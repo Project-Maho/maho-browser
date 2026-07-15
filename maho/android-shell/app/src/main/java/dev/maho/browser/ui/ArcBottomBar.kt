@@ -208,17 +208,11 @@ fun ArcBottomBar(
                         shape = RoundedCornerShape(22.dp),
                     ) {
                         HomeSearchField(
-                            homeQuery = homeQuery,
                             isIncognito = isIncognito,
                             controlHighlightColor = controlHighlightColor,
                             contentColor = contentColor,
                             textSecondary = shellColors.textSecondary,
-                            canSubmitHomeQuery = canSubmitHomeQuery,
-                            onHomeQueryChange = onHomeQueryChange,
-                            onHomeSubmit = {
-                                keyboardController?.hide()
-                                onHomeSubmit()
-                            },
+                            onClick = onSearchClick,
                         )
                     }
                 }
@@ -350,17 +344,11 @@ fun ArcBottomBar(
                                 shape = RoundedCornerShape(22.dp),
                             ) {
                                 HomeSearchField(
-                                    homeQuery = homeQuery,
                                     isIncognito = isIncognito,
                                     controlHighlightColor = controlHighlightColor,
                                     contentColor = contentColor,
                                     textSecondary = shellColors.textSecondary,
-                                    canSubmitHomeQuery = canSubmitHomeQuery,
-                                    onHomeQueryChange = onHomeQueryChange,
-                                    onHomeSubmit = {
-                                        keyboardController?.hide()
-                                        onHomeSubmit()
-                                    },
+                                    onClick = onSearchClick,
                                 )
                             }
                         }
@@ -842,36 +830,18 @@ private fun ArcMenuStateLabel(
 
 @Composable
 private fun HomeSearchField(
-    homeQuery: String,
     isIncognito: Boolean,
     controlHighlightColor: Color,
     contentColor: Color,
     textSecondary: Color,
-    canSubmitHomeQuery: Boolean,
-    onHomeQueryChange: (String) -> Unit,
-    onHomeSubmit: () -> Unit,
+    onClick: () -> Unit,
 ) {
-    var fieldValue by remember(homeQuery) {
-        mutableStateOf(
-            TextFieldValue(
-                text = homeQuery,
-                selection = androidx.compose.ui.text.TextRange(homeQuery.length),
-            ),
-        )
-    }
-
-    if (fieldValue.text != homeQuery) {
-        fieldValue = fieldValue.copy(
-            text = homeQuery,
-            selection = androidx.compose.ui.text.TextRange(homeQuery.length),
-        )
-    }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("homeSearchBar")
             .border(width = 1.dp, color = controlHighlightColor.copy(alpha = 0.42f), shape = RoundedCornerShape(18.dp))
+            .clickable { onClick() }
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -894,85 +864,11 @@ private fun HomeSearchField(
             modifier = Modifier.weight(1f),
             contentAlignment = Alignment.CenterStart,
         ) {
-            if (fieldValue.text.isEmpty()) {
-                Text(
-                    text = "Search or enter URL",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = textSecondary,
-                )
-            }
-
-            BasicTextField(
-                value = fieldValue,
-                onValueChange = { updated ->
-                    fieldValue = updated
-                    onHomeQueryChange(updated.text)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("homeSearchField")
-                    .semantics {
-                        contentDescription = "Search or enter URL"
-                    },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Uri,
-                    imeAction = ImeAction.Search,
-                ),
-                keyboardActions = KeyboardActions(
-                    onSearch = {
-                        if (canSubmitHomeQuery) {
-                            onHomeSubmit()
-                        }
-                    },
-                ),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(if (isIncognito) contentColor else textSecondary),
-            )
-        }
-
-        if (fieldValue.text.isNotEmpty()) {
-            Surface(
-                modifier = Modifier
-                    .testTag("homeSearchClearButton")
-                    .clickable {
-                        fieldValue = TextFieldValue("")
-                        onHomeQueryChange("")
-                    }
-                    .semantics {
-                        contentDescription = "Clear search"
-                    },
-                shape = CircleShape,
-                color = controlHighlightColor,
-            ) {
-                Icon(
-                    painter = painterResource(id = MahoIcon.Close.drawableRes),
-                    contentDescription = null,
-                    tint = textSecondary,
-                    modifier = Modifier
-                        .padding(9.dp)
-                        .size(16.dp),
-                )
-            }
-        }
-
-        Surface(
-            modifier = Modifier
-                .testTag("homeSearchSubmitButton")
-                .clickable(enabled = canSubmitHomeQuery, onClick = onHomeSubmit)
-                .semantics {
-                    contentDescription = "Submit search"
-                },
-            shape = CircleShape,
-            color = if (canSubmitHomeQuery) controlHighlightColor else controlHighlightColor.copy(alpha = 0.42f),
-        ) {
-            Icon(
-                painter = painterResource(id = MahoIcon.NavForward.drawableRes),
-                contentDescription = null,
-                tint = if (canSubmitHomeQuery) contentColor else textSecondary.copy(alpha = 0.52f),
-                modifier = Modifier
-                    .padding(9.dp)
-                    .size(16.dp),
+            Text(
+                text = "Search or enter URL",
+                style = MaterialTheme.typography.bodyLarge,
+                color = textSecondary,
+                modifier = Modifier.testTag("homeSearchField")
             )
         }
     }

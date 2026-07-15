@@ -64,8 +64,9 @@ gfx::ImageSkia CreateSidebarDragImage(views::View* view) {
 }
 
 gfx::ImageSkia CreateSidebarDragImageWithBackground(views::View* view,
-                                                    SkColor bg_color,
-                                                    float corner_radius_dp) {
+                                                     SkColor base_color,
+                                                     SkColor overlay_color,
+                                                     float corner_radius_dp) {
   gfx::ImageSkia inner = CreateSidebarDragImage(view);
   if (inner.isNull() || inner.size().IsEmpty()) {
     return inner;
@@ -84,8 +85,10 @@ gfx::ImageSkia CreateSidebarDragImageWithBackground(views::View* view,
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setStyle(SkPaint::kFill_Style);
-    paint.setColor(bg_color);
     const SkRect rect = SkRect::MakeIWH(size.width(), size.height());
+    paint.setColor(SkColorSetA(base_color, 255));
+    sk_canvas.drawRoundRect(rect, corner_radius_dp, corner_radius_dp, paint);
+    paint.setColor(overlay_color);
     sk_canvas.drawRoundRect(rect, corner_radius_dp, corner_radius_dp, paint);
     const SkBitmap inner_bitmap = *inner.bitmap();
     sk_canvas.drawImage(inner_bitmap.asImage(), 0, 0);

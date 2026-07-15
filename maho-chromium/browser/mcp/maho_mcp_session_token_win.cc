@@ -102,7 +102,7 @@ std::unique_ptr<MahoMcpSessionToken> MahoMcpSessionToken::Create() {
   auto token = std::unique_ptr<MahoMcpSessionToken>(
       new MahoMcpSessionToken());
   token->token_.resize(kTokenSize);
-  crypto::RandBytes(base::make_span(token->token_));
+  crypto::RandBytes(base::span(token->token_));
   return token;
 }
 

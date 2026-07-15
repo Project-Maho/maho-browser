@@ -526,6 +526,9 @@ mod tests {
             is_custom: false,
             is_primary: true,
             c_raw: None,
+            position: None,
+            lightness: None,
+            algorithm: None,
         };
         let theme = SpaceTheme::Gradient {
             colors: vec![primary_color],
@@ -566,6 +569,9 @@ mod tests {
             is_custom: false,
             is_primary: true,
             c_raw: None,
+            position: None,
+            lightness: None,
+            algorithm: None,
         };
         let theme = SpaceTheme::Gradient {
             colors: vec![primary_color],
@@ -605,6 +611,9 @@ mod tests {
             is_custom: false,
             is_primary: true,
             c_raw: None,
+            position: None,
+            lightness: None,
+            algorithm: None,
         };
         let theme = SpaceTheme::Zen {
             colors: vec![primary_color],
@@ -1609,22 +1618,9 @@ impl SpaceManager {
 
     pub fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool {
         if let Some(space) = self.spaces.get_mut(space_id) {
-            let matching_count = space
-                .folders
-                .iter()
-                .filter(|f| f.id == *folder_id)
-                .count();
+
             if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
                 folder.is_expanded = !folder.is_expanded;
-                if folder.name == "Research" {
-                    eprintln!(
-                        "[folder-rust-debug] toggle space={} folder={} name=Research matching_count={} new_expanded={}",
-                        space_id,
-                        folder_id,
-                        matching_count,
-                        folder.is_expanded
-                    );
-                }
                 return true;
             }
         }
@@ -1906,21 +1902,8 @@ impl SpaceManager {
             }
             RootItem::Folder(folder_id) => {
                 let space = self.get_space(space_id)?;
-                let matching_count = space
-                    .folders
-                    .iter()
-                    .filter(|f| f.id == *folder_id)
-                    .count();
+
                 let folder = space.folders.iter().find(|f| f.id == *folder_id)?;
-                if folder.name == "Research" {
-                    eprintln!(
-                        "[folder-rust-debug] tree space={} folder={} name=Research matching_count={} expanded={}",
-                        space_id,
-                        folder_id,
-                        matching_count,
-                        folder.is_expanded
-                    );
-                }
 
                 let mut children = Vec::new();
                 for child_tab_id in &folder.tab_ids {

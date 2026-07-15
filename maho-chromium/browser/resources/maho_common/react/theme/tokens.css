@@ -5,6 +5,7 @@
 @source "../../../maho_ai/react/**/*.tsx";
 @source "../../../maho_space_config/react/**/*.tsx";
 @source "../../../maho_settings/react/**/*.tsx";
+@source "../../../maho_welcome/react/**/*.tsx";
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 

@@ -20,10 +20,15 @@ class WebUI;
 
 class MahoLiveFoldersUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoLiveFoldersUIConfig
     : public content::DefaultWebUIConfig<MahoLiveFoldersUI> {
  public:
   MahoLiveFoldersUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoLiveFoldersUI

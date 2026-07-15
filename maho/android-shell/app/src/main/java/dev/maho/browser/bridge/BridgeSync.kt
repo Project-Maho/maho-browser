@@ -5,6 +5,7 @@ import dev.maho.browser.models.ConnectedDevice
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.ShellEvent
 import dev.maho.browser.models.SyncStatusResponse
+import dev.maho.browser.sync.RelaySessionStore
 import dev.maho.browser.support.MahoJson
 
 object BridgeSync {
@@ -25,6 +26,10 @@ object BridgeSync {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    fun getCurrentDeviceId(): String? {
+        return RelaySessionStore.load()?.device?.id
     }
 
     fun generateSyncKey(): String? {

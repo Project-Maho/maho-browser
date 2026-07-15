@@ -30,6 +30,7 @@ fn bench_search_with_history(c: &mut Criterion) {
                         let event = ShellEvent::CommandBarQuery {
                             text: "test query".to_string(),
                             mode: None,
+                            is_incognito: false,
                         };
                         core.handle_event(event);
                     },
@@ -56,6 +57,7 @@ fn bench_search_empty_query(c: &mut Criterion) {
                         let event = ShellEvent::CommandBarQuery {
                             text: "".to_string(),
                             mode: None,
+                            is_incognito: false,
                         };
                         core.handle_event(event);
                     },
@@ -86,6 +88,7 @@ fn bench_search_partial_matches(c: &mut Criterion) {
                 let event = ShellEvent::CommandBarQuery {
                     text: q.to_string(),
                     mode: None,
+                    is_incognito: false,
                 };
                 core.handle_event(event);
             });

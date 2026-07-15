@@ -51,7 +51,9 @@ class MahoAiPageContextExtractor {
   using PageContextCallback =
       base::OnceCallback<void(PageContextResult page_context)>;
 
-  explicit MahoAiPageContextExtractor(Browser* browser);
+  explicit MahoAiPageContextExtractor(
+      Browser* browser,
+      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>());
   MahoAiPageContextExtractor(const MahoAiPageContextExtractor&) = delete;
   MahoAiPageContextExtractor& operator=(
       const MahoAiPageContextExtractor&) = delete;
@@ -77,6 +79,7 @@ class MahoAiPageContextExtractor {
   content::WebContents* GetWebContentsForTabId(int tab_id) const;
 
   raw_ptr<Browser> browser_;
+  base::RepeatingCallback<bool()> ai_gate_;
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<MahoAiPageContextExtractor> weak_factory_{this};
 };

@@ -45,12 +45,15 @@ std::string ToolStatusToString(
 
 }  // namespace
 
-MahoBrowserToolExecutor::MahoBrowserToolExecutor(Browser* browser,
-                                                 bool browser_tools_v1_enabled)
+MahoBrowserToolExecutor::MahoBrowserToolExecutor(
+    Browser* browser,
+    bool browser_tools_v1_enabled,
+    base::RepeatingCallback<bool()> ai_gate)
     : browser_(browser),
       browser_tools_v1_enabled_(browser_tools_v1_enabled),
-      page_context_extractor_(std::make_unique<MahoAiPageContextExtractor>(
-          browser)) {}
+      ai_gate_(ai_gate),
+      page_context_extractor_(
+          std::make_unique<MahoAiPageContextExtractor>(browser, ai_gate)) {}
 
 MahoBrowserToolExecutor::~MahoBrowserToolExecutor() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -72,6 +75,12 @@ void MahoBrowserToolExecutor::Execute(const std::string& tool_name,
                                       const base::DictValue& arguments,
                                       ToolResultCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (ai_gate_ && !ai_gate_.Run()) {
+    std::move(callback).Run(BuildErrorResult(
+        tool_name, "AI is not available in this context."));
+    return;
+  }
 
   if (!browser_tools_v1_enabled_) {
     std::move(callback).Run(BuildErrorResult(

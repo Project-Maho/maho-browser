@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 
 #include <algorithm>
 #include <optional>
@@ -26,7 +27,9 @@
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -39,6 +42,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
+#include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/ai/maho_model_list_fetcher.h"
 #include "maho/browser/ai/maho_managed_connection_test.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -52,6 +56,7 @@
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -67,27 +72,6 @@ namespace acct = maho::account_prefs;
 constexpr char kSettingsSyncRelayUrl[] = "https://sync.mahobrowser.com";
 
 // ── Auth traffic annotations ──
-
-const net::NetworkTrafficAnnotationTag kAuthLoginTrafficAnnotation =
-    net::DefineNetworkTrafficAnnotation("maho_auth_login", R"(
-      semantics {
-        sender: "Maho Auth Login"
-        description:
-          "Authenticates the user with the Maho relay using email and password."
-        trigger:
-          "User submits the sign-in form in the Account settings pane."
-        data: "User email and password in the request body."
-        destination: WEBSITE
-      }
-      policy {
-        cookies_allowed: NO
-        setting: "Triggered by an explicit user action; not background."
-        policy_exception_justification:
-          "Not controlled by enterprise policy. The user explicitly submits "
-          "credentials in the Account settings pane to authenticate with the "
-          "Maho relay service. No ambient or background network activity."
-      }
-    )");
 
 const net::NetworkTrafficAnnotationTag kAuthLogoutTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("maho_auth_logout", R"(
@@ -219,108 +203,7 @@ constexpr SettingMapping kSettingsMap[] = {
       SettingMapping::Type::kBool},
 };
 
-maho_settings::mojom::PasswordProviderKind ToPasswordProviderKind(
-    const std::string& mode) {
-  if (mode == "bitwarden") {
-    return maho_settings::mojom::PasswordProviderKind::kBitwarden;
-  }
-  if (mode == "onepassword") {
-    return maho_settings::mojom::PasswordProviderKind::kOnePassword;
-  }
-  return maho_settings::mojom::PasswordProviderKind::kMahoNative;
-}
 
-std::string NormalizePasswordProviderMode(const std::string& mode) {
-  return maho::passwords::NormalizePasswordProviderMode(mode);
-}
-
-maho_settings::mojom::PasswordProviderCapabilitiesPtr
-MakePasswordProviderCapabilities(maho_settings::mojom::PasswordProviderKind kind) {
-  auto capabilities = maho_settings::mojom::PasswordProviderCapabilities::New();
-  const bool native = kind == maho_settings::mojom::PasswordProviderKind::kMahoNative;
-  capabilities->can_list_saved_passwords = native;
-  capabilities->can_search_saved_passwords = native;
-  capabilities->can_delete_saved_passwords = native;
-  capabilities->can_add_saved_passwords = native;
-  capabilities->can_edit_saved_passwords = native;
-  capabilities->can_reveal_passwords = native;
-  return capabilities;
-}
-
-std::vector<maho_settings::mojom::SavedPasswordPtr> ParseSavedPasswordsJson(
-    const std::string& json) {
-  std::vector<maho_settings::mojom::SavedPasswordPtr> passwords;
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return passwords;
-  }
-
-  for (const base::Value& value : parsed->GetList()) {
-    if (!value.is_dict()) {
-      continue;
-    }
-    const auto& dict = value.GetDict();
-    auto password = maho_settings::mojom::SavedPassword::New();
-    if (const std::string* id = dict.FindString("id")) {
-      password->id = *id;
-    }
-    if (const std::string* domain = dict.FindString("domain")) {
-      password->domain = *domain;
-    }
-    if (const std::string* username = dict.FindString("username")) {
-      password->username = *username;
-    }
-    if (const std::string* created_at = dict.FindString("createdAt")) {
-      password->created_at = *created_at;
-    }
-    if (const std::string* last_used = dict.FindString("lastUsed")) {
-      password->last_used = *last_used;
-    }
-    if (const std::string* password_value = dict.FindString("password")) {
-      password->password = *password_value;
-    }
-    passwords.push_back(std::move(password));
-  }
-
-  return passwords;
-}
-
-std::vector<maho_settings::mojom::SavedPasswordPtr> GetSavedPasswordsFromCore() {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return {};
-  }
-
-  char* json_str = maho_core_search_passwords(core, "");
-  if (!json_str) {
-    return {};
-  }
-
-  std::string json(json_str);
-  maho_string_free(json_str);
-  return ParseSavedPasswordsJson(json);
-}
-
-bool UpdateAutofillSettingsInCore(bool passwords_enabled,
-                                  const std::string& mode) {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return false;
-  }
-
-  base::DictValue autofill;
-  autofill.Set("passwordsEnabled", passwords_enabled);
-  autofill.Set("passwordProvider", mode);
-
-  base::DictValue settings;
-  settings.Set("autofill", std::move(autofill));
-
-  std::string json;
-  base::JSONWriter::Write(base::Value(std::move(settings)), &json);
-  maho_core_update_settings(core, json.c_str());
-  return true;
-}
 
 const SettingMapping* FindMapping(const std::string& maho_key) {
   for (const auto& m : kSettingsMap) {
@@ -331,47 +214,7 @@ const SettingMapping* FindMapping(const std::string& maho_key) {
   return nullptr;
 }
 
-std::string ReadPasswordProviderModeFromCore() {
-  return maho::passwords::GetActivePasswordProviderMode();
-}
 
-bool ReadPasswordsEnabledFromCore() {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return true;
-  }
-
-  char* json_str = maho_core_get_settings(core);
-  if (!json_str) {
-    return true;
-  }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    return true;
-  }
-
-  const base::DictValue& root = parsed->GetDict();
-  const base::DictValue* autofill = root.FindDict("autofill");
-  if (!autofill) {
-    return true;
-  }
-
-  const std::string* mode = autofill->FindString("passwordProvider");
-  if (mode && *mode == "disabled") {
-    return false;
-  }
-
-  std::optional<bool> passwords_enabled = autofill->FindBool("passwordsEnabled");
-  if (passwords_enabled) {
-    return *passwords_enabled;
-  }
-
-  return true;
-}
 
 PrefService* GetPrefServiceForKey(Profile* profile,
                                   const std::string& maho_key) {
@@ -868,6 +711,18 @@ void StopSyncOnCoreSequence() {
   maho_core_stop_sync(core);
 }
 
+bool DisconnectSyncDeviceOnCoreSequence(const std::string& device_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) return false;
+  return maho_core_disconnect_sync_device(core, device_id.c_str());
+}
+
+bool RenameSyncDeviceOnCoreSequence(const std::string& device_id, const std::string& new_name) {
+  MahoCore* core = maho::GetCore();
+  if (!core) return false;
+  return maho_core_rename_sync_device(core, device_id.c_str(), new_name.c_str());
+}
+
 // ── Theme / Spaces domain helpers (MahoCore sequence) ──
 
 
@@ -928,11 +783,11 @@ BuildAutofillAddressesOnCoreSequence() {
     };
     addr->id = s("id");
     addr->name = s("name");
-    addr->address_line1 = s("address_line1");
-    addr->address_line2 = s("address_line2");
+    addr->address_line1 = s("street");
+    addr->address_line2 = s("addressLine2");
     addr->city = s("city");
     addr->state = s("state");
-    addr->postal_code = s("postal_code");
+    addr->postal_code = s("zip");
     addr->country = s("country");
     addr->phone = s("phone");
     addr->email = s("email");
@@ -966,7 +821,7 @@ BuildAutofillPaymentsOnCoreSequence() {
       return v ? *v : "";
     };
     pay->id = s("id");
-    pay->card_network = "";
+    pay->card_network = s("cardNetwork");
     pay->last_four = s("lastFour");
     pay->expiration = s("expiry");
     pay->cardholder_name = s("cardName");
@@ -1121,6 +976,7 @@ AddAutofillAddressOnCoreSequence(const std::string& id,
   address.Set("id", id);
   address.Set("name", name);
   address.Set("street", address_line1);
+  address.Set("addressLine2", address_line2);
   address.Set("city", city);
   address.Set("state", state);
   address.Set("zip", postal_code);
@@ -1145,7 +1001,7 @@ AddAutofillAddressOnCoreSequence(const std::string& id,
   out->id = s("id");
   out->name = s("name");
   out->address_line1 = s("street");
-  out->address_line2 = "";
+  out->address_line2 = s("addressLine2");
   out->city = s("city");
   out->state = s("state");
   out->postal_code = s("zip");
@@ -1191,7 +1047,7 @@ AddAutofillPaymentOnCoreSequence(const std::string& id,
     return v ? *v : "";
   };
   out->id = s("id");
-  out->card_network = "";
+  out->card_network = s("cardNetwork");
   out->last_four = s("lastFour");
   out->expiration = s("expiry");
   out->cardholder_name = s("cardName");
@@ -1234,6 +1090,15 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
       profile_(profile),
       prefs_(profile->GetPrefs()),
       local_state_(g_browser_process->local_state()) {
+  // R-4 security guard: a forged Mojo receiver can construct this handler even
+  // when IsWebUIEnabled already denies OTR/Guest/system controller creation.
+  // Fail closed before any prefs/OSCrypt/network/bridge init and disconnect so
+  // no method is reachable in a denied context. Do not remove.
+  if (!MahoIsWebUIEnabled(profile)) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
   g_active_instance = this;
   pref_registrar_.Init(prefs_);
   if (local_state_) {
@@ -1267,8 +1132,26 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
 
   auto url_loader_factory = profile_->GetDefaultStoragePartition()
                                 ->GetURLLoaderFactoryForBrowserProcess();
+  // R-9: gate the AI model-list network path on kAI. The settings surface is
+  // already regular-only via MahoIsWebUIEnabled above; this revalidates the
+  // AI-specific read/write path against the profile's window before any
+  // provider/model request leaves the browser.
+  auto ai_gate = base::BindRepeating(
+      [](base::WeakPtr<MahoSettingsPageHandler> self) {
+        if (!self) {
+          return false;
+        }
+        BrowserWindowInterface* window =
+            chrome::FindLastActiveWithProfile(self->profile_);
+        if (!window) {
+          return false;
+        }
+        MahoPrivateContextToken token(window, /*web_contents=*/nullptr);
+        return token.Revalidate(MahoPrivateCapability::kAI);
+      },
+      weak_factory_.GetWeakPtr());
   model_list_fetcher_ = std::make_unique<maho::ai::MahoModelListFetcher>(
-      prefs_, url_loader_factory);
+      prefs_, url_loader_factory, ai_gate);
   model_list_fetcher_->SetRefreshedCallback(base::BindRepeating(
       &MahoSettingsPageHandler::OnProviderModelsRefreshed,
       weak_factory_.GetWeakPtr()));
@@ -1296,10 +1179,12 @@ const char* MahoSettingsPageHandler::GetPrefPath(
 std::string MahoSettingsPageHandler::ReadSetting(
     const std::string& maho_key) {
   if (maho_key == kPasswordProviderModeMahoKey) {
-    return ReadPasswordProviderModeFromCore();
+    return maho_settings_password_helpers::ReadPasswordProviderModeFromCore();
   }
   if (maho_key == kPasswordsEnabledMahoKey) {
-    return ReadPasswordsEnabledFromCore() ? "true" : "false";
+    return maho_settings_password_helpers::ReadPasswordsEnabledFromCore()
+               ? "true"
+               : "false";
   }
   const SettingMapping* m = FindMapping(maho_key);
   if (m) {
@@ -1343,23 +1228,27 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
   }
 
   if (key == kPasswordProviderModeMahoKey) {
-    bool passwords_enabled = ReadPasswordsEnabledFromCore();
+    bool passwords_enabled =
+        maho_settings_password_helpers::ReadPasswordsEnabledFromCore();
     std::string mode = "maho_native";
     if (value == "disabled") {
       passwords_enabled = false;
     } else {
-      mode = NormalizePasswordProviderMode(value);
+      mode = maho_settings_password_helpers::NormalizePasswordProviderMode(value);
     }
     std::move(callback).Run(
-        UpdateAutofillSettingsInCore(passwords_enabled, mode));
+        maho_settings_password_helpers::UpdateAutofillSettingsInCore(
+            passwords_enabled, mode));
     ScheduleNotify();
     return;
   }
 
   if (key == kPasswordsEnabledMahoKey) {
     bool passwords_enabled = value == "true";
-    std::move(callback).Run(UpdateAutofillSettingsInCore(
-        passwords_enabled, ReadPasswordProviderModeFromCore()));
+    std::move(callback).Run(
+        maho_settings_password_helpers::UpdateAutofillSettingsInCore(
+            passwords_enabled,
+            maho_settings_password_helpers::ReadPasswordProviderModeFromCore()));
     ScheduleNotify();
     return;
   }
@@ -1820,6 +1709,10 @@ void MahoSettingsPageHandler::SetAIBaseUrl(const std::string& url) {
 
 void MahoSettingsPageHandler::SetAIApiKey(const std::string& key) {
   prefs_->SetString(ai::kApiKey, key);
+  prefs_->CommitPendingWrite();
+  if (key.empty()) {
+    MahoUnifiedAgentAdapter::ClearActiveBYOKKeys("openai-compatible");
+  }
 }
 
 void MahoSettingsPageHandler::SetAIModel(const std::string& model) {
@@ -2071,6 +1964,35 @@ void MahoSettingsPageHandler::StopSync() {
       base::BindOnce(&StopSyncOnCoreSequence));
 }
 
+void MahoSettingsPageHandler::DisconnectSyncDevice(
+    const std::string& device_id,
+    DisconnectSyncDeviceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&DisconnectSyncDeviceOnCoreSequence, device_id),
+      base::BindOnce(
+          [](DisconnectSyncDeviceCallback cb, bool success) {
+            std::move(cb).Run(success);
+          },
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::RenameSyncDevice(
+    const std::string& device_id,
+    const std::string& new_name,
+    RenameSyncDeviceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&RenameSyncDeviceOnCoreSequence, device_id, new_name),
+      base::BindOnce(
+          [](RenameSyncDeviceCallback cb, bool success) {
+            std::move(cb).Run(success);
+          },
+          std::move(callback)));
+}
+
 
 
 void MahoSettingsPageHandler::GetSpaces(GetSpacesCallback callback) {
@@ -2088,10 +2010,10 @@ void MahoSettingsPageHandler::GetSpaces(GetSpacesCallback callback) {
 
 void MahoSettingsPageHandler::GetPasswordProviderStatus(
     GetPasswordProviderStatusCallback callback) {
-  const bool passwords_enabled = ReadPasswordsEnabledFromCore();
-  const std::string mode = ReadPasswordProviderModeFromCore();
+  const bool passwords_enabled = maho_settings_password_helpers::ReadPasswordsEnabledFromCore();
+  const std::string mode = maho_settings_password_helpers::ReadPasswordProviderModeFromCore();
   auto status = maho_settings::mojom::PasswordProviderStatus::New();
-  status->provider = ToPasswordProviderKind(mode);
+  status->provider = maho_settings_password_helpers::ToPasswordProviderKind(mode);
   status->is_enabled = passwords_enabled;
   status->is_available =
       maho::passwords::IsPasswordProviderAvailable(mode);
@@ -2113,13 +2035,47 @@ void MahoSettingsPageHandler::GetPasswordProviderStatus(
                                  : "1Password is selected, but the 1Password extension is not installed or enabled.";
       break;
   }
-  status->capabilities = MakePasswordProviderCapabilities(status->provider);
+  status->capabilities = maho_settings_password_helpers::MakePasswordProviderCapabilities(status->provider);
   std::move(callback).Run(std::move(status));
+}
+
+void MahoSettingsPageHandler::GetPasswordProviderOptions(
+    GetPasswordProviderOptionsCallback callback) {
+  std::vector<maho_settings::mojom::PasswordProviderOptionPtr> options;
+
+  {
+    auto opt = maho_settings::mojom::PasswordProviderOption::New();
+    opt->provider = maho_settings::mojom::PasswordProviderKind::kMahoNative;
+    opt->display_name = "Maho Native";
+    opt->description = "Use Maho's native password manager.";
+    opt->is_available = true;
+    options.push_back(std::move(opt));
+  }
+
+  {
+    auto opt = maho_settings::mojom::PasswordProviderOption::New();
+    opt->provider = maho_settings::mojom::PasswordProviderKind::kBitwarden;
+    opt->display_name = "Bitwarden";
+    opt->description = "Use Bitwarden as the password provider.";
+    opt->is_available = maho::passwords::IsBitwardenExtensionAvailable();
+    options.push_back(std::move(opt));
+  }
+
+  {
+    auto opt = maho_settings::mojom::PasswordProviderOption::New();
+    opt->provider = maho_settings::mojom::PasswordProviderKind::kOnePassword;
+    opt->display_name = "1Password";
+    opt->description = "Use 1Password as the password provider.";
+    opt->is_available = maho::passwords::IsOnePasswordExtensionAvailable();
+    options.push_back(std::move(opt));
+  }
+
+  std::move(callback).Run(std::move(options));
 }
 
 void MahoSettingsPageHandler::GetSavedPasswords(
     GetSavedPasswordsCallback callback) {
-  std::move(callback).Run(GetSavedPasswordsFromCore());
+  std::move(callback).Run(maho_settings_password_helpers::GetSavedPasswordsFromCore());
 }
 
 void MahoSettingsPageHandler::SearchPasswords(
@@ -2139,7 +2095,8 @@ void MahoSettingsPageHandler::SearchPasswords(
 
   std::string json(json_str);
   maho_string_free(json_str);
-  std::move(callback).Run(ParseSavedPasswordsJson(json));
+  auto result = maho_settings_password_helpers::ParseSavedPasswordsJson(json);
+  std::move(callback).Run(result ? std::move(*result) : std::vector<maho_settings::mojom::SavedPasswordPtr>());
 }
 
 void MahoSettingsPageHandler::AddPassword(const std::string& domain,
@@ -2192,6 +2149,39 @@ void MahoSettingsPageHandler::DeletePassword(
     ScheduleNotify();
   }
   std::move(callback).Run(success);
+}
+
+void MahoSettingsPageHandler::RevealPassword(
+    const std::string& password_id,
+    RevealPasswordCallback callback) {
+  std::string provider_mode = maho_settings_password_helpers::ReadPasswordProviderModeFromCore();
+  bool passwords_enabled = maho_settings_password_helpers::ReadPasswordsEnabledFromCore();
+
+  if (provider_mode != "maho_native") {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  if (!passwords_enabled) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  char* raw_pwd = maho_core_reveal_password(core, password_id.c_str());
+  if (!raw_pwd) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  std::string revealed(raw_pwd);
+  maho_string_free(raw_pwd);
+  std::move(callback).Run(revealed);
 }
 
 void MahoSettingsPageHandler::GetAutofillAddresses(
@@ -2544,10 +2534,12 @@ void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
   if (provider == "openai") {
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, "");
     prefs_->CommitPendingWrite();
+    MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, "");
     prefs_->CommitPendingWrite();
+    MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
     std::move(callback).Run(true);
   } else {
     LOG(ERROR) << "[ClearBYOKKey] unknown provider: " << provider;
@@ -2599,164 +2591,24 @@ void MahoSettingsPageHandler::Login(const std::string& email,
     return;
   }
 
-  base::DictValue body;
-  body.Set("email", email);
-  body.Set("password", password);
-#if BUILDFLAG(IS_MAC)
-  body.Set("device_name", "Maho macOS");
-  body.Set("device_type", "desktop");
-#elif BUILDFLAG(IS_WIN)
-  body.Set("device_name", "Maho Windows");
-  body.Set("device_type", "desktop");
-#elif BUILDFLAG(IS_LINUX)
-  body.Set("device_name", "Maho Linux");
-  body.Set("device_type", "desktop");
-#elif BUILDFLAG(IS_IOS)
-  body.Set("device_name", "Maho iOS");
-  body.Set("device_type", "mobile");
-#elif BUILDFLAG(IS_ANDROID)
-  body.Set("device_name", "Maho Android");
-  body.Set("device_type", "mobile");
-#else
-  body.Set("device_name", "Maho");
-  body.Set("device_type", "unknown");
-#endif
-  std::string body_json;
-  base::JSONWriter::Write(body, &body_json);
-
-  std::string relay_url = maho::auth::GetRelayBaseUrl();
-  GURL request_url(relay_url + "/auth/login");
-  if (!request_url.is_valid()) {
-    std::move(callback).Run(false, "Invalid relay URL.");
-    return;
-  }
-
-  auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = request_url;
-  resource_request->method = "POST";
-  resource_request->headers.SetHeader("Content-Type", "application/json");
-  resource_request->headers.SetHeader("Accept", "application/json");
-  resource_request->credentials_mode =
-      network::mojom::CredentialsMode::kOmit;
-
-  auto url_loader = network::SimpleURLLoader::Create(
-      std::move(resource_request), kAuthLoginTrafficAnnotation);
-  url_loader->AttachStringForUpload(body_json, "application/json");
-  url_loader->SetTimeoutDuration(base::Seconds(30));
-
   auto url_loader_factory = profile_->GetDefaultStoragePartition()
                                 ->GetURLLoaderFactoryForBrowserProcess();
 
-  auto* raw_loader = url_loader.get();
-  raw_loader->DownloadToString(
-      url_loader_factory.get(),
-      base::BindOnce(&MahoSettingsPageHandler::OnLoginResponse,
-                     weak_factory_.GetWeakPtr(), std::move(callback),
-                     std::move(url_loader)),
-      /*max_body_size=*/64 * 1024);
+  maho::auth::MahoRelayLogin(
+      prefs_, url_loader_factory, *encryptor_, email, password,
+      base::BindOnce(&MahoSettingsPageHandler::OnRelayLoginCompleted,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-void MahoSettingsPageHandler::OnLoginResponse(
+void MahoSettingsPageHandler::OnRelayLoginCompleted(
     LoginCallback callback,
-    std::unique_ptr<network::SimpleURLLoader> loader,
-    std::optional<std::string> response_body) {
+    bool ok,
+    const std::string& error_message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  int net_error = loader->NetError();
-  const auto* response_info = loader->ResponseInfo();
-  int http_status =
-      response_info ? response_info->headers->response_code() : 0;
-
-  if (net_error != net::OK || !response_body.has_value()) {
-    std::move(callback).Run(false, "Network error");
+  if (!ok) {
+    std::move(callback).Run(false, error_message);
     return;
-  }
-
-  auto parsed =
-      base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    std::move(callback).Run(false, "Invalid server response.");
-    return;
-  }
-
-  const base::DictValue& dict = parsed->GetDict();
-
-  if (http_status != 200) {
-    const std::string* error_msg = dict.FindString("error");
-    std::move(callback).Run(
-        false,
-        error_msg ? *error_msg : "Authentication failed (HTTP " +
-                                      base::NumberToString(http_status) + ")");
-    return;
-  }
-
-  const std::string* access_token = dict.FindString("access_token");
-  const std::string* refresh_token = dict.FindString("refresh_token");
-  if (!access_token || !refresh_token) {
-    std::move(callback).Run(false, "Missing tokens in response.");
-    return;
-  }
-
-  int64_t expires_at = static_cast<int64_t>(
-      dict.FindDouble("expires_at").value_or(0));
-  int64_t refresh_expires_at = static_cast<int64_t>(
-      dict.FindDouble("refresh_expires_at").value_or(0));
-
-  const base::DictValue* account = dict.FindDict("account");
-  std::string user_email;
-  std::string user_id;
-  std::string user_display_name;
-  std::string user_tier;
-  if (account) {
-    if (const std::string* v = account->FindString("email"))
-      user_email = *v;
-    if (std::optional<int> v_int = account->FindInt("id"))
-      user_id = base::NumberToString(*v_int);
-    else if (const std::string* v_str = account->FindString("id"))
-      user_id = *v_str;
-    if (const std::string* v = account->FindString("display_name"))
-      user_display_name = *v;
-  }
-
-  maho::auth::StoreTokensParams params;
-  params.access_token = *access_token;
-  params.refresh_token = *refresh_token;
-  params.access_expires_at = expires_at;
-  params.refresh_expires_at = refresh_expires_at;
-  params.user_email = user_email;
-  params.user_id = user_id;
-  params.user_display_name = user_display_name;
-  params.user_tier = user_tier;
-
-  if (!maho::auth::StoreRelayTokens(prefs_, *encryptor_, params)) {
-    std::move(callback).Run(false, "Failed to store credentials.");
-    return;
-  }
-
-  // Fire ShellEvent::SignIn to maho-core on the thread pool.
-  {
-    base::DictValue sign_in_event;
-    base::DictValue sign_in_data;
-    sign_in_data.Set("email", user_email);
-    sign_in_data.Set("password", "");  // Don't pass password to core.
-    sign_in_data.Set("display_name", user_display_name);
-    sign_in_data.Set("access_token", *access_token);
-    sign_in_data.Set("user_id", user_id);
-    sign_in_event.Set("SignIn", std::move(sign_in_data));
-
-    std::string event_json;
-    base::JSONWriter::Write(sign_in_event, &event_json);
-
-    maho::PostCoreClosure(
-        FROM_HERE,
-        base::BindOnce(
-            [](std::string json) {
-              MahoCore* core = maho::GetCore();
-              if (!core) return;
-              char* result = maho_core_sign_in(core, json.c_str());
-              if (result) maho_string_free(result);
-            },
-            std::move(event_json)));
   }
 
   BroadcastAccountStatus();

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-05-15
-**Commit:** e2e5fbf
+**Generated:** 2026-07-14
+**Commit:** 4fd48142
 **Branch:** main
 
 ## OVERVIEW
@@ -17,8 +17,9 @@ Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells 
 ```
 maho-workspace/
 ├── maho/               # Rust workspace + native shells (see maho/AGENTS.md)
-│   ├── crates/         # maho-core, maho-ffi, maho-storage, maho-types, maho-engine, maho-extension, maho-jni, maho-bench
-│   ├── relay/          # Standalone sync relay server (separate Cargo workspace)
+│   ├── crates/         # maho-core, maho-ffi, maho-storage, maho-types, maho-engine, maho-import, maho-agent, maho-browser-mcp, maho-cli, maho-jni, maho-bench
+│   ├── relay/          # Standalone sync relay server (separate Cargo workspace; see maho/relay/AGENTS.md)
+│   ├── web-ai/         # Unified AI WebView bundle (Preact, iOS + Android + Desktop; see maho/web-ai/AGENTS.md)
 │   ├── ios-shell/      # iOS shell
 │   ├── android-shell/  # Android Gradle project
 │   └── appium-tests/   # Regression automation
@@ -46,7 +47,8 @@ maho-workspace/
 | Maho Mail (Rust) | `mail/src-tauri/` | Tauri v2 commands/state |
 | Maho Website | `website/src/` | Astro pages & Starlight docs |
 | Upstream overrides | `maho-chromium/chromium_src/` | Brave-style #define + #include |
-| Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml |
+| Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml. See `maho/relay/AGENTS.md` |
+| AI WebView bundle (iOS/Android/Desktop) | `maho/web-ai/` | Preact SPA loaded by WKWebView/WebView; see `maho/web-ai/AGENTS.md` |
 | Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Pass `--ninja-target <T>` (repeatable) to build a narrower target through the same lock-backed wrapper, e.g. `--ninja-target unit_tests`. Falling back to `autoninja -C out/Default <target>` from `chromium/src` skips the wrapper entirely (no maho-core rebuild, no overlay/override apply). |
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
@@ -129,3 +131,4 @@ cd maho/relay && cargo test && cargo clippy -- -D warnings
 - Symlink setup: `ln -s ../../maho-chromium chromium/src/maho`
 - **Three Cargo workspaces**: `maho/Cargo.toml` (main), `maho/relay/Cargo.toml` (isolated), and `mail/Cargo.toml` (isolated).
 - See `maho/AGENTS.md` for crate-level detail; `maho-chromium/AGENTS.md` for overlay detail
+- New subdirectory AGENTS.md added: `maho/relay/`, `maho-chromium/browser/ai/`, `maho-chromium/browser/ui/views/`, `maho-chromium/browser/ui/webui/`, `maho-chromium/browser/resources/`

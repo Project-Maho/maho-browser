@@ -7,12 +7,67 @@
 #include <string>
 #include <vector>
 
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_status_code.h"
+#include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace maho {
+
+namespace {
+
+std::string RedactDataUrlPayload(const GURL& url) {
+  std::string spec = url.spec();
+  if (!url.SchemeIs(url::kDataScheme)) {
+    return spec;
+  }
+
+  const size_t payload_separator = spec.find(',');
+  if (payload_separator == std::string::npos) {
+    return "data:[REDACTED_DATA_URL_PAYLOAD]";
+  }
+  spec.erase(payload_separator + 1);
+  spec.append("[REDACTED_DATA_URL_PAYLOAD]");
+  return spec;
+}
+
+base::DictValue RequestHeadersToDict(
+    const net::HttpRequestHeaders& headers) {
+  base::DictValue dict;
+  net::HttpRequestHeaders::Iterator it(headers);
+  while (it.GetNext()) {
+    dict.Set(it.name(), it.value());
+  }
+  return dict;
+}
+
+base::DictValue ResponseHeadersToDict(
+    const net::HttpResponseHeaders& headers) {
+  base::DictValue dict;
+  size_t iter = 0;
+  std::string name;
+  std::string value;
+  while (headers.EnumerateHeaderLines(&iter, &name, &value)) {
+    dict.Set(name, value);
+  }
+  return dict;
+}
+
+std::string StatusTextForCode(int status) {
+  if (status <= 0) {
+    return std::string();
+  }
+  return std::string(net::GetHttpReasonPhrase(status));
+}
+
+}  // namespace
 
 MahoMcpNetworkObserver::Entry::Entry() = default;
 MahoMcpNetworkObserver::Entry::~Entry() = default;
@@ -29,13 +84,23 @@ void MahoMcpNetworkObserver::StartCapture() {
   entries_.clear();
 }
 
+void MahoMcpNetworkObserver::StartCapture(content::WebContents* web_contents) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  Observe(web_contents);
+  StartCapture();
+}
+
 void MahoMcpNetworkObserver::StopCapture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   capturing_ = false;
+  Observe(nullptr);
 }
 
-void MahoMcpNetworkObserver::TestOnly_AddEntry(Entry entry) {
+void MahoMcpNetworkObserver::RecordEntry(Entry entry) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!capturing_) {
+    return;
+  }
   entries_.push_back(std::move(entry));
 }
 
@@ -71,6 +136,7 @@ base::DictValue MahoMcpNetworkObserver::BuildHarFromEntries(
     request.Set("method", e.method);
     request.Set("url", e.url);
     request.Set("httpVersion", "HTTP/1.1");
+    request.Set("_headersAvailable", e.request_headers_available);
 
     // Headers as dict for MahoMcpFirewall::WrapHar compatibility.
     base::DictValue req_headers;
@@ -90,6 +156,7 @@ base::DictValue MahoMcpNetworkObserver::BuildHarFromEntries(
     response.Set("status", e.status);
     response.Set("statusText", e.status_text);
     response.Set("httpVersion", "HTTP/1.1");
+    response.Set("_headersAvailable", e.response_headers_available);
 
     base::DictValue resp_headers;
     for (const auto pair : e.response_headers) {
@@ -102,6 +169,7 @@ base::DictValue MahoMcpNetworkObserver::BuildHarFromEntries(
     response.Set("headers", std::move(resp_headers));
     response.Set("headersSize", -1);
     response.Set("bodySize", static_cast<int>(e.response_size));
+    response.Set("_transferSize", static_cast<int>(e.response_transfer_size));
 
     base::DictValue content;
     content.Set("size", static_cast<int>(e.response_size));
@@ -120,6 +188,91 @@ base::DictValue MahoMcpNetworkObserver::BuildHarFromEntries(
 
   har.Set("entries", std::move(entry_list));
   return har;
+}
+
+void MahoMcpNetworkObserver::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!capturing_ || !navigation_handle->IsInPrimaryMainFrame() ||
+      !navigation_handle->HasCommitted() ||
+      navigation_handle->IsSameDocument() ||
+      navigation_handle->IsErrorPage()) {
+    return;
+  }
+
+  Entry entry;
+  entry.url = RedactDataUrlPayload(navigation_handle->GetURL());
+  entry.method = navigation_handle->GetRequestMethod();
+  if (entry.method.empty()) {
+    entry.method = "GET";
+  }
+  entry.request_headers = RequestHeadersToDict(
+      navigation_handle->GetRequestHeaders());
+
+  const net::HttpResponseHeaders* headers =
+      navigation_handle->GetResponseHeaders();
+  entry.status = headers ? headers->response_code() : 200;
+  if (headers) {
+    entry.status_text = headers->GetStatusText();
+    if (entry.status_text.empty()) {
+      entry.status_text = StatusTextForCode(entry.status);
+    }
+    entry.response_headers = ResponseHeadersToDict(*headers);
+  } else {
+    entry.status_text = StatusTextForCode(entry.status);
+    entry.response_headers_available = false;
+  }
+  entry.mime_type = web_contents() ? web_contents()->GetContentsMimeType()
+                                   : std::string();
+  entry.start_time = navigation_handle->NavigationStart();
+  if (entry.start_time.is_null()) {
+    entry.start_time = base::TimeTicks::Now();
+  }
+  const base::TimeTicks finish_time = base::TimeTicks::Now();
+  if (finish_time >= entry.start_time) {
+    entry.duration = finish_time - entry.start_time;
+  }
+  RecordEntry(std::move(entry));
+}
+
+void MahoMcpNetworkObserver::ResourceLoadComplete(
+    content::RenderFrameHost* render_frame_host,
+    const content::GlobalRequestID& request_id,
+    const blink::mojom::ResourceLoadInfo& resource_load_info) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!capturing_ || !resource_load_info.final_url.is_valid()) {
+    return;
+  }
+  if (render_frame_host && render_frame_host->IsInPrimaryMainFrame() &&
+      resource_load_info.request_destination ==
+          network::mojom::RequestDestination::kDocument) {
+    return;
+  }
+
+  Entry entry;
+  entry.url = RedactDataUrlPayload(resource_load_info.final_url);
+  entry.method =
+      resource_load_info.method.empty() ? "GET" : resource_load_info.method;
+  entry.status = resource_load_info.http_status_code;
+  entry.status_text = StatusTextForCode(entry.status);
+  entry.mime_type = resource_load_info.mime_type;
+  entry.request_headers_available = false;
+  entry.response_headers_available = false;
+  entry.request_size = -1;
+  entry.start_time = resource_load_info.load_timing_info.request_start;
+  if (entry.start_time.is_null()) {
+    entry.start_time = base::TimeTicks::Now();
+  }
+
+  const base::TimeTicks end =
+      resource_load_info.load_timing_info.receive_headers_end;
+  if (!end.is_null() && end >= entry.start_time) {
+    entry.duration = end - entry.start_time;
+  }
+  entry.response_size = resource_load_info.raw_body_bytes.InBytes();
+  entry.response_transfer_size =
+      resource_load_info.total_received_bytes.InBytes();
+  RecordEntry(std::move(entry));
 }
 
 }  // namespace maho

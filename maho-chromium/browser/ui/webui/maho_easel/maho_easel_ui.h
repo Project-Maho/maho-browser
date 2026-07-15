@@ -21,9 +21,14 @@ class WebUI;
 
 class MahoEaselUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoEaselUIConfig : public DefaultTopChromeWebUIConfig<MahoEaselUI> {
  public:
   MahoEaselUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoEaselUI : public TopChromeWebUIController,

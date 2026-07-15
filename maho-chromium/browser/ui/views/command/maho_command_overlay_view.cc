@@ -354,6 +354,8 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       origin_mode_(mode),
       select_initial_text_(select_initial_text) {
   DCHECK(browser_);
+  context_class_ =
+      ClassifyProfileForTesting(browser_ ? browser_->profile() : nullptr);
   GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
   GetViewAccessibility().SetName(u"Command Palette");
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -933,7 +935,7 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
     case ui::VKEY_RETURN: {
       if (mode_ == CommandOverlayMode::kAI) {
         std::string query = base::UTF16ToUTF8(textfield_->GetText());
-        if (!query.empty()) {
+        if (!query.empty() && AiIngressAllowed()) {
           browser_->profile()->GetPrefs()->SetString(
               maho::ai_prefs::kPendingInitialQuery, query);
           Dismiss();
@@ -980,7 +982,9 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
            mode_ == CommandOverlayMode::kNewTab ||
            mode_ == CommandOverlayMode::kCurrentTab)) {
         if (trimmed == "ai" || trimmed == "AI") {
-          EnterAIMode();
+          if (AiIngressAllowed()) {
+            EnterAIMode();
+          }
           return true;
         }
 
@@ -1394,6 +1398,11 @@ void MahoCommandOverlayView::ExitSiteSearchMode() {
   ApplyPlaceholderForMode();
   if (model_) model_->Cancel();
   UpdateResultViews({});
+}
+
+bool MahoCommandOverlayView::AiIngressAllowed() const {
+  return context_class_ == MahoPrivateContextClass::kRegular ||
+         context_class_ == MahoPrivateContextClass::kNull;
 }
 
 void MahoCommandOverlayView::EnterAIMode() {

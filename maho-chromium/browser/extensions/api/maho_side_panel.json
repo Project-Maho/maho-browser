@@ -1,0 +1,39 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+[
+  {
+    "namespace": "maho.sidePanel",
+    "description": "Use the <code>chrome.maho.sidePanel</code> API to control Maho-specific side panel behavior, such as switching the calling extension's side panel between the left and right layout at runtime.",
+    "compiler_options": {
+      "implemented_in": "maho/browser/extensions/api/maho_side_panel_api.h"
+    },
+    "types": [
+      {
+        "id": "LayoutType",
+        "type": "string",
+        "enum": ["left", "right"],
+        "description": "The side to dock the panel on."
+      }
+    ],
+    "functions": [
+      {
+        "name": "setLayout",
+        "type": "function",
+        "description": "Sets the layout (docking side) of the calling extension's Maho side panel at runtime. Overrides the static <code>side_panel.maho_side_panel.layout</code> manifest value.",
+        "parameters": [
+          {
+            "name": "layout",
+            "$ref": "LayoutType",
+            "description": "The side to dock the panel on."
+          }
+        ],
+
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
+      }
+    ]
+  }
+]

@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -37,7 +37,7 @@ use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, Tab
 use maho_types::note::Note;
 use maho_types::settings::{AppearanceSettingsUpdate, PinnedCloseBehavior, Settings, SettingsUpdate};
 use maho_types::keyboard::{KeyCombo, KeyModifier};
-use maho_types::space::{Space, SpaceColor};
+use maho_types::space::{RootItem, Space, SpaceColor};
 use maho_types::split_view::{SplitConfig, SplitViewConfig};
 use maho_types::tab::{Tab, TabLifecycleState, TabRole};
 use maho_types::traits::shell_renderer::{
@@ -78,6 +78,118 @@ use crate::skills_manager::SkillsManager;
 use crate::space_manager::SpaceManager;
 use crate::sync_models::{SyncEntity, SyncEntityType};
 use crate::tab_lifecycle::{timestamp_millis_to_iso8601, TabLifecycleManager};
+
+fn private_tab_ids_from_tabs<'a, I>(tabs: I) -> HashSet<TabId>
+where
+    I: IntoIterator<Item = &'a Tab>,
+{
+    tabs.into_iter()
+        .filter(|tab| tab.is_private)
+        .map(|tab| tab.id.clone())
+        .collect()
+}
+
+fn sanitize_space_for_private_tabs(space: &Space, private_ids: &HashSet<TabId>) -> Space {
+    if private_ids.is_empty() {
+        return space.clone();
+    }
+
+    let mut sanitized = space.clone();
+    sanitized.tab_order.retain(|tab_id| !private_ids.contains(tab_id));
+    for folder in &mut sanitized.folders {
+        folder.tab_ids.retain(|tab_id| !private_ids.contains(tab_id));
+    }
+    sanitized.root_order.retain(|item| match item {
+        RootItem::Tab(tab_id) => !private_ids.contains(tab_id),
+        RootItem::Folder(_) => true,
+    });
+    if sanitized
+        .last_active_tab_id
+        .as_ref()
+        .is_some_and(|tab_id| private_ids.contains(tab_id))
+    {
+        sanitized.last_active_tab_id = None;
+    }
+    sanitized
+}
+
+fn sanitize_spaces_for_private_tabs<'a, I>(spaces: I, private_ids: &HashSet<TabId>) -> Vec<Space>
+where
+    I: IntoIterator<Item = &'a Space>,
+{
+    spaces
+        .into_iter()
+        .map(|space| sanitize_space_for_private_tabs(space, private_ids))
+        .collect()
+}
+
+// One-time cleanup (LMDB schema v2 -> v3). Pre-fix, closing a Favorite/Pinned
+// tab's WebContents was suppressed and never removed the core tab, so add+close
+// cycles accumulated duplicate ghost entries. For each (space, role class, url)
+// group with more than one tab, keep the most-recently-active and drop the rest
+// from the tab list and every space ordering (tab_order, root_order, folders).
+fn dedup_duplicate_pinned_favorites(
+    tabs: Vec<Tab>,
+    mut spaces: Vec<Space>,
+) -> (Vec<Tab>, Vec<Space>, usize) {
+    let mut groups: std::collections::HashMap<(SpaceId, u8, String), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, tab) in tabs.iter().enumerate() {
+        let role_class = match tab.role {
+            TabRole::Pinned => 1u8,
+            TabRole::Favorite { .. } => 2u8,
+            _ => continue,
+        };
+        groups
+            .entry((tab.space_id.clone(), role_class, tab.url.0.clone()))
+            .or_default()
+            .push(idx);
+    }
+
+    let mut remove_ids: HashSet<TabId> = HashSet::new();
+    for idxs in groups.values() {
+        if idxs.len() <= 1 {
+            continue;
+        }
+        let keep = *idxs
+            .iter()
+            .max_by(|&&a, &&b| tabs[a].last_active_at.0.cmp(&tabs[b].last_active_at.0))
+            .expect("group is non-empty");
+        for &i in idxs {
+            if i != keep {
+                remove_ids.insert(tabs[i].id.clone());
+            }
+        }
+    }
+
+    if remove_ids.is_empty() {
+        return (tabs, spaces, 0);
+    }
+
+    let removed = remove_ids.len();
+    let kept: Vec<Tab> = tabs
+        .into_iter()
+        .filter(|tab| !remove_ids.contains(&tab.id))
+        .collect();
+    for space in &mut spaces {
+        space.tab_order.retain(|tab_id| !remove_ids.contains(tab_id));
+        space.root_order.retain(|item| match item {
+            RootItem::Tab(tab_id) => !remove_ids.contains(tab_id),
+            RootItem::Folder(_) => true,
+        });
+        for folder in &mut space.folders {
+            folder.tab_ids.retain(|tab_id| !remove_ids.contains(tab_id));
+        }
+        if space
+            .last_active_tab_id
+            .as_ref()
+            .is_some_and(|tab_id| remove_ids.contains(tab_id))
+        {
+            space.last_active_tab_id = None;
+        }
+    }
+    (kept, spaces, removed)
+}
 use crate::tab_preview_manager::TabPreviewManager;
 
 type UpdateListeners = Rc<RefCell<Vec<Box<dyn Fn(CoreUpdate)>>>>;
@@ -107,6 +219,7 @@ mod tests {
             parent_id: None,
             tab_id: None,
             window_id: None,
+            is_private: false,
         });
         core.get_tab_view_models()
             .iter()
@@ -380,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn unfavorite_folder_resident_tab_does_not_add_to_root_order() {
+    fn unfavorite_previously_folder_resident_tab_restores_to_root_order() {
         let mut core = MahoCore::new();
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
@@ -389,12 +502,19 @@ mod tests {
         core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
 
         core.favorite_tab(&tab_id);
+        // ADR-11: favoriting decouples the tab from its folder.
+        assert!(
+            !core.space_manager.is_tab_in_folder(&space_id, &tab_id),
+            "favoriting must decouple the tab from its folder"
+        );
+
         core.transition_tab_role(&tab_id, TabRole::Normal);
 
-        let root_order = core.space_manager.get_root_order(&space_id);
+        // Decoupled at favorite time, the tab is no longer folder-resident, so
+        // unfavoriting restores it to root_order like any non-folder tab.
         assert!(
-            !root_order.contains(&maho_types::space::RootItem::Tab(tab_id)),
-            "folder-resident tab must not appear in root_order after unfavoriting"
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "decoupled tab must return to root_order after unfavoriting"
         );
     }
 
@@ -933,6 +1053,11 @@ impl MahoCore {
         &self.tab_manager
     }
 
+    pub fn tool_registry(&self) -> &ToolRegistry {
+        &self.tool_registry
+    }
+
+
     pub fn new() -> Self {
         let update_listeners: UpdateListeners = Rc::new(RefCell::new(Vec::new()));
         let emitted_during_dispatch = Rc::new(RefCell::new(Vec::new()));
@@ -950,7 +1075,6 @@ impl MahoCore {
         let space_manager = SpaceManager::new();
         let mut command_bar = CommandBarEngine::new();
 
-        command_bar.add_action("new_tab".into(), "New Tab".into(), "Tabs".into());
         command_bar.add_action("close_tab".into(), "Close Tab".into(), "Tabs".into());
         command_bar.add_action(
             "close_other_tabs".into(),
@@ -1204,14 +1328,14 @@ impl MahoCore {
 
         let favorite_tab = self
             .tab_manager
-            .create_tab(active_space_id.clone(), ntp_url.clone(), None, None);
+            .create_tab(active_space_id.clone(), ntp_url.clone(), None, None, false);
         self.space_manager
             .add_tab_to_space(&active_space_id, favorite_tab.id.clone(), None);
         self.tab_manager.favorite_tab(&favorite_tab.id);
 
         let pinned_tab = self
             .tab_manager
-            .create_tab(active_space_id.clone(), ntp_url, None, None);
+            .create_tab(active_space_id.clone(), ntp_url, None, None, false);
         self.space_manager
             .add_tab_to_space(&active_space_id, pinned_tab.id.clone(), None);
         self.tab_manager.pin_tab(&pinned_tab.id);
@@ -1311,7 +1435,12 @@ impl MahoCore {
             .ok_or_else(|| PersistenceError::Storage("LMDB storage not initialized".to_string()))?;
 
         if dirty & LMDB_DIRTY_TABS != 0 {
-            let tabs: Vec<&maho_types::tab::Tab> = self.tab_manager.get_all_tabs();
+            let tabs: Vec<&maho_types::tab::Tab> = self
+                .tab_manager
+                .get_all_tabs()
+                .into_iter()
+                .filter(|tab| !tab.is_private)
+                .collect();
             let favorite_count = tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
             eprintln!(
                 "[Maho] save_state: persisting {} tabs ({} favorites), {} spaces",
@@ -1323,11 +1452,16 @@ impl MahoCore {
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             lmdb.put("tabs", &tabs_json)
                 .map_err(|e| PersistenceError::Storage(e.to_string()))?;
-            self.tab_preview_manager.persist_to_storage(lmdb);
+            let private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
+            self.tab_preview_manager.persist_to_storage(lmdb, &private_ids);
         }
 
         if dirty & LMDB_DIRTY_SPACES != 0 {
-            let spaces: Vec<&maho_types::space::Space> = self.space_manager.get_all_spaces();
+            let private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
+            let spaces = sanitize_spaces_for_private_tabs(
+                self.space_manager.get_all_spaces(),
+                &private_ids,
+            );
             let spaces_json = serde_json::to_vec(&spaces)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             lmdb.put("spaces", &spaces_json)
@@ -1374,6 +1508,9 @@ impl MahoCore {
                 let mut stable_panes = Vec::new();
                 for pane in &config.panes {
                     if let Some(tab) = self.tab_manager.get_tab(&pane.tab_id) {
+                        if tab.is_private {
+                            continue;
+                        }
                         let tab_creation_time_micros = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&tab.created_at.0) {
                             dt.timestamp_micros() as u64
                         } else {
@@ -1463,7 +1600,8 @@ impl MahoCore {
                 let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                     .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
 
-                let migrated_data = serde_json::to_vec(&tabs)
+                let migrated_tabs: Vec<&maho_types::tab::Tab> = tabs.iter().filter(|tab| !tab.is_private).collect();
+                let migrated_data = serde_json::to_vec(&migrated_tabs)
                     .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
 
                 let version_bytes = serde_json::to_vec(&2u32)
@@ -1490,6 +1628,47 @@ impl MahoCore {
             }
         }
 
+        if schema_version < 4 {
+            let tabs_raw = lmdb
+                .get("tabs")
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+            let spaces_raw = lmdb
+                .get("spaces")
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+            let version_bytes = serde_json::to_vec(&4u32)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            if let (Some(tabs_data), Some(spaces_data)) = (tabs_raw, spaces_raw) {
+                let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
+                    .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+                let spaces: Vec<maho_types::space::Space> = serde_json::from_slice(&spaces_data)
+                    .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+                let (deduped_tabs, deduped_spaces, removed) =
+                    dedup_duplicate_pinned_favorites(tabs, spaces);
+                if removed > 0 {
+                    let tabs_out = serde_json::to_vec(&deduped_tabs)
+                        .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+                    let spaces_out = serde_json::to_vec(&deduped_spaces)
+                        .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+                    lmdb.put_batch(&[
+                        ("tabs", &tabs_out),
+                        ("spaces", &spaces_out),
+                        ("schema_version", &version_bytes),
+                    ])
+                    .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+                    eprintln!(
+                        "[Maho] LMDB dedup migration (schema v4): removed {} duplicate ghost favorite/pinned tabs",
+                        removed
+                    );
+                } else {
+                    lmdb.put("schema_version", &version_bytes)
+                        .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+                }
+            } else {
+                lmdb.put("schema_version", &version_bytes)
+                    .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+            }
+        }
+
         let tabs_data = lmdb
             .get("tabs")
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
@@ -1506,16 +1685,25 @@ impl MahoCore {
             self.tab_manager.clear();
         }
 
+        let mut loaded_private_ids = HashSet::new();
         if let Some(tabs_data) = tabs_data {
             let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-            let fav_count = tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
+            loaded_private_ids = private_tab_ids_from_tabs(tabs.iter());
+            let persisted_tabs: Vec<maho_types::tab::Tab> = tabs
+                .into_iter()
+                .filter(|tab| !tab.is_private)
+                .collect();
+            let fav_count = persisted_tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
             eprintln!(
                 "[Maho] load_state: restoring {} tabs ({} favorites)",
-                tabs.len(),
+                persisted_tabs.len(),
                 fav_count,
             );
-            for tab in tabs {
+            for mut tab in persisted_tabs {
+                if tab.role.is_pinned() && tab.pinned_url.is_none() {
+                    tab.pinned_url = Some(tab.url.clone());
+                }
                 self.tab_manager.restore_tab(tab);
             }
             let tab_ids: Vec<maho_types::identifiers::TabId> = self.tab_manager.get_all_tabs().iter().map(|t| t.id.clone()).collect();
@@ -1535,6 +1723,7 @@ impl MahoCore {
         if let Some(spaces_data) = spaces_data {
             let spaces: Vec<maho_types::space::Space> = serde_json::from_slice(&spaces_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            let spaces = sanitize_spaces_for_private_tabs(spaces.iter(), &loaded_private_ids);
             self.space_manager.restore_spaces(spaces, active_space_id);
 
             // Heal cross-space tab_order/root_order duplication that may have
@@ -1745,7 +1934,7 @@ impl MahoCore {
 
         // Load autofill addresses
         if let Ok(addresses) = storage.load_autofill_addresses() {
-            for (id, name, street, city, state, zip, country, phone, email) in addresses {
+            for (id, name, street, city, state, zip, country, phone, email, address_line2) in addresses {
                 let addr = maho_types::autofill::AutofillAddress {
                     id,
                     name,
@@ -1756,6 +1945,7 @@ impl MahoCore {
                     country,
                     phone,
                     email,
+                    address_line2,
                 };
                 self.autofill_manager.add_address(addr);
             }
@@ -1763,12 +1953,13 @@ impl MahoCore {
 
         // Load autofill payments
         if let Ok(payments) = storage.load_autofill_payments() {
-            for (id, card_name, last_four, expiry) in payments {
+            for (id, card_name, last_four, expiry, card_network) in payments {
                 let payment = maho_types::autofill::AutofillPayment {
                     id,
                     card_name,
                     last_four,
                     expiry,
+                    card_network,
                 };
                 self.autofill_manager.add_payment(payment);
             }
@@ -1913,6 +2104,10 @@ impl MahoCore {
 
     pub fn list_passwords(&self) -> &[maho_types::passwords::SavedPassword] {
         self.password_manager.list_passwords()
+    }
+
+    pub fn password_by_id(&self, id: &str) -> Option<&maho_types::passwords::SavedPassword> {
+        self.password_manager.password_by_id(id)
     }
 
     pub fn delete_password_persisted(&mut self, password_id: &str) -> bool {
@@ -2078,7 +2273,41 @@ impl MahoCore {
             })
     }
 
+    fn active_tab_id_for_privacy_gate(&self) -> Option<TabId> {
+        let active_space_id = self.space_manager.get_active_space_id();
+        self.space_manager
+            .get_last_active_tab(active_space_id)
+            .cloned()
+            .or_else(|| self.tab_manager.get_active_tab_id().cloned())
+    }
+
+    fn tab_id_is_private(&self, tab_id: &TabId) -> bool {
+        self.tab_manager
+            .get_tab(tab_id)
+            .map(|tab| tab.is_private)
+            .unwrap_or(false)
+    }
+
+    fn active_tab_is_private(&self) -> bool {
+        self.active_tab_id_for_privacy_gate()
+            .as_ref()
+            .map(|tab_id| self.tab_id_is_private(tab_id))
+            .unwrap_or(false)
+    }
+
     pub fn add_history_entry(&mut self, url: &str, title: &str) {
+        let active_tab_id = self.active_tab_id_for_privacy_gate();
+        self.add_history_entry_for_tab(active_tab_id.as_ref(), url, title);
+    }
+
+    pub fn add_history_entry_for_tab(&mut self, tab_id: Option<&TabId>, url: &str, title: &str) {
+        let is_private_context = tab_id
+            .map(|id| self.tab_id_is_private(id))
+            .unwrap_or_else(|| self.active_tab_is_private());
+        if is_private_context {
+            return;
+        }
+
         self.command_bar.add_history_entry(
             url.to_string(),
             title.to_string(),
@@ -2110,6 +2339,10 @@ impl MahoCore {
     }
 
     pub fn add_bookmark(&mut self, url: &str, title: &str, folder_id: Option<&str>) {
+        if self.active_tab_is_private() {
+            return;
+        }
+
         let bm = self.bookmark_manager.add_bookmark(
             title.to_string(),
             url.to_string(),
@@ -2437,6 +2670,7 @@ impl MahoCore {
                 country: &added.country,
                 phone: added.phone.as_deref(),
                 email: added.email.as_deref(),
+                address_line2: added.address_line2.as_deref(),
             });
         }
         if let Ok(payload) = serde_json::to_string(&added) {
@@ -2467,6 +2701,7 @@ impl MahoCore {
                 &added.card_name,
                 &added.last_four,
                 &added.expiry,
+                added.card_network.as_deref(),
             );
         }
         if let Ok(payload) = serde_json::to_string(&added) {
@@ -2905,7 +3140,7 @@ impl MahoCore {
             }
         }
         self.post_dispatch_sync(&event_cloned, &result);
-        
+
         let emitted = self.emitted_during_dispatch.borrow().clone();
         let emitted_strs: std::collections::HashSet<String> = emitted
             .iter()
@@ -2923,7 +3158,7 @@ impl MahoCore {
             .cloned()
             .collect();
         self.emit_updates(filtered);
-        
+
         result
     }
 
@@ -3125,10 +3360,11 @@ impl MahoCore {
     }
 
     fn handle_event_inner(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
-        if let ShellEvent::CreateTab { tab_id: Some(explicit_id), window_id, .. } = &event {
+        if let ShellEvent::CreateTab { tab_id: Some(explicit_id), window_id, is_private, .. } = &event {
             if let Some(mut tab) = self.tab_manager.get_tab(explicit_id).cloned() {
-                if tab.window_id != *window_id {
+                if tab.window_id != *window_id || tab.is_private != *is_private {
                     tab.window_id = *window_id;
+                    tab.is_private = *is_private;
                     self.tab_manager.restore_tab(tab);
 
                     if let Some(w_id) = window_id {
@@ -3446,6 +3682,22 @@ impl MahoCore {
                 }
                 return vec![];
             }
+            ShellEvent::SearchHistory { query, limit, is_incognito } => {
+                let entries = if *is_incognito {
+                    Vec::new()
+                } else {
+                    self.search_history(query, *limit)
+                        .into_iter()
+                        .map(|(id, url, title)| maho_types::events::core_update::HistoryEntry {
+                            id,
+                            url,
+                            title,
+                            visited_at: String::new(),
+                        })
+                        .collect()
+                };
+                return vec![CoreUpdate::HistoryResults { entries }];
+            }
             ShellEvent::CreateNote {
                 linked_tab,
                 content,
@@ -3689,6 +3941,7 @@ impl MahoCore {
                     .tab_manager
                     .get_all_favorite_tabs()
                     .iter()
+                    .filter(|t| profile_space_ids.contains(&t.space_id))
                     .filter_map(|t| t.role.favorite_order())
                     .max()
                     .unwrap_or(0);
@@ -3698,6 +3951,21 @@ impl MahoCore {
             }
             ShellEvent::ChangeTabRole { ref tab_id, ref new_role } => {
                 return self.transition_tab_role(tab_id, new_role.clone());
+            }
+            ShellEvent::PinTab { ref tab_id } => {
+                let mut updates = self.transition_tab_role(tab_id, TabRole::Pinned);
+                if self.settings_manager.get_settings().max.tidy_tab_titles {
+                    if let Some(tab) = self.tab_manager.get_tab(tab_id) {
+                        let tidy_update = self
+                            .llm_manager
+                            .request_tidy_title(tab_id, &tab.title, &tab.url.0);
+                        updates.push(tidy_update);
+                    }
+                }
+                return updates;
+            }
+            ShellEvent::UnpinTab { ref tab_id } => {
+                return self.transition_tab_role(tab_id, TabRole::Normal);
             }
             ShellEvent::CloseTab { ref tab_id, ref expected_space_id } => {
                 if let Some(ref expected_sid) = expected_space_id {
@@ -3725,14 +3993,24 @@ impl MahoCore {
                     .clone();
                 let tab_opt = self.tab_manager.get_tab(tab_id);
                 // Architectural Shift (B-Architecture):
-                // Under B-architecture, favorites on the grid and tabs on the normal strip are 
-                // strictly decoupled using unique TabIds. Pinned tabs remain on the strip and 
-                // require close-guard protection, whereas favorites do not reside on the active 
+                // Under B-architecture, favorites on the grid and tabs on the normal strip are
+                // strictly decoupled using unique TabIds. Pinned tabs remain on the strip and
+                // require close-guard protection, whereas favorites do not reside on the active
                 // tab strip as regular closable tabs and thus do not require close-guard protection.
                 let is_pinned = tab_opt.map(|t| t.role == TabRole::Pinned).unwrap_or(false);
+                let is_favorite = tab_opt.map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: role query
                 let already_suspended = tab_opt
                     .map(|t| matches!(t.state, TabLifecycleState::Suspended { .. }))
                     .unwrap_or(false);
+
+                if is_favorite { // L3-EXEMPT: close protection check
+                    if !already_suspended {
+                        self.tab_manager.suspend_tab(tab_id);
+                        self.persist_lmdb_now_partial(LMDB_DIRTY_TABS);
+                        self.push_tab_sync(tab_id);
+                    }
+                    return vec![];
+                }
 
                 if is_pinned && !matches!(behavior, PinnedCloseBehavior::Close) {
                     if already_suspended {
@@ -3754,13 +4032,10 @@ impl MahoCore {
                             self.tab_manager.reset_pinned_tab(tab_id);
                         }
 
-                        let needs_unload = matches!(
-                            behavior,
-                            PinnedCloseBehavior::UnloadSwitch | PinnedCloseBehavior::ResetUnloadSwitch
-                        );
-                        if needs_unload {
-                            self.tab_manager.suspend_tab(tab_id);
-                        }
+                        // Under B-architecture, we must transition the tab to Suspended when the WebContents
+                        // is closed natively (e.g. via close_tab dispatch), even if PinnedCloseBehavior is not
+                        // ResetUnloadSwitch/UnloadSwitch.
+                        self.tab_manager.suspend_tab(tab_id);
 
                         let needs_focus_switch = matches!(
                             behavior,
@@ -4138,6 +4413,12 @@ impl MahoCore {
         let active_space_id = self.space_manager.get_active_space_id().clone();
         let folders = self.get_folder_view_models(&active_space_id);
 
+        let event_is_incognito = match &event {
+            ShellEvent::CommandBarQuery { is_incognito, .. }
+            | ShellEvent::SearchHistory { is_incognito, .. } => *is_incognito,
+            _ => false,
+        };
+
         let ctx = SearchContext {
             tabs: tab_view_models,
             spaces: space_view_models,
@@ -4147,7 +4428,7 @@ impl MahoCore {
             bookmark_favicons,
             closed_tabs,
             extensions,
-            is_incognito: false,
+            is_incognito: event_is_incognito,
         };
 
         // Extract PinTab info before dispatch consumes the event
@@ -4263,6 +4544,7 @@ impl MahoCore {
                     last_active_at: tab.last_active_at.clone(),
                     favorite_order: tab.role.favorite_order(),
                     role: tab.role.clone(),
+                    is_private: tab.is_private,
                 }
             })
             .collect()
@@ -4308,6 +4590,22 @@ impl MahoCore {
         self.space_manager.get_last_active_tab(space_id).cloned()
     }
 
+    pub fn get_activation_target_for_space(&self, space_id: &SpaceId) -> Option<TabId> {
+        if let Some(tab_id) = self.space_manager.get_last_active_tab(space_id).cloned() {
+            Some(tab_id)
+        } else {
+            self.space_manager
+                .get_tab_order(space_id)
+                .into_iter()
+                .find(|tab_id| {
+                    self.tab_manager
+                        .get_tab(tab_id)
+                        .map(|tab| !matches!(tab.state, TabLifecycleState::Archived { .. }))
+                        .unwrap_or(false)
+                })
+        }
+    }
+
     pub fn create_space(&mut self, name: &str, color: SpaceColor, profile_id: ProfileId) -> Space {
         let space = self.space_manager.create_space(name, color, profile_id);
         self.seed_default_favorite_for_space(&space.id);
@@ -4327,6 +4625,7 @@ impl MahoCore {
             Some(google_url),
             None,
             None,
+            false,
         );
         self.tab_manager.update_tab_title(&tab.id, "Google".to_string());
         self.space_manager
@@ -4888,7 +5187,18 @@ impl MahoCore {
         let tid = maho_types::identifiers::TabId::new(tab_id);
         self.tab_manager
             .get_tab(&tid)
-            .map(|tab| tab.role.is_pinned())
+            .map(|tab| tab.role.is_close_protected())
+            .unwrap_or(false)
+    }
+
+    /// Returns `true` if the tab is close-protected: Pinned OR Favorite. Unlike
+    /// [`is_tab_pinned`] (strict Pinned-only), this is the guard used to keep
+    /// favorites alive when the user closes their tab (ADR-11).
+    pub fn is_tab_close_protected(&self, tab_id: &str) -> bool {
+        let tid = maho_types::identifiers::TabId::new(tab_id);
+        self.tab_manager
+            .get_tab(&tid)
+            .map(|tab| tab.role.is_close_protected() || tab.role.is_favorite()) // L3-EXEMPT: close-guard covers Pinned OR Favorite
             .unwrap_or(false)
     }
 
@@ -4923,6 +5233,7 @@ impl MahoCore {
             .tab_manager
             .get_all_favorite_tabs()
             .iter()
+            .filter(|t| profile_space_ids.contains(&t.space_id))
             .filter_map(|t| t.role.favorite_order())
             .max()
             .unwrap_or(0);
@@ -4934,6 +5245,9 @@ impl MahoCore {
 
     pub fn transition_tab_role(&mut self, id: &TabId, new_role: TabRole) -> Vec<CoreUpdate> {
         let old = self.tab_manager.get_tab(id).map(|t| t.role.clone());
+        if old.as_ref() == Some(&new_role) {
+            return vec![];
+        }
         if !self.tab_manager.transition_tab_role(id, new_role.clone()) {
             return vec![];
         }
@@ -4943,14 +5257,23 @@ impl MahoCore {
             self.space_manager.apply_tab_residency(
                 &space_id, id, new_role.is_favorite(), is_in_folder // L3-EXEMPT: role query
             );
-            
+
             if new_role.is_favorite() { // L3-EXEMPT: role query
+                let folder_ids: Vec<_> = self
+                    .space_manager
+                    .get_folder_view_models(&space_id)
+                    .into_iter()
+                    .map(|f| f.id)
+                    .collect();
+                for folder_id in folder_ids {
+                    self.space_manager.remove_tab_from_folder(&space_id, &folder_id, id);
+                }
                 let mut favorited = std::collections::HashSet::new();
                 favorited.insert(id.clone());
                 self.space_manager
                     .strip_favorited_tabs_from_root_orders(&favorited);
             }
-            
+
             self.enforce_residency_for_tab(id);
             self.persist_lmdb_now_partial(LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES);
             self.push_tab_sync(id);
@@ -5097,16 +5420,20 @@ impl MahoCore {
                 });
                 match self.next_hlc_ts() {
                     Ok(version) => {
+                        let device_id = self.account_manager.device_id_hash();
+                        let payload_str = payload.to_string();
+                        let fields_hlc_json = crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
                         let sync_entity = SyncEntity {
                             entity_type: SyncEntityType::Extension,
                             entity_id: ext.id.clone(),
                             version,
-                            device_id: self.account_manager.device_id_hash(),
+                            device_id,
                             schema_version: 1,
                             modified_at: chrono::Utc::now().timestamp(),
-                            payload_json: payload.to_string(),
+                            payload_json: payload_str,
                             deleted: false,
                             queue_row_id: None,
+                            fields_hlc_json,
                         };
                         self.sync_push_entity_persisted(sync_entity);
                     }
@@ -5417,6 +5744,10 @@ impl MahoCore {
     }
 
     pub fn save_form_data(&mut self, tab_id: &str, form_json: String) {
+        let typed_tab_id = TabId::new(tab_id);
+        if self.tab_id_is_private(&typed_tab_id) {
+            return;
+        }
         self.crash_recovery.save_form_data(tab_id, form_json);
     }
 
@@ -5606,6 +5937,7 @@ impl MahoCore {
             last_active_at: tab.last_active_at.clone(),
             favorite_order: tab.role.favorite_order(),
             role: tab.role.clone(),
+            is_private: tab.is_private,
         }
     }
 
@@ -6232,16 +6564,20 @@ impl MahoCore {
             });
             match self.next_hlc_ts() {
                 Ok(version) => {
+                    let device_id = self.account_manager.device_id_hash();
+                    let payload_str = payload.to_string();
+                    let fields_hlc_json = crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
                     let sync_entity = crate::sync_models::SyncEntity {
                         entity_type: crate::sync_models::SyncEntityType::Shortcut,
                         entity_id: action.to_string(),
                         version,
-                        device_id: self.account_manager.device_id_hash(),
+                        device_id,
                         schema_version: 1,
                         modified_at: chrono::Utc::now().timestamp(),
-                        payload_json: payload.to_string(),
+                        payload_json: payload_str,
                         deleted: false,
                         queue_row_id: None,
+                        fields_hlc_json,
                     };
                     self.sync_push_entity_persisted(sync_entity);
                 }
@@ -6271,6 +6607,7 @@ impl MahoCore {
                     payload_json: payload.to_string(),
                     deleted: true,
                     queue_row_id: None,
+                    fields_hlc_json: None,
                 };
                 self.sync_push_entity_persisted(sync_entity);
             }
@@ -6713,6 +7050,7 @@ impl MahoCore {
                             parent_id: None,
                             tab_id: None,
                             window_id: None,
+                            is_private: false,
                         });
                         serde_json::json!({"action": "newtab", "ok": true}).to_string()
                     }
@@ -6754,6 +7092,7 @@ impl MahoCore {
                         parent_id: None,
                         tab_id: None,
                         window_id: None,
+                        is_private: false,
                     });
                     serde_json::json!({"action": "open", "ok": true}).to_string()
                 } else {
@@ -6793,6 +7132,9 @@ impl MahoCore {
 
     pub fn push_tab_sync(&mut self, tab_id: &TabId) {
         if let Some(tab) = self.tab_manager.get_tab(tab_id) {
+            if tab.is_private {
+                return;
+            }
             if let Ok(payload) = serde_json::to_string(tab) {
                 self.push_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, false);
             }
@@ -6801,7 +7143,9 @@ impl MahoCore {
 
     pub fn push_space_sync(&mut self, space_id: &SpaceId) {
         if let Some(space) = self.space_manager.get_space(space_id) {
-            if let Ok(payload) = serde_json::to_string(space) {
+            let private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
+            let sanitized = sanitize_space_for_private_tabs(space, &private_ids);
+            if let Ok(payload) = serde_json::to_string(&sanitized) {
                 self.push_sync_entity(SyncEntityType::Space, space.id.to_string(), payload, false);
             }
         }
@@ -6865,6 +7209,13 @@ impl MahoCore {
     pub fn stop_sync(&mut self) {
         self.trigger_async_snapshot_upload();
         self.sync_manager = None;
+    }
+
+    pub fn drain_received_tabs(&mut self) -> Vec<crate::sync_models::ReceivedTab> {
+        match &mut self.sync_manager {
+            Some(sm) => sm.drain_received_tabs(),
+            None => Vec::new(),
+        }
     }
 
     pub fn set_sync_status(&mut self, status: crate::sync_models::SyncStatus) {
@@ -6951,6 +7302,63 @@ impl MahoCore {
         }
     }
 
+    pub fn get_sync_server_url(&self) -> Option<String> {
+        self.sync_manager.as_ref().map(|sm| sm.config().server_url.clone())
+    }
+
+    pub fn get_sync_key(&self) -> Option<String> {
+        self.sync_manager.as_ref().and_then(|sm| sm.config().sync_key.clone())
+    }
+
+    pub fn handle_incoming_websocket_message(&mut self, message_json: &str) -> Result<(), String> {
+        use crate::sync_models::SyncMessage;
+        let msg: SyncMessage = serde_json::from_str(message_json)
+            .map_err(|e| format!("Failed to parse SyncMessage: {}", e))?;
+
+        let decrypted_msg = if let SyncMessage::Encrypted { data } = msg {
+            if let Some(ref sm) = self.sync_manager {
+                if let Some(ref key) = sm.encryption_key {
+                    let decrypted = crate::sync_crypto::decrypt_update(&data, key)
+                        .map_err(|e| format!("Decryption failed: {}", e))?;
+                    serde_json::from_slice::<SyncMessage>(&decrypted)
+                        .map_err(|e| format!("Failed to parse decrypted message: {}", e))?
+                } else {
+                    return Err("No encryption key configured".to_string());
+                }
+            } else {
+                return Err("SyncManager not active".to_string());
+            }
+        } else {
+            msg
+        };
+
+        match decrypted_msg {
+            SyncMessage::EntityPush { entity } => {
+                self.apply_sync_remote_entities(vec![entity]);
+            }
+            SyncMessage::EntityBatch { entities } => {
+                self.apply_sync_remote_entities(entities);
+            }
+            other => {
+                if let Some(ref mut sm) = self.sync_manager {
+                    sm.handle_incoming_message(other);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_sync_auth_token(&self) -> String {
+        let token = if let Some(ref storage) = self.storage {
+            storage.get_setting("auth:access_token").ok().flatten().filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        token.unwrap_or_else(|| {
+            self.get_sync_key().unwrap_or_default()
+        })
+    }
+
     pub fn get_connected_devices(&self) -> String {
         match &self.sync_manager {
             Some(sm) => {
@@ -7031,9 +7439,45 @@ impl MahoCore {
         }).to_string()
     }
 
+    pub fn configure_sync_encryption_for_recovery_phrase(
+        &mut self,
+        server_url: &str,
+        recovery_phrase: &str,
+    ) -> Result<(), String> {
+        use crate::sync_crypto;
+
+        let seed = sync_crypto::decode_recovery_phrase(recovery_phrase)
+            .map_err(|e| format!("Invalid recovery phrase: {}", e))?;
+        let encryption_key = sync_crypto::derive_encryption_key(&seed)
+            .map_err(|e| format!("Key derivation failed: {}", e))?;
+        let room_id = sync_crypto::derive_room_id(&seed)
+            .map_err(|e| format!("Room ID derivation failed: {}", e))?;
+        self.start_sync(server_url, &room_id);
+        if let Some(ref mut sm) = self.sync_manager {
+            sm.set_encryption_key(encryption_key);
+        }
+        Ok(())
+    }
+
     pub fn remove_sync_device(&mut self, device_id: &str) {
         if let Some(ref mut sm) = self.sync_manager {
             sm.remove_device(device_id);
+        }
+    }
+
+    pub fn disconnect_sync_device(&mut self, device_id: &str) -> bool {
+        if let Some(ref mut sm) = self.sync_manager {
+            sm.disconnect_device(device_id)
+        } else {
+            false
+        }
+    }
+
+    pub fn rename_sync_device(&mut self, device_id: &str, new_name: String) -> bool {
+        if let Some(ref mut sm) = self.sync_manager {
+            sm.rename_device(device_id, new_name)
+        } else {
+            false
         }
     }
 
@@ -7047,7 +7491,7 @@ impl MahoCore {
         let device_id = self.account_manager.device_id_hash();
         if let Some(ref mut sm) = self.sync_manager {
             let key = format!("{}:{}", type_lower, entity_id);
-            sm.set_entity_version_in_cache(&key, version, device_id);
+            sm.set_entity_version_in_cache(&key, version, device_id, None, None);
         }
         if let Some(ref storage) = self.storage {
             if let Err(e) = storage.ack_sync_entity_by_key(&type_lower, entity_id, version) {
@@ -7067,14 +7511,22 @@ impl MahoCore {
         modified_at: i64,
     ) -> crate::sync_models::SyncEntity {
         let type_str = entity_type.as_str();
-        
-        let (version, device_id) = if let Some(ref s) = self.storage {
+
+        let (version, device_id, fields_hlc_json) = if let Some(ref s) = self.storage {
             match s.get_entity_version(type_str, &entity_id) {
-                Ok(Some((hlc_ts, dev_id))) => (hlc_ts, dev_id),
-                _ => ((modified_at * 1000) as u64, self.account_manager.device_id_hash()),
+                Ok(Some((hlc_ts, dev_id, fields_hlc, _payload))) => (hlc_ts, dev_id, fields_hlc),
+                _ => {
+                    let dev_id = self.account_manager.device_id_hash();
+                    let ver = (modified_at * 1000) as u64;
+                    let f_hlc = crate::sync_models::build_fields_hlc(&payload_json, ver, dev_id);
+                    (ver, dev_id, f_hlc)
+                }
             }
         } else {
-            ((modified_at * 1000) as u64, self.account_manager.device_id_hash())
+            let dev_id = self.account_manager.device_id_hash();
+            let ver = (modified_at * 1000) as u64;
+            let f_hlc = crate::sync_models::build_fields_hlc(&payload_json, ver, dev_id);
+            (ver, dev_id, f_hlc)
         };
 
         crate::sync_models::SyncEntity {
@@ -7087,6 +7539,7 @@ impl MahoCore {
             payload_json,
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json,
         }
     }
 
@@ -7098,7 +7551,7 @@ impl MahoCore {
             creator_device_id: self.account_manager.device_id_hash(),
             entities: std::collections::HashMap::new(),
         };
-        
+
         let parse_dt = |dt_str: &str| -> i64 {
             chrono::DateTime::parse_from_rfc3339(dt_str).map(|d| d.timestamp()).unwrap_or_else(|_| {
                 dt_str.parse::<i64>().unwrap_or(0)
@@ -7112,15 +7565,16 @@ impl MahoCore {
                 false
             }
         };
-        
+
         let mut hlc_ts_ceiling = 0u64;
         let mut entities = std::collections::HashMap::new();
+        let private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
 
         // Spaces
         let mut spaces = Vec::new();
         if !is_disabled(SyncEntityType::Space) {
-            for space in self.space_manager.get_all_spaces() {
-                let payload = serde_json::to_string(space).map_err(|e| e.to_string())?;
+            for space in sanitize_spaces_for_private_tabs(self.space_manager.get_all_spaces(), &private_ids) {
+                let payload = serde_json::to_string(&space).map_err(|e| e.to_string())?;
                 let sync_ent = self.create_sync_entity(SyncEntityType::Space, space.id.to_string(), payload, chrono::Utc::now().timestamp());
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 spaces.push(sync_ent);
@@ -7132,6 +7586,9 @@ impl MahoCore {
         let mut tabs = Vec::new();
         if !is_disabled(SyncEntityType::Tab) {
             for tab in self.tab_manager.get_all_tabs() {
+                if tab.is_private {
+                    continue;
+                }
                 let payload = serde_json::to_string(tab).map_err(|e| e.to_string())?;
                 let sync_ent = self.create_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, parse_dt(&tab.created_at.0));
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
@@ -7336,9 +7793,9 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::AutofillAddress) {
             if let Some(ref storage) = self.storage {
                 if let Ok(addresses_raw) = storage.load_autofill_addresses() {
-                    for (id, name, street, city, state, zip, country, phone, email) in addresses_raw {
+                    for (id, name, street, city, state, zip, country, phone, email, address_line2) in addresses_raw {
                         let addr = maho_types::autofill::AutofillAddress {
-                            id: id.clone(), name, street, city, state, zip, country, phone, email
+                            id: id.clone(), name, street, city, state, zip, country, phone, email, address_line2
                         };
                         let payload = serde_json::to_string(&addr).map_err(|e| e.to_string())?;
                         let sync_ent = self.create_sync_entity(SyncEntityType::AutofillAddress, id, payload, chrono::Utc::now().timestamp());
@@ -7355,9 +7812,9 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::AutofillPayment) {
             if let Some(ref storage) = self.storage {
                 if let Ok(payments_raw) = storage.load_autofill_payments() {
-                    for (id, card_name, last_four, expiry) in payments_raw {
+                    for (id, card_name, last_four, expiry, card_network) in payments_raw {
                         let payment = maho_types::autofill::AutofillPayment {
-                            id: id.clone(), card_name, last_four, expiry
+                            id: id.clone(), card_name, last_four, expiry, card_network
                         };
                         let payload = serde_json::to_string(&payment).map_err(|e| e.to_string())?;
                         let sync_ent = self.create_sync_entity(SyncEntityType::AutofillPayment, id, payload, chrono::Utc::now().timestamp());
@@ -7420,7 +7877,7 @@ impl MahoCore {
 
         let snap: crate::snapshot::Snapshot = serde_json::from_slice(&decrypted_bytes).map_err(|e| e.to_string())?;
         let mut ordered_entities = Vec::new();
-        
+
         let type_keys = vec![
             "Space",
             "Tab",
@@ -7500,16 +7957,23 @@ impl MahoCore {
 
         match self.next_hlc_ts() {
             Ok(version) => {
+                let device_id = self.account_manager.device_id_hash();
+                let fields_hlc_json = if deleted {
+                    None
+                } else {
+                    crate::sync_models::build_fields_hlc(&payload_json, version, device_id)
+                };
                 let sync_entity = crate::sync_models::SyncEntity {
                     entity_type,
                     entity_id: id,
                     version,
-                    device_id: self.account_manager.device_id_hash(),
+                    device_id,
                     schema_version: 1,
                     modified_at: chrono::Utc::now().timestamp(),
                     payload_json,
                     deleted,
                     queue_row_id: None,
+                    fields_hlc_json,
                 };
                 self.sync_push_entity_persisted(sync_entity);
 
@@ -7661,7 +8125,7 @@ impl MahoCore {
                 let base64_blob = json_val["blob"].as_str().ok_or_else(|| "Missing blob field in snapshot response".to_string())?;
                 use base64::Engine;
                 let encrypted_bytes = base64::engine::general_purpose::STANDARD.decode(base64_blob).map_err(|e| format!("Base64 decode failed: {:?}", e))?;
-                
+
                 println!("[sync] Snapshot found on relay, applying...");
                 if let Err(e) = self.apply_snapshot(&encrypted_bytes) {
                     eprintln!("[sync] Failed to apply snapshot: {:?}", e);
@@ -7683,8 +8147,42 @@ impl MahoCore {
         &mut self,
         entities: Vec<crate::sync_models::SyncEntity>,
     ) -> Vec<crate::sync_models::SyncEntity> {
+        let mut incoming_private_ids: HashSet<TabId> = HashSet::new();
+        for entity in &entities {
+            if entity.entity_type == SyncEntityType::Tab && !entity.deleted {
+                if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
+                    if tab.is_private {
+                        incoming_private_ids.insert(tab.id);
+                    }
+                }
+            }
+        }
+
+        let local_private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
+        let mut blocked_private_ids = local_private_ids;
+        blocked_private_ids.extend(incoming_private_ids);
+
         let mut valid_entities = Vec::new();
-        for entity in entities {
+        for mut entity in entities {
+            if entity.entity_type == SyncEntityType::Tab && !entity.deleted {
+                if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
+                    if tab.is_private {
+                        continue;
+                    }
+                }
+            }
+            if entity.entity_type == SyncEntityType::Space && !entity.deleted {
+                if let Ok(space) = serde_json::from_str::<maho_types::space::Space>(&entity.payload_json) {
+                    let sanitized = sanitize_space_for_private_tabs(&space, &blocked_private_ids);
+                    match serde_json::to_string(&sanitized) {
+                        Ok(payload) => entity.payload_json = payload,
+                        Err(e) => {
+                            eprintln!("Rejected remote space {} due to sanitize serialization error: {}", entity.entity_id, e);
+                            continue;
+                        }
+                    }
+                }
+            }
             if let Err(e) = self.update_hlc_ts_on_receive(entity.version) {
                 eprintln!("Rejected remote entity {} due to invalid HLC: {}", entity.entity_id, e);
                 continue;
@@ -7909,7 +8407,7 @@ impl MahoCore {
                             let categories = payload.get("categories").and_then(|v| v.as_str()).unwrap_or("");
                             let importance = payload.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5);
                             let metadata = payload.get("metadata").and_then(|v| v.as_str());
-                            
+
                             if let Some(ref storage) = self.storage {
                                 let _ = storage.insert_memory(&id, fact, source, session_id, categories, importance, metadata);
                                 self.memory_manager.embed_fact(id, fact.to_string());
@@ -7983,6 +8481,7 @@ impl MahoCore {
                                 country: &addr.country,
                                 phone: addr.phone.as_deref(),
                                 email: addr.email.as_deref(),
+                                address_line2: addr.address_line2.as_deref(),
                             });
                         }
                     }
@@ -7994,7 +8493,13 @@ impl MahoCore {
                         }
                     } else if let Ok(pay) = serde_json::from_str::<maho_types::autofill::AutofillPayment>(&entity.payload_json) {
                         if let Some(ref storage) = self.storage {
-                            let _ = storage.save_autofill_payment(&pay.id, &pay.card_name, &pay.last_four, &pay.expiry);
+                            let _ = storage.save_autofill_payment(
+                                &pay.id,
+                                &pay.card_name,
+                                &pay.last_four,
+                                &pay.expiry,
+                                pay.card_network.as_deref(),
+                            );
                         }
                     }
                 }
@@ -8058,9 +8563,20 @@ impl MahoCore {
             ) {
                 entity.queue_row_id = Some(row_id);
             }
+            // Also update entity_versions table for local change
+            let _ = storage.save_entity_version(
+                entity_type_str,
+                &entity.entity_id,
+                entity.version,
+                entity.device_id,
+                entity.fields_hlc_json.as_deref(),
+                Some(&entity.payload_json),
+            );
         }
         // Then push to in-memory sync manager
         if let Some(ref mut sm) = self.sync_manager {
+            let cache_key = format!("{}:{}", entity.entity_type.as_str(), entity.entity_id);
+            sm.set_entity_version_in_cache(&cache_key, entity.version, entity.device_id, entity.fields_hlc_json.clone(), Some(entity.payload_json.clone()));
             sm.push_entity(entity);
         }
     }
@@ -8081,16 +8597,23 @@ impl MahoCore {
                     continue;
                 }
             };
+            let device_id = self.account_manager.device_id_hash();
+            let fields_hlc_json = if deleted {
+                None
+            } else {
+                crate::sync_models::build_fields_hlc(&payload_json, version, device_id)
+            };
             let entity = SyncEntity {
                 entity_type,
                 entity_id,
                 version,
-                device_id: self.account_manager.device_id_hash(),
+                device_id,
                 schema_version: 1,
                 modified_at,
                 payload_json,
                 deleted,
                 queue_row_id: Some(id),
+                fields_hlc_json,
             };
             if let Some(ref mut sm) = self.sync_manager {
                 sm.push_entity(entity);
@@ -8439,12 +8962,12 @@ fn parse_sync_entity_type(s: &str) -> Option<SyncEntityType> {
 // === Trait implementations for EventDispatcher ===
 
 impl TabManagerInterface for TabLifecycleManager {
-    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab {
-        self.create_tab(space_id, url, parent_id, window_id)
+    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab {
+        self.create_tab(space_id, url, parent_id, window_id, is_private)
     }
 
-    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab {
-        self.create_tab_with_id(tab_id, space_id, url, parent_id, window_id)
+    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab {
+        self.create_tab_with_id(tab_id, space_id, url, parent_id, window_id, is_private)
     }
 
     fn close_tab(&mut self, tab_id: &TabId) -> Option<Tab> {
@@ -8492,8 +9015,8 @@ impl TabManagerInterface for TabLifecycleManager {
         self.transition_tab_role(tab_id, new_role)
     }
 
-    fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize) {
-        self.reorder_favorite(tab_id, new_index)
+    fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize, space_ids: &std::collections::HashSet<SpaceId>) {
+        self.reorder_favorite(tab_id, new_index, space_ids)
     }
 
     fn mute_tab(&mut self, tab_id: &TabId) {
@@ -8674,6 +9197,10 @@ impl SpaceManagerInterface for SpaceManager {
     ) -> Option<maho_types::traits::shell_renderer::SpaceViewModel> {
         self.get_space(space_id)
             .map(|space| self.to_view_model(space))
+    }
+
+    fn get_space_ids_for_profile(&self, profile_id: &ProfileId) -> std::collections::HashSet<SpaceId> {
+        self.get_space_ids_for_profile(profile_id)
     }
 
     fn create_folder(

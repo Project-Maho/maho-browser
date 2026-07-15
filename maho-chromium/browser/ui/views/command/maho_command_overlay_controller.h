@@ -9,6 +9,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -36,6 +37,10 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   MahoCommandOverlayController& operator=(
       const MahoCommandOverlayController&) = delete;
   ~MahoCommandOverlayController() override;
+
+  // A command controller/overlay may exist only for regular or exact-primary
+  // Incognito normal windows. Guest/system/DevTools/other OTR get none.
+  static bool ShouldCreateForContext(MahoPrivateContextClass klass);
 
   void Toggle(views::View* anchor,
               CommandOverlayMode mode = CommandOverlayMode::kSearch);

@@ -78,8 +78,16 @@ interface PageHandler {
   ClearThemePreview();
   OpenThemePickerDialog(string current_theme_json) => (string picked_theme_json);
 
+  // AI onboarding
+  LoginFromWelcome(string email, string password) => (bool ok, string error_message);
+  SignupFromWelcome(string email, string password, string display_name) => (bool ok, string error_message);
+  GetRelayAccountStatusFromWelcome() => (bool signed_in, string tier, string subscription_status, bool welcome_completed, bool has_stored_session, bool is_local_dev);
+
   // Completion / FDA
   FinishOnboarding();
+  // Local-dev only: finish onboarding without a valid relay session. The
+  // handler ignores this unless MAHO_RELAY_URL is set (never in production).
+  DevSkipOnboarding();
   OpenFDASettings();
 };
 

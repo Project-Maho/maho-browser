@@ -1418,5 +1418,169 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
             views::ScrollView::ScrollBarMode::kHiddenButEnabled);
 }
 
+// --- H1 regression: well-formed ShellEvents must never parse-error in core ---
+//
+// The silent-no-op ("H1") bug class happened when the native shell built a
+// ShellEvent payload with a field name the Rust `ShellEvent` enum did not
+// expect (e.g. move_tab_to_space sent with `space_id` instead of the
+// `target_space_id` the enum actually deserializes).  serde rejected the
+// payload, `maho_core_handle_event` returned a structured parse-error payload
+// — `{"error":{"kind":"parse",...}}` — and the UI silently assumed success:
+// the drag looked like it worked but nothing changed in core.
+//
+// This contract test dispatches a representative *well-formed* payload for
+// every sidebar-relevant ShellEvent kind straight through
+// maho_core_handle_event (the same core entry point DispatchShellEvent* uses,
+// but read here for its return value, which those helpers discard) and asserts
+// the core never answers with the parse-error payload.  Field names below
+// mirror the Rust ShellEvent variants exactly (maho-types shell_event.rs).
+//
+// A negative control at the end re-sends the exact H1 shape and asserts it DOES
+// produce a parse error, proving the detector above is not vacuous.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       WellFormedShellEventsDoNotProduceParseErrors) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  MahoCore* core = GetCore();
+  ASSERT_TRUE(core);
+
+  // Use a real active space id and a real tab id so the fixtures are as
+  // representative as possible.  Parse validity does not depend on the ids
+  // referencing live objects (an unknown id is a semantic no-op, never a parse
+  // error), but realistic ids keep the payloads honest.
+  const std::string space_id = GetActiveSpaceId();
+  ASSERT_FALSE(space_id.empty());
+
+  std::string tab_id;
+  {
+    auto state = GetViewState();
+    for (const auto& node : state.tab_list.normal_tree) {
+      if (node.kind == SidebarNodeKind::kTab && !node.tab_id.empty()) {
+        tab_id = node.tab_id;
+        break;
+      }
+    }
+    if (tab_id.empty()) {
+      for (const auto& node : state.tab_list.pinned_tree) {
+        if (node.kind == SidebarNodeKind::kTab && !node.tab_id.empty()) {
+          tab_id = node.tab_id;
+          break;
+        }
+      }
+    }
+  }
+  ASSERT_FALSE(tab_id.empty()) << "Seed 2 must expose at least one tab id";
+
+  // base::GetQuotedJSONString returns the value WITH its surrounding double
+  // quotes and escapes any embedded quotes, so the ids can be spliced straight
+  // into the JSON literals below without breaking them.  Built as raw JSON
+  // strings on purpose: base::Value::Dict is not name-visible in this modules
+  // TU, so payloads are assembled by hand.
+  const std::string q_tab = base::GetQuotedJSONString(tab_id);
+  const std::string q_space = base::GetQuotedJSONString(space_id);
+
+  // Round-trips a raw JSON payload through maho_core_handle_event and returns
+  // the decoded response.  An empty string means the FFI returned null, which
+  // for a live core + valid C string must never happen for a well-formed event.
+  auto dispatch = [&](const std::string& json) -> std::string {
+    char* result_c = maho_core_handle_event(core, json.c_str());
+    if (!result_c) {
+      return std::string();
+    }
+    std::string result(result_c);
+    maho_string_free(result_c);
+    return result;
+  };
+
+  // Order-independent parse-error detection.  serde_json serializes with keys
+  // sorted alphabetically (no preserve_order), so the payload is
+  // {"error":{"detail":"...","kind":"parse"}} — the "error" object and the
+  // "kind":"parse" member must both be present, but their order must not be
+  // assumed.
+  auto is_parse_error = [](const std::string& response) -> bool {
+    return response.find("\"error\"") != std::string::npos &&
+           response.find("\"kind\":\"parse\"") != std::string::npos;
+  };
+
+  // Table of {description, raw JSON payload}.  Field names mirror the Rust
+  // ShellEvent variants exactly (maho-types shell_event.rs); every id is
+  // quoted via base::GetQuotedJSONString.
+  std::vector<std::pair<std::string, std::string>> rows = {
+      // PinTab { tab_id }
+      {"pin_tab", "{\"kind\":\"pin_tab\",\"tab_id\":" + q_tab + "}"},
+      // UnpinTab { tab_id }
+      {"unpin_tab", "{\"kind\":\"unpin_tab\",\"tab_id\":" + q_tab + "}"},
+      // FavoriteTab { tab_id }
+      {"favorite_tab", "{\"kind\":\"favorite_tab\",\"tab_id\":" + q_tab + "}"},
+      // ChangeTabRole { tab_id, new_role: TabRole }.  TabRole is internally
+      // tagged with `type` (serde tag="type", rename_all="camelCase").
+      {"change_tab_role",
+       "{\"kind\":\"change_tab_role\",\"tab_id\":" + q_tab +
+           ",\"new_role\":{\"type\":\"pinned\"}}"},
+      // ReorderFavorite { tab_id, new_index: usize }
+      {"reorder_favorite", "{\"kind\":\"reorder_favorite\",\"tab_id\":" + q_tab +
+                               ",\"new_index\":0}"},
+      // CloseTab { tab_id, expected_space_id: Option (serde default) }
+      {"close_tab (no expected_space_id)",
+       "{\"kind\":\"close_tab\",\"tab_id\":" + q_tab + "}"},
+      {"close_tab (with expected_space_id)",
+       "{\"kind\":\"close_tab\",\"tab_id\":" + q_tab +
+           ",\"expected_space_id\":" + q_space + "}"},
+      // SuspendTab { tab_id }
+      {"suspend_tab", "{\"kind\":\"suspend_tab\",\"tab_id\":" + q_tab + "}"},
+      // ArchiveTabById { tab_id }
+      {"archive_tab_by_id",
+       "{\"kind\":\"archive_tab_by_id\",\"tab_id\":" + q_tab + "}"},
+      // MoveTabToSpace { tab_id, target_space_id, section: String (default) }.
+      // target_space_id — NOT space_id — is the exact field the H1 bug got
+      // wrong.
+      {"move_tab_to_space (target_space_id + section)",
+       "{\"kind\":\"move_tab_to_space\",\"tab_id\":" + q_tab +
+           ",\"target_space_id\":" + q_space + ",\"section\":\"normal\"}"},
+      // MoveTabToRoot { space_id, folder_id, tab_id, before_tab_id: Option }
+      {"move_tab_to_root",
+       "{\"kind\":\"move_tab_to_root\",\"space_id\":" + q_space +
+           ",\"folder_id\":\"folder-contract-test\",\"tab_id\":" + q_tab + "}"},
+      // ReorderRootItem { space_id, item: RootItem, insertion_point:
+      // RootInsertionPoint }.  RootItem is tag="kind", content="id"; Append is
+      // {"kind":"append"}.
+      {"reorder_root_item",
+       "{\"kind\":\"reorder_root_item\",\"space_id\":" + q_space +
+           ",\"item\":{\"kind\":\"tab\",\"id\":" + q_tab +
+           "},\"insertion_point\":{\"kind\":\"append\"}}"},
+      // CreateFolderWithTabs { space_id, name, tab_ids: Vec<TabId> }
+      {"create_folder_with_tabs",
+       "{\"kind\":\"create_folder_with_tabs\",\"space_id\":" + q_space +
+           ",\"name\":\"Contract Folder\",\"tab_ids\":[" + q_tab + "]}"},
+  };
+
+  for (const auto& [description, json] : rows) {
+    const std::string response = dispatch(json);
+    EXPECT_FALSE(response.empty())
+        << "maho_core_handle_event returned null for well-formed '"
+        << description << "'";
+    EXPECT_FALSE(is_parse_error(response))
+        << description << " -> " << response;
+  }
+
+  // Negative control — the exact H1 shape: move_tab_to_space carrying the wrong
+  // field name `space_id` instead of `target_space_id`.  serde reports the
+  // required `target_space_id` as missing, so the core MUST answer with the
+  // parse-error payload.  If this ever stops being a parse error, the guard
+  // above has gone vacuous.
+  {
+    const std::string bad = "{\"kind\":\"move_tab_to_space\",\"tab_id\":" +
+                            q_tab + ",\"space_id\":" + q_space + "}";
+    const std::string response = dispatch(bad);
+    ASSERT_FALSE(response.empty())
+        << "malformed event must still return a non-null error payload";
+    EXPECT_TRUE(is_parse_error(response))
+        << "malformed move_tab_to_space (space_id instead of target_space_id) "
+           "must yield a parse-error payload; got: " << response;
+  }
+}
+
 }  // namespace
 }  // namespace maho

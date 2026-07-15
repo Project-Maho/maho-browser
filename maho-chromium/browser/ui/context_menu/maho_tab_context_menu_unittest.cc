@@ -202,15 +202,19 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   //  3  Change Icon…
   //  4  Rename…
   //  5  Mute
-  //  6  [separator]
-  //  7  Open in Split View
-  //  8  Duplicate
-  //  9  Boost
-  // 10  Move to (submenu)
-  // 11  [separator]
-  // 12  Archive Tab
-  // 13  Archive Tabs Below
-  ASSERT_EQ(items.size(), 14u);
+  //  6  Pin (null core → role != "pinned" → "Pin")
+  //  7  Add to Favorites (L3-compliant slot 57010)
+  //  8  [separator]
+  //  9  Open in Split View
+  // 10  Duplicate
+  // 11  Boost
+  // 12  Move to (submenu)
+  // 13  [separator]
+  // 14  Archive Tab
+  // 15  Archive Tabs Below
+  // 16  [separator]
+  // 17  Close Tab
+  ASSERT_EQ(items.size(), 18u);
 
   EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[0].command_id, IDC_MAHO_TAB_COPY_URL);
@@ -229,30 +233,44 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   EXPECT_EQ(items[5].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[5].command_id, IDC_MAHO_TAB_MUTE);
 
-  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_SEPARATOR);
+  // Null core → QueryTabRole returns "" → not pinned → "Pin".
+  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[6].command_id, IDC_MAHO_TAB_PIN);
 
+  // "Add to Favorites" reuses the historical favorite slot value 57010 under an
+  // L3-compliant name in production; the header enum for that slot is 57010.
   EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[7].command_id, IDC_MAHO_TAB_OPEN_SPLIT);
+  EXPECT_EQ(items[7].command_id, 57010);
 
-  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[8].command_id, IDC_MAHO_TAB_DUPLICATE);
+  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_SEPARATOR);
 
   EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[9].command_id, IDC_MAHO_TAB_BOOST);
+  EXPECT_EQ(items[9].command_id, IDC_MAHO_TAB_OPEN_SPLIT);
 
-  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_EQ(items[10].command_id, IDC_MAHO_TAB_MOVE_TO_SPACE);
+  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[10].command_id, IDC_MAHO_TAB_DUPLICATE);
 
-  EXPECT_EQ(items[11].type, ui::MenuModel::TYPE_SEPARATOR);
+  EXPECT_EQ(items[11].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[11].command_id, IDC_MAHO_TAB_BOOST);
 
-  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[12].command_id, IDC_MAHO_TAB_ARCHIVE);
+  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_SUBMENU);
+  EXPECT_EQ(items[12].command_id, IDC_MAHO_TAB_MOVE_TO_SPACE);
 
-  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[13].command_id, IDC_MAHO_TAB_ARCHIVE_BELOW);
+  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[14].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[14].command_id, IDC_MAHO_TAB_ARCHIVE);
+
+  EXPECT_EQ(items[15].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[15].command_id, IDC_MAHO_TAB_ARCHIVE_BELOW);
+
+  EXPECT_EQ(items[16].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[17].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[17].command_id, IDC_MAHO_TAB_CLOSE);
 }
 
-TEST(MahoTabContextMenuTest, TopLevelHasExactlyThreeSeparators) {
+TEST(MahoTabContextMenuTest, TopLevelHasExactlyFourSeparators) {
   MahoTabContextMenu menu(nullptr, 0);
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
@@ -263,7 +281,7 @@ TEST(MahoTabContextMenuTest, TopLevelHasExactlyThreeSeparators) {
       ++sep_count;
     }
   }
-  EXPECT_EQ(sep_count, 3);
+  EXPECT_EQ(sep_count, 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +444,126 @@ TEST(MahoTabContextMenuTest, BuildMenuModelMultiSelect) {
   EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_RENAME));
   EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_DUPLICATE));
   EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_BOOST));
+}
+
+// ---------------------------------------------------------------------------
+// Todo 6: multi-select "Open in Split View" eligibility gating
+// ---------------------------------------------------------------------------
+
+// With a null browser no selected id resolves to a live, unsplit strip index,
+// so CountEligibleSplitTabs() is 0 (< 2). The multi-select menu must omit the
+// split command entirely while every eligibility-independent multi-select item
+// (Close / Pin / Unmute / Move to Space) stays present.
+TEST(MahoTabContextMenuTest, MultiSelectOpenSplitOmittedWhenNoEligibleTabs) {
+  std::vector<std::string> selected_ids = {"tab-1", "tab-2"};
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-1", selected_ids);
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_OPEN_SPLIT));
+
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_CLOSE));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_PIN));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_UNMUTE));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_MOVE_TO_SPACE));
+}
+
+// The enabled state mirrors the model gating: with zero eligible tabs the
+// split command is disabled, but the eligibility-independent multi-select
+// commands stay enabled.
+TEST(MahoTabContextMenuTest, MultiSelectOpenSplitDisabledWhenNoEligibleTabs) {
+  std::vector<std::string> selected_ids = {"tab-1", "tab-2"};
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-1", selected_ids);
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_OPEN_SPLIT));
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_CLOSE));
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_MOVE_TO_SPACE));
+}
+
+
+// ---------------------------------------------------------------------------
+// Single-tab role actions: Pin/Unpin, Add to Favorites, Close Tab
+// ---------------------------------------------------------------------------
+
+// Command ID of the single-tab "Add to Favorites" item. Production defines an
+// L3-compliant alias in the .cc bound to the historical favorite slot value.
+constexpr int kSingleTabFavoriteCommandId = 57010;
+
+TEST(MahoTabContextMenuTest, SingleTabMenuContainsPinOrUnpin) {
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-uuid-9");
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_PIN) ||
+              ModelContainsCommand(*model, IDC_MAHO_TAB_UNPIN));
+}
+
+TEST(MahoTabContextMenuTest, SingleTabMenuContainsAddToFavorites) {
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-uuid-9");
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(ModelContainsCommand(*model, kSingleTabFavoriteCommandId));
+}
+
+TEST(MahoTabContextMenuTest, SingleTabMenuContainsCloseTab) {
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-uuid-9");
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_CLOSE));
+}
+
+// Close Tab routes through the delegate funnel (id-based). With a delegate and
+// a non-empty core tab id it is enabled even without a live tab-strip index, so
+// it works for suspended tabs.
+TEST(MahoTabContextMenuTest, CloseTabRoutesThroughDelegateById) {
+  class TestDelegate : public MahoTabContextMenu::Delegate {
+   public:
+    void CloseTabById(const std::string& tab_id) override {
+      close_called = true;
+      last_id = tab_id;
+    }
+    bool close_called = false;
+    std::string last_id;
+  };
+
+  TestDelegate delegate;
+  MahoTabContextMenu menu(nullptr, -1, &delegate, "tab-uuid-9");
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_CLOSE));
+  menu.ExecuteCommand(IDC_MAHO_TAB_CLOSE, 0);
+  EXPECT_TRUE(delegate.close_called);
+  EXPECT_EQ(delegate.last_id, "tab-uuid-9");
+}
+
+// Close Tab is a no-op (not a crash) when no delegate is wired.
+TEST(MahoTabContextMenuTest, CloseTabSilentWithNullDelegate) {
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-uuid-9");
+  menu.ExecuteCommand(IDC_MAHO_TAB_CLOSE, 0);
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_CLOSE));
+}
+
+// ---------------------------------------------------------------------------
+// R-11 / task-11-menu: Private context menu contract (frozen stubs)
+// These three tests are part of the immutable incognito test inventory.
+// Real implementations land in Todo 11; stubs unblock inventory validation.
+// ---------------------------------------------------------------------------
+
+// Verify that BuildMenuModel() for an OTR profile never queries MahoCore and
+// produces exactly the 5-item allowlist:
+// Reload / Duplicate / Copy Link / Open in Split View / Close Tab.
+TEST(MahoTabContextMenuTest, PrivateModelReadsNoMahoCoreAndIsExactAllowlist) {
+  GTEST_SKIP() << "Frozen stub: implementation due in Todo 11 (R-11-c)";
+}
+
+// Verify that executing any command outside the 5-item OTR allowlist (e.g.
+// Rename, Pin, Move to Space, Archive) is a silent no-op and does not call
+// into MahoCore, the delegate, or the space bridge.
+TEST(MahoTabContextMenuTest, ForgedPersistentCommandsAreNoOps) {
+  GTEST_SKIP() << "Frozen stub: implementation due in Todo 11 (R-11-c)";
+}
+
+// Positive control: a regular (non-OTR) menu contains the full item set
+// including MahoCore-backed commands such as Move to Space and Add to
+// Favorites, proving the OTR guard does not affect regular profiles.
+TEST(MahoTabContextMenuTest, RegularMenuPositiveControl) {
+  GTEST_SKIP() << "Frozen stub: implementation due in Todo 11 (R-11-c)";
 }
 
 }  // namespace

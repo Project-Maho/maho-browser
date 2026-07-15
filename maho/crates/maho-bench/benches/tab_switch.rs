@@ -12,6 +12,7 @@ fn extract_tab_id_from_updates(core: &mut MahoCore, space_id: &SpaceId, url: &st
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
     };
     let updates = core.handle_event(event);
 

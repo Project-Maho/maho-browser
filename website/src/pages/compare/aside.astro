@@ -1,0 +1,155 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+import JSONLD from '../../components/JSONLD.astro';
+import ScrollReveal from '../../components/motion/ScrollReveal';
+import { getSiteUrl } from '../../lib/site';
+
+const { absoluteUrl } = getSiteUrl(Astro);
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: 'Maho vs Aside Browser',
+  url: absoluteUrl('/compare/aside'),
+  description: 'Detailed feature comparison between Maho Browser and Aside Browser (YC F25). Privacy-first, multi-provider BYOK vs Gemini bundles.'
+};
+
+const comparisonRows = [
+  {
+    feature: 'AI Integration',
+    maho: 'Multi-provider BYOK (OpenAI, Anthropic, Ollama, LM Studio) + Managed Free Trial',
+    aside: 'Gemini bundled key (zero setup) + BYOK settings for ChatGPT/Claude',
+    verdict: 'Maho for flexibility, Aside for instant setup'
+  },
+  {
+    feature: 'Agent Architecture',
+    maho: 'ACP (Agent Client Protocol) standard with out-of-process watchdog sandboxing',
+    aside: 'AsideAgentManager in-process web-driver (ChatGPT Atlas backend)',
+    verdict: 'Maho (robust isolation)'
+  },
+  {
+    feature: 'Spaces & Layout',
+    maho: 'Native Spaces (visual themes, per-space configurations) + Tab Folders & Pinned Sections',
+    aside: 'Vertical tabs + AI-based tab sorting/tidy',
+    verdict: 'Maho (organization), Aside (auto-sorting)'
+  },
+  {
+    feature: 'Supported Platforms',
+    maho: 'macOS, Windows, Linux desktops + native iOS & Android shells',
+    aside: 'macOS only (Windows in development)',
+    verdict: 'Maho (any device)'
+  },
+  {
+    feature: 'Privacy & Sovereignty',
+    maho: 'Built-in cosmetic/network ad blocker + E2E encrypted self-hostable sync relay',
+    aside: 'No ad blocker; standard sync backend (no self-host option)',
+    verdict: 'Maho'
+  },
+  {
+    feature: 'Productivity Suites',
+    maho: 'Maho Mail (Tauri React client) + Built-in Draw Easel, Tab Notes, Command Palette',
+    aside: 'Browser only (no mail/easel/notes)',
+    verdict: 'Maho'
+  }
+];
+---
+
+<BaseLayout
+  title="Maho Browser vs Aside Browser — Feature Comparison"
+  description="Compare Maho Browser and YC-backed Aside Browser side-by-side. Discover how Maho offers superior data sovereignty, multi-provider AI, and cross-platform native shells."
+>
+  <JSONLD data={ld} />
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main id="main" class="pt-24 sm:pt-28 md:pt-32">
+      <div class="container-marketing pad-x-ladder section-rhythm">
+        <div class="mx-auto max-w-5xl">
+          <ScrollReveal client:visible variant="fade" className="max-w-3xl mb-12">
+            <header>
+              <p class="mb-4 font-mono text-xs uppercase tracking-mono-loose text-muted-foreground">
+                Comparison
+              </p>
+              <h1 class="heading-serif mb-4 text-4xl sm:text-5xl">
+                Maho vs Aside Browser
+              </h1>
+              <p class="text-lg leading-relaxed text-muted-foreground">
+                Aside Browser (YC F25) focuses on "AI delegation" via bundled Gemini keys. Maho takes a different posture: "AI as a tool" with complete data sovereignty, multi-provider BYOK, native Spaces, and cross-platform native shells.
+              </p>
+            </header>
+          </ScrollReveal>
+
+          <ScrollReveal client:visible variant="fade" className="mb-16">
+            <div class="overflow-x-auto rounded-squircle-lg border border-border bg-card">
+              <table class="w-full border-collapse text-left text-sm" id="aside-comparison-table">
+                <thead>
+                  <tr class="border-b border-border bg-muted/30 font-mono text-xs uppercase tracking-mono-loose text-muted-foreground">
+                    <th class="p-4 sm:p-5">Feature</th>
+                    <th class="p-4 sm:p-5">Maho Browser</th>
+                    <th class="p-4 sm:p-5">Aside Browser</th>
+                    <th class="p-4 sm:p-5">Verdict</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-border text-muted-foreground">
+                  {comparisonRows.map((row) => (
+                    <tr class="transition-colors hover:bg-muted/10">
+                      <td class="p-4 sm:p-5 font-medium text-foreground">{row.feature}</td>
+                      <td class="p-4 sm:p-5 leading-relaxed">{row.maho}</td>
+                      <td class="p-4 sm:p-5 leading-relaxed">{row.aside}</td>
+                      <td class="p-4 sm:p-5 font-mono text-xs text-foreground/80">{row.verdict}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ScrollReveal>
+
+          <ScrollReveal client:visible variant="fade" className="grid gap-8 md:grid-cols-2">
+            <section class="space-y-4">
+              <h2 class="heading-serif text-2xl text-foreground">Why Maho?</h2>
+              <p class="text-sm leading-relaxed text-muted-foreground">
+                Maho is built for users who want to control their tools. By bringing your own API keys (or utilizing our managed free trial), you pay exactly what the tokens cost without a $20/month markup. Our architecture isolates the AI agent to an out-of-process sandbox, so your secrets and local files are never exposed. With built-in Spaces, Easel, Notes, and a native Mail client, Maho is a complete privacy-first productivity hub.
+              </p>
+            </section>
+            <section class="space-y-4">
+              <h2 class="heading-serif text-2xl text-foreground">Why Aside?</h2>
+              <p class="text-sm leading-relaxed text-muted-foreground">
+                Aside Browser is excellent for users who want zero configuration. The YC F25 team has built a highly polished, Gemini-bundled workflow that automates simple web-driver tasks immediately out of the box. If you do not mind paying a $20/month premium for automated tab tidy and web-delegated task completion, Aside provides a convenient first-run experience.
+              </p>
+            </section>
+          </ScrollReveal>
+
+          <ScrollReveal
+            client:visible
+            as="section"
+            variant="fade"
+            className="mt-16 rounded-squircle-lg border border-border bg-card p-8 text-center squircle-enhanced sm:p-10"
+          >
+            <h2 class="heading-serif mb-4 text-3xl sm:text-4xl">Try Maho Browser today.</h2>
+            <p class="mx-auto mb-6 max-w-lg text-sm leading-relaxed text-muted-foreground">
+              Free forever. Self-hostable sync relay. Available on macOS, with iOS and Android native shells in active development.
+            </p>
+            <div class="flex flex-col justify-center gap-4 sm:flex-row">
+              <a
+                id="btn-download-aside-page"
+                href="/download"
+                class="inline-flex items-center justify-center rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition hover:opacity-90"
+              >
+                Download for macOS
+              </a>
+              <a
+                id="btn-why-aside-page"
+                href="/why"
+                class="inline-flex items-center justify-center rounded-full border border-border bg-background px-6 py-3 text-sm font-medium text-foreground transition hover:bg-muted"
+              >
+                Why Maho?
+              </a>
+            </div>
+          </ScrollReveal>
+        </div>
+      </div>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

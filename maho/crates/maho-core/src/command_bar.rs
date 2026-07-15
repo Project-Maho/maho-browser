@@ -292,9 +292,12 @@ impl CommandBarEngine {
         mode: Option<&str>,
         ctx: &SearchContext,
     ) -> Vec<SuggestionViewModel> {
+        if ctx.is_incognito {
+            return self.search_incognito(query, mode, ctx);
+        }
         // ">" prefix → action-only mode
         if let Some(action_query) = query.strip_prefix('>') {
-            return self.search_actions_only(action_query.trim());
+            return self.search_actions_only(action_query.trim(), false);
         }
         let mut results: Vec<SearchResult> = Vec::new();
         let lower_query = query.to_lowercase();
@@ -767,34 +770,192 @@ impl CommandBarEngine {
             .collect()
     }
 
-    fn search_actions_only(&self, query: &str) -> Vec<SuggestionViewModel> {
+    fn search_actions_only(&self, query: &str, is_incognito: bool) -> Vec<SuggestionViewModel> {
         let lower_query = query.to_lowercase();
         let mut results: Vec<SearchResult> = Vec::new();
 
-        for action in &self.actions {
-            let target = format!("{} {}", action.label, action.category).to_lowercase();
-            let match_result = if query.is_empty() {
-                FuzzyMatchResult {
-                    is_match: true,
-                    score: 0.5,
-                    matched_indices: vec![],
+        let ephemeral_actions = vec![
+            ("close_tab", "Close Tab", "Tabs"),
+            ("reload_tab", "Reload Tab", "Tabs"),
+            ("hard_reload", "Hard Reload", "Tabs"),
+            ("copy_url", "Copy URL", "Navigation"),
+            ("toggle_sidebar", "Toggle Sidebar", "Navigation"),
+            ("toggle_split_view", "Toggle Split View", "Split View"),
+            ("zoom_in", "Zoom In", "View"),
+            ("zoom_out", "Zoom Out", "View"),
+            ("reset_zoom", "Reset Zoom", "View"),
+            ("find_in_page", "Find in Page", "View"),
+            ("view_source", "View Source", "View"),
+            ("toggle_dev_tools", "Toggle Developer Tools", "View"),
+            ("print_page", "Print Page", "View"),
+        ];
+
+        if is_incognito {
+            for (id, label, category) in ephemeral_actions {
+                let target = format!("{} {}", label, category).to_lowercase();
+                let match_result = if query.is_empty() {
+                    FuzzyMatchResult {
+                        is_match: true,
+                        score: 0.5,
+                        matched_indices: vec![],
+                    }
+                } else {
+                    Self::fuzzy_match(&lower_query, &target)
+                };
+                if match_result.is_match {
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::Action,
+                            key: format!("action:{}", id),
+                            title: label.to_string(),
+                            subtitle: Some(category.to_string()),
+                            execution_payload: None,
+                            icon: None,
+                            relevance_score: match_result.score,
+                            match_ranges: Some(indices_to_ranges(
+                                &match_result.matched_indices,
+                                label.len(),
+                            )),
+                            shortcut: None,
+                        },
+                        score: match_result.score,
+                    });
                 }
+            }
+        } else {
+            for action in &self.actions {
+                let target = format!("{} {}", action.label, action.category).to_lowercase();
+                let match_result = if query.is_empty() {
+                    FuzzyMatchResult {
+                        is_match: true,
+                        score: 0.5,
+                        matched_indices: vec![],
+                    }
+                } else {
+                    Self::fuzzy_match(&lower_query, &target)
+                };
+                if match_result.is_match {
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::Action,
+                            key: format!("action:{}", action.id),
+                            title: action.label.clone(),
+                            subtitle: Some(action.category.clone()),
+                            execution_payload: None,
+                            icon: None,
+                            relevance_score: match_result.score,
+                            match_ranges: Some(indices_to_ranges(
+                                &match_result.matched_indices,
+                                action.label.len(),
+                            )),
+                            shortcut: None,
+                        },
+                        score: match_result.score,
+                    });
+                }
+            }
+        }
+
+        // Apply frequency boost before sorting (only for non-incognito)
+        if !is_incognito {
+            for result in &mut results {
+                let key = &result.suggestion.key;
+                let boost = self.frequency_boost(key);
+                result.score += boost;
+                result.suggestion.relevance_score += boost;
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let limit = if is_incognito { 20 } else { MAX_RESULTS };
+        results
+            .into_iter()
+            .take(limit)
+            .map(|r| r.suggestion)
+            .collect()
+    }
+
+    fn search_incognito(
+        &self,
+        query: &str,
+        mode: Option<&str>,
+        ctx: &SearchContext,
+    ) -> Vec<SuggestionViewModel> {
+        // ">" prefix → action-only mode
+        if let Some(action_query) = query.strip_prefix('>') {
+            return self.search_actions_only(action_query.trim(), true);
+        }
+
+        let mut results: Vec<SearchResult> = Vec::new();
+        let lower_query = query.to_lowercase();
+
+        // 1. Navigation / Direct URL
+        if Self::is_url(query) {
+            let url = if query.starts_with("http://") || query.starts_with("https://") {
+                query.to_string()
             } else {
-                Self::fuzzy_match(&lower_query, &target)
+                format!("https://{}", query)
             };
+            results.push(SearchResult {
+                suggestion: SuggestionViewModel {
+                    kind: SuggestionType::Navigation,
+                    key: format!("nav:{}", url),
+                    title: format!("Go to {}", url),
+                    subtitle: Some("Navigate".to_string()),
+                    execution_payload: Some(url.clone()),
+                    icon: None,
+                    relevance_score: 2.0,
+                    match_ranges: None,
+                    shortcut: None,
+                },
+                score: 2.0,
+            });
+        }
+
+        // 2. Search row
+        if !query.trim().is_empty() {
+            let search_url = self.get_search_url(query);
+            let engine_name = self
+                .get_default_search_engine()
+                .map(|e| e.name.clone())
+                .unwrap_or_else(|| "Google".to_string());
+            results.push(SearchResult {
+                suggestion: SuggestionViewModel {
+                    kind: SuggestionType::Search,
+                    key: format!("search:{}", query),
+                    title: format!("{} — Search with {}", query, engine_name),
+                    subtitle: None,
+                    execution_payload: Some(search_url),
+                    icon: None,
+                    relevance_score: 1.5,
+                    match_ranges: None,
+                    shortcut: None,
+                },
+                score: 1.5,
+            });
+        }
+
+        // 3. Same-window tabs
+        for tab in &ctx.tabs {
+            let target = format!("{} {}", tab.title, tab.url).to_lowercase();
+            let match_result = Self::fuzzy_match(&lower_query, &target);
             if match_result.is_match {
                 results.push(SearchResult {
                     suggestion: SuggestionViewModel {
-                        kind: SuggestionType::Action,
-                        key: format!("action:{}", action.id),
-                        title: action.label.clone(),
-                        subtitle: Some(action.category.clone()),
-                        execution_payload: None,
-                        icon: None,
+                        kind: SuggestionType::Tab,
+                        key: format!("tab:{}", tab.id),
+                        title: tab.title.clone(),
+                        subtitle: Some(tab.url.clone()),
+                        execution_payload: Some(tab.url.clone()),
+                        icon: tab.favicon.clone(),
                         relevance_score: match_result.score,
                         match_ranges: Some(indices_to_ranges(
                             &match_result.matched_indices,
-                            action.label.len(),
+                            tab.title.len(),
                         )),
                         shortcut: None,
                     },
@@ -803,19 +964,110 @@ impl CommandBarEngine {
             }
         }
 
-        // Apply frequency boost before sorting
-        for result in &mut results {
-            let key = &result.suggestion.key;
-            let boost = self.frequency_boost(key);
-            result.score += boost;
-            result.suggestion.relevance_score += boost;
+        // 4. Ephemeral actions
+        if !lower_query.is_empty() {
+            let ephemeral_actions = vec![
+                ("close_tab", "Close Tab", "Tabs"),
+                ("reload_tab", "Reload Tab", "Tabs"),
+                ("hard_reload", "Hard Reload", "Tabs"),
+                ("copy_url", "Copy URL", "Navigation"),
+                ("toggle_sidebar", "Toggle Sidebar", "Navigation"),
+                ("toggle_split_view", "Toggle Split View", "Split View"),
+                ("zoom_in", "Zoom In", "View"),
+                ("zoom_out", "Zoom Out", "View"),
+                ("reset_zoom", "Reset Zoom", "View"),
+                ("find_in_page", "Find in Page", "View"),
+                ("view_source", "View Source", "View"),
+                ("toggle_dev_tools", "Toggle Developer Tools", "View"),
+                ("print_page", "Print Page", "View"),
+            ];
+
+            for (id, label, category) in ephemeral_actions {
+                let target = format!("{} {}", label, category).to_lowercase();
+                let match_result = Self::fuzzy_match(&lower_query, &target);
+                if match_result.is_match && match_result.score > 0.3 {
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::Action,
+                            key: format!("action:{}", id),
+                            title: label.to_string(),
+                            subtitle: Some(category.to_string()),
+                            execution_payload: None,
+                            icon: None,
+                            relevance_score: match_result.score,
+                            match_ranges: Some(indices_to_ranges(
+                                &match_result.matched_indices,
+                                label.len(),
+                            )),
+                            shortcut: None,
+                        },
+                        score: match_result.score,
+                    });
+                }
+            }
         }
 
+        // Deduplicate keys
+        {
+            let mut seen = std::collections::HashSet::new();
+            results.retain(|r| seen.insert(r.suggestion.key.clone()));
+        }
+
+        // Apply mode boosts
+        if let Some(mode) = mode {
+            for result in &mut results {
+                let kind_boost = match mode {
+                    "normal" => match result.suggestion.kind {
+                        SuggestionType::Action => 0.5,
+                        SuggestionType::Tab => 0.3,
+                        SuggestionType::Search => 0.2,
+                        _ => 0.0,
+                    },
+                    "addressBar" => match result.suggestion.kind {
+                        SuggestionType::Navigation => 0.5,
+                        SuggestionType::Search => 0.3,
+                        _ => 0.0,
+                    },
+                    "newTab" => match result.suggestion.kind {
+                        SuggestionType::Navigation => 0.5,
+                        SuggestionType::Tab => 0.4,
+                        SuggestionType::Search => 0.3,
+                        _ => 0.0,
+                    },
+                    _ => 0.0,
+                };
+                result.score += kind_boost;
+                result.suggestion.relevance_score += kind_boost;
+            }
+        }
+
+        // Sort descending by score; type priority breaks ties deterministically.
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    Self::type_priority(&a.suggestion.kind)
+                        .cmp(&Self::type_priority(&b.suggestion.kind))
+                })
         });
+
+        // Cross-type URL deduplication
+        {
+            let mut seen_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+            results.retain(|r| {
+                if Self::is_url_bearing_type(&r.suggestion.kind) {
+                    if let Some(ref url) = r.suggestion.execution_payload {
+                        seen_urls.insert(url.trim_end_matches('/').to_lowercase())
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            });
+        }
+
         results
             .into_iter()
             .take(MAX_RESULTS)

@@ -21,6 +21,8 @@
 #include "maho/browser/ui/views/boost/maho_boost_window_controller_bridge.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 
 namespace {
 
@@ -542,25 +544,58 @@ MahoBoostPageHandler::MahoBoostPageHandler(
     mojo::PendingReceiver<maho_boost::mojom::PageHandler> receiver,
     mojo::PendingRemote<maho_boost::mojom::PageObserver> page,
     const std::string& domain,
-    base::WeakPtr<maho::MahoBoostWindowController> controller)
+    base::WeakPtr<maho::MahoBoostWindowController> controller,
+    BrowserWindowInterface* browser_window,
+    content::WebContents* web_contents)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
       domain_(domain),
-      controller_(std::move(controller)) {}
+      controller_(std::move(controller)),
+      context_token_(
+          browser_window,
+          (browser_window && web_contents &&
+           browser_window->GetTabStripModel()->GetIndexOfWebContents(web_contents) != TabStripModel::kNoTab)
+              ? web_contents
+              : nullptr),
+      host_web_contents_(web_contents ? web_contents->GetWeakPtr() : nullptr) {}
 
 MahoBoostPageHandler::~MahoBoostPageHandler() = default;
 
+#define WEBUI_REVALIDATE_OR_RETURN(default_val)                              \
+  if (!context_token_.Revalidate(                                            \
+          MahoPrivateCapability::kProcessGlobalWebUI)) {                     \
+    receiver_.reset();                                                       \
+    page_.reset();                                                           \
+    return;                                                                  \
+  }
+
+#define WEBUI_REVALIDATE_OR_RETURN_VOID()                                    \
+  if (!context_token_.Revalidate(                                            \
+          MahoPrivateCapability::kProcessGlobalWebUI)) {                     \
+    receiver_.reset();                                                       \
+    page_.reset();                                                           \
+    return;                                                                  \
+  }
+
 void MahoBoostPageHandler::FireEditorKilled() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!context_token_.Revalidate(MahoPrivateCapability::kProcessGlobalWebUI)) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
   page_->OnEditorKilled();
 }
 
 void MahoBoostPageHandler::GetDomain(GetDomainCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN("");
   std::move(callback).Run(domain_);
 }
 
 void MahoBoostPageHandler::ListBoosts(ListBoostsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(std::vector<maho_boost::mojom::BoostInfoPtr>());
   maho::PostCoreTask<std::vector<maho_boost::mojom::BoostInfoPtr>>(
       FROM_HERE,
       base::BindOnce(&ListBoostsOnCoreSequence, domain_),
@@ -570,6 +605,7 @@ void MahoBoostPageHandler::ListBoosts(ListBoostsCallback callback) {
 void MahoBoostPageHandler::GetBoost(const std::string& boost_id,
                                     GetBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&GetBoostOnCoreSequence, boost_id),
@@ -578,6 +614,7 @@ void MahoBoostPageHandler::GetBoost(const std::string& boost_id,
 
 void MahoBoostPageHandler::GetActiveBoost(GetActiveBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&GetActiveBoostOnCoreSequence, domain_),
@@ -586,6 +623,7 @@ void MahoBoostPageHandler::GetActiveBoost(GetActiveBoostCallback callback) {
 
 void MahoBoostPageHandler::CreateTempBoost(CreateTempBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&CreateTempBoostOnCoreSequence, domain_),
@@ -596,6 +634,7 @@ void MahoBoostPageHandler::CreateTempBoost(CreateTempBoostCallback callback) {
 void MahoBoostPageHandler::CommitBoost(const std::string& boost_id,
                                        CommitBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&CommitBoostOnCoreSequence, boost_id),
@@ -608,6 +647,7 @@ void MahoBoostPageHandler::CommitBoost(const std::string& boost_id,
 void MahoBoostPageHandler::DiscardBoost(const std::string& boost_id,
                                         DiscardBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::PostCoreTask<std::string>(
       FROM_HERE,
       base::BindOnce(&DiscardBoostOnCoreSequence, boost_id),
@@ -620,6 +660,7 @@ void MahoBoostPageHandler::UpdateBoost(
     maho_boost::mojom::BoostUpdatePtr changes,
     UpdateBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   std::string changes_json = SerializeBoostUpdate(changes);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
@@ -631,6 +672,7 @@ void MahoBoostPageHandler::UpdateBoost(
 void MahoBoostPageHandler::DeleteBoost(const std::string& boost_id,
                                        DeleteBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(false);
   maho::PostCoreTask<bool>(
       FROM_HERE,
       base::BindOnce(&DeleteBoostOnCoreSequence, boost_id),
@@ -642,6 +684,7 @@ void MahoBoostPageHandler::SetActiveBoost(
     const std::optional<std::string>& boost_id,
     SetActiveBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::PostCoreTask<std::string>(
       FROM_HERE,
       base::BindOnce(&SetActiveBoostOnCoreSequence, domain_, boost_id),
@@ -653,6 +696,7 @@ void MahoBoostPageHandler::SetActiveBoost(
 void MahoBoostPageHandler::ComposeCss(const std::string& boost_id,
                                       ComposeCssCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN("");
   maho::PostCoreTask<std::string>(
       FROM_HERE, base::BindOnce(&ComposeCssOnCoreSequence, boost_id),
       base::BindOnce(
@@ -665,6 +709,7 @@ void MahoBoostPageHandler::ComposeCss(const std::string& boost_id,
 void MahoBoostPageHandler::ShuffleBoost(const std::string& boost_id,
                                         ShuffleBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&ShuffleBoostOnCoreSequence, boost_id),
@@ -675,6 +720,7 @@ void MahoBoostPageHandler::ShuffleBoost(const std::string& boost_id,
 void MahoBoostPageHandler::ResetBoost(const std::string& boost_id,
                                       ResetBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&ResetBoostOnCoreSequence, boost_id),
@@ -685,6 +731,7 @@ void MahoBoostPageHandler::ResetBoost(const std::string& boost_id,
 void MahoBoostPageHandler::ExportBoost(const std::string& boost_id,
                                        ExportBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN("");
   maho::PostCoreTask<std::string>(
       FROM_HERE, base::BindOnce(&ExportBoostOnCoreSequence, boost_id),
       base::BindOnce(
@@ -697,6 +744,7 @@ void MahoBoostPageHandler::ExportBoost(const std::string& boost_id,
 void MahoBoostPageHandler::ImportBoost(const std::string& json,
                                        ImportBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&ImportBoostOnCoreSequence, domain_, json),
@@ -706,6 +754,7 @@ void MahoBoostPageHandler::ImportBoost(const std::string& json,
 
 void MahoBoostPageHandler::CloseDialog(CloseDialogCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::HideActiveBoost();
   std::move(callback).Run();
 }
@@ -714,6 +763,7 @@ void MahoBoostPageHandler::RequestModeResize(
     maho_boost::mojom::WindowMode mode,
     RequestModeResizeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::SetBoostWindowMode(controller_, mode);
   std::move(callback).Run();
 }
@@ -721,6 +771,7 @@ void MahoBoostPageHandler::RequestModeResize(
 void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
                                         EnterZapModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   content::WebContents* active_wc = GetActiveTab();
   if (!active_wc) {
     std::move(callback).Run();
@@ -740,13 +791,17 @@ void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
       FROM_HERE,
       base::BindOnce(&GetZapSelectorsOnCoreSequence, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnEnterZapModeDone,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     active_wc->GetWeakPtr()));
 }
 
 void MahoBoostPageHandler::OnEnterZapModeDone(
     EnterZapModeCallback callback,
+    base::WeakPtr<content::WebContents> captured_wc,
     std::vector<std::string> zap_selectors) {
-  content::WebContents* active_wc = GetActiveTab();
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
+  content::WebContents* active_wc = captured_wc.get();
   if (!active_wc) {
     std::move(callback).Run();
     return;
@@ -768,6 +823,7 @@ void MahoBoostPageHandler::OnEnterZapModeDone(
 
 void MahoBoostPageHandler::ExitZapMode(ExitZapModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   content::WebContents* active_wc = GetActiveTab();
   if (active_wc) {
     auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
@@ -783,6 +839,7 @@ void MahoBoostPageHandler::ExitZapMode(ExitZapModeCallback callback) {
 void MahoBoostPageHandler::EnterPickerMode(const std::string& boost_id,
                                            EnterPickerModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   content::WebContents* active_wc = GetActiveTab();
   if (!active_wc) {
     std::move(callback).Run();
@@ -808,6 +865,7 @@ void MahoBoostPageHandler::EnterPickerMode(const std::string& boost_id,
 
 void MahoBoostPageHandler::ExitPickerMode(ExitPickerModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   content::WebContents* active_wc = GetActiveTab();
   if (active_wc) {
     auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
@@ -825,6 +883,7 @@ void MahoBoostPageHandler::AppendZapSelector(
     const std::string& selector,
     AppendZapSelectorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&AppendZapSelectorOnCoreSequence, boost_id, selector),
@@ -837,6 +896,7 @@ void MahoBoostPageHandler::RemoveZapSelector(
     const std::string& selector,
     RemoveZapSelectorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&RemoveZapSelectorOnCoreSequence, boost_id, selector),
@@ -846,6 +906,7 @@ void MahoBoostPageHandler::RemoveZapSelector(
 
 void MahoBoostPageHandler::OpenInspector(OpenInspectorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   content::WebContents* active_wc = GetActiveTab();
   if (active_wc) {
     DevToolsWindow::OpenDevToolsWindow(
@@ -858,6 +919,7 @@ void MahoBoostPageHandler::OpenInspector(OpenInspectorCallback callback) {
 
 void MahoBoostPageHandler::GetSystemFonts(GetSystemFontsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(std::vector<std::string>());
   content::GetFontListAsync(
       base::BindOnce(&MahoBoostPageHandler::OnGetFontListDone,
                      weak_factory_.GetWeakPtr(),
@@ -867,6 +929,8 @@ void MahoBoostPageHandler::GetSystemFonts(GetSystemFontsCallback callback) {
 void MahoBoostPageHandler::OnCreateTempBoostDone(
     CreateTempBoostCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   page_->OnBoostsChanged();
   std::move(callback).Run(std::move(result));
 }
@@ -874,6 +938,8 @@ void MahoBoostPageHandler::OnCreateTempBoostDone(
 void MahoBoostPageHandler::OnUpdateBoostDone(
     UpdateBoostCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   if (result) {
     VLOG(1) << "[MahoBoost] OnUpdateBoostDone: reinject domain="
             << result->domain;
@@ -888,6 +954,8 @@ void MahoBoostPageHandler::OnUpdateBoostDone(
 
 void MahoBoostPageHandler::OnDeleteBoostDone(DeleteBoostCallback callback,
                                               bool success) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(false);
   page_->OnBoostsChanged();
   std::move(callback).Run(success);
 }
@@ -896,6 +964,8 @@ void MahoBoostPageHandler::OnSetActiveBoostDone(
     std::optional<std::string> boost_id,
     SetActiveBoostCallback callback,
     std::string event_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   MahoBoostInjectionHandler::OnCoreUpdatesJson(std::move(event_json));
   page_->OnActiveChanged(boost_id);
   std::move(callback).Run();
@@ -903,6 +973,8 @@ void MahoBoostPageHandler::OnSetActiveBoostDone(
 
 void MahoBoostPageHandler::OnDiscardBoostDone(DiscardBoostCallback callback,
                                                std::string prev_active_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   if (!prev_active_id.empty()) {
     SetActiveBoost(prev_active_id,
                    base::BindOnce([](){ }));
@@ -914,6 +986,8 @@ void MahoBoostPageHandler::OnDiscardBoostDone(DiscardBoostCallback callback,
 void MahoBoostPageHandler::OnShuffleBoostDone(
     ShuffleBoostCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
   }
@@ -924,6 +998,8 @@ void MahoBoostPageHandler::OnShuffleBoostDone(
 void MahoBoostPageHandler::OnResetBoostDone(
     ResetBoostCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
   }
@@ -934,6 +1010,8 @@ void MahoBoostPageHandler::OnResetBoostDone(
 void MahoBoostPageHandler::OnImportBoostDone(
     ImportBoostCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(nullptr);
   page_->OnBoostsChanged();
   std::move(callback).Run(std::move(result));
 }
@@ -941,6 +1019,8 @@ void MahoBoostPageHandler::OnImportBoostDone(
 void MahoBoostPageHandler::OnAppendZapDone(
     AppendZapSelectorCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
   }
@@ -951,6 +1031,8 @@ void MahoBoostPageHandler::OnAppendZapDone(
 void MahoBoostPageHandler::OnRemoveZapDone(
     RemoveZapSelectorCallback callback,
     maho_boost::mojom::BoostInfoPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
   }
@@ -960,6 +1042,8 @@ void MahoBoostPageHandler::OnRemoveZapDone(
 
 void MahoBoostPageHandler::OnGetFontListDone(GetSystemFontsCallback callback,
                                                base::ListValue fonts) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN(std::vector<std::string>());
   std::vector<std::string> family_names;
   family_names.reserve(fonts.size());
   for (const base::Value& entry : fonts) {
@@ -977,6 +1061,12 @@ void MahoBoostPageHandler::OnContentScriptEvent(
     const std::string& type,
     const std::string& selector,
     const std::string& msg) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!context_token_.Revalidate(MahoPrivateCapability::kProcessGlobalWebUI)) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
   if (type == "zap_click" && !current_zap_boost_id_.empty()) {
     AppendZapSelector(current_zap_boost_id_, selector,
                       base::BindOnce([](){ }));
@@ -1006,3 +1096,4 @@ void MahoBoostPageHandler::OnContentScriptEvent(
 content::WebContents* MahoBoostPageHandler::GetActiveTab() {
   return maho::GetActiveTabForBoost(controller_);
 }
+

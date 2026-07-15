@@ -31,12 +31,6 @@ inline constexpr int kTopRegionSpacingDp = 8;
 // Spacer starts at x = kRailInsets.left() (10dp), so width = 74 − 10.
 inline constexpr int kTrafficLightAlignmentWidthDp = 64;
 inline constexpr int kTopBarTrafficLightAlignmentHeightDp = 20;
-// Windows in-sidebar caption dots (Mac-style close/min/max). Rendered inside
-// the traffic-light slot on Windows, where there are no native controls.
-inline constexpr int kWinCaptionDotDiameterDp = 12;
-inline constexpr int kWinCaptionDotSpacingDp = 8;
-// Top inset for the Windows top-bar row so the dots clear the top resize band.
-inline constexpr int kWinTopBarTopInsetDp = 10;
 // Top-bar action button hit target (width × height).
 inline constexpr int kTopBarButtonSizeDp = 20;
 inline constexpr int kTopBarButtonCornerRadiusDp = 8;

@@ -14,8 +14,17 @@
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+
 MahoRoutinesUIConfig::MahoRoutinesUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoRoutinesHost) {}
+
+bool MahoRoutinesUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoRoutinesUI)
 
@@ -39,6 +48,12 @@ void MahoRoutinesUI::BindInterface(
 void MahoRoutinesUI::CreatePageHandler(
     mojo::PendingRemote<maho_routines::mojom::Page> page,
     mojo::PendingReceiver<maho_routines::mojom::PageHandler> receiver) {
+  content::WebContents* host = web_ui()->GetWebContents();
+  BrowserWindowInterface* browser_window = webui::GetBrowserWindowInterface(host);
+  if (!browser_window || Profile::FromBrowserContext(host->GetBrowserContext()) != browser_window->GetProfile() ||
+      !MahoIsWebUIEnabled(host->GetBrowserContext())) {
+    return;
+  }
   page_handler_ = std::make_unique<MahoRoutinesPageHandler>(
-      std::move(receiver), std::move(page));
+      std::move(receiver), std::move(page), browser_window, host);
 }

@@ -25,6 +25,13 @@ class MahoExtensionSidePanelCoordinator : public extensions::SidePanelService::O
   MahoExtensionSidePanelCoordinator& operator=(const MahoExtensionSidePanelCoordinator&) = delete;
   ~MahoExtensionSidePanelCoordinator() override;
 
+  // Updates the docking side ("left" or "right") of the given extension's Maho
+  // side panel at runtime, overriding the static
+  // side_panel.maho_side_panel.layout manifest value. No-op when the extension
+  // has not registered a side panel with maho-core yet.
+  void SetLayout(const extensions::ExtensionId& extension_id,
+                 const std::string& layout);
+
   // extensions::SidePanelService::Observer:
   void OnPanelOptionsChanged(
       const extensions::ExtensionId& extension_id,

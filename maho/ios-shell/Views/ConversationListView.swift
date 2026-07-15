@@ -6,6 +6,7 @@ struct ConversationListView: View {
     private struct ConversationRoute: Hashable {
         let token = UUID()
         let sessionId: String?
+        let initialQuery: String?
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -24,6 +25,7 @@ struct ConversationListView: View {
     private let bridge: MahoBridge
     private let captureCurrentPageScreenshot: (@MainActor () async -> Data?)?
     private let autoOpenChatOnAppear: Bool
+    private let initialQuery: String?
 
     init(
         pageUrl: String,
@@ -31,7 +33,8 @@ struct ConversationListView: View {
         pageText: String,
         bridge: MahoBridge = .shared,
         captureCurrentPageScreenshot: (@MainActor () async -> Data?)? = nil,
-        autoOpenChatOnAppear: Bool = false
+        autoOpenChatOnAppear: Bool = false,
+        initialQuery: String? = nil
     ) {
         self.pageUrl = pageUrl
         self.pageTitle = pageTitle
@@ -39,6 +42,7 @@ struct ConversationListView: View {
         self.bridge = bridge
         self.captureCurrentPageScreenshot = captureCurrentPageScreenshot
         self.autoOpenChatOnAppear = autoOpenChatOnAppear
+        self.initialQuery = initialQuery
     }
 
     var body: some View {
@@ -71,6 +75,7 @@ struct ConversationListView: View {
                     pageTitle: pageTitle,
                     pageText: pageText,
                     sessionId: route.sessionId,
+                    initialQuery: route.initialQuery,
                     bridge: bridge,
                     captureCurrentPageScreenshot: captureCurrentPageScreenshot,
                     onClose: { dismiss() }
@@ -160,7 +165,7 @@ struct ConversationListView: View {
             } else {
                 Section("Saved conversations") {
                     ForEach(Array(conversations.enumerated()), id: \.element.id) { _, conversation in
-                        NavigationLink(value: ConversationRoute(sessionId: conversation.id)) {
+                        NavigationLink(value: ConversationRoute(sessionId: conversation.id, initialQuery: nil)) {
                             ConversationRow(conversation: conversation)
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -304,7 +309,7 @@ struct ConversationListView: View {
         }
 
         hasPerformedInitialNavigation = true
-        navigationPath.append(ConversationRoute(sessionId: nil))
+        navigationPath.append(ConversationRoute(sessionId: nil, initialQuery: initialQuery))
     }
 
     private func reloadConversations() {
@@ -321,7 +326,7 @@ struct ConversationListView: View {
             SpotlightManager.shared.indexConversation(id: sessionId, title: "", lastMessageAt: "")
         }
         reloadConversations()
-        navigationPath.append(ConversationRoute(sessionId: created ? sessionId : nil))
+        navigationPath.append(ConversationRoute(sessionId: created ? sessionId : nil, initialQuery: nil))
     }
 
     private func commitRename() {

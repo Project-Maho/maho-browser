@@ -131,3 +131,32 @@ IN_PROC_BROWSER_TEST_F(MahoLinkPreviewManagerInteractiveUiTest,
   }));
   EXPECT_FALSE(manager()->bubble_widget_for_testing());
 }
+
+// task-9-ai-ui: hovering a link in an Incognito tab is denied by the kAI token
+// before any bubble, MahoCore dispatch, or network request. No preview bubble
+// is ever created.
+IN_PROC_BROWSER_TEST_F(MahoLinkPreviewManagerInteractiveUiTest,
+                       OtrHoverStopsBeforeCoreAndNetwork) {
+  Browser* incognito = CreateIncognitoBrowser();
+  ASSERT_TRUE(incognito);
+  ASSERT_TRUE(incognito->profile()->IsOffTheRecord());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      incognito, embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+
+  content::WebContents* wc =
+      incognito->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(wc);
+  MahoLinkPreviewManager::CreateForWebContents(wc);
+  MahoLinkPreviewManager* otr_manager =
+      MahoLinkPreviewManager::FromWebContents(wc);
+  ASSERT_TRUE(otr_manager);
+
+  otr_manager->HandleLinkHoverForTesting("https://example.com", "Example",
+                                         AnchorRect());
+  base::RunLoop().RunUntilIdle();
+
+  // Denied: no bubble is ever created, and no core/network work is scheduled.
+  EXPECT_FALSE(otr_manager->bubble_widget_for_testing());
+}

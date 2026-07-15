@@ -15,6 +15,7 @@
 #include "maho/browser/maho_features.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_controller.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
@@ -101,17 +102,24 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
       std::make_unique<MahoSidebarNowPlayingView>(browser));
   resize_handle_view_ = AddChildView(std::make_unique<views::ResizeArea>(this));
 
-  PrefService* prefs = browser->profile()->GetPrefs();
-  was_panel_expanded_ = sidebar_prefs::IsSidebarPanelExpanded(prefs);
-  pref_registrar_.Init(prefs);
-  pref_registrar_.Add(
-      sidebar_prefs::kSidebarPanelExpanded,
-      base::BindRepeating(&MahoSidebarContainerView::OnPanelExpandedChanged,
-                          weak_factory_.GetWeakPtr()));
-  pref_registrar_.Add(
-      sidebar_prefs::kSidebarWidth,
-      base::BindRepeating(&MahoSidebarContainerView::OnSidebarWidthChanged,
-                          weak_factory_.GetWeakPtr()));
+  is_private_ = browser->profile()->IsIncognitoProfile() &&
+                browser->profile()->IsPrimaryOTRProfile();
+  private_sidebar_width_ = sidebar_layout::kDefaultRailWidthDp;
+  if (is_private_) {
+    was_panel_expanded_ = private_panel_expanded_;
+  } else {
+    PrefService* prefs = browser->profile()->GetPrefs();
+    was_panel_expanded_ = sidebar_prefs::IsSidebarPanelExpanded(prefs);
+    pref_registrar_.Init(prefs);
+    pref_registrar_.Add(
+        sidebar_prefs::kSidebarPanelExpanded,
+        base::BindRepeating(&MahoSidebarContainerView::OnPanelExpandedChanged,
+                            weak_factory_.GetWeakPtr()));
+    pref_registrar_.Add(
+        sidebar_prefs::kSidebarWidth,
+        base::BindRepeating(&MahoSidebarContainerView::OnSidebarWidthChanged,
+                            weak_factory_.GetWeakPtr()));
+  }
 
   ApplyPanelState();
   UpdateResizeHandleBounds();
@@ -149,6 +157,18 @@ void MahoSidebarContainerView::ShowCommandOverlayForSearch(
       browser_view->ShowMahoCommandOverlayForSearch(initial_query);
     }
   }
+}
+
+bool MahoSidebarContainerView::ShowAppMenu() {
+#if BUILDFLAG(IS_WIN)
+  auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+  if (!sidebar || !sidebar->top_bar_view()) {
+    return false;
+  }
+  return sidebar->top_bar_view()->ShowAppMenu();
+#else
+  return false;
+#endif
 }
 
 void MahoSidebarContainerView::OnThemeChanged() {
@@ -203,10 +223,7 @@ void MahoSidebarContainerView::OnResize(int resize_amount,
   const int new_width = resize_drag_start_width_ + resize_amount;
   const int clamped = sidebar_prefs::ClampSidebarWidthForLayout(new_width);
 
-  PrefService* prefs = browser_->profile()->GetPrefs();
-  if (prefs->GetInteger(sidebar_prefs::kSidebarWidth) != clamped) {
-    prefs->SetInteger(sidebar_prefs::kSidebarWidth, clamped);
-  }
+  WriteSidebarWidth(clamped);
 
   if (done_resizing) {
     resize_drag_start_width_ = -1;
@@ -242,8 +259,7 @@ void MahoSidebarContainerView::OnSidebarWidthChanged() {
 }
 
 void MahoSidebarContainerView::ApplyPanelState() {
-  PrefService* prefs = browser_->profile()->GetPrefs();
-  const bool pinned = sidebar_prefs::IsSidebarPanelExpanded(prefs);
+  const bool pinned = ReadPanelExpanded();
   const bool was_pinned = was_panel_expanded_;
 
   if (pinned) {
@@ -284,15 +300,12 @@ void MahoSidebarContainerView::ApplyPanelState() {
 }
 
 void MahoSidebarContainerView::ApplyPreferredWidthFromPrefs() {
-  PrefService* prefs = browser_->profile()->GetPrefs();
-  int width = sidebar_prefs::GetSidebarWidthForLayout(
-      prefs->GetInteger(sidebar_prefs::kSidebarWidth));
+  int width = sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
   if (sidebar_view_) {
     auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
     if (sidebar->IsInLibraryMode()) {
       const auto active = sidebar->GetActiveLibraryCategory();
-      const bool overlay_flag =
-          prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
+      const bool overlay_flag = ReadSpacesFullViewport();
       if (active == MahoSidebarLibraryRailView::Category::kSpaces &&
           overlay_flag) {
         const int rail_width = GetLibraryRailWidth();
@@ -316,13 +329,8 @@ void MahoSidebarContainerView::MaybePersistSidebarWidth(int width) {
     return;
   }
 
-  PrefService* prefs = browser_->profile()->GetPrefs();
   const int clamped_width = sidebar_prefs::ClampSidebarWidthForLayout(width);
-  if (prefs->GetInteger(sidebar_prefs::kSidebarWidth) == clamped_width) {
-    return;
-  }
-
-  prefs->SetInteger(sidebar_prefs::kSidebarWidth, clamped_width);
+  WriteSidebarWidth(clamped_width);
 }
 
 void MahoSidebarContainerView::OnBoundsChanged(
@@ -470,9 +478,8 @@ bool MahoSidebarContainerView::IsCursorInsideContainerScreenBounds() const {
 
 void MahoSidebarContainerView::AnimationProgressed(
     const gfx::Animation* animation) {
-  PrefService* prefs = browser_->profile()->GetPrefs();
-  const int full_width = sidebar_prefs::GetSidebarWidthForLayout(
-      prefs->GetInteger(sidebar_prefs::kSidebarWidth));
+  const int full_width =
+      sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
   const double fraction = reveal_animation_.GetCurrentValue();
   const int trigger_width = sidebar_layout::kHoverTriggerWidthDp;
   const int animated_width = trigger_width +
@@ -496,8 +503,7 @@ void MahoSidebarContainerView::AnimationEnded(
 }
 
 bool MahoSidebarContainerView::IsAutoHideMode() const {
-  PrefService* prefs = browser_->profile()->GetPrefs();
-  return !sidebar_prefs::IsSidebarPanelExpanded(prefs);
+  return !ReadPanelExpanded();
 }
 
 double MahoSidebarContainerView::GetRevealFraction() const {
@@ -560,15 +566,12 @@ gfx::Insets MahoSidebarContainerView::GetSidebarSlotInsets() const {
   if (IsFullyAutoHidden()) {
     return gfx::Insets();
   }
-  PrefService* prefs = browser_->profile()->GetPrefs();
-  int width = sidebar_prefs::GetSidebarWidthForLayout(
-      prefs->GetInteger(sidebar_prefs::kSidebarWidth));
+  int width = sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
   if (sidebar_view_) {
     auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
     if (sidebar->IsInLibraryMode()) {
       const auto active = sidebar->GetActiveLibraryCategory();
-      const bool overlay_flag =
-          prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
+      const bool overlay_flag = ReadSpacesFullViewport();
       if (active == MahoSidebarLibraryRailView::Category::kSpaces &&
           overlay_flag) {
         const int rail_width = GetLibraryRailWidth();
@@ -593,6 +596,63 @@ void MahoSidebarContainerView::CheckAndNotifyAutoHide() {
       overlay_host_->DismissSpacesOverlay();
     }
   }
+}
+
+void MahoSidebarContainerView::SetPrivateAppearance(
+    const ui::ImageModel& identity_icon,
+    ui::ColorId surface_color_id,
+    ui::ColorId text_color_id) {
+  is_private_ = true;
+  if (auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_)) {
+    sidebar->SetPrivateAppearance(identity_icon, surface_color_id,
+                                  text_color_id);
+  }
+}
+
+bool MahoSidebarContainerView::ReadPanelExpanded() const {
+  if (is_private_) {
+    return private_panel_expanded_;
+  }
+  return sidebar_prefs::IsSidebarPanelExpanded(browser_->profile()->GetPrefs());
+}
+
+int MahoSidebarContainerView::ReadSidebarWidth() const {
+  if (is_private_) {
+    return private_sidebar_width_;
+  }
+  return browser_->profile()->GetPrefs()->GetInteger(
+      sidebar_prefs::kSidebarWidth);
+}
+
+void MahoSidebarContainerView::WriteSidebarWidth(int clamped_width) {
+  if (is_private_) {
+    private_sidebar_width_ = clamped_width;
+    return;
+  }
+  PrefService* prefs = browser_->profile()->GetPrefs();
+  if (prefs->GetInteger(sidebar_prefs::kSidebarWidth) != clamped_width) {
+    prefs->SetInteger(sidebar_prefs::kSidebarWidth, clamped_width);
+  }
+}
+
+bool MahoSidebarContainerView::ReadSpacesFullViewport() const {
+  if (is_private_) {
+    return false;
+  }
+  return browser_->profile()->GetPrefs()->GetBoolean(
+      sidebar_prefs::kSpacesFullViewport);
+}
+
+void MahoSidebarContainerView::TogglePanelExpanded() {
+  if (is_private_) {
+    private_panel_expanded_ = !private_panel_expanded_;
+    ApplyPanelState();
+    if (parent()) {
+      parent()->InvalidateLayout();
+    }
+    return;
+  }
+  sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
 }
 
 }  // namespace maho

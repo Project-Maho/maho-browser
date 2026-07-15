@@ -11,12 +11,18 @@
 #include <wchar.h>
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
 
@@ -30,6 +36,9 @@ constexpr size_t kReadBufferSize = 4096;
 constexpr wchar_t kPipePrefix[] = L"\\\\.\\pipe\\maho-browser-";
 
 }  // namespace
+
+MahoMcpPipeServer::PipeConnection::PipeConnection() = default;
+MahoMcpPipeServer::PipeConnection::~PipeConnection() = default;
 
 // static
 std::wstring MahoMcpPipeServer::SanitizeUsername(const std::wstring& username) {
@@ -242,13 +251,16 @@ void MahoMcpPipeServer::OnObjectSignaled(HANDLE object) {
 
   if (object == connect_event_.get()) {
     OnClientConnected();
-  } else {
-    // Read completion for a connection.
-    for (auto& conn : connections_) {
-      if (object == conn->read_event.get()) {
-        OnReadComplete(conn.get());
-        return;
-      }
+    return;
+  }
+  for (auto& conn : connections_) {
+    if (object == conn->read_event.get()) {
+      OnReadComplete(conn->connection_id);
+      return;
+    }
+    if (object == conn->write_event.get()) {
+      OnWriteComplete(conn->connection_id);
+      return;
     }
   }
 }
@@ -258,19 +270,42 @@ void MahoMcpPipeServer::OnClientConnected() {
 
   // Transfer the connected pipe handle to a new connection.
   auto conn = std::make_unique<PipeConnection>();
+  conn->connection_id = next_connection_id_++;
   conn->pipe_handle = std::move(listen_handle_);
   conn->session = std::make_unique<MahoMcpSession>(session_token_);
   conn->read_buffer.resize(kReadBufferSize);
 
-  // Create read event for this connection.
   conn->read_event.Set(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
   memset(&conn->read_overlapped, 0, sizeof(conn->read_overlapped));
   conn->read_overlapped.hEvent = conn->read_event.get();
 
-  PipeConnection* conn_ptr = conn.get();
+  conn->write_event.Set(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  memset(&conn->write_overlapped, 0, sizeof(conn->write_overlapped));
+  conn->write_overlapped.hEvent = conn->write_event.get();
+
+  const uint64_t connection_id = conn->connection_id;
+
+  // Install the deferred-response sink. The callback captures a WeakPtr to the
+  // server, the pipe sequence's task runner, and the STABLE connection id —
+  // never a raw PipeConnection* or a vector index. It hops back to the pipe
+  // sequence; OnDeferredResponse resolves the id and drops the response if the
+  // connection is gone.
+  scoped_refptr<base::SequencedTaskRunner> pipe_runner =
+      base::SequencedTaskRunner::GetCurrentDefault();
+  conn->session->SetDeferredResponseSender(base::BindRepeating(
+      [](base::WeakPtr<MahoMcpPipeServer> self,
+         scoped_refptr<base::SequencedTaskRunner> runner, uint64_t cid,
+         std::string response) {
+        runner->PostTask(
+            FROM_HERE,
+            base::BindOnce(&MahoMcpPipeServer::OnDeferredResponse, self, cid,
+                           std::move(response)));
+      },
+      weak_factory_.GetWeakPtr(), pipe_runner, connection_id));
+
   connections_.push_back(std::move(conn));
 
-  BeginRead(conn_ptr);
+  BeginRead(connection_id);
 
   // Create a new listen pipe for the next connection.
   if (CreateListenPipe()) {
@@ -278,10 +313,21 @@ void MahoMcpPipeServer::OnClientConnected() {
   }
 }
 
-void MahoMcpPipeServer::BeginRead(PipeConnection* conn) {
+MahoMcpPipeServer::PipeConnection* MahoMcpPipeServer::FindConnection(
+    uint64_t connection_id) {
+  for (auto& conn : connections_) {
+    if (conn->connection_id == connection_id) {
+      return conn.get();
+    }
+  }
+  return nullptr;
+}
+
+void MahoMcpPipeServer::BeginRead(uint64_t connection_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!conn->pipe_handle.is_valid()) {
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn || !conn->pipe_handle.is_valid()) {
     return;
   }
 
@@ -295,7 +341,7 @@ void MahoMcpPipeServer::BeginRead(PipeConnection* conn) {
       &conn->read_overlapped);
 
   if (success) {
-    OnReadComplete(conn);
+    OnReadComplete(connection_id);
     return;
   }
 
@@ -303,71 +349,218 @@ void MahoMcpPipeServer::BeginRead(PipeConnection* conn) {
   if (error == ERROR_IO_PENDING) {
     conn->read_watcher.StartWatchingOnce(conn->read_event.get(), this);
   } else if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED) {
-    RemoveConnection(conn);
+    RemoveConnection(connection_id);
   } else {
     LOG(ERROR) << "MCP: ReadFile on pipe failed: " << error;
-    RemoveConnection(conn);
+    RemoveConnection(connection_id);
   }
 }
 
-void MahoMcpPipeServer::OnReadComplete(PipeConnection* conn) {
+void MahoMcpPipeServer::OnReadComplete(uint64_t connection_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn) {
+    return;
+  }
 
   DWORD bytes_read = 0;
   if (!::GetOverlappedResult(conn->pipe_handle.get(),
                              &conn->read_overlapped,
                              &bytes_read, FALSE)) {
     DWORD error = ::GetLastError();
-    if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED) {
-      RemoveConnection(conn);
-      return;
+    if (error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
+      LOG(ERROR) << "MCP: GetOverlappedResult (read) failed: " << error;
     }
-    LOG(ERROR) << "MCP: GetOverlappedResult failed: " << error;
-    RemoveConnection(conn);
+    RemoveConnection(connection_id);
     return;
   }
 
   if (bytes_read == 0) {
-    RemoveConnection(conn);
+    RemoveConnection(connection_id);
     return;
   }
 
   std::string data(conn->read_buffer.data(), bytes_read);
-  auto responses = conn->session->ProcessData(data);
 
-  for (const auto& response : responses) {
-    DWORD bytes_written = 0;
-    // Synchronous write for response simplicity (responses are small).
-    ::WriteFile(conn->pipe_handle.get(), response.data(),
-                static_cast<DWORD>(response.size()),
-                &bytes_written, nullptr);
-  }
+  // Dispatch ProcessData() on the Chromium UI sequence: the session and its
+  // browser delegate touch UI objects, which must never be accessed on the
+  // pipe sequence. Responses come back to the pipe sequence in
+  // OnResponsesReady(), keyed by the stable connection id.
+  MahoMcpSession* session_ptr = conn->session.get();
+  content::GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&MahoMcpSession::ProcessData,
+                     base::Unretained(session_ptr), data),
+      base::BindOnce(&MahoMcpPipeServer::OnResponsesReady,
+                     weak_factory_.GetWeakPtr(), connection_id));
+}
 
-  if (conn->session->state() == MahoMcpSession::State::kClosed) {
-    RemoveConnection(conn);
+void MahoMcpPipeServer::OnResponsesReady(uint64_t connection_id,
+                                         std::vector<std::string> responses) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn) {
     return;
   }
 
-  BeginRead(conn);
+  for (auto& response : responses) {
+    conn->write_queue.push_back(std::move(response));
+  }
+
+  const bool closed =
+      conn->session->state() == MahoMcpSession::State::kClosed;
+  conn->close_after_drain = conn->close_after_drain || closed;
+
+  MaybeWriteNext(connection_id);
+
+  // MaybeWriteNext() may have removed the connection (write error or a fully
+  // drained close). Re-resolve before touching it again.
+  conn = FindConnection(connection_id);
+  if (!conn) {
+    return;
+  }
+  if (!conn->close_after_drain) {
+    BeginRead(connection_id);
+  }
 }
 
-void MahoMcpPipeServer::RemoveConnection(PipeConnection* conn) {
+void MahoMcpPipeServer::OnDeferredResponse(uint64_t connection_id,
+                                           std::string response) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn || !conn->pipe_handle.is_valid()) {
+    LOG(WARNING) << "[MahoMcp] OnDeferredResponse: DROPPED connection_id="
+                 << connection_id
+                 << " reason=" << (conn ? "no_pipe" : "connection_not_found");
+    return;
+  }
+
+  conn->write_queue.push_back(std::move(response));
+  MaybeWriteNext(connection_id);
+}
+
+void MahoMcpPipeServer::MaybeWriteNext(uint64_t connection_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn || conn->write_in_progress) {
+    return;
+  }
+
+  while (!conn->write_queue.empty()) {
+    const std::string& front = conn->write_queue.front();
+    if (conn->write_offset >= front.size()) {
+      conn->write_queue.pop_front();
+      conn->write_offset = 0;
+      continue;
+    }
+
+    ::ResetEvent(conn->write_event.get());
+
+    const size_t remaining = front.size() - conn->write_offset;
+    const DWORD to_write = static_cast<DWORD>(std::min<size_t>(
+        remaining, std::numeric_limits<DWORD>::max()));
+    BOOL success = ::WriteFile(
+        conn->pipe_handle.get(),
+        front.data() + conn->write_offset,
+        to_write,
+        nullptr,
+        &conn->write_overlapped);
+
+    if (success) {
+      // Completed synchronously; resolve the byte count via the overlapped
+      // result (consistent with the read path) and keep draining.
+      DWORD bytes_written = 0;
+      ::GetOverlappedResult(conn->pipe_handle.get(), &conn->write_overlapped,
+                            &bytes_written, FALSE);
+      conn->write_offset += bytes_written;
+      if (conn->write_offset >= conn->write_queue.front().size()) {
+        conn->write_queue.pop_front();
+        conn->write_offset = 0;
+      }
+      continue;
+    }
+
+    DWORD error = ::GetLastError();
+    if (error == ERROR_IO_PENDING) {
+      conn->write_in_progress = true;
+      conn->write_watcher.StartWatchingOnce(conn->write_event.get(), this);
+      return;
+    }
+
+    if (error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
+      LOG(WARNING) << "MCP: WriteFile on pipe failed: " << error;
+    }
+    RemoveConnection(connection_id);
+    return;
+  }
+
+  // Queue fully drained.
+  if (conn->close_after_drain) {
+    RemoveConnection(connection_id);
+  }
+}
+void MahoMcpPipeServer::OnWriteComplete(uint64_t connection_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn) {
+    return;
+  }
+
+  DWORD bytes_written = 0;
+  if (!::GetOverlappedResult(conn->pipe_handle.get(),
+                             &conn->write_overlapped,
+                             &bytes_written, FALSE)) {
+    DWORD error = ::GetLastError();
+    if (error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
+      LOG(WARNING) << "MCP: GetOverlappedResult (write) failed: " << error;
+    }
+    RemoveConnection(connection_id);
+    return;
+  }
+
+  conn->write_in_progress = false;
+  if (!conn->write_queue.empty()) {
+    conn->write_offset += bytes_written;
+    if (conn->write_offset >= conn->write_queue.front().size()) {
+      conn->write_queue.pop_front();
+      conn->write_offset = 0;
+    }
+  }
+
+  MaybeWriteNext(connection_id);
+}
+
+void MahoMcpPipeServer::RemoveConnection(uint64_t connection_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   for (auto it = connections_.begin(); it != connections_.end(); ++it) {
-    if (it->get() == conn) {
-      (*it)->read_watcher.StopWatching();
-      ::DisconnectNamedPipe((*it)->pipe_handle.get());
-      connections_.erase(it);
-      return;
+    if ((*it)->connection_id != connection_id) {
+      continue;
     }
+    // Stop watchers and cancel any outstanding overlapped I/O BEFORE erasing,
+    // so no read/write completion can fire against freed connection state.
+    (*it)->read_watcher.StopWatching();
+    (*it)->write_watcher.StopWatching();
+    if ((*it)->pipe_handle.is_valid()) {
+      ::CancelIoEx((*it)->pipe_handle.get(), nullptr);
+      ::DisconnectNamedPipe((*it)->pipe_handle.get());
+    }
+    connections_.erase(it);
+    return;
   }
 }
 
 void MahoMcpPipeServer::CloseAllConnections() {
   for (auto& conn : connections_) {
     conn->read_watcher.StopWatching();
+    conn->write_watcher.StopWatching();
     if (conn->pipe_handle.is_valid()) {
+      ::CancelIoEx(conn->pipe_handle.get(), nullptr);
       ::DisconnectNamedPipe(conn->pipe_handle.get());
     }
   }

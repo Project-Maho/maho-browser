@@ -6,11 +6,13 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 
+class Browser;
 class PrefService;
 
 namespace network {
@@ -24,7 +26,10 @@ class MahoAiRuntimeRouter {
  public:
   MahoAiRuntimeRouter(
       PrefService* prefs,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>(),
+      base::RepeatingCallback<Browser*()> bound_browser_resolver =
+          base::RepeatingCallback<Browser*()>());
   ~MahoAiRuntimeRouter();
 
   MahoAiRuntimeRouter(const MahoAiRuntimeRouter&) = delete;
@@ -40,6 +45,8 @@ class MahoAiRuntimeRouter {
   SEQUENCE_CHECKER(sequence_checker_);
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+  base::RepeatingCallback<bool()> ai_gate_;
+  base::RepeatingCallback<Browser*()> bound_browser_resolver_;
 
   std::unique_ptr<MahoAiRuntimeAdapter> active_adapter_;
 };

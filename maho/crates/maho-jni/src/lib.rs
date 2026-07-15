@@ -2802,13 +2802,13 @@ fn get_jni_env() -> Option<jni::AttachGuard<'static>> {
 fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
     let Some(mut env_guard) = get_jni_env() else { return 1; };
     let env = &mut *env_guard;
-    
+
     let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else { return 1; };
     let cls = unsafe { &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass) };
-    
+
     let Ok(tool_jstr) = env.new_string(tool_name) else { return 1; };
     let Ok(args_jstr) = env.new_string(arguments) else { return 1; };
-    
+
     let val = env.call_static_method(
         cls,
         "requestAgentPermission",
@@ -2818,7 +2818,7 @@ fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
             jni::objects::JValue::Object(args_jstr.as_ref()).into(),
         ]
     );
-    
+
     match val {
         Ok(v) => v.i().unwrap_or(1),
         Err(_) => 1,
@@ -2828,19 +2828,19 @@ fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
 fn call_android_secure_storage_callback(provider: &str) -> Option<String> {
     let Some(mut env_guard) = get_jni_env() else { return None; };
     let env = &mut *env_guard;
-    
+
     let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else { return None; };
     let cls = unsafe { &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass) };
-    
+
     let Ok(provider_jstr) = env.new_string(provider) else { return None; };
-    
+
     let val = env.call_static_method(
         cls,
         "getAgentSecureStorage",
         "(Ljava/lang/String;)Ljava/lang/String;",
         &[jni::objects::JValue::Object(provider_jstr.as_ref()).into()]
     );
-    
+
     match val {
         Ok(v) => {
             let obj = v.l().ok()?;
@@ -2901,7 +2901,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         Some(s) => s,
         None => return 0,
     };
-    
+
     if let Ok(vm) = env.get_java_vm() {
         let _ = JAVA_VM.set(vm);
     }
@@ -2910,21 +2910,21 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
             let _ = MAHO_BRIDGE_CLASS.set(global_cls);
         }
     }
-    
+
     let db_path_str = match core.sqlite_db_path() {
         Some(p) => p,
         None => return 0,
     };
     let db_path = std::path::Path::new(&db_path_str);
     let workspace_root = db_path.parent().unwrap_or(db_path).to_path_buf();
-    
+
     let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path_str) {
         Ok(s) => s,
         Err(_) => return 0,
     };
-    
+
     let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
-    
+
     let permission_cb = Box::new(|req| jni_permission_handler(req));
     let runtime = Arc::new(SwiftideBackend::new(
         Arc::new(agent_storage),
@@ -2932,7 +2932,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         workspace_root,
         false, // allow_insecure_key_storage = false on mobile/Android JNI
     ));
-    
+
     let secure_storage_cb = Box::new(|provider: &str| {
         jni_secure_storage_handler(provider).map(|key| maho_agent::SecureKeyBundle {
             key,
@@ -2943,19 +2943,19 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
     if runtime.set_secure_storage_callback(secure_storage_cb).is_err() {
         return 0;
     }
-    
+
     let isolation = match SessionRuntime::new() {
         Ok(i) => Arc::new(i),
         Err(_) => return 0,
     };
-    
+
     let session = Box::new(MahoAgentSession {
         runtime,
         isolation,
         session_id: sid,
         event_queue: Arc::new(Mutex::new(Vec::new())),
     });
-    
+
     Box::into_raw(session) as jlong
 }
 
@@ -2987,16 +2987,16 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
         Some(s) => s,
         None => return 0,
     };
-    
+
     let runtime = Arc::clone(&session.runtime);
     let session_id = session.session_id.clone();
     let q_clone = Arc::clone(&session.event_queue);
     let q_clone_token = Arc::clone(&session.event_queue);
-    
+
     let on_token = Box::new(move |token: &str| {
         enqueue_event(&q_clone_token, "token", serde_json::json!(token));
     });
-    
+
     let fut = async move {
         let user_chat_msg = maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
         match runtime.run_turn(&session_id, user_chat_msg, Some(on_token)).await {
@@ -3017,12 +3017,12 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
             }
         }
     };
-    
+
     let isolation = Arc::clone(&session.isolation);
     let _ = isolation.block_on(async move {
         tokio::spawn(fut);
     });
-    
+
     1
 }
 
@@ -3039,12 +3039,12 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCancel
     let session = &*session;
     let runtime = Arc::clone(&session.runtime);
     let session_id = session.session_id.clone();
-    
+
     let isolation = Arc::clone(&session.isolation);
     let res = isolation.block_on(async move {
         runtime.cancel(&session_id).await
     });
-    
+
     if res.is_ok() { 1 } else { 0 }
 }
 
@@ -3060,17 +3060,17 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTo
     }
     let session = &*session;
     let runtime = Arc::clone(&session.runtime);
-    
+
     let isolation = Arc::clone(&session.isolation);
     let tools_res = isolation.block_on(async move {
         runtime.list_tools().await
     });
-    
+
     let tools: Vec<maho_agent::ToolDefinition> = match tools_res {
         Ok(Ok(t)) => t,
         _ => return std::ptr::null_mut(),
     };
-    
+
     let json_str = serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string());
     match env.new_string(&json_str) {
         Ok(s) => s.into_raw(),
@@ -3089,7 +3089,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEv
         return std::ptr::null_mut();
     }
     let session = &*session;
-    
+
     let event = if let Ok(mut lock) = session.event_queue.lock() {
         if lock.is_empty() {
             None
@@ -3099,7 +3099,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEv
     } else {
         None
     };
-    
+
     match event {
         Some(evt) => match env.new_string(&evt) {
             Ok(s) => s.into_raw(),
@@ -3163,7 +3163,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConve
     let title_opt = get_rust_string(&mut env, &title).filter(|s| !s.is_empty());
     let space_opt = get_rust_string(&mut env, &space_id).filter(|s| !s.is_empty());
     let model_opt = get_rust_string(&mut env, &model).filter(|s| !s.is_empty());
-    
+
     if core.create_conversation_persisted(&id_str, title_opt.as_deref(), space_opt.as_deref(), model_opt.as_deref()) {
         1
     } else {
@@ -3248,7 +3248,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConvers
         None => return 0,
     };
     let url_opt = get_rust_string(&mut env, &url_context).filter(|s| !s.is_empty());
-    
+
     if core.save_conversation_message_persisted(&sid_str, &role_str, &content_str, url_opt.as_deref()) {
         1
     } else {
@@ -3318,6 +3318,39 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeClusterTabs<'local
     };
     let clusters = core.cluster_tabs(threshold);
     to_json_jstring(&mut env, &clusters)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_preview_call_order_stays_compatible() {
+        let mut core = MahoCore::new();
+        let tab_id = maho_types::identifiers::TabId::new("test-tab");
+        let image_data = maho_types::common::ImageData {
+            data: vec![1, 2, 3],
+            width: 0,
+            height: 0,
+            format: maho_types::common::ImageFormat::Png,
+        };
+        core.update_tab_preview(&tab_id, image_data);
+        assert!(core.get_tab_preview(&tab_id).is_some());
+    }
+
+    #[test]
+    fn private_preview_call_order_stays_compatible() {
+        let mut core = MahoCore::new();
+        let tab_id = maho_types::identifiers::TabId::new("private-tab");
+        let image_data = maho_types::common::ImageData {
+            data: vec![4, 5, 6],
+            width: 0,
+            height: 0,
+            format: maho_types::common::ImageFormat::Png,
+        };
+        core.update_tab_preview(&tab_id, image_data);
+        assert!(core.get_tab_preview(&tab_id).is_some());
+    }
 }
 
 

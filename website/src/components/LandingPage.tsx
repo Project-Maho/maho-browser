@@ -81,8 +81,9 @@ const content = {
           title: "Split View",
           body: "Two pages side by side. Compare, reference, and multitask without switching tabs.",
           visual: {
-            type: "placeholder",
-            label: "Split View demo · shipping with release build",
+            type: "schematic",
+            variant: "split-view",
+            label: "Two panes, one workspace",
           },
         },
         {
@@ -90,8 +91,9 @@ const content = {
           title: "Command Bar",
           body: "One shortcut for everything. Navigate, search open tabs, run actions, jump between Spaces. Keyboard-first from the start.",
           visual: {
-            type: "placeholder",
-            label: "Command Bar demo · shipping with release build",
+            type: "schematic",
+            variant: "command-bar",
+            label: "Actions without menu hunting",
           },
         },
         {
@@ -99,8 +101,9 @@ const content = {
           title: "Optional AI",
           body: "Summarize pages, rename downloads, group tabs — with your own key, or a managed subscription. Never forced. Never mandatory.",
           visual: {
-            type: "placeholder",
-            label: "Provider setup demo · shipping with release build",
+            type: "schematic",
+            variant: "providers",
+            label: "BYOK providers, clearly separated",
           },
         },
       ],
@@ -108,7 +111,7 @@ const content = {
     importSection: {
       eyebrow: "Migration",
       headline: "Bring your setup with you.",
-      subheadline: "One-click import from Arc, Chrome, Safari, Firefox, Edge. Bookmarks, tabs, history, and passwords land where you expect them.",
+      subheadline: "One-click import from Arc, Chrome, Safari (bookmarks & history), Firefox, Edge. Bookmarks, history, and passwords land where you expect them.",
       sources: [
         { name: "Arc", logo: "/assets/browser-logos/arc.svg" },
         { name: "Chrome", logo: "/assets/browser-logos/chrome.svg" },

@@ -48,6 +48,8 @@ export {
   Database,
   Volume2,
   VolumeX,
+  Mic,
+  MicOff,
   StopCircle,
   Square,
   Globe,

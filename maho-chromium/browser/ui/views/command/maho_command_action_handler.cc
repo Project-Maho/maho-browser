@@ -29,7 +29,6 @@
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "ui/views/view_utils.h"
-#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -46,6 +45,7 @@
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "components/split_tabs/split_tab_id.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
@@ -190,15 +190,113 @@ void ToggleMahoAiPanel(Browser* browser) {
                       SidePanelOpenTrigger::kToolbarButton);
 }
 
-void ToggleActiveSplitPane(Browser* browser) {
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  if (!browser_view) {
+void ActivatePartnerSplitPane(Browser* browser) {
+  TabStripModel* model = browser ? browser->tab_strip_model() : nullptr;
+  if (!model || !model->IsActiveTabSplit()) {
     return;
   }
-  MultiContentsView* mcv = browser_view->multi_contents_view();
-  if (mcv && mcv->IsInSplitView()) {
-    int current = mcv->GetActiveIndex();
-    mcv->SetActiveIndex(current == 0 ? 1 : 0);
+  tabs::TabInterface* active_tab = model->GetActiveTab();
+  if (!active_tab) {
+    return;
+  }
+  std::optional<split_tabs::SplitTabId> split_id = active_tab->GetSplit();
+  if (!split_id.has_value()) {
+    return;
+  }
+  split_tabs::SplitTabData* split_data = model->GetSplitData(split_id.value());
+  if (!split_data) {
+    return;
+  }
+  // Two-pane splits only: activate the one member that is not already active.
+  // Routing through TabStripModel::ActivateTabAt makes the model the single
+  // source of truth and drives the canonical
+  // MultiContentsViewDelegateImpl::WebContentsFocused ->
+  // TabStripModel::ActivateTabAt -> BrowserView::UpdateActiveTabInSplitView ->
+  // MultiContentsView::SetActiveIndex path, so both next and prev converge the
+  // active WebContents, focus, and derived MultiContentsView state.
+  for (tabs::TabInterface* member : split_data->ListTabs()) {
+    if (member == active_tab) {
+      continue;
+    }
+    const int partner_index = model->GetIndexOfTab(member);
+    if (partner_index != TabStripModel::kNoTab) {
+      model->ActivateTabAt(
+          partner_index,
+          TabStripUserGestureDetails(
+              TabStripUserGestureDetails::GestureType::kOther));
+    }
+    return;
+  }
+}
+
+}  // namespace
+
+bool IsPrimaryIncognitoAllowedActionId(const std::string& action_id) {
+  for (const std::string& id : MahoCommandModel::PrivateActionAllowlist()) {
+    if (id == action_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ShouldPersistSidebarToggle(MahoPrivateContextClass klass) {
+  return klass == MahoPrivateContextClass::kRegular;
+}
+
+namespace {
+
+// Exact-primary-Incognito dispatcher: accepts ONLY the frozen 13 IDs, each
+// gated by a fresh token revalidation. toggle_sidebar never writes prefs and
+// toggle_split_view uses the nonpersistent split mode (no MahoCore dispatch).
+void ExecutePrivateCommandAction(Browser* browser,
+                                 const std::string& action_id) {
+  if (!IsPrimaryIncognitoAllowedActionId(action_id)) {
+    return;
+  }
+
+  content::WebContents* active =
+      browser->tab_strip_model()->GetActiveWebContents();
+  MahoPrivateContextToken token(browser, active);
+  if (!token.Revalidate(MahoPrivateCapability::kWindowLocalTabs)) {
+    return;
+  }
+
+  if (action_id == "close_tab") {
+    chrome::CloseTab(browser);
+  } else if (action_id == "reload_tab") {
+    chrome::Reload(browser, WindowOpenDisposition::CURRENT_TAB);
+  } else if (action_id == "hard_reload") {
+    chrome::ReloadBypassingCache(browser, WindowOpenDisposition::CURRENT_TAB);
+  } else if (action_id == "copy_url") {
+    if (active) {
+      ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+      writer.WriteText(base::UTF8ToUTF16(active->GetVisibleURL().spec()));
+    }
+  } else if (action_id == "toggle_sidebar") {
+    // Local-only: must NOT persist sidebar prefs. The in-memory container width
+    // toggle is owned/wired by R-11 (MahoSidebarContainerView); until then this
+    // deliberately performs no pref mutation.
+  } else if (action_id == "toggle_split_view") {
+    MahoSplitViewController(browser, MahoSplitPersistence::kPrivateLocal)
+        .ToggleSplit();
+  } else if (action_id == "zoom_in") {
+    chrome::Zoom(browser, content::PAGE_ZOOM_IN);
+  } else if (action_id == "zoom_out") {
+    chrome::Zoom(browser, content::PAGE_ZOOM_OUT);
+  } else if (action_id == "reset_zoom") {
+    chrome::Zoom(browser, content::PAGE_ZOOM_RESET);
+  } else if (action_id == "find_in_page") {
+    chrome::Find(browser);
+  } else if (action_id == "view_source") {
+    if (active) {
+      active->GetPrimaryMainFrame()->ViewSource();
+    }
+  } else if (action_id == "toggle_dev_tools") {
+    chrome::ToggleDevToolsWindow(browser, DevToolsToggleAction::Toggle(),
+                                 DevToolsOpenedByAction::kUnknown);
+  } else if (action_id == "print_page") {
+    chrome::Print(browser);
   }
 }
 
@@ -207,6 +305,19 @@ void ToggleActiveSplitPane(Browser* browser) {
 void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   DCHECK(browser);
   DCHECK(browser->tab_strip_model());
+
+  const MahoPrivateContextClass klass =
+      ClassifyProfileForTesting(browser->profile());
+  if (klass == MahoPrivateContextClass::kPrimaryIncognito) {
+    ExecutePrivateCommandAction(browser, action_id);
+    return;
+  }
+  if (klass != MahoPrivateContextClass::kRegular) {
+    // Guest/system/DevTools/other OTR/null windows own no Maho command model;
+    // deny defensively.
+    return;
+  }
+
   if (action_id == "new_tab") {
     BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
     if (browser_view) {
@@ -266,9 +377,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "remove_split_view") {
     MahoSplitViewController(browser).RemoveSplit();
   } else if (action_id == "next_split_view") {
-    ToggleActiveSplitPane(browser);
+    ActivatePartnerSplitPane(browser);
   } else if (action_id == "prev_split_view") {
-    ToggleActiveSplitPane(browser);
+    ActivatePartnerSplitPane(browser);
   } else if (action_id == "swap_split_view") {
     MahoSplitViewController(browser).SwapSplit();
   } else if (action_id == "toggle_split_view") {
@@ -359,10 +470,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id.starts_with("open_space:")) {
     std::string space_id = action_id.substr(std::string("open_space:").size());
     if (!space_id.empty()) {
-      auto* bridge = MahoSpaceProfileBridge::GetInstance();
-      if (bridge) {
-        bridge->SwitchToSpace(browser, space_id);
-      }
+      MahoSidebarView::ActivateSpaceAndTab(browser, space_id);
     }
   } else if (action_id == "little_arc") {
     MahoLittleArcWindow::Open(browser, GURL());
@@ -393,9 +501,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
               const auto* target_dict = list[target].GetIfDict();
               if (target_dict) {
                 const std::string* target_id = target_dict->FindString("id");
-                if (target_id) {
-                  bridge->SwitchToSpace(browser, *target_id);
-                }
+                  MahoSidebarView::ActivateSpaceAndTab(browser, *target_id);
               }
               break;
             }
@@ -424,9 +530,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
               const auto* dict = list[idx].GetIfDict();
               if (dict) {
                 const std::string* id = dict->FindString("id");
-                if (id) {
-                  bridge->SwitchToSpace(browser, *id);
-                }
+                  MahoSidebarView::ActivateSpaceAndTab(browser, *id);
               }
             }
           }

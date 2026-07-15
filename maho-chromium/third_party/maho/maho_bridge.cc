@@ -326,10 +326,25 @@ std::string SearchBookmarks(MahoCore* core,
 std::string HandleEvent(MahoCore* core, const char* event_json) {
   char* result = maho_core_handle_event(core, event_json);
   if (!result) {
+    LOG(WARNING) << "maho_core_handle_event failed or returned null for event: " << (event_json ? event_json : "null");
     return "{}";
   }
   std::string ret(result);
   maho_string_free(result);
+
+  // A serde parse failure in maho_core_handle_event returns a structured payload
+  // containing {"error":{...,"kind":"parse",...}}. serde_json sorts object keys
+  // alphabetically (no preserve_order feature), so match order-independently:
+  // the "kind":"parse" pair is contiguous regardless of sibling-key order. This
+  // lightweight bridge TU does not expose base::Value::Dict; downstream callers
+  // still receive "{}" so the update contract is unchanged.
+  if (ret.find("\"error\"") != std::string::npos &&
+      ret.find("\"kind\":\"parse\"") != std::string::npos) {
+    LOG(ERROR) << "maho_core_handle_event parse error for event: "
+               << (event_json ? event_json : "null") << " detail: " << ret;
+    return "{}";
+  }
+
   return ret;
 }
 

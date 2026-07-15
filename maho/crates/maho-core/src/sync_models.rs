@@ -173,6 +173,8 @@ pub struct SyncEntity {
     pub deleted: bool,
     #[serde(skip)]
     pub queue_row_id: Option<i64>,
+    #[serde(default)]
+    pub fields_hlc_json: Option<String>,
 }
 
 fn default_schema_version() -> u8 {
@@ -266,5 +268,17 @@ fn hostname() -> String {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         "Unknown Device".to_string()
+    }
+}
+
+pub fn build_fields_hlc(payload_json: &str, version: u64, device_id: u32) -> Option<String> {
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(payload_json) {
+        let mut fields = std::collections::HashMap::new();
+        for key in map.keys() {
+            fields.insert(key.clone(), (version, device_id));
+        }
+        serde_json::to_string(&fields).ok()
+    } else {
+        None
     }
 }

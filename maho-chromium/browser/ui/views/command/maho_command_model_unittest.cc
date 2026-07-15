@@ -577,6 +577,54 @@ TEST_F(QuickActionGateTest, CalculatorAndUnitConversionPreserved) {
   EXPECT_EQ("unit:0", results[1].key);
 }
 
+// ---------------------------------------------------------------------------
+// Private-context (exact-primary-Incognito) contract — task-10-command-unit
+// ---------------------------------------------------------------------------
+
+class MahoCommandModelTest : public ::testing::Test {};
+
+TEST_F(MahoCommandModelTest, PrivateSourcesAreNeverRead) {
+  EXPECT_TRUE(MahoCommandModel::ShouldReadSavedSourcesForContext(
+      MahoPrivateContextClass::kRegular));
+
+  for (MahoPrivateContextClass klass :
+       {MahoPrivateContextClass::kPrimaryIncognito,
+        MahoPrivateContextClass::kOtherOtr, MahoPrivateContextClass::kGuest,
+        MahoPrivateContextClass::kSystem,
+        MahoPrivateContextClass::kDevToolsOtr,
+        MahoPrivateContextClass::kNull}) {
+    EXPECT_FALSE(MahoCommandModel::ShouldReadSavedSourcesForContext(klass))
+        << "saved sources must never be read outside a regular profile";
+  }
+}
+
+TEST_F(MahoCommandModelTest, PrivateActionRowsMatchRustContract) {
+  const std::vector<std::string> expected = {
+      "close_tab",   "reload_tab",     "hard_reload",     "copy_url",
+      "toggle_sidebar", "toggle_split_view", "zoom_in",   "zoom_out",
+      "reset_zoom",  "find_in_page",   "view_source",     "toggle_dev_tools",
+      "print_page"};
+  EXPECT_EQ(expected, MahoCommandModel::PrivateActionAllowlist())
+      << "C++ private action allowlist must match the frozen Rust "
+         "command_bar.rs search_incognito ephemeral_actions order/ids";
+}
+
+TEST_F(MahoCommandModelTest, PrivateSearchUsesTemplateUrlServiceReadOnly) {
+  EXPECT_TRUE(MahoCommandModel::PrivateSearchUsesDefaultProviderOnly(
+      MahoPrivateContextClass::kPrimaryIncognito));
+  EXPECT_FALSE(MahoCommandModel::PrivateSearchUsesDefaultProviderOnly(
+      MahoPrivateContextClass::kRegular));
+
+  CommandSuggestion suggestion =
+      MahoCommandModel::BuildDefaultProviderSearchSuggestion(
+          "cats", "https://example.test/search?q=cats", "ExampleSearch");
+  EXPECT_EQ(CommandSuggestionType::kSearch, suggestion.type);
+  EXPECT_EQ("search:cats", suggestion.key);
+  EXPECT_EQ("https://example.test/search?q=cats",
+            suggestion.execution_payload);
+  EXPECT_NE(std::string::npos, suggestion.title.find("ExampleSearch"));
+}
+
 }  // namespace
 }  // namespace maho
 

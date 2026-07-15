@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React from 'react';
+import {Heart} from 'lucide-react';
 
 import {
   FINISH_SLIDE_OUT,
@@ -26,7 +27,7 @@ export function CompletionSidebar() {
 export async function runCompletionSequence(
     {store, selectedTheme}: CompletionSequenceOptions): Promise<void> {
   await animateSelector(
-      '#welcome-content',
+      '#completion-content',
       [
         {transform: 'translateX(0%)'},
         {transform: 'translateX(100%)'},
@@ -37,7 +38,7 @@ export async function runCompletionSequence(
         fill: 'forwards',
       });
   await animateSelector(
-      '#welcome-heart',
+      '#completion-heart',
       [
         {opacity: HEART_PULSE_KEYFRAMES.opacity[0], transform: `scale(${HEART_PULSE_KEYFRAMES.scale[0]})`},
         {opacity: HEART_PULSE_KEYFRAMES.opacity[1], transform: `scale(${HEART_PULSE_KEYFRAMES.scale[1]})`},
@@ -58,7 +59,7 @@ export async function runCompletionSequence(
   }
 
   await animateSelector(
-      '#welcome-pages',
+      '#onboarding-pages',
       [
         {opacity: 1},
         {opacity: 0},
@@ -84,11 +85,13 @@ async function animateSelector(
 
 export function CompletionContent({store}: {store: MahoWelcomeStore}) {
   return (
-    <div className="welcome-completion-stage">
-      <div id="welcome-heart" className="welcome-heart" aria-hidden="true" />
-      <div id="welcome-content" className="welcome-completion-pane" aria-hidden="true">
-        <h2 className="welcome-completion__title">{store.getString('IDS_MAHO_WELCOME_COMPLETION_TITLE')}</h2>
-        <p className="welcome-completion__tagline">{store.getString('IDS_MAHO_WELCOME_COMPLETION_BODY')}</p>
+    <div className="relative flex h-full w-full items-center justify-center">
+      <div id="completion-heart" className="absolute inset-0 flex items-center justify-center text-primary/15" aria-hidden="true">
+        <Heart className="size-44 fill-current" aria-hidden="true" />
+      </div>
+      <div id="completion-content" className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-xl border border-border bg-background/70 p-8 text-center shadow-2xl shadow-black/20 backdrop-blur-md" aria-hidden="true">
+        <h2 className="m-0 mb-3 text-2xl font-semibold tracking-tight">{store.getString('IDS_MAHO_WELCOME_COMPLETION_TITLE')}</h2>
+        <p className="m-0 max-w-sm text-base leading-7 text-muted-foreground">{store.getString('IDS_MAHO_WELCOME_COMPLETION_BODY')}</p>
       </div>
     </div>
   );

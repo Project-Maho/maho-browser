@@ -107,11 +107,17 @@ class MahoSettingsPageHandler
   void JoinSync(const std::string& recovery_phrase,
                 JoinSyncCallback callback) override;
   void StopSync() override;
+  void DisconnectSyncDevice(const std::string& device_id,
+                            DisconnectSyncDeviceCallback callback) override;
+  void RenameSyncDevice(const std::string& device_id,
+                        const std::string& new_name,
+                        RenameSyncDeviceCallback callback) override;
 
 
   void GetSpaces(GetSpacesCallback callback) override;
 
   void GetPasswordProviderStatus(GetPasswordProviderStatusCallback callback) override;
+  void GetPasswordProviderOptions(GetPasswordProviderOptionsCallback callback) override;
   void GetSavedPasswords(GetSavedPasswordsCallback callback) override;
   void SearchPasswords(const std::string& query,
                        SearchPasswordsCallback callback) override;
@@ -124,6 +130,8 @@ class MahoSettingsPageHandler
                               UpdatePasswordUsernameCallback callback) override;
   void DeletePassword(const std::string& password_id,
                       DeletePasswordCallback callback) override;
+  void RevealPassword(const std::string& password_id,
+                      RevealPasswordCallback callback) override;
 
   void GetAutofillAddresses(GetAutofillAddressesCallback callback) override;
   void AddAutofillAddress(const std::string& id,
@@ -216,9 +224,9 @@ class MahoSettingsPageHandler
   void FlushExtensionNotify();
 
 
-  void OnLoginResponse(LoginCallback callback,
-                       std::unique_ptr<network::SimpleURLLoader> loader,
-                       std::optional<std::string> response_body);
+  void OnRelayLoginCompleted(LoginCallback callback,
+                             bool ok,
+                             const std::string& error_message);
   void OnSubscriptionResponse(GetBillingInfoCallback callback,
                               bool refreshed_once,
                               std::unique_ptr<network::SimpleURLLoader> loader,

@@ -19,6 +19,7 @@ fn setup_core_with_tabs(count: usize) -> (MahoCore, Vec<TabId>) {
             parent_id: None,
             tab_id: None,
             window_id: None,
+            is_private: false,
         });
         let after = core.get_tab_view_models();
         let new_tab = after.iter().find(|t| !before.contains(&t.id)).unwrap();

@@ -7,7 +7,9 @@
 
 #include "base/functional/bind.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -76,14 +78,14 @@ void MahoSidebarSpacesView::ReloadSpaces() {
 
 void MahoSidebarSpacesView::HandleSpaceSelected(const std::string& space_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto* bridge = MahoSpaceProfileBridge::GetInstance();
-  if (!bridge || !browser_) {
+  if (!browser_) {
     return;
   }
 
-  if (bridge->SwitchToSpace(browser_, space_id)) {
+  if (MahoSidebarView::ActivateSpaceAndTab(browser_, space_id)) {
     ReloadSpaces();
   }
 }
+
 
 }  // namespace maho

@@ -14,6 +14,7 @@ type AutofillAddressRecord = (
     String,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 type BookmarkFolderRecord = (String, String, Option<String>, String);
 
@@ -27,6 +28,7 @@ pub struct AutofillAddressParams<'a> {
     pub country: &'a str,
     pub phone: Option<&'a str>,
     pub email: Option<&'a str>,
+    pub address_line2: Option<&'a str>,
 }
 
 /// SQLite storage for persistent data (history, bookmarks, settings)
@@ -219,6 +221,31 @@ impl SqliteStorage {
 
         self.run_ai_extensibility_migrations()?;
 
+        self.run_routines_migrations()?;
+
+        Ok(())
+    }
+
+    /// Additive migration for user-configurable Routines (P2.3).
+    ///
+    /// `event_trigger` (not `trigger`, which is a SQLite reserved keyword) holds
+    /// the serialized event kind; `schedule` holds a cron string. A routine uses
+    /// exactly one of the two (the other is NULL).
+    fn run_routines_migrations(&self) -> Result<(), StorageError> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS custom_routines (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    schedule TEXT,
+                    event_trigger TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_custom_routines_enabled ON custom_routines(enabled);",
+            )
+            .map_err(|e| StorageError::Other(format!("custom_routines migration failed: {}", e)))?;
         Ok(())
     }
 
@@ -248,7 +275,7 @@ impl SqliteStorage {
                 id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
                 name TEXT NOT NULL,
-                transport TEXT NOT NULL CHECK(transport IN ('stdio', 'http')),
+                transport TEXT NOT NULL CHECK(transport IN ('stdio', 'http', 'uds')),
                 command TEXT,
                 url TEXT,
                 auth_keychain_id TEXT,
@@ -258,6 +285,7 @@ impl SqliteStorage {
                 output_cap_bytes INTEGER NOT NULL DEFAULT 10240,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                socket_path TEXT,
                 UNIQUE(workspace_id, name)
             );
             CREATE TABLE IF NOT EXISTS ai_cli_tools (
@@ -288,6 +316,44 @@ impl SqliteStorage {
         ).unwrap_or(false);
         if !has_prompt_col {
             let _ = self.conn.execute("ALTER TABLE conversations ADD COLUMN system_prompt_snapshot TEXT", []);
+        }
+
+        let has_socket_path_col: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('ai_mcp_servers') WHERE name='socket_path'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_socket_path_col {
+            let _ = self.conn.execute("PRAGMA foreign_keys=OFF;", []);
+            let _ = self.conn.execute("CREATE TABLE ai_mcp_servers_dg_tmp AS SELECT * FROM ai_mcp_servers;", []);
+            let _ = self.conn.execute("DROP TABLE ai_mcp_servers;", []);
+            let _ = self.conn.execute("
+                CREATE TABLE ai_mcp_servers (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    transport TEXT NOT NULL CHECK(transport IN ('stdio', 'http', 'uds')),
+                    command TEXT,
+                    url TEXT,
+                    auth_keychain_id TEXT,
+                    trusted INTEGER NOT NULL DEFAULT 0,
+                    trusted_tools_json TEXT,
+                    timeout_ms INTEGER NOT NULL DEFAULT 60000,
+                    output_cap_bytes INTEGER NOT NULL DEFAULT 10240,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    socket_path TEXT,
+                    UNIQUE(workspace_id, name)
+                );
+            ", []);
+            let _ = self.conn.execute("
+                INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at)
+                SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at
+                FROM ai_mcp_servers_dg_tmp;
+            ", []);
+            let _ = self.conn.execute("DROP TABLE ai_mcp_servers_dg_tmp;", []);
+            let _ = self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_mcp_servers_workspace ON ai_mcp_servers(workspace_id);", []);
+            let _ = self.conn.execute("PRAGMA foreign_keys=ON;", []);
         }
 
         let count: i64 = self.conn.query_row(
@@ -536,13 +602,15 @@ impl SqliteStorage {
                 zip TEXT NOT NULL,
                 country TEXT NOT NULL,
                 phone TEXT,
-                email TEXT
+                email TEXT,
+                address_line2 TEXT
             );
             CREATE TABLE IF NOT EXISTS autofill_payments (
                 id TEXT PRIMARY KEY,
                 card_name TEXT NOT NULL,
                 last_four TEXT NOT NULL,
-                expiry TEXT NOT NULL
+                expiry TEXT NOT NULL,
+                card_network TEXT
             );
             CREATE TABLE IF NOT EXISTS reading_list (
                 id TEXT PRIMARY KEY,
@@ -670,6 +738,41 @@ impl SqliteStorage {
         ).unwrap_or(false);
         if !has_acked_at {
             let _ = self.conn.execute("ALTER TABLE sync_queue ADD COLUMN acked_at INTEGER", []);
+        }
+
+        let has_fields_hlc: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('entity_versions') WHERE name='fields_hlc_json'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_fields_hlc {
+            let _ = self.conn.execute("ALTER TABLE entity_versions ADD COLUMN fields_hlc_json TEXT", []);
+        }
+
+        let has_payload: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('entity_versions') WHERE name='payload_json'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_payload {
+            let _ = self.conn.execute("ALTER TABLE entity_versions ADD COLUMN payload_json TEXT", []);
+        }
+        let has_address_line2: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('autofill_addresses') WHERE name='address_line2'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_address_line2 {
+            let _ = self.conn.execute("ALTER TABLE autofill_addresses ADD COLUMN address_line2 TEXT", []);
+        }
+
+        let has_card_network: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('autofill_payments') WHERE name='card_network'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_card_network {
+            let _ = self.conn.execute("ALTER TABLE autofill_payments ADD COLUMN card_network TEXT", []);
         }
 
         // Reset sent_at to NULL for old unacknowledged entries older than 30 days to trigger retransmission
@@ -1600,7 +1703,7 @@ impl SqliteStorage {
         address: AutofillAddressParams<'_>,
     ) -> Result<(), StorageError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO autofill_addresses (id, name, street, city, state, zip, country, phone, email) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT OR REPLACE INTO autofill_addresses (id, name, street, city, state, zip, country, phone, email, address_line2) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 address.id,
                 address.name,
@@ -1611,6 +1714,7 @@ impl SqliteStorage {
                 address.country,
                 address.phone,
                 address.email,
+                address.address_line2,
             ],
         )?;
         Ok(())
@@ -1620,7 +1724,7 @@ impl SqliteStorage {
         &self,
     ) -> Result<Vec<AutofillAddressRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, street, city, state, zip, country, phone, email FROM autofill_addresses",
+            "SELECT id, name, street, city, state, zip, country, phone, email, address_line2 FROM autofill_addresses",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -1633,6 +1737,7 @@ impl SqliteStorage {
                 row.get::<_, String>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
         let mut results = Vec::new();
@@ -1658,26 +1763,28 @@ impl SqliteStorage {
         card_name: &str,
         last_four: &str,
         expiry: &str,
+        card_network: Option<&str>,
     ) -> Result<(), StorageError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO autofill_payments (id, card_name, last_four, expiry) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![id, card_name, last_four, expiry],
+            "INSERT OR REPLACE INTO autofill_payments (id, card_name, last_four, expiry, card_network) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, card_name, last_four, expiry, card_network],
         )?;
         Ok(())
     }
 
     pub fn load_autofill_payments(
         &self,
-    ) -> Result<Vec<(String, String, String, String)>, StorageError> {
+    ) -> Result<Vec<(String, String, String, String, Option<String>)>, StorageError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, card_name, last_four, expiry FROM autofill_payments")?;
+            .prepare("SELECT id, card_name, last_four, expiry, card_network FROM autofill_payments")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
         let mut results = Vec::new();
@@ -2093,13 +2200,18 @@ impl SqliteStorage {
         &self,
         entity_type: &str,
         entity_id: &str,
-    ) -> Result<Option<(u64, u32)>, StorageError> {
+    ) -> Result<Option<(u64, u32, Option<String>, Option<String>)>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT hlc_ts, device_id FROM entity_versions WHERE entity_type = ?1 AND entity_id = ?2",
+            "SELECT hlc_ts, device_id, fields_hlc_json, payload_json FROM entity_versions WHERE entity_type = ?1 AND entity_id = ?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![entity_type, entity_id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some((row.get::<_, u64>(0)?, row.get::<_, u32>(1)?)))
+            Ok(Some((
+                row.get::<_, u64>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            )))
         } else {
             Ok(None)
         }
@@ -2111,10 +2223,12 @@ impl SqliteStorage {
         entity_id: &str,
         hlc_ts: u64,
         device_id: u32,
+        fields_hlc_json: Option<&str>,
+        payload_json: Option<&str>,
     ) -> Result<(), StorageError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO entity_versions (entity_type, entity_id, hlc_ts, device_id) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![entity_type, entity_id, hlc_ts, device_id],
+            "INSERT OR REPLACE INTO entity_versions (entity_type, entity_id, hlc_ts, device_id, fields_hlc_json, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![entity_type, entity_id, hlc_ts, device_id, fields_hlc_json, payload_json],
         )?;
         Ok(())
     }

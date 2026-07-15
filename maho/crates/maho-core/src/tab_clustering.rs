@@ -135,6 +135,7 @@ mod tests {
             scroll_position: ScrollPosition::default(),
             pinned_url: None,
             window_id: None,
+            is_private: false,
         }
     }
 

@@ -1,8 +1,14 @@
-//! Maho Routines — hardcoded recipe automation for Max-tier users.
+//! Maho Routines — recipe automation for Max-tier users.
 //!
-//! This module provides a fixed set of browser-automation recipes that run
-//! via the SwiftideBackend agent. Recipes are NOT user-configurable; they
-//! are a curated set of high-value automations bundled with Max tier.
+//! This module provides two kinds of browser-automation recipes, both run via
+//! the SwiftideBackend agent and gated to Max tier:
+//!   - Four hardcoded built-in recipes (see `ROUTINES`), and
+//!   - User-configurable recipes persisted in `maho-storage`
+//!     (`custom_routines` table, see `maho_storage::CustomRoutine`).
+//!
+//! Custom recipes are triggered by either a cron `schedule` OR a
+//! `RoutineEvent` (e.g. `OnStartup`, `OnManyTabs`). Cron routines fire from the
+//! scheduler tick; event routines fire via `fire_event_routines`.
 //!
 //! ## R-9 Ownership Pattern (SwiftideBackend mutable singleton)
 //!
@@ -19,6 +25,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::sync::Mutex;
+
+use maho_storage::sqlite::SqliteStorage;
+use maho_storage::CustomRoutine;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,6 +81,105 @@ impl std::fmt::Display for RoutineError {
 }
 
 impl std::error::Error for RoutineError {}
+
+// ---------------------------------------------------------------------------
+// Event triggers (P2.3)
+// ---------------------------------------------------------------------------
+
+/// A non-cron event that can trigger a user-defined routine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RoutineEvent {
+    /// Fired once when the browser finishes starting up.
+    OnStartup,
+    /// Fired when the open-tab count reaches/exceeds a threshold.
+    OnManyTabs { threshold: u32 },
+}
+
+impl RoutineEvent {
+    /// Parse the compact form stored in `custom_routines.event_trigger`.
+    /// Forms: `on_startup`, `on_many_tabs:<n>`.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s == "on_startup" {
+            return Some(Self::OnStartup);
+        }
+        if let Some(rest) = s.strip_prefix("on_many_tabs:") {
+            return rest.trim().parse::<u32>().ok().map(|threshold| Self::OnManyTabs { threshold });
+        }
+        None
+    }
+
+    /// Serialize to the compact form stored in the database.
+    pub fn to_trigger_string(&self) -> String {
+        match self {
+            Self::OnStartup => "on_startup".to_string(),
+            Self::OnManyTabs { threshold } => format!("on_many_tabs:{threshold}"),
+        }
+    }
+
+    /// Whether a routine configured with `self` should fire for `fired`.
+    /// For `OnManyTabs`, the fired event's count must meet the configured
+    /// threshold.
+    pub fn matches(&self, fired: &RoutineEvent) -> bool {
+        match (self, fired) {
+            (Self::OnStartup, Self::OnStartup) => true,
+            (Self::OnManyTabs { threshold }, Self::OnManyTabs { threshold: actual }) => {
+                actual >= threshold
+            }
+            _ => false,
+        }
+    }
+}
+
+/// How a routine is triggered: on a cron schedule, or by an event.
+pub enum RoutineTrigger {
+    Cron(CronSchedule),
+    Event(RoutineEvent),
+}
+
+impl RoutineTrigger {
+    /// Resolve a stored routine's trigger from its `schedule` / `event_trigger`
+    /// columns. Cron takes precedence when both are present.
+    pub fn from_stored(schedule: Option<&str>, trigger: Option<&str>) -> Option<Self> {
+        if let Some(cron) = schedule {
+            if let Some(parsed) = CronSchedule::parse(cron) {
+                return Some(Self::Cron(parsed));
+            }
+        }
+        if let Some(event) = trigger {
+            if let Some(parsed) = RoutineEvent::parse(event) {
+                return Some(Self::Event(parsed));
+            }
+        }
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Merged listing view (built-in + user-defined)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutineSource {
+    Builtin,
+    Custom,
+}
+
+/// A unified, owned view over both built-in and user-defined routines, for
+/// listing surfaces (FFI/WebUI). Exactly one of `cron`/`trigger` is populated.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoutineView {
+    pub id: String,
+    pub name: String,
+    pub cron: Option<String>,
+    pub trigger: Option<String>,
+    pub description: String,
+    pub enabled: bool,
+    pub source: RoutineSource,
+}
+
 
 // ---------------------------------------------------------------------------
 // Hardcoded Recipes
@@ -154,6 +262,162 @@ where
         content,
         success: true,
     })
+}
+
+// ---------------------------------------------------------------------------
+// User-defined routines (P2.3): resolution, execution, event dispatch
+// ---------------------------------------------------------------------------
+
+/// Merged listing of built-in and user-defined routines.
+///
+/// Built-ins are always enabled and cron-triggered; custom routines carry their
+/// own `enabled` flag and either a `cron`/`schedule` or an event `trigger`.
+pub fn list_all_routines(storage: &SqliteStorage) -> Result<Vec<RoutineView>, RoutineError> {
+    let mut views: Vec<RoutineView> = ROUTINES
+        .iter()
+        .map(|r| RoutineView {
+            id: r.id.to_string(),
+            name: r.name.to_string(),
+            cron: Some(r.cron.to_string()),
+            trigger: None,
+            description: r.description.to_string(),
+            enabled: true,
+            source: RoutineSource::Builtin,
+        })
+        .collect();
+
+    let custom = storage
+        .list_custom_routines()
+        .map_err(|e| RoutineError::ExecutionFailed(e.to_string()))?;
+    for c in custom {
+        views.push(RoutineView {
+            id: c.id,
+            name: c.name,
+            cron: c.schedule,
+            trigger: c.trigger,
+            description: c.prompt.chars().take(140).collect(),
+            enabled: c.enabled,
+            source: RoutineSource::Custom,
+        });
+    }
+    Ok(views)
+}
+
+fn build_custom_prompt(routine: &CustomRoutine) -> String {
+    format!(
+        "You are a browser assistant running the user-defined '{}' routine.\n\
+         Instructions provided by the user:\n{}\n\
+         Follow the instructions and produce a clear, readable result.",
+        routine.name, routine.prompt
+    )
+}
+
+/// Execute a routine by id, resolving built-ins first and then user-defined
+/// recipes from storage. The Max-tier gate applies to both.
+pub async fn run_routine_resolved<F, Fut>(
+    id: &str,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    agent_prompt_runner: F,
+) -> Result<RoutineResult, RoutineError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    if user_tier != UserTier::Max {
+        return Err(RoutineError::TierLockedToMax);
+    }
+
+    if let Some(routine) = ROUTINES.iter().find(|r| r.id == id) {
+        let prompt = build_prompt(routine);
+        let content = agent_prompt_runner(prompt)
+            .await
+            .map_err(RoutineError::ExecutionFailed)?;
+        return Ok(RoutineResult {
+            id: routine.id.to_string(),
+            ran_at: chrono::Utc::now().timestamp(),
+            content,
+            success: true,
+        });
+    }
+
+    let custom = storage
+        .get_custom_routine(id)
+        .map_err(|e| RoutineError::ExecutionFailed(e.to_string()))?;
+    match custom {
+        Some(c) => {
+            let prompt = build_custom_prompt(&c);
+            let content = agent_prompt_runner(prompt)
+                .await
+                .map_err(RoutineError::ExecutionFailed)?;
+            Ok(RoutineResult {
+                id: c.id,
+                ran_at: chrono::Utc::now().timestamp(),
+                content,
+                success: true,
+            })
+        }
+        None => Err(RoutineError::NotFound(id.to_string())),
+    }
+}
+
+/// Fire every enabled, event-triggered user routine whose configured trigger
+/// matches `event`. Non-Max tiers are a silent no-op (empty result), matching
+/// the scheduler's tier behavior. A per-routine agent failure is recorded as a
+/// non-`success` `RoutineResult` rather than aborting the whole batch.
+///
+/// The shell/core should call this from the browser event loop (e.g. on
+/// startup, or when a tab-count threshold is crossed). See the follow-up note:
+/// browser-side emission of these events is not yet wired.
+pub async fn fire_event_routines<F, Fut>(
+    event: RoutineEvent,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    agent_prompt_runner: F,
+) -> Result<Vec<RoutineResult>, RoutineError>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    if user_tier != UserTier::Max {
+        return Ok(Vec::new());
+    }
+
+    let custom = storage
+        .list_custom_routines()
+        .map_err(|e| RoutineError::ExecutionFailed(e.to_string()))?;
+
+    let mut results = Vec::new();
+    for c in custom {
+        if !c.enabled {
+            continue;
+        }
+        let configured = match c.trigger.as_deref().and_then(RoutineEvent::parse) {
+            Some(ev) => ev,
+            None => continue,
+        };
+        if !configured.matches(&event) {
+            continue;
+        }
+
+        let prompt = build_custom_prompt(&c);
+        let ran_at = chrono::Utc::now().timestamp();
+        match agent_prompt_runner(prompt).await {
+            Ok(content) => results.push(RoutineResult {
+                id: c.id,
+                ran_at,
+                content,
+                success: true,
+            }),
+            Err(e) => results.push(RoutineResult {
+                id: c.id,
+                ran_at,
+                content: e,
+                success: false,
+            }),
+        }
+    }
+    Ok(results)
 }
 
 // ---------------------------------------------------------------------------
@@ -312,13 +576,18 @@ pub type TierProviderFn = Arc<dyn Fn() -> UserTier + Send + Sync>;
 pub type StorageGetFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 pub type StorageSetFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
+/// Supplies the current set of user-defined routines each tick (typically a
+/// closure over `SqliteStorage::list_custom_routines`).
+pub type CustomRoutinesProviderFn = Arc<dyn Fn() -> Vec<CustomRoutine> + Send + Sync>;
+
 pub struct RoutineScheduler {
     agent_runner: AgentRunnerFn,
     tier_provider: TierProviderFn,
-    #[allow(dead_code)]
     storage_get: StorageGetFn,
     storage_set: StorageSetFn,
+    custom_provider: CustomRoutinesProviderFn,
     last_runs: Mutex<HashMap<&'static str, i64>>,
+    custom_last_runs: Mutex<HashMap<String, i64>>,
 }
 
 impl RoutineScheduler {
@@ -327,6 +596,25 @@ impl RoutineScheduler {
         tier_provider: TierProviderFn,
         storage_get: StorageGetFn,
         storage_set: StorageSetFn,
+    ) -> Self {
+        Self::new_with_custom(
+            agent_runner,
+            tier_provider,
+            storage_get,
+            storage_set,
+            Arc::new(Vec::new),
+        )
+    }
+
+    /// Like `new`, but also schedules cron-triggered user-defined routines
+    /// supplied by `custom_provider`. Event-triggered custom routines are not
+    /// fired here — use `fire_event_routines`.
+    pub fn new_with_custom(
+        agent_runner: AgentRunnerFn,
+        tier_provider: TierProviderFn,
+        storage_get: StorageGetFn,
+        storage_set: StorageSetFn,
+        custom_provider: CustomRoutinesProviderFn,
     ) -> Self {
         let mut initial_runs = HashMap::new();
         for routine in ROUTINES {
@@ -342,7 +630,9 @@ impl RoutineScheduler {
             tier_provider,
             storage_get,
             storage_set,
+            custom_provider,
             last_runs: Mutex::new(initial_runs),
+            custom_last_runs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -361,30 +651,80 @@ impl RoutineScheduler {
             return;
         }
 
-        let mut last_runs = self.last_runs.lock().await;
-        for routine in ROUTINES {
-            let schedule = match CronSchedule::parse(routine.cron) {
+        {
+            let mut last_runs = self.last_runs.lock().await;
+            for routine in ROUTINES {
+                let schedule = match CronSchedule::parse(routine.cron) {
+                    Some(s) => s,
+                    None => {
+                        eprintln!("[RoutineScheduler] failed to parse cron for {}: {}", routine.id, routine.cron);
+                        continue;
+                    }
+                };
+
+                let last_run = last_runs.get(routine.id).copied().unwrap_or(0);
+                let next_fire = schedule.next_fire_after(last_run);
+
+                if now >= next_fire {
+                    let prompt = build_prompt(routine);
+                    let runner = self.agent_runner.clone();
+                    let result = runner(prompt).await;
+
+                    last_runs.insert(routine.id, now);
+                    let key = format!("routines:last_run:{}", routine.id);
+                    (self.storage_set)(&key, &now.to_string());
+
+                    if let Err(e) = result {
+                        eprintln!("[RoutineScheduler] routine {} failed: {}", routine.id, e);
+                    }
+                }
+            }
+        }
+
+        self.tick_custom_cron(now).await;
+    }
+
+    async fn tick_custom_cron(&self, now: i64) {
+        let customs = (self.custom_provider)();
+        if customs.is_empty() {
+            return;
+        }
+
+        let mut custom_last_runs = self.custom_last_runs.lock().await;
+        for c in customs {
+            if !c.enabled {
+                continue;
+            }
+            let cron = match c.schedule.as_deref() {
+                Some(s) => s,
+                None => continue,
+            };
+            let schedule = match CronSchedule::parse(cron) {
                 Some(s) => s,
                 None => {
-                    eprintln!("[RoutineScheduler] failed to parse cron for {}: {}", routine.id, routine.cron);
+                    eprintln!("[RoutineScheduler] failed to parse cron for custom {}: {}", c.id, cron);
                     continue;
                 }
             };
 
-            let last_run = last_runs.get(routine.id).copied().unwrap_or(0);
+            let key = format!("routines:last_run:{}", c.id);
+            let last_run = custom_last_runs
+                .get(&c.id)
+                .copied()
+                .or_else(|| (self.storage_get)(&key).and_then(|v| v.parse::<i64>().ok()))
+                .unwrap_or(0);
             let next_fire = schedule.next_fire_after(last_run);
 
             if now >= next_fire {
-                let prompt = build_prompt(routine);
+                let prompt = build_custom_prompt(&c);
                 let runner = self.agent_runner.clone();
                 let result = runner(prompt).await;
 
-                last_runs.insert(routine.id, now);
-                let key = format!("routines:last_run:{}", routine.id);
+                custom_last_runs.insert(c.id.clone(), now);
                 (self.storage_set)(&key, &now.to_string());
 
                 if let Err(e) = result {
-                    eprintln!("[RoutineScheduler] routine {} failed: {}", routine.id, e);
+                    eprintln!("[RoutineScheduler] custom routine {} failed: {}", c.id, e);
                 }
             }
         }
@@ -711,5 +1051,248 @@ mod tests {
 
         let captured = prompts.lock().await;
         assert_eq!(captured.len(), 0);
+    }
+
+    // === User-defined routines (P2.3) ===
+
+    fn make_custom(id: &str, schedule: Option<&str>, trigger: Option<&str>) -> CustomRoutine {
+        CustomRoutine {
+            id: id.to_string(),
+            name: format!("Custom {id}"),
+            prompt: "Do the user thing.".to_string(),
+            schedule: schedule.map(|s| s.to_string()),
+            trigger: trigger.map(|t| t.to_string()),
+            enabled: true,
+            created_at: "2026-07-13T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_routine_event_parse_roundtrip() {
+        let ev = RoutineEvent::OnManyTabs { threshold: 20 };
+        assert_eq!(ev.to_trigger_string(), "on_many_tabs:20");
+        assert_eq!(RoutineEvent::parse("on_many_tabs:20"), Some(ev));
+        assert_eq!(RoutineEvent::parse("on_startup"), Some(RoutineEvent::OnStartup));
+        assert_eq!(RoutineEvent::OnStartup.to_trigger_string(), "on_startup");
+        assert_eq!(RoutineEvent::parse("bogus"), None);
+        assert_eq!(RoutineEvent::parse("on_many_tabs:notanumber"), None);
+    }
+
+    #[test]
+    fn test_routine_event_matches_threshold() {
+        let configured = RoutineEvent::OnManyTabs { threshold: 20 };
+        assert!(configured.matches(&RoutineEvent::OnManyTabs { threshold: 25 }));
+        assert!(configured.matches(&RoutineEvent::OnManyTabs { threshold: 20 }));
+        assert!(!configured.matches(&RoutineEvent::OnManyTabs { threshold: 10 }));
+        assert!(!configured.matches(&RoutineEvent::OnStartup));
+    }
+
+    #[test]
+    fn test_custom_cron_parses_for_user_schedule() {
+        let c = make_custom("c1", Some("30 7 * * 1"), None);
+        let parsed = CronSchedule::parse(c.schedule.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed.minute.value, Some(30));
+        assert_eq!(parsed.hour.value, Some(7));
+        assert_eq!(parsed.day_of_week.value, Some(1));
+    }
+
+    #[test]
+    fn test_list_all_routines_merges_builtin_and_custom() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage
+            .create_custom_routine(&make_custom("c1", Some("0 9 * * *"), None))
+            .unwrap();
+        let all = list_all_routines(&storage).unwrap();
+        assert_eq!(all.len(), 5);
+        assert_eq!(all.iter().filter(|v| matches!(v.source, RoutineSource::Builtin)).count(), 4);
+        let custom = all.iter().find(|v| v.id == "c1").unwrap();
+        assert!(matches!(custom.source, RoutineSource::Custom));
+        assert_eq!(custom.cron.as_deref(), Some("0 9 * * *"));
+    }
+
+    #[tokio::test]
+    async fn test_custom_routine_create_list_run() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage
+            .create_custom_routine(&make_custom("c1", Some("0 9 * * *"), None))
+            .unwrap();
+
+        let listed = storage.list_custom_routines().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "c1");
+
+        let captured = Arc::new(std::sync::Mutex::new(String::new()));
+        let cap = captured.clone();
+        let result = run_routine_resolved("c1", UserTier::Max, &storage, move |prompt| {
+            let cap = cap.clone();
+            async move {
+                *cap.lock().unwrap() = prompt;
+                Ok("custom result".to_string())
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result.id, "c1");
+        assert!(result.success);
+        assert_eq!(result.content, "custom result");
+        let prompt = captured.lock().unwrap().clone();
+        assert!(prompt.contains("Custom c1"));
+        assert!(prompt.contains("Do the user thing."));
+    }
+
+    #[tokio::test]
+    async fn test_run_routine_resolved_builtin_still_works() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let result = run_routine_resolved("morning_briefing", UserTier::Max, &storage, |prompt| async move {
+            assert!(prompt.contains("Morning Briefing"));
+            Ok("briefing".to_string())
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.id, "morning_briefing");
+    }
+
+    #[tokio::test]
+    async fn test_custom_routine_tier_gate() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage
+            .create_custom_routine(&make_custom("c1", Some("0 9 * * *"), None))
+            .unwrap();
+        let result = run_routine_resolved("c1", UserTier::Pro, &storage, |_| async {
+            Ok("should not reach".to_string())
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), RoutineError::TierLockedToMax);
+    }
+
+    #[tokio::test]
+    async fn test_custom_routine_unknown_id_not_found() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let result = run_routine_resolved("ghost", UserTier::Max, &storage, |_| async {
+            Ok("nope".to_string())
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), RoutineError::NotFound("ghost".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_routines_matches_and_gates() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage
+            .create_custom_routine(&make_custom("evt", None, Some("on_many_tabs:20")))
+            .unwrap();
+        // A disabled event routine must never fire.
+        let mut disabled = make_custom("evt_off", None, Some("on_many_tabs:5"));
+        disabled.enabled = false;
+        storage.create_custom_routine(&disabled).unwrap();
+        // A cron routine must not fire on events.
+        storage
+            .create_custom_routine(&make_custom("cron", Some("0 9 * * *"), None))
+            .unwrap();
+
+        let count = Arc::new(std::sync::Mutex::new(0u32));
+        let count2 = count.clone();
+        let runner = move |_prompt: String| {
+            let count3 = count2.clone();
+            async move {
+                *count3.lock().unwrap() += 1;
+                Ok::<String, String>("done".to_string())
+            }
+        };
+
+        // Below threshold: nothing fires.
+        let below = fire_event_routines(
+            RoutineEvent::OnManyTabs { threshold: 10 },
+            UserTier::Max,
+            &storage,
+            &runner,
+        )
+        .await
+        .unwrap();
+        assert_eq!(below.len(), 0);
+
+        // At/above threshold: only the enabled matching routine fires.
+        let hit = fire_event_routines(
+            RoutineEvent::OnManyTabs { threshold: 25 },
+            UserTier::Max,
+            &storage,
+            &runner,
+        )
+        .await
+        .unwrap();
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].id, "evt");
+        assert!(hit[0].success);
+        assert_eq!(*count.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_routines_not_max_is_noop() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage
+            .create_custom_routine(&make_custom("evt", None, Some("on_startup")))
+            .unwrap();
+        let results = fire_event_routines(RoutineEvent::OnStartup, UserTier::Pro, &storage, |_| async {
+            Ok("x".to_string())
+        })
+        .await
+        .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_runs_due_custom_cron() {
+        let prompts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let prompts_clone = prompts.clone();
+        let agent: AgentRunnerFn = Arc::new(move |prompt: String| {
+            let pc = prompts_clone.clone();
+            Box::pin(async move {
+                pc.lock().await.push(prompt);
+                Ok("done".to_string())
+            })
+        });
+        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Max);
+        let storage: Arc<std::sync::Mutex<HashMap<String, String>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sg = storage.clone();
+        let storage_get: StorageGetFn = Arc::new(move |key: &str| sg.lock().unwrap().get(key).cloned());
+        let ss = storage.clone();
+        let storage_set: StorageSetFn =
+            Arc::new(move |key: &str, val: &str| { ss.lock().unwrap().insert(key.to_string(), val.to_string()); });
+
+        // Custom cron routine due every day at 08:00; last_run defaults to 0 → due.
+        let custom_provider: CustomRoutinesProviderFn =
+            Arc::new(|| vec![make_custom("c_daily", Some("0 8 * * *"), None)]);
+
+        let scheduler = RoutineScheduler::new_with_custom(
+            agent,
+            tier_provider,
+            storage_get,
+            storage_set,
+            custom_provider,
+        );
+
+        // Pin built-ins to `now` so only the custom routine is due.
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 6, 15)
+            .unwrap()
+            .and_hms_opt(8, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        {
+            let mut lr = scheduler.last_runs.lock().await;
+            for r in ROUTINES {
+                lr.insert(r.id, now);
+            }
+        }
+
+        scheduler.tick(now).await;
+
+        let captured = prompts.lock().await;
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].contains("Custom c_daily"));
+        // Persisted last-run for the custom routine.
+        assert!(storage.lock().unwrap().contains_key("routines:last_run:c_daily"));
     }
 }

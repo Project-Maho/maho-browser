@@ -12,6 +12,7 @@
 #include "base/sequence_checker.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/webui/maho_inline_edit/maho_inline_edit.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -31,6 +32,7 @@ class MahoInlineEditHandler
     : public maho_inline_edit::mojom::InlineEditPageHandler {
  public:
   MahoInlineEditHandler(
+      std::unique_ptr<MahoPrivateContextToken> token,
       Browser* browser,
       PrefService* prefs,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
@@ -63,6 +65,9 @@ class MahoInlineEditHandler
 
   SEQUENCE_CHECKER(sequence_checker_);
 
+  bool IsAiAllowed();
+
+  std::unique_ptr<MahoPrivateContextToken> token_;
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
   MahoAiLlmClient llm_client_;

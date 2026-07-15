@@ -12,6 +12,7 @@ regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
+toml = "0.8"
 lru = "0.12"
 psl = { workspace = true }
 adblock = "0.12.2"

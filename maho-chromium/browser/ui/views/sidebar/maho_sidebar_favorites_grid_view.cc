@@ -1555,7 +1555,17 @@ void MahoSidebarFavoritesGridView::OnTileDragDone(const std::string& tab_id) {
     return;
   }
 
-  DispatchShellEvent("close_tab", {{"tab_id", tab_id}});
+  // ADR-0013 (plan design decision 4): dragging a favorite tile off the grid
+  // un-favorites it (transitions its role back to normal / Today), not closes
+  // it. A plain close_tab only suspends a favorite and keeps the tile, so it
+  // was a visual no-op. Matches the exact change_tab_role→normal payload used
+  // by the favorites context-menu "Remove" action.
+  base::DictValue event;
+  event.Set("tab_id", tab_id);
+  base::DictValue new_role;
+  new_role.Set("type", "normal");
+  event.Set("new_role", std::move(new_role));
+  DispatchShellEventDict("change_tab_role", std::move(event));
 }
 
 void MahoSidebarFavoritesGridView::OnFavoritesHintDismissed() {

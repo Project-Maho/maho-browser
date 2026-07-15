@@ -55,10 +55,17 @@ const base::DictValue* FindUpdateOfKind(const base::Value& parsed,
 class TidyRun {
  public:
   TidyRun(Browser* browser,
-          MahoTabTidyOrchestrator::ResultCallback callback)
-      : browser_(browser), callback_(std::move(callback)) {}
+          MahoTabTidyOrchestrator::ResultCallback callback,
+          base::RepeatingCallback<bool()> ai_gate)
+      : browser_(browser),
+        callback_(std::move(callback)),
+        ai_gate_(std::move(ai_gate)) {}
 
   void Start() {
+    if (ai_gate_ && !ai_gate_.Run()) {
+      Finish(0, "AI is not available in this context");
+      return;
+    }
     if (!browser_) {
       Finish(0, "No browser context");
       return;
@@ -214,6 +221,7 @@ class TidyRun {
 
   raw_ptr<Browser> browser_;
   MahoTabTidyOrchestrator::ResultCallback callback_;
+  base::RepeatingCallback<bool()> ai_gate_;
   std::string space_id_;
   std::string request_id_;
   std::unique_ptr<MahoAiLlmClient> llm_client_;
@@ -224,8 +232,9 @@ class TidyRun {
 
 // static
 void MahoTabTidyOrchestrator::RunOneShot(Browser* browser,
-                                         ResultCallback callback) {
-  auto* run = new TidyRun(browser, std::move(callback));
+                                         ResultCallback callback,
+                                         base::RepeatingCallback<bool()> ai_gate) {
+  auto* run = new TidyRun(browser, std::move(callback), std::move(ai_gate));
   run->Start();
 }
 

@@ -9,6 +9,7 @@ source_set("maho_welcome_window") {
   deps = [
     "//base",
     "//chrome/browser/profiles:profile",
+    "//components/keep_alive_registry",
     "//content/public/browser",
     "//maho/components/constants",
     "//ui/base",

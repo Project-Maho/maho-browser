@@ -54,6 +54,11 @@ bool IsMediaFilePath(std::string_view path) {
 
 std::vector<DownloadItem> ParseDownloads() {
   std::vector<DownloadItem> downloads;
+  // kMahoDownloadMetadata fail-closed boundary: Maho download metadata lives in
+  // the process-global regular MahoCore only. An Incognito-only process has no
+  // core (see R-7 process-startup gating), so GetCore() is null and no metadata
+  // is consulted for OTR. There is no OTR download store and no production OTR
+  // ingress, so this null-guard is the complete read-side denial.
   MahoCore* core = maho::GetCore();
   if (!core) {
     return downloads;

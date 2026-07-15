@@ -2,6 +2,9 @@
 
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_page_handler.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,17 +24,22 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"  // nogncheck
 #include "chrome/browser/shell_integration.h"  // nogncheck
+#include "chrome/browser/sessions/session_restore.h"  // nogncheck
 #include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/browser_finder.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
 #include "chrome/browser/ui/browser_tabstrip.h"  // nogncheck
+#include "chrome/browser/ui/startup/startup_tab.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
 #include "chrome/browser/ui/views/frame/browser_view.h"  // nogncheck
 #include "chrome/grit/generated_resources.h"  // nogncheck
+#include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/storage_partition.h"
 #include "maho/browser/importer/maho_browser_detector.h"
 #include "maho/browser/importer/maho_import_session_bridge.h"
 #include "maho/browser/importer/importers/essential_importer.h"
@@ -39,11 +47,15 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/importer/maho_migration_dialog_view.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/color/color_provider_manager.h"
 #include "ui/views/widget/root_view.h"
@@ -53,25 +65,6 @@
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/platform_util.h"  // nogncheck
 #endif
-
-namespace {
-
-void RepaintBrowserAfterThemeChange(Browser* browser) {
-  ui::ColorProviderManager::Get().ResetColorProviderCache();
-  if (!browser) return;
-  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  if (!browser_view) return;
-  auto* widget = browser_view->GetWidget();
-  if (!widget || widget->IsClosed()) return;
-  auto* root_view = static_cast<views::internal::RootView*>(
-      widget->GetRootView());
-  if (root_view) {
-    root_view->ThemeChanged();
-  }
-  widget->NotifyColorProviderChanged();
-}
-
-}  // namespace
 
 MahoWelcomePageHandler::MahoWelcomePageHandler(
     mojo::PendingReceiver<maho_welcome::mojom::PageHandler> receiver,
@@ -83,13 +76,26 @@ MahoWelcomePageHandler::MahoWelcomePageHandler(
       page_(std::move(page)),
       profile_(profile),
       browser_(browser),
-      web_contents_(web_contents) {}
+      web_contents_(web_contents) {
+  // R-4 fail-closed: forged Mojo receiver bypasses config-level denial. Do not remove.
+  if (!MahoIsWebUIEnabled(profile)) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
+  if (g_browser_process && g_browser_process->os_crypt_async()) {
+    g_browser_process->os_crypt_async()->GetInstance(
+        base::BindOnce(&MahoWelcomePageHandler::OnOsCryptReady,
+                       weak_factory_.GetWeakPtr()),
+        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+  }
+}
 
 MahoWelcomePageHandler::~MahoWelcomePageHandler() {
   if (MahoSpaceThemeState::HasPreviewOverride()) {
     MahoSpaceThemeState::ClearPreviewOverride();
     MahoSpaceThemeState::UpdateFromCore();
-    RepaintBrowserAfterThemeChange(browser_);
+    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   }
 }
 
@@ -273,6 +279,8 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
   add("IDS_MAHO_WELCOME_CTA_NEXT", "Next");
   add("IDS_MAHO_WELCOME_CTA_BACK", "Back");
   add("IDS_MAHO_WELCOME_CTA_DONE", "Dive in!");
+  add("IDS_MAHO_WELCOME_CTA_SIGN_IN", "Sign in");
+  add("IDS_MAHO_WELCOME_CTA_SIGN_UP", "Sign up");
 
   std::move(callback).Run(std::move(strings));
 }
@@ -402,7 +410,7 @@ void MahoWelcomePageHandler::FavoriteEssentialSites(
 
 void MahoWelcomePageHandler::PreviewTheme(const std::string& theme_json) {
   if (MahoSpaceThemeState::SetPreviewOverride(theme_json)) {
-    RepaintBrowserAfterThemeChange(browser_);
+    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   }
 }
 
@@ -411,27 +419,22 @@ void MahoWelcomePageHandler::ApplyTheme(const std::string& theme_json) {
     std::string active_space_id =
         maho::MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId(browser_);
     if (!active_space_id.empty()) {
-      std::optional<base::Value> theme_val =
-          base::JSONReader::Read(theme_json, base::JSON_PARSE_RFC);
-      if (theme_val) {
-        base::DictValue changes;
-        changes.Set("theme", std::move(*theme_val));
-        std::string changes_json;
-        base::JSONWriter::Write(changes, &changes_json);
-        maho::MahoSpaceFFIClient::GetInstance()->UpdateSpaceConfig(active_space_id, changes_json);
+      MahoCore* core = maho::GetCore();
+      if (core) {
+        maho_theme::ApplyThemeJsonToSpace(core, active_space_id, theme_json);
       }
     }
   }
   MahoSpaceThemeState::ClearPreviewOverride();
   MahoSpaceThemeState::UpdateFromCore();
-  RepaintBrowserAfterThemeChange(browser_);
+  MahoSpaceThemePickerDialog::RepaintAllBrowsers();
 }
 
 void MahoWelcomePageHandler::ClearThemePreview() {
   if (MahoSpaceThemeState::HasPreviewOverride()) {
     MahoSpaceThemeState::ClearPreviewOverride();
     MahoSpaceThemeState::UpdateFromCore();
-    RepaintBrowserAfterThemeChange(browser_);
+    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   }
 }
 
@@ -454,42 +457,127 @@ void MahoWelcomePageHandler::OpenThemePickerDialog(
           std::move(callback)));
 }
 
+void MahoWelcomePageHandler::SignupFromWelcome(
+    const std::string& email,
+    const std::string& password,
+    const std::string& display_name,
+    SignupFromWelcomeCallback callback) {
+  if (email.empty() || password.empty()) {
+    std::move(callback).Run(false, "Email and password are required.");
+    return;
+  }
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+
+  maho::auth::MahoRelaySignup(
+      profile_->GetPrefs(), url_loader_factory, *encryptor_, email, password,
+      display_name,
+      base::BindOnce(
+          [](SignupFromWelcomeCallback cb, PrefService* prefs, bool ok,
+             const std::string& error_message) {
+            if (ok) {
+              prefs->SetString(maho::ai_prefs::kProvider, "maho-managed");
+            }
+            std::move(cb).Run(ok, error_message);
+          },
+          std::move(callback), profile_->GetPrefs()));
+}
+
+void MahoWelcomePageHandler::OnOsCryptReady(
+    os_crypt_async::Encryptor encryptor) {
+  encryptor_ = std::move(encryptor);
+}
+
 void MahoWelcomePageHandler::FinishOnboarding() {
   DVLOG(1) << "[MahoFinish] ENTER is_finishing=" << is_finishing_;
   if (is_finishing_) {
     return;
   }
+
+  if (!maho::auth::HasValidRelaySession(profile_->GetPrefs())) {
+    LOG(ERROR) << "FinishOnboarding: Refusing to finish onboarding without valid relay session.";
+    return;
+  }
+
+  DoFinishOnboarding();
+}
+
+void MahoWelcomePageHandler::DevSkipOnboarding() {
+  // MAHO_RELAY_URL is only set for local relay development and is never set in
+  // shipped builds, so this relay-session bypass is unreachable in production.
+  if (!std::getenv("MAHO_RELAY_URL")) {
+    LOG(ERROR) << "DevSkipOnboarding ignored: not a local-dev build.";
+    return;
+  }
+  if (is_finishing_) {
+    return;
+  }
+  DoFinishOnboarding();
+}
+
+void MahoWelcomePageHandler::DoFinishOnboarding() {
   is_finishing_ = true;
 
+  PrefService* prefs = profile_->GetPrefs();
   DVLOG(1) << "[MahoFinish] step1 SetPref kWelcomeCompleted";
-  profile_->GetPrefs()->SetBoolean(maho::welcome::kWelcomeCompleted, true);
+  prefs->SetBoolean(maho::welcome::kWelcomeCompleted, true);
+  prefs->SetBoolean(maho::welcome::kLoginGateActive, false);
 
   DVLOG(1) << "[MahoFinish] step2 theme cleanup; HasPreview=" << MahoSpaceThemeState::HasPreviewOverride();
   if (MahoSpaceThemeState::HasPreviewOverride()) {
     MahoSpaceThemeState::ClearPreviewOverride();
     MahoSpaceThemeState::UpdateFromCore();
-    RepaintBrowserAfterThemeChange(browser_);
+    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   }
 
-  DVLOG(1) << "[MahoFinish] step3 Browser::Create; browser_=" << browser_ << " profile_=" << profile_;
-  if (profile_) {
+  DVLOG(1) << "[MahoFinish] step3 defer reveal; profile_=" << profile_;
+  // The login gate suppressed startup session-restore, so the returning user's
+  // tabs still live only on disk. Reveal (restore-or-create) the browser after
+  // this Mojo call unwinds: SessionRestore(SYNCHRONOUS) spins a nested RunLoop
+  // that must not run inside a Mojo dispatch. The welcome window's keep-alive
+  // pins the process until RevealBrowserAndCloseWelcome swaps in the browser.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoWelcomePageHandler::RevealBrowserAndCloseWelcome,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoWelcomePageHandler::RevealBrowserAndCloseWelcome() {
+  if (!profile_) {
+    return;
+  }
+
+  // The gate suppressed startup browser creation, so no browser exists yet:
+  // this becomes the sole browser and its sidebar claims the per-profile media
+  // dialog delegate exactly once, avoiding the SetDialogDelegate DCHECK.
+  // FindTabbedBrowser is a defensive idempotency guard for the non-gated path.
+  Browser* main_browser =
+      chrome::FindTabbedBrowser(profile_, /*match_original_profiles=*/false);
+  if (!main_browser) {
+    main_browser = SessionRestore::RestoreSession(
+        profile_, /*browser=*/nullptr,
+        SessionRestore::SYNCHRONOUS | SessionRestore::RESTORE_BROWSER,
+        StartupTabs());
+  }
+  if (!main_browser) {
     Browser::CreateParams params(profile_, true);
     params.creation_source = Browser::CreationSource::kStartupCreator;
-    Browser* main_browser = Browser::Create(params);
-    DVLOG(1) << "[MahoFinish] step3b main_browser=" << main_browser;
-    main_browser->window()->Show();
-    DVLOG(1) << "[MahoFinish] step4 window shown";
-
-    BrowserView* bv = BrowserView::GetBrowserViewForBrowser(main_browser);
-    DVLOG(1) << "[MahoFinish] step4b bv=" << bv;
-    auto* overlay =
-        MahoNotificationOverlay::GetOrCreateForBrowser(main_browser);
-    overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
+    main_browser = Browser::Create(params);
   }
+  main_browser->window()->Show();
+  main_browser->window()->Activate();
 
-  DVLOG(1) << "[MahoFinish] step5 CloseWelcomeTab";
+  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(main_browser);
+  overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
+
+  // Destroys the welcome window and this handler; must be the last statement.
   CloseWelcomeTab();
-  DVLOG(1) << "[MahoFinish] EXIT";
 }
 
 void MahoWelcomePageHandler::OpenFDASettings() {
@@ -517,4 +605,50 @@ void MahoWelcomePageHandler::CloseWelcomeTab() {
   int index = model->GetIndexOfWebContents(web_contents_);
   if (index == TabStripModel::kNoTab) return;
   model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
+}
+
+void MahoWelcomePageHandler::LoginFromWelcome(
+    const std::string& email,
+    const std::string& password,
+    LoginFromWelcomeCallback callback) {
+  if (email.empty() || password.empty()) {
+    std::move(callback).Run(false, "Email and password are required.");
+    return;
+  }
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+
+  maho::auth::MahoRelayLogin(
+      profile_->GetPrefs(), url_loader_factory, *encryptor_, email, password,
+      base::BindOnce(
+          [](LoginFromWelcomeCallback cb, PrefService* prefs, bool ok,
+             const std::string& error_message) {
+            if (ok && prefs->GetString(maho::ai_prefs::kProvider).empty()) {
+              prefs->SetString(maho::ai_prefs::kProvider, "maho-managed");
+            }
+            std::move(cb).Run(ok, error_message);
+          },
+          std::move(callback), profile_->GetPrefs()));
+}
+
+void MahoWelcomePageHandler::GetRelayAccountStatusFromWelcome(
+    GetRelayAccountStatusFromWelcomeCallback callback) {
+  PrefService* prefs = profile_->GetPrefs();
+  bool signed_in = maho::auth::HasValidRelaySession(prefs);
+  std::string tier = prefs->GetString(maho::account_prefs::kRelayUserTier);
+  std::string sub_status =
+      prefs->GetString(maho::account_prefs::kRelaySubscriptionStatus);
+  bool welcome_completed = prefs->GetBoolean(maho::welcome::kWelcomeCompleted);
+  bool has_stored_session =
+      !prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64)
+           .empty();
+  bool is_local_dev = std::getenv("MAHO_RELAY_URL") != nullptr;
+  std::move(callback).Run(signed_in, tier, sub_status, welcome_completed,
+                          has_stored_session, is_local_dev);
 }

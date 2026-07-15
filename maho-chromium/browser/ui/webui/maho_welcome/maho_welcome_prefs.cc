@@ -8,6 +8,7 @@ namespace maho::welcome {
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kWelcomeCompleted, false);
+  registry->RegisterBooleanPref(kLoginGateActive, false);
 }
 
 }  // namespace maho::welcome

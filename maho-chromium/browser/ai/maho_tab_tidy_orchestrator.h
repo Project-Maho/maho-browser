@@ -17,7 +17,12 @@ class MahoTabTidyOrchestrator {
       base::OnceCallback<void(int folder_count,
                               const std::string& error_message)>;
 
-  static void RunOneShot(Browser* browser, ResultCallback callback);
+  // R-9 fail-closed gate: a non-null |ai_gate| that returns false stops the
+  // run before any MahoCore/LLM ingress; null preserves regular behavior.
+  static void RunOneShot(
+      Browser* browser,
+      ResultCallback callback,
+      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>());
 
  private:
   MahoTabTidyOrchestrator() = delete;

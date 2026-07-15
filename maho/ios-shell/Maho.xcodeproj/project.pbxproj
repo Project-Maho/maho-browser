@@ -32,6 +32,7 @@
 		28A01C4737658E123C316C05 /* Patchable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115CD7DD504A026FB3000E13 /* Patchable.swift */; };
 		29945FF391A233A6BD9BE8B7 /* MainBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B43101A63E11A25E35577F1 /* MainBrowserView.swift */; };
 		2D9A41B58CF394C0C0B16CF3 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = E0F014B2760877B3C5A39B65 /* Readability.js */; };
+		2DC388FABC72E24DFC0A5ECA /* PrivacyDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AFA0D73F59C325847CCB9FF /* PrivacyDashboardView.swift */; };
 		2FC38E34915D7AF107BF35B9 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */; };
 		3251F36A8C16E0569092BA2F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D68D55332912D1045D2DC3D /* ShareViewController.swift */; };
 		32BE1822EA70F413BEC07F24 /* MahoBridge+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB92C7C587E13D75B67734E7 /* MahoBridge+Lifecycle.swift */; };
@@ -72,6 +73,7 @@
 		72F015A2F7EFF57B9F8B91EE /* MahoBridge+Folders.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5ED1E4E5BA9FF169BD7820A /* MahoBridge+Folders.swift */; };
 		73C7914D454256D6F3648317 /* DomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6755369F1B3D726FBF009C5 /* DomainModels.swift */; };
 		77E4E779B5B9D523323F37DA /* SceneCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D83BA65CFFD9339C64AA508F /* SceneCoordinator.swift */; };
+		786F2ABE52D080B781912CB1 /* SearchSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C766F1713BEF91AD681A3430 /* SearchSheet.swift */; };
 		79A59E56F4774FE4205A869B /* AIBridgeTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7AD616F993FBC3144EB12D5 /* AIBridgeTypes.swift */; };
 		7BCAF2CB965F355021A6F3B1 /* ScreenshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F853304DCE9B7611A3827FD /* ScreenshotHelper.swift */; };
 		7C6944A79D614802111D8B10 /* NavigationButtonsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D00B054D20468F8772BC281 /* NavigationButtonsView.swift */; };
@@ -92,7 +94,6 @@
 		98677DAF105BFAF327F47D20 /* MahoBridge+CommandBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 577E74A267A31EAA405ABE40 /* MahoBridge+CommandBar.swift */; };
 		995A1DACD5E35F707B3B352A /* TabPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD0A7A38DEE6DF82D4EA656 /* TabPreviewView.swift */; };
 		9A8AB810F34CBC67F03FE77D /* PrivacySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D642BAAC442BB1CB8144FC10 /* PrivacySettingsView.swift */; };
-		E0A16EC0B7C11BB35200B59C /* PrivacyDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260E8E30E5275524FC5A01DE /* PrivacyDashboardView.swift */; };
 		A15060131BE84479D220911A /* ChatSessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2AAA0E8E019A7911BAA39F2 /* ChatSessionRegistry.swift */; };
 		A4899BF2A420ADD0CDAC35DA /* AutoArchiveBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5281C1310F695E8B05A1CB49 /* AutoArchiveBridge.swift */; };
 		A62C593022F81FB41E1AB3CC /* FolderCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30915874373AD381E6FFD36 /* FolderCardView.swift */; };
@@ -107,6 +108,7 @@
 		AC6B8C1F12A67EA85504E4C8 /* BYOKSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB99637F5F962026F6F463C /* BYOKSettingsView.swift */; };
 		AD2FBB9C4A78C7BEDB9C17C2 /* MaxSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0634630A0ECC83A7E66A3D10 /* MaxSettingsView.swift */; };
 		AD3816861F73B7543C4A4B13 /* MahoIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FD563F16DF5C7A1ADBAE606 /* MahoIcon.swift */; };
+		AD4A7427C9D3FCF0646A9DCF /* VoiceAssistantOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7A209869E6CBAEA63E5256 /* VoiceAssistantOverlayView.swift */; };
 		B0DA093000D9E1EE8B67A775 /* KindDiscriminatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED2F1688CBBF3AE94FC19A1 /* KindDiscriminatorTests.swift */; };
 		B543BC39B7E917EEAA6555F5 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032A8D4B93356B24167BDD7E /* Settings.swift */; };
 		B5E0AA3426647825C0E3D29C /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAE35287BE9A661FB2176D66 /* SettingsTests.swift */; };
@@ -205,6 +207,7 @@
 		05B5B558DF634AA1616E1F8F /* ReadingListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingListView.swift; sourceTree = "<group>"; };
 		0634630A0ECC83A7E66A3D10 /* MaxSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaxSettingsView.swift; sourceTree = "<group>"; };
 		07A09139B37646512D2C7CE7 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		0AFA0D73F59C325847CCB9FF /* PrivacyDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyDashboardView.swift; sourceTree = "<group>"; };
 		115CD7DD504A026FB3000E13 /* Patchable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Patchable.swift; sourceTree = "<group>"; };
 		1244E75B4901FFB3C1A83398 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		15D0A789885A589A10D8FDF5 /* DefaultBrowserManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultBrowserManager.swift; sourceTree = "<group>"; };
@@ -311,10 +314,12 @@
 		C32BA0029D175A683044F083 /* MahoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MahoApp.swift; sourceTree = "<group>"; };
 		C50D8552936CD298489EC3EC /* DomainMonogram.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainMonogram.swift; sourceTree = "<group>"; };
 		C62B3063590BAFAFF699B7C2 /* MahoBridge+Spaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Spaces.swift"; sourceTree = "<group>"; };
+		C766F1713BEF91AD681A3430 /* SearchSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchSheet.swift; sourceTree = "<group>"; };
 		C793D0E167A6486F4022C931 /* ArcBottomBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArcBottomBar.swift; sourceTree = "<group>"; };
 		C93214A716E35455EBA4DA28 /* AppearanceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettingsView.swift; sourceTree = "<group>"; };
 		CBD842B11A5EC412F000F4C0 /* AppThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppThemeStore.swift; sourceTree = "<group>"; };
 		CE3C5675E1CE153EA4710143 /* TabGridToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabGridToolbar.swift; sourceTree = "<group>"; };
+		CE7A209869E6CBAEA63E5256 /* VoiceAssistantOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistantOverlayView.swift; sourceTree = "<group>"; };
 		CED2F1688CBBF3AE94FC19A1 /* KindDiscriminatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindDiscriminatorTests.swift; sourceTree = "<group>"; };
 		CF4FE11620755F00EAD604E3 /* MahoBridge+Profiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Profiles.swift"; sourceTree = "<group>"; };
 		CF588754412F8DC2BA9012EF /* PinchSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchSummaryView.swift; sourceTree = "<group>"; };
@@ -325,7 +330,6 @@
 		D40B089D497E81BA193CF15B /* MahoBridge+Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Settings.swift"; sourceTree = "<group>"; };
 		D637C4A26908AE6FB1F1D1DD /* VisualSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualSearchView.swift; sourceTree = "<group>"; };
 		D642BAAC442BB1CB8144FC10 /* PrivacySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsView.swift; sourceTree = "<group>"; };
-		260E8E30E5275524FC5A01DE /* PrivacyDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyDashboardView.swift; sourceTree = "<group>"; };
 		D74C164590BB6FF777021D50 /* CameraManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraManager.swift; sourceTree = "<group>"; };
 		D7AD616F993FBC3144EB12D5 /* AIBridgeTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBridgeTypes.swift; sourceTree = "<group>"; };
 		D83BA65CFFD9339C64AA508F /* SceneCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneCoordinator.swift; sourceTree = "<group>"; };
@@ -355,7 +359,7 @@
 		FF1AFF85313E8530CEF4B167 /* SyncTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTransport.swift; sourceTree = "<group>"; };
 		FF8FF3CC8F3101B33A809CC4 /* LanguageSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageSettingsView.swift; sourceTree = "<group>"; };
 		FFEC8CF3BAC18D361D46B8F2 /* ContentBlockerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentBlockerView.swift; sourceTree = "<group>"; };
-		"TEMP_2FD3D500-9DD4-45FD-9726-D6408C6A3866" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_40A5E7E5-FF43-45CA-8D8C-8AEB086AB752" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -622,8 +626,8 @@
 				FF8FF3CC8F3101B33A809CC4 /* LanguageSettingsView.swift */,
 				0634630A0ECC83A7E66A3D10 /* MaxSettingsView.swift */,
 				2145C277CFA158D2F5C01437 /* NotificationSettingsView.swift */,
+				0AFA0D73F59C325847CCB9FF /* PrivacyDashboardView.swift */,
 				D642BAAC442BB1CB8144FC10 /* PrivacySettingsView.swift */,
-				260E8E30E5275524FC5A01DE /* PrivacyDashboardView.swift */,
 				20BD6ED4FE48F04B24D35ADE /* ReaderSettingsView.swift */,
 				F302E99642B18ECC4E9ABC94 /* SettingsRootView.swift */,
 				0303D7ED647E7D6BD8211FB0 /* SpaceAIConfigView.swift */,
@@ -710,10 +714,12 @@
 				CF588754412F8DC2BA9012EF /* PinchSummaryView.swift */,
 				2CCD836DC0F18F95C8A80545 /* ReaderSettingsSheet.swift */,
 				53316DFA1F497E8174272861 /* ReaderView.swift */,
+				C766F1713BEF91AD681A3430 /* SearchSheet.swift */,
 				E221EB224C807F4A42D2406F /* ShellTheme.swift */,
 				755F67CDEA8011C1E7CA80B5 /* SummaryOverlayView.swift */,
 				C1023C87BF6692E8BCC73749 /* UpdateBannerView.swift */,
 				D637C4A26908AE6FB1F1D1DD /* VisualSearchView.swift */,
+				CE7A209869E6CBAEA63E5256 /* VoiceAssistantOverlayView.swift */,
 				6A990E64F069712A9F33084A /* VoiceSearchButton.swift */,
 				69EF9DEE5D3F518BBED3FEFE /* WebViewContainer.swift */,
 				990D75F136CA79CD0FC6B6C6 /* WebViewCoordinator.swift */,
@@ -768,10 +774,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_22E5000E-83F5-4BFA-993C-850A1D9F637B" /* ios-shell */ = {
+		"TEMP_D1694E49-7183-47AB-AE24-1FB688589FCB" /* ios-shell */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_2FD3D500-9DD4-45FD-9726-D6408C6A3866" /* Signing.xcconfig */,
+				"TEMP_40A5E7E5-FF43-45CA-8D8C-8AEB086AB752" /* Signing.xcconfig */,
 			);
 			path = "ios-shell";
 			sourceTree = "<group>";
@@ -1037,8 +1043,8 @@
 				D8222CD644C9430D0A317ABF /* PermissionSheet.swift in Sources */,
 				3B6DEC7634A1B5D0CCD793AD /* PiPManager.swift in Sources */,
 				6C3C94004CBC5EA3993D46DD /* PinchSummaryView.swift in Sources */,
+				2DC388FABC72E24DFC0A5ECA /* PrivacyDashboardView.swift in Sources */,
 				9A8AB810F34CBC67F03FE77D /* PrivacySettingsView.swift in Sources */,
-				E0A16EC0B7C11BB35200B59C /* PrivacyDashboardView.swift in Sources */,
 				E218A5BF03A22456BB8848C1 /* PrivateBanner.swift in Sources */,
 				EA72D3F0519B57E619CCA6D0 /* PrivateBrowsingDataStorePool.swift in Sources */,
 				B74D6545FAC95FF3113EC220 /* ProfileSettingsView.swift in Sources */,
@@ -1051,6 +1057,7 @@
 				E9CFE8E0C23AE076036186A2 /* RelayAuthStore.swift in Sources */,
 				77E4E779B5B9D523323F37DA /* SceneCoordinator.swift in Sources */,
 				7BCAF2CB965F355021A6F3B1 /* ScreenshotHelper.swift in Sources */,
+				786F2ABE52D080B781912CB1 /* SearchSheet.swift in Sources */,
 				B543BC39B7E917EEAA6555F5 /* Settings.swift in Sources */,
 				862B3C6105802E2C2BB5F03C /* SettingsRootView.swift in Sources */,
 				D1CF9EF50DED9907CFDBEFFA /* SettingsView.swift in Sources */,
@@ -1077,6 +1084,7 @@
 				C8EC3303D7B02E3FD9372FB2 /* UpdateBannerView.swift in Sources */,
 				C48EC00CD4748B5A745DE5C7 /* ViewModels.swift in Sources */,
 				3FC924BC61F224D328CE0D05 /* VisualSearchView.swift in Sources */,
+				AD4A7427C9D3FCF0646A9DCF /* VoiceAssistantOverlayView.swift in Sources */,
 				8825E11C469CA1013C4BA7E8 /* VoiceSearchButton.swift in Sources */,
 				B6B6023553EA80705099E159 /* VoiceSearchManager.swift in Sources */,
 				D50A9602ABFC06EECF1EAC51 /* WebSocketTaskProtocol.swift in Sources */,
@@ -1157,7 +1165,7 @@
 		};
 		32EAC85B0E13154E2341C404 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_2FD3D500-9DD4-45FD-9726-D6408C6A3866" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_40A5E7E5-FF43-45CA-8D8C-8AEB086AB752" /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -1174,7 +1182,7 @@
 		};
 		609C0B55047A5B33E839A127 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_2FD3D500-9DD4-45FD-9726-D6408C6A3866" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_40A5E7E5-FF43-45CA-8D8C-8AEB086AB752" /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";

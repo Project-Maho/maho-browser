@@ -27,6 +27,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -232,22 +233,20 @@ class MahoSidebarFadeMaskView : public views::View {
 BEGIN_METADATA(MahoSidebarFadeMaskView)
 END_METADATA
 
-void DispatchCreateFolderForSpace(const std::string& space_id) {
-  MahoCore* core = maho::GetCore();
-  if (!core || space_id.empty()) {
+void DispatchCreateFolderForSpace(views::View* origin,
+                                  const std::string& space_id) {
+  if (space_id.empty()) {
     return;
   }
-
-  base::DictValue event;
-  event.Set("kind", "create_folder");
-  event.Set("space_id", space_id);
-
-  std::string event_json;
-  base::JSONWriter::Write(event, &event_json);
-  char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) {
-    maho_string_free(result);
+  std::string new_folder_id = DispatchCreateFolder(space_id, "New Folder");
+  if (new_folder_id.empty() || !origin) {
+    return;
   }
+  MahoSidebarView* sidebar_view = FindSidebarViewAncestor(origin);
+  if (!sidebar_view || !sidebar_view->tab_list_view()) {
+    return;
+  }
+  sidebar_view->tab_list_view()->SetPendingFolderEdit(new_folder_id);
 }
 
 }  // namespace
@@ -494,7 +493,7 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
     case MahoSidebarActionPopoverAction::kNewFolder: {
       auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
       if (bridge) {
-        DispatchCreateFolderForSpace(bridge->GetActiveSpaceId());
+        DispatchCreateFolderForSpace(this, bridge->GetActiveSpaceId());
       }
       break;
     }
@@ -688,9 +687,8 @@ void MahoSidebarFooterView::OnSpaceDotActivated(
     }
   }
   UpdateDotSelectionState();
-  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-  if (bridge && !dot->space_id().empty()) {
-    bridge->SwitchToSpace(browser_, dot->space_id());
+  if (!dot->space_id().empty()) {
+    MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
   }
 }
 
@@ -917,9 +915,8 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
     UpdateDotSelectionState();
     auto* dot = static_cast<MahoSidebarSpaceDotView*>(
         children[selected_dot_index_]);
-    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-    if (bridge && !dot->space_id().empty()) {
-      bridge->SwitchToSpace(browser_, dot->space_id());
+    if (!dot->space_id().empty()) {
+      MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
     }
     ScrollToActiveSpace();
     UpdateFadeMask();
@@ -934,9 +931,8 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
     UpdateDotSelectionState();
     auto* dot = static_cast<MahoSidebarSpaceDotView*>(
         children[selected_dot_index_]);
-    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-    if (bridge && !dot->space_id().empty()) {
-      bridge->SwitchToSpace(browser_, dot->space_id());
+    if (!dot->space_id().empty()) {
+      MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
     }
     ScrollToActiveSpace();
     UpdateFadeMask();
@@ -948,9 +944,8 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
     if (selected_dot_index_ >= 0 && selected_dot_index_ < count) {
       auto* dot = static_cast<MahoSidebarSpaceDotView*>(
           children[selected_dot_index_]);
-      auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-      if (bridge && !dot->space_id().empty()) {
-        bridge->SwitchToSpace(browser_, dot->space_id());
+      if (!dot->space_id().empty()) {
+        MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
       }
     }
     return true;

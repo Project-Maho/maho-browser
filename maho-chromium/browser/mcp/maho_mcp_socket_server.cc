@@ -15,7 +15,6 @@
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/task/sequenced_task_runner.h"
@@ -239,41 +238,13 @@ void MahoMcpSocketServer::OnResponsesReady(
   if (!conn) {
     return;
   }
-  for (const auto& response : responses) {
-    auto write_buf =
-        base::MakeRefCounted<net::StringIOBuffer>(response);
-    static const net::NetworkTrafficAnnotationTag kAnnotation =
-        net::DefineNetworkTrafficAnnotation("maho_mcp_local_uds", R"(
-            semantics {
-              sender: "Maho MCP Socket Server"
-              description:
-                "Writes JSON-RPC responses back to a local Unix domain socket "
-                "client (maho mcp / CLI) that has authenticated via "
-                "SO_PEERCRED/LOCAL_PEERCRED. Local IPC only — no network "
-                "traffic leaves the machine."
-              trigger:
-                "An authenticated local MCP client sends a tool call over "
-                "the maho.sock UDS."
-              data:
-                "JSON-RPC responses containing tool results (tab info, "
-                "history entries, page content). Credentials are redacted "
-                "by the credential firewall before egress."
-              destination: LOCAL
-            }
-            policy {
-              cookies_allowed: NO
-              setting: "Disabled by default; toggled via maho settings."
-              policy_exception_justification: "Local IPC only."
-            })");
-    conn->socket->Write(write_buf.get(), response.size(),
-                       base::DoNothing(), kAnnotation);
+  for (auto& response : responses) {
+    EnqueueWrite(connection_id, std::move(response));
   }
-
   if (conn->session->state() == MahoMcpSession::State::kClosed) {
     RemoveConnection(connection_id);
     return;
   }
-
   ReadFromConnection(connection_id);
 }
 
@@ -290,23 +261,51 @@ void MahoMcpSocketServer::OnDeferredResponse(uint64_t connection_id,
   }
   LOG(WARNING) << "[MahoMcp] OnDeferredResponse: WRITING conn_id="
                << connection_id << " resp_size=" << response.size();
-  auto& conn = *conn_ptr;
-  auto write_buf = base::MakeRefCounted<net::StringIOBuffer>(response);
-  static const net::NetworkTrafficAnnotationTag kAnnotation =
-      net::DefineNetworkTrafficAnnotation("maho_mcp_local_uds_deferred", R"annotation(
+  EnqueueWrite(connection_id, std::move(response));
+}
+
+void MahoMcpSocketServer::EnqueueWrite(uint64_t connection_id,
+                                       std::string response) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ActiveConnection* conn = FindConnection(connection_id);
+  if (!conn || !conn->socket) {
+    return;
+  }
+  conn->write_queue.push_back(std::move(response));
+  PumpWriteQueue(connection_id);
+}
+
+void MahoMcpSocketServer::PumpWriteQueue(uint64_t connection_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ActiveConnection* conn = FindConnection(connection_id);
+  if (!conn || !conn->socket) {
+    return;
+  }
+  if (conn->write_in_flight) {
+    return;
+  }
+  if (!conn->current_write || conn->current_write->BytesRemaining() == 0) {
+    if (conn->write_queue.empty()) {
+      conn->current_write.reset();
+      return;
+    }
+    auto io_buf = base::MakeRefCounted<net::StringIOBuffer>(
+        std::move(conn->write_queue.front()));
+    conn->write_queue.pop_front();
+    int size = io_buf->size();
+    conn->current_write =
+        base::MakeRefCounted<net::DrainableIOBuffer>(std::move(io_buf), size);
+  }
+  static const net::NetworkTrafficAnnotationTag kQueueAnnotation =
+      net::DefineNetworkTrafficAnnotation("maho_mcp_local_uds_queued", R"annotation(
           semantics {
-            sender: "Maho MCP Socket Server (deferred)"
+            sender: "Maho MCP Socket Server (queued)"
             description:
-              "Writes an asynchronously-produced JSON-RPC response (e.g. "
-              "screenshot capture) back to a local Unix domain socket client. "
-              "Local IPC only — no network traffic leaves the machine."
-            trigger:
-              "An authenticated local MCP client sent a tool call whose "
-              "result required async work (viz compositor IPC) that finished "
-              "after ProcessData already returned."
-            data:
-              "JSON-RPC responses containing tool results. Credentials are "
-              "redacted by the credential firewall before egress."
+              "Writes JSON-RPC responses back to a local Unix domain socket "
+              "client, draining partial writes and serializing per connection. "
+              "Local IPC only."
+            trigger: "An authenticated local MCP client sent a tool call."
+            data: "JSON-RPC tool results; credentials redacted before egress."
             destination: LOCAL
           }
           policy {
@@ -314,47 +313,47 @@ void MahoMcpSocketServer::OnDeferredResponse(uint64_t connection_id,
             setting: "Disabled by default; toggled via maho settings."
             policy_exception_justification: "Local IPC only."
           })annotation");
-  auto drainable = base::MakeRefCounted<net::DrainableIOBuffer>(
-      std::move(write_buf), response.size());
-  auto write_next = std::make_shared<base::RepeatingClosure>();
-  net::StreamSocket* socket_ptr = conn.socket.get();
-  *write_next = base::BindRepeating(
-      [](net::StreamSocket* socket, scoped_refptr<net::DrainableIOBuffer> buf,
-         std::shared_ptr<base::RepeatingClosure> self_closure,
-         const net::NetworkTrafficAnnotationTag& annotation) {
-        while (buf->BytesRemaining() > 0) {
-          int result = socket->Write(
-              buf.get(), buf->BytesRemaining(),
-              base::BindOnce(
-                  [](scoped_refptr<net::DrainableIOBuffer> b,
-                     std::shared_ptr<base::RepeatingClosure> next, int r) {
-                    if (r > 0) {
-                      b->DidConsume(r);
-                    }
-                    if (r < 0) {
-                      LOG(WARNING)
-                          << "[MahoMcp] OnDeferredResponse write err=" << r;
-                      return;
-                    }
-                    if (b->BytesRemaining() > 0) {
-                      next->Run();
-                    }
-                  },
-                  buf, self_closure),
-              annotation);
-          if (result == net::ERR_IO_PENDING) {
-            return;
-          }
-          if (result < 0) {
-            LOG(WARNING)
-                << "[MahoMcp] OnDeferredResponse sync write err=" << result;
-            return;
-          }
-          buf->DidConsume(result);
-        }
-      },
-      socket_ptr, drainable, write_next, std::cref(kAnnotation));
-  write_next->Run();
+  while (conn->current_write->BytesRemaining() > 0) {
+    int result = conn->socket->Write(
+        conn->current_write.get(), conn->current_write->BytesRemaining(),
+        base::BindOnce(&MahoMcpSocketServer::OnWriteComplete,
+                       weak_factory_.GetWeakPtr(), connection_id),
+        kQueueAnnotation);
+    if (result == net::ERR_IO_PENDING) {
+      conn->write_in_flight = true;
+      return;
+    }
+    if (result < 0) {
+      LOG(WARNING) << "[MahoMcp] PumpWriteQueue write err=" << result;
+      conn->current_write.reset();
+      conn->write_queue.clear();
+      return;
+    }
+    conn->current_write->DidConsume(result);
+  }
+  conn->current_write.reset();
+  if (!conn->write_queue.empty()) {
+    PumpWriteQueue(connection_id);
+  }
+}
+
+void MahoMcpSocketServer::OnWriteComplete(uint64_t connection_id, int result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ActiveConnection* conn = FindConnection(connection_id);
+  if (!conn) {
+    return;
+  }
+  conn->write_in_flight = false;
+  if (result < 0) {
+    LOG(WARNING) << "[MahoMcp] OnWriteComplete write err=" << result;
+    conn->current_write.reset();
+    conn->write_queue.clear();
+    return;
+  }
+  if (conn->current_write) {
+    conn->current_write->DidConsume(result);
+  }
+  PumpWriteQueue(connection_id);
 }
 
 void MahoMcpSocketServer::RemoveConnection(uint64_t connection_id) {

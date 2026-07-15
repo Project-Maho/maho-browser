@@ -310,6 +310,39 @@ class TestMainFlags(unittest.TestCase):
 
         mock_sign.assert_not_called()
 
+    def test_ninja_target_repeats(self):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+
+        with patch.object(sys, 'argv', ['build_maho.py', '--skip-rust', '--ninja-target', 'target1', '--ninja-target', 'target2']), \
+             patch.object(sys, 'platform', 'darwin'), \
+             patch.object(_bm, 'apply_tracked_chromium_overrides'), \
+             patch.object(_bm, 'build_chromium_app') as mock_build, \
+             patch.object(_bm, 'find_codesign_identity', return_value='FAKSHA'), \
+             patch.object(_bm, 'codesign_app') as mock_sign, \
+             patch.object(_bm, 'launch_app') as mock_launch:
+            _bm.main()
+
+        mock_build.assert_called_once_with('out/Default', ['target1', 'target2'], [])
+        mock_sign.assert_not_called()
+        mock_launch.assert_not_called()
+
+    def test_ninja_target_clashes_with_remainder(self):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+
+        with patch.object(sys, 'argv', ['build_maho.py', '--skip-rust', '--ninja-target', 'target1', '--', '-j16']), \
+             patch.object(sys, 'platform', 'darwin'), \
+             patch.object(sys, 'stderr'):
+            with self.assertRaises(SystemExit):
+                _bm.main()
+
 
 if __name__ == '__main__':
     unittest.main()

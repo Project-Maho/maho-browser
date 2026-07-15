@@ -24,6 +24,7 @@ namespace maho {
 struct LastDispatchedTabState {
   std::string url;
   std::string title;
+  std::string favicon_b64;
 };
 
 // Architectural invariant: the canonical tab UUID is the one issued by
@@ -49,6 +50,13 @@ class MahoTabRegistry : public BrowserCollectionObserver {
   void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   static std::set<std::string> GetLiveTabIdsForProfile(Profile* profile);
+
+  // Retries create_tab announcement for every observed tab still carrying
+  // has_been_announced()==false (inserted before the bridge resolved the
+  // active space, which makes DispatchCreateTabForContents no-op with no retry
+  // trigger). Invoked by the bridge once the active space is known. Idempotent:
+  // DispatchCreateTabForContents self-guards on announced/empty space_id.
+  void ReannounceUnannouncedTabs();
 
   LastDispatchedTabState& GetOrCreateDispatchCache(const std::string& tab_id);
   void EraseDispatchCache(const std::string& tab_id);
@@ -77,6 +85,27 @@ class MahoTabRegistry : public BrowserCollectionObserver {
 
 class ShellEventObserver;
 void SetTabRegistryShellEventObserverForTesting(ShellEventObserver* observer);
+
+bool IsCorePinnedTab(const std::string& tab_id);
+bool IsCoreCloseProtectedTab(const std::string& tab_id);
+
+// Scopes a suspended-tab wake (WakeSuspendedTab's Navigate call). While alive,
+// the first WebContents announced through DispatchCreateTabForContents adopts
+// |tab_id| in place of the fresh UUID minted by TabHelpers, so the create_tab
+// event reaches maho-core under the ORIGINAL identity and the existing
+// suspended tab is restored instead of a brand-new Normal tab being created.
+// The kInserted announcement fires synchronously inside Navigate — before the
+// caller gets a chance to rebind the id on the returned WebContents — which is
+// why the adoption must happen here and not after Navigate returns. Unlike the
+// old SetPendingRestoredTabId FIFO, the id cannot outlive the wake call and
+// pollute an unrelated tab creation.
+class ScopedMahoTabWakeId {
+ public:
+  explicit ScopedMahoTabWakeId(const std::string& tab_id);
+  ~ScopedMahoTabWakeId();
+  ScopedMahoTabWakeId(const ScopedMahoTabWakeId&) = delete;
+  ScopedMahoTabWakeId& operator=(const ScopedMahoTabWakeId&) = delete;
+};
 
 }  // namespace maho
 

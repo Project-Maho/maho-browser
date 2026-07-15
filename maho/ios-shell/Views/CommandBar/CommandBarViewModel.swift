@@ -5,8 +5,8 @@ import UIKit
 class CommandBarViewModel: ObservableObject, CommandBarUpdateHandler {
     @Published var suggestions: [SuggestionViewModel] = []
 
-    func query(_ text: String, mode: String? = nil) {
-        let updates = MahoBridge.shared.commandBarQuery(query: text, mode: mode)
+    func query(_ text: String, mode: String? = nil, isIncognito: Bool = false) {
+        let updates = MahoBridge.shared.commandBarQuery(query: text, mode: mode, isIncognito: isIncognito)
         for update in updates {
             _ = MahoBridge.shared.processCommandBarUpdate(update, handler: self)
         }

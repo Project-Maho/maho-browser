@@ -7,6 +7,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/files/file_path.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/raw_ref.h"
@@ -25,6 +26,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/gfx/canvas.h"
+#include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -445,6 +448,77 @@ void MahoMigrationDialogView::OnImportClicked() {
   }
 
   if (mask == 0) return;
+
+  // Safari passwords must come from a CSV the user exports manually
+  // (Passwords app → Export). Collect that file before starting; the path is
+  // forwarded to the orchestrator in FileSelected().
+  if (browser.type == maho::BrowserType::kSafari &&
+      (mask & mojom::kImportPasswords)) {
+    pending_import_bitmask_ = mask;
+    import_button_->SetEnabled(false);  // Guard against re-entry.
+
+    const std::string locale = g_browser_process->GetApplicationLocale();
+    const bool is_ko = base::StartsWith(
+        locale, "ko", base::CompareCase::INSENSITIVE_ASCII);
+    const std::u16string title =
+        is_ko ? u"Safari에서 내보낸 비밀번호 CSV 선택"
+              : u"Choose the passwords CSV exported from Safari";
+
+    select_file_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+    ui::SelectFileDialog::FileTypeInfo file_type_info;
+    file_type_info.extensions.push_back({FILE_PATH_LITERAL("csv")});
+    file_type_info.extension_description_overrides.push_back(
+        is_ko ? u"CSV 파일 (.csv)" : u"CSV file (.csv)");
+
+    select_file_dialog_->SelectFile(
+        ui::SelectFileDialog::SELECT_OPEN_FILE, title, base::FilePath(),
+        &file_type_info, 1, FILE_PATH_LITERAL("csv"),
+        GetWidget() ? GetWidget()->GetNativeWindow() : gfx::NativeWindow());
+    return;
+  }
+
+  StartImport(mask);
+}
+
+void MahoMigrationDialogView::FileSelected(const ui::SelectedFileInfo& file,
+                                           int index) {
+  select_file_dialog_.reset();
+  const uint32_t mask = pending_import_bitmask_;
+  pending_import_bitmask_ = 0;
+  if (mask == 0 || state_ != DialogState::kIdle) {
+    return;
+  }
+
+  // Forward the CSV path to the orchestrator (consumed by the next session
+  // start). Never log the path or its contents.
+  const std::string path = file.path().AsUTF8Unsafe();
+  last_password_csv_path_for_testing_ = path;
+  maho_import_orchestrator_set_password_csv(path.c_str());
+
+  StartImport(mask);
+}
+
+void MahoMigrationDialogView::FileSelectionCanceled() {
+  select_file_dialog_.reset();
+  uint32_t mask = pending_import_bitmask_;
+  pending_import_bitmask_ = 0;
+
+  // User cancelled the CSV picker: skip passwords but still import any other
+  // selected data types.
+  mask &= ~mojom::kImportPasswords;
+  if (mask == 0) {
+    // Nothing else was selected — stay idle so the user can retry.
+    import_button_->SetEnabled(selected_browser_index_.has_value());
+    return;
+  }
+
+  StartImport(mask);
+}
+
+void MahoMigrationDialogView::StartImport(uint32_t mask) {
+  if (!selected_browser_index_.has_value()) return;
+
+  const auto& browser = browsers_[selected_browser_index_.value()];
 
   current_import_bitmask_ = mask;
   was_cancelled_ = false;

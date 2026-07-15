@@ -1,6 +1,9 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React, {useEffect, useRef} from 'react';
+import {ArrowRight} from 'lucide-react';
+
+import {Button} from '@ui/button';
 
 import {
   SPLASH_CTA_DELAY,
@@ -57,15 +60,24 @@ export function WelcomeSplash({onStart}: {onStart: () => void}) {
   }, []);
 
   return (
-    <div className="welcome-splash" ref={splashRef}>
-      <h1 className="welcome-splash__title" ref={titleRef}>
-        <span>Built for people who</span>
-        <span>took browsers seriously.</span>
+    <div
+      className="relative isolate flex min-h-screen w-full items-center justify-center overflow-hidden bg-background px-6 text-center text-foreground"
+      ref={splashRef}
+    >
+      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted" />
+      <div aria-hidden="true" className="absolute left-[18%] top-[18%] h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
+      <div aria-hidden="true" className="absolute bottom-[12%] right-[16%] h-80 w-80 rounded-full bg-muted/60 blur-3xl" />
+      <h1
+        className="relative z-10 m-0 max-w-5xl text-balance text-[clamp(3.5rem,6vw,8rem)] font-medium leading-[1.05] tracking-tight"
+        ref={titleRef}
+      >
+        <span className="block opacity-0">Built for people who</span>
+        <span className="block opacity-0">took browsers seriously.</span>
       </h1>
-      <button
+      <Button
         ref={ctaRef}
         type="button"
-        className="welcome-splash__cta"
+        className="absolute bottom-[10%] left-1/2 z-10 size-24 min-w-24 -translate-x-1/2 rounded-full border-border bg-card/80 text-foreground opacity-0 shadow-2xl shadow-black/30 backdrop-blur-xl transition-transform hover:-translate-x-1/2 hover:scale-105 hover:bg-muted"
         aria-label="Get started"
         onClick={async () => {
           const container = splashRef.current;
@@ -86,11 +98,8 @@ export function WelcomeSplash({onStart}: {onStart: () => void}) {
           await exit.finished.catch(() => undefined);
           onStart();
         }}>
-        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-          <polyline points="12 5 19 12 12 19"></polyline>
-        </svg>
-      </button>
+        <ArrowRight className="size-8" aria-hidden="true" />
+      </Button>
     </div>
   );
 }

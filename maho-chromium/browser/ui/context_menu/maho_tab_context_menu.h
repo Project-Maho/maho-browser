@@ -19,6 +19,7 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
     virtual ~Delegate() = default;
     virtual void RenameTab(int tab_index) {}
     virtual void CloseSelectedTabs() {}
+    virtual void CloseTabById(const std::string& tab_id) {}
     virtual void PinSelectedTabs(bool pin) {}
     virtual void MoveSelectedTabsToSpace(const std::string& space_id) {}
     virtual void MuteSelectedTabs(bool mute) {}
@@ -55,6 +56,11 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
     std::string name;
     std::string icon;
   };
+
+  // Number of selected tabs whose id resolves to a contained live strip index
+  // with no existing split. 0 when the browser/model is unavailable. The
+  // multi-select Open-in-Split command is shown/enabled only when this is >= 2.
+  int CountEligibleSplitTabs() const;
 
   raw_ptr<Browser> browser_;
   int tab_index_;

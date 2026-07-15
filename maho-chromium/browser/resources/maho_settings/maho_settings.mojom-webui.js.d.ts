@@ -105,13 +105,19 @@ export interface PasswordProviderStatus {
   capabilities: PasswordProviderCapabilities;
 }
 
+export interface PasswordProviderOption {
+  provider: PasswordProviderKind;
+  displayName: string;
+  description: string;
+  isAvailable: boolean;
+}
+
 export interface SavedPassword {
   id: string;
   domain: string;
   username: string;
   createdAt: string;
   lastUsed?: string | null;
-  password?: string | null;
 }
 
 
@@ -160,6 +166,16 @@ export interface InstalledExtension {
   version: string;
   description: string;
   enabled: boolean;
+  manifestVersion: number;
+}
+
+export enum RemoveExtensionResult {
+  kSuccess = 0,
+  kCancelled = 1,
+  kBlockedByPolicy = 2,
+  kNotFound = 3,
+  kBusy = 4,
+  kUninstallFailed = 5,
 }
 
 export interface AccountStatus {
@@ -198,23 +214,21 @@ export class PageCallbackRouter {
     bindNewPipeAndPassRemote(): unknown;
   };
   settingsChanged: {
-    addListener(listener: (settings: SettingValue[]) => void): void;
+    addListener(listener: (settings: SettingValue[]) => void): number;
   };
   installedExtensionsChanged: {
-    addListener(listener: (extensions: InstalledExtension[]) => void): void;
-    removeListener(listener: (extensions: InstalledExtension[]) => void): void;
+    addListener(listener: (extensions: InstalledExtension[]) => void): number;
   };
   accountStatusChanged: {
-    addListener(listener: (status: AccountStatus) => void): void;
-    removeListener(listener: (status: AccountStatus) => void): void;
+    addListener(listener: (status: AccountStatus) => void): number;
   };
   onShortcutRecorded: {
-    addListener(listener: (keyCombo: MojoKeyCombo) => void): void;
-    removeListener(listener: (keyCombo: MojoKeyCombo) => void): void;
+    addListener(listener: (keyCombo: MojoKeyCombo) => void): number;
   };
   providerModelsRefreshed: {
-    addListener(listener: (providerId: string, modelIds: string[]) => void): void;
+    addListener(listener: (providerId: string, modelIds: string[]) => void): number;
   };
+  removeListener(id: number): boolean;
 }
 
 export class PageHandlerRemote {
@@ -256,13 +270,17 @@ export class PageHandlerRemote {
   startSync(syncKey: string): Promise<{status: SyncStatus}>;
   joinSync(recoveryPhrase: string): Promise<{status: SyncStatus}>;
   stopSync(): Promise<void>;
+  disconnectSyncDevice(deviceId: string): Promise<{success: boolean}>;
+  renameSyncDevice(deviceId: string, newName: string): Promise<{success: boolean}>;
   getSpaces(): Promise<{spaces: SpaceBasicInfo[]}>;
   getPasswordProviderStatus(): Promise<{status: PasswordProviderStatus}>;
+  getPasswordProviderOptions(): Promise<{options: PasswordProviderOption[]}>;
   getSavedPasswords(): Promise<{passwords: SavedPassword[]}>;
   searchPasswords(query: string): Promise<{passwords: SavedPassword[]}>;
   addPassword(domain: string, username: string, password: string): Promise<{success: boolean}>;
   updatePasswordUsername(passwordId: string, username: string): Promise<{success: boolean}>;
   deletePassword(passwordId: string): Promise<{success: boolean}>;
+  revealPassword(passwordId: string): Promise<{password: string | null}>;
   getAutofillAddresses(): Promise<{addresses: AutofillAddress[]}>;
   addAutofillAddress(
       id: string,
@@ -292,13 +310,17 @@ export class PageHandlerRemote {
   getContentBlockerStats(): Promise<{stats: ContentBlockerStats}>;
   getInstalledExtensions(): Promise<{extensions: InstalledExtension[]}>;
   toggleExtension(id: string): Promise<{enabled: boolean}>;
-  removeExtension(id: string): Promise<{success: boolean}>;
+  removeExtension(id: string): Promise<{result: RemoveExtensionResult}>;
+  openExtensionsPage(): Promise<void>;
   setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
   clearBYOKKey(provider: string): Promise<{success: boolean}>;
   login(email: string, password: string): Promise<{success: boolean; errorMessage: string}>;
   logout(): Promise<void>;
   getAccountStatus(): Promise<{status: AccountStatus}>;
   getBillingInfo(): Promise<{info: BillingInfo}>;
+  getInvoices(): Promise<{invoices: Invoice[]}>;
+  getBillingPortalUrl(): Promise<{url: string}>;
+  getBuyCreditsUrl(packSizeUsd: number): Promise<{checkoutUrl: string}>;
 }
 
 export class PageHandlerFactory {

@@ -47,7 +47,7 @@ fn extract_registrable_domain(url: &str) -> String {
 }
 
 fn is_auto_lifecycle_exempt(tab: &Tab) -> bool {
-    tab.role.is_pinned()
+    tab.role.is_liveness_protected()
 }
 
 pub struct TabLifecycleManager {
@@ -63,6 +63,16 @@ pub struct TabLifecycleManager {
 }
 
 impl TabLifecycleManager {
+    fn push_closed_tab(&mut self, tab: Tab) {
+        if tab.is_private {
+            return;
+        }
+        self.closed_stack.push_back(tab);
+        if self.closed_stack.len() > MAX_CLOSED_STACK {
+            self.closed_stack.pop_front();
+        }
+    }
+
     pub fn new(on_update: Box<dyn Fn(CoreUpdate)>) -> Self {
         Self {
             tabs: HashMap::new(),
@@ -83,8 +93,9 @@ impl TabLifecycleManager {
         url: Option<Url>,
         parent_id: Option<TabId>,
         window_id: Option<i64>,
+        is_private: bool,
     ) -> Tab {
-        self.create_tab_inner(TabId::generate(), space_id, url, parent_id, window_id)
+        self.create_tab_inner(TabId::generate(), space_id, url, parent_id, window_id, is_private)
     }
 
     pub fn create_tab_with_id(
@@ -94,11 +105,12 @@ impl TabLifecycleManager {
         url: Option<Url>,
         parent_id: Option<TabId>,
         window_id: Option<i64>,
+        is_private: bool,
     ) -> Tab {
         if let Some(existing) = self.tabs.get(&tab_id) {
             return existing.clone();
         }
-        self.create_tab_inner(tab_id, space_id, url, parent_id, window_id)
+        self.create_tab_inner(tab_id, space_id, url, parent_id, window_id, is_private)
     }
 
     fn create_tab_inner(
@@ -108,6 +120,7 @@ impl TabLifecycleManager {
         url: Option<Url>,
         parent_id: Option<TabId>,
         window_id: Option<i64>,
+        is_private: bool,
     ) -> Tab {
         let now = DateTime::now();
         let now_ms = now_millis();
@@ -128,6 +141,7 @@ impl TabLifecycleManager {
             scroll_position: ScrollPosition::default(),
             pinned_url: None,
             window_id,
+            is_private,
         };
         self.tabs.insert(tab.id.clone(), tab.clone());
         self.state_timestamps.insert(tab.id.clone(), now_ms);
@@ -147,10 +161,7 @@ impl TabLifecycleManager {
                 self.loading_states.remove(child_id);
                 self.security_states.remove(child_id);
                 self.reader_mode_tabs.remove(child_id);
-                self.closed_stack.push_back(child_tab);
-                if self.closed_stack.len() > MAX_CLOSED_STACK {
-                    self.closed_stack.pop_front();
-                }
+                self.push_closed_tab(child_tab);
                 (self.on_update)(CoreUpdate::TabClosed {
                     tab_id: child_id.clone(),
                     animated: true,
@@ -163,10 +174,7 @@ impl TabLifecycleManager {
         self.loading_states.remove(tab_id);
         self.security_states.remove(tab_id);
         self.reader_mode_tabs.remove(tab_id);
-        self.closed_stack.push_back(tab.clone());
-        if self.closed_stack.len() > MAX_CLOSED_STACK {
-            self.closed_stack.pop_front();
-        }
+        self.push_closed_tab(tab.clone());
         (self.on_update)(CoreUpdate::TabClosed {
             tab_id: tab_id.clone(),
             animated: true,
@@ -354,7 +362,7 @@ impl TabLifecycleManager {
         let url = Some(original.url.clone());
         let parent_id = original.parent_id.clone();
         let window_id = original.window_id;
-        Some(self.create_tab(space_id, url, parent_id, window_id))
+        Some(self.create_tab(space_id, url, parent_id, window_id, false))
     }
 
     pub fn move_tab(
@@ -461,16 +469,22 @@ impl TabLifecycleManager {
 
     /// Sets `tab.role` to `new_role` and emits a `TabUpdated` event.
     ///
-    /// This is a pure role-field mutation: side-effect fields such as
-    /// `pinned_url` are NOT automatically managed. Callers that need
-    /// pinned-related side effects (e.g. clearing `pinned_url` on a
-    /// Pinned → Normal transition, or seeding it on Normal → Pinned)
-    /// must apply those separately before/after this call. See ADR 11
-    /// (docs/decisions/0011-favorites-close-protection-policy.md) for
-    /// the role-transition contract.
+    /// Also manages `pinned_url` side-effect: seeds `pinned_url` on Normal/Favorite -> Pinned,
+    /// and clears it when transitioning away from Pinned.
+    /// See ADR 11 (docs/decisions/0011-favorites-close-protection-policy.md).
     pub fn transition_tab_role(&mut self, id: &TabId, new_role: TabRole) -> bool {
+        if self.tabs.get(id).map(|t| &t.role) == Some(&new_role) {
+            return false;
+        }
         if let Some(tab) = self.tabs.get_mut(id) {
             tab.role = new_role.clone();
+            if new_role.is_pinned() {
+                if tab.pinned_url.is_none() {
+                    tab.pinned_url = Some(tab.url.clone());
+                }
+            } else {
+                tab.pinned_url = None;
+            }
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: id.clone(),
                 changes: TabStateUpdate {
@@ -549,6 +563,7 @@ impl TabLifecycleManager {
                     .filter(|t| {
                         matches!(t.state, TabLifecycleState::Active)
                             && !self.is_recently_active(&t.id)
+                            && !t.role.is_liveness_protected()
                     })
                     .map(|t| t.id.clone())
                     .collect();
@@ -562,7 +577,10 @@ impl TabLifecycleManager {
                 let frozen: Vec<TabId> = self
                     .tabs
                     .values()
-                    .filter(|t| matches!(t.state, TabLifecycleState::Frozen))
+                    .filter(|t| {
+                        matches!(t.state, TabLifecycleState::Frozen)
+                            && !t.role.is_liveness_protected()
+                    })
                     .map(|t| t.id.clone())
                     .collect();
                 let count = frozen.len();
@@ -581,7 +599,7 @@ impl TabLifecycleManager {
                             TabLifecycleState::Active
                                 | TabLifecycleState::Suspended { .. }
                                 | TabLifecycleState::Archived { .. }
-                        )
+                        ) && !t.role.is_liveness_protected()
                     })
                     .map(|t| t.id.clone())
                     .collect();
@@ -776,11 +794,11 @@ impl TabLifecycleManager {
         tabs
     }
 
-    pub fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize) {
+    pub fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize, space_ids: &HashSet<SpaceId>) {
         let mut favorite_tabs: Vec<Tab> = self
             .tabs
             .values()
-            .filter(|t| t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
+            .filter(|t| t.role.is_favorite() && space_ids.contains(&t.space_id) && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
             .cloned()
             .collect();
         favorite_tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
@@ -830,7 +848,7 @@ impl TabLifecycleManager {
             .filter(|t| {
                 t.space_id == *space_id
                     && !t.role.is_pinned()
-                    && matches!(t.state, TabLifecycleState::Active)
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
             })
             .collect()
     }
@@ -878,10 +896,7 @@ impl TabLifecycleManager {
                 self.loading_states.remove(&tab_id);
                 self.security_states.remove(&tab_id);
                 self.reader_mode_tabs.remove(&tab_id);
-                self.closed_stack.push_back(tab);
-                if self.closed_stack.len() > MAX_CLOSED_STACK {
-                    self.closed_stack.pop_front();
-                }
+                self.push_closed_tab(tab);
                 released.push(tab_id);
             }
         }
@@ -1013,6 +1028,7 @@ impl TabLifecycleManager {
             last_active_at: tab.last_active_at.clone(),
             favorite_order: tab.role.favorite_order(),
             role: tab.role.clone(),
+            is_private: tab.is_private,
         }
     }
 
@@ -1091,10 +1107,7 @@ impl TabLifecycleManager {
                 self.loading_states.remove(&tab_id);
                 self.security_states.remove(&tab_id);
                 self.reader_mode_tabs.remove(&tab_id);
-                self.closed_stack.push_back(tab);
-                if self.closed_stack.len() > MAX_CLOSED_STACK {
-                    self.closed_stack.pop_front();
-                }
+                self.push_closed_tab(tab);
                 (self.on_update)(CoreUpdate::TabClosed {
                     tab_id: tab_id.clone(),
                     animated: true,
@@ -1132,10 +1145,7 @@ impl TabLifecycleManager {
                 self.loading_states.remove(&tid);
                 self.security_states.remove(&tid);
                 self.reader_mode_tabs.remove(&tid);
-                self.closed_stack.push_back(tab);
-                if self.closed_stack.len() > MAX_CLOSED_STACK {
-                    self.closed_stack.pop_front();
-                }
+                self.push_closed_tab(tab);
                 (self.on_update)(CoreUpdate::TabClosed {
                     tab_id: tid.clone(),
                     animated: true,
@@ -1173,10 +1183,7 @@ impl TabLifecycleManager {
                 self.loading_states.remove(&tid);
                 self.security_states.remove(&tid);
                 self.reader_mode_tabs.remove(&tid);
-                self.closed_stack.push_back(tab);
-                if self.closed_stack.len() > MAX_CLOSED_STACK {
-                    self.closed_stack.pop_front();
-                }
+                self.push_closed_tab(tab);
                 (self.on_update)(CoreUpdate::TabClosed {
                     tab_id: tid.clone(),
                     animated: true,
@@ -1317,7 +1324,7 @@ mod tests {
         }));
 
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.favorite_tab(&tab_id);
@@ -1355,7 +1362,7 @@ mod tests {
     fn restored_archived_tab_not_re_archived_by_today_tab_timeout() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         let old_ts = now_millis() - 24 * 60 * 60 * 1000;
@@ -1377,7 +1384,7 @@ mod tests {
     fn favorite_tab_exempt_from_frozen_to_suspended() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.favorite_tab(&tab_id);
@@ -1398,9 +1405,9 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None);
+        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None, false);
         let tab1_id = tab1.id.clone();
-        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None);
+        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None, false);
         let tab2_id = tab2.id.clone();
 
         manager.favorite_tab(&tab1_id);
@@ -1426,7 +1433,7 @@ mod tests {
     fn reopened_tab_not_re_archived_by_tick() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         // Backdate creation timestamp so tab appears old
@@ -1453,7 +1460,7 @@ mod tests {
     fn test_update_tab_url() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         assert_eq!(manager.get_tab(&tab_id).unwrap().url.0.as_str(), "https://example.com");
@@ -1466,9 +1473,9 @@ mod tests {
     fn collect_child_ids_terminates_on_cycle() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None);
+        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None, false);
         let tab1_id = tab1.id.clone();
-        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None);
+        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None, false);
         let tab2_id = tab2.id.clone();
 
         if let Some(t1) = manager.tabs.get_mut(&tab1_id) {
@@ -1486,7 +1493,7 @@ mod tests {
     fn find_tabs_older_than_skips_pinned() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.pin_tab(&tab_id);
@@ -1503,13 +1510,13 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let old_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://old.com")), None, None);
+        let old_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://old.com")), None, None, false);
         let old_id = old_tab.id.clone();
         if let Some(t) = manager.tabs.get_mut(&old_id) {
             t.last_active_at = DateTime::from_iso("2023-01-01T00:00:00.000Z");
         }
 
-        let recent_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://recent.com")), None, None);
+        let recent_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://recent.com")), None, None, false);
         let recent_id = recent_tab.id.clone();
         if let Some(t) = manager.tabs.get_mut(&recent_id) {
             t.last_active_at = DateTime::from_iso("2024-06-01T00:00:00.000Z");
@@ -1526,13 +1533,13 @@ mod tests {
         let space_a = SpaceId::new("space-a");
         let space_b = SpaceId::new("space-b");
 
-        let tab_a = manager.create_tab(space_a.clone(), Some(Url::new("https://a.com")), None, None);
+        let tab_a = manager.create_tab(space_a.clone(), Some(Url::new("https://a.com")), None, None, false);
         let id_a = tab_a.id.clone();
         if let Some(t) = manager.tabs.get_mut(&id_a) {
             t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
         }
 
-        let tab_b = manager.create_tab(space_b.clone(), Some(Url::new("https://b.com")), None, None);
+        let tab_b = manager.create_tab(space_b.clone(), Some(Url::new("https://b.com")), None, None, false);
         let id_b = tab_b.id.clone();
         if let Some(t) = manager.tabs.get_mut(&id_b) {
             t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
@@ -1557,7 +1564,7 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         // 1. Initial tab activation updates last_active_at to now.
@@ -1574,7 +1581,7 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.suspend_tab(&tab_id);
@@ -1592,7 +1599,7 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.freeze_tab(&tab_id);
@@ -1611,7 +1618,7 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.freeze_tab(&tab_id);
@@ -1632,7 +1639,7 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
         let tab_id = tab.id.clone();
 
         manager.freeze_tab(&tab_id);
@@ -1648,4 +1655,3 @@ mod tests {
         assert_ne!(t.last_active_at.0, old_stamp);
     }
 }
-

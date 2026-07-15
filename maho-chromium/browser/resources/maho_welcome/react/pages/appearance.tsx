@@ -1,6 +1,9 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import type {ReactNode} from 'react';
+import {Check} from 'lucide-react';
+
+import {cn} from '@lib/utils';
 import type {MahoWelcomeStore} from '../store.js';
 import type {AppearanceMode} from '../types.js';
 
@@ -50,12 +53,12 @@ export function AppearanceSidebar({store}: AppearanceSidebarProps) {
 
 export function AppearanceContent({store, appearance}: AppearanceContentProps) {
   return (
-    <div className="welcome-appearance-content">
-      <div className="welcome-appearance__options">
+    <div className="flex w-full flex-col items-stretch gap-5">
+      <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-3">
         {APPEARANCE_OPTIONS.map(option => {
           const isSelected = appearance === option.mode;
           const descriptionId = option.descriptionId
-              ? `welcome-appearance-${option.mode}-description`
+              ? `appearance-${option.mode}-description`
               : undefined;
           return (
             <button
@@ -63,22 +66,34 @@ export function AppearanceContent({store, appearance}: AppearanceContentProps) {
               type="button"
               aria-pressed={isSelected}
               aria-describedby={descriptionId}
-              className={`welcome-appearance-card welcome-appearance-card--${option.mode}${isSelected ? ' is-selected' : ''}`}
-              onClick={() => store.setAppearance(option.mode)}>
-              <span className="welcome-appearance-card__preview" aria-hidden="true">
-                <span className="welcome-appearance-card__chrome">
-                  <span></span><span></span><span></span>
+              className={cn(
+                  'group relative flex min-h-52 flex-col gap-3 rounded-xl border border-border bg-background/60 p-4 text-left text-foreground shadow-sm transition duration-150 hover:-translate-y-0.5 hover:bg-muted/50 hover:shadow-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                  isSelected && 'scale-[1.015] border-primary bg-muted shadow-xl ring-2 ring-primary/20')}
+              onClick={() => store.setAppearance(option.mode)}
+            >
+              {isSelected ? (
+                <span className="absolute right-3 top-3 z-20 flex size-6 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+                  <Check className="size-3.5" aria-hidden="true" />
                 </span>
-                <span className="welcome-appearance-card__icon">
+              ) : null}
+              <span className={cn(
+                  'relative flex min-h-28 items-center justify-center overflow-hidden rounded-lg border border-border shadow-inner',
+                  getPreviewClasses(option.mode))} aria-hidden="true">
+                <span className="absolute left-3 top-3 z-10 flex gap-1.5">
+                  <span className="size-2 rounded-full bg-red-400 shadow-sm" />
+                  <span className="size-2 rounded-full bg-yellow-400 shadow-sm" />
+                  <span className="size-2 rounded-full bg-green-400 shadow-sm" />
+                </span>
+                <span className="relative z-10 flex size-16 items-center justify-center rounded-full border border-border bg-background/40 text-current shadow-lg backdrop-blur-md transition group-hover:scale-105">
                   {option.renderIcon()}
                 </span>
               </span>
-              <span className="welcome-appearance-card__copy">
-                <span className="welcome-appearance-card__title">
+              <span className="flex flex-col gap-1">
+                <span className="text-base font-semibold tracking-tight">
                   {store.getString(option.titleId)}
                 </span>
                 {option.descriptionId ? (
-                  <span id={descriptionId} className="welcome-appearance-card__description">
+                  <span id={descriptionId} className="text-sm leading-5 text-muted-foreground">
                     {store.getString(option.descriptionId)}
                   </span>
                 ) : null}
@@ -87,11 +102,22 @@ export function AppearanceContent({store, appearance}: AppearanceContentProps) {
           );
         })}
       </div>
-      <p className="welcome-appearance__helper">
+      <p className="mx-auto m-0 max-w-lg text-center text-sm leading-6 text-muted-foreground">
         {store.getString('IDS_MAHO_WELCOME_APPEARANCE_HELPER')}
       </p>
     </div>
   );
+}
+
+function getPreviewClasses(mode: AppearanceMode): string {
+  switch (mode) {
+    case 'system':
+      return 'bg-[linear-gradient(135deg,var(--color-zinc-100)_0_49%,var(--color-zinc-900)_51%_100%)] text-zinc-200';
+    case 'light':
+      return 'bg-gradient-to-br from-zinc-50 to-zinc-200 text-zinc-700';
+    case 'dark':
+      return 'bg-gradient-to-br from-zinc-800 to-zinc-950 text-zinc-100';
+  }
 }
 
 function SystemIcon() {

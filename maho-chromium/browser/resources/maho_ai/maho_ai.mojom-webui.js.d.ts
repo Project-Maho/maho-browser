@@ -208,6 +208,16 @@ export class PageCallbackRouter {
   onAISettingsChanged: {
     addListener(listener: (info: AISettingsInfo) => void): void;
   };
+  onVoicePartial: {
+    addListener(listener: (transcript: string) => void): number;
+  };
+  onVoiceFinal: {
+    addListener(listener: (transcript: string) => void): number;
+  };
+  onVoiceError: {
+    addListener(listener: (message: string) => void): number;
+  };
+  removeListener(id: number): boolean;
 }
 
 export class PageHandlerRemote {
@@ -253,6 +263,9 @@ export class PageHandlerRemote {
   applyTabTidyFolders(folders: TidyFolder[]): Promise<void>;
   getCreditBalance(): Promise<{info: CreditBalanceInfo}>;
   getBuyCreditsUrl(packSizeUsd: number): Promise<{checkoutUrl: string}>;
+  startVoiceSession(): Promise<{accepted: boolean}>;
+  pushAudioChunk(pcm16k: number[]): Promise<void>;
+  stopVoiceSession(): Promise<void>;
 
   // AI Extensibility methods
   createAiProfile(name: string, systemPrompt: string, model: string | null): Promise<{profileId: string | null}>;

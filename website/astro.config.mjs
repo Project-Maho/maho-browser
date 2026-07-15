@@ -11,6 +11,9 @@ const SITE_URL = process.env.SITE_URL || 'https://mahobrowser.com';
 
 export default defineConfig({
   site: SITE_URL,
+  redirects: {
+    '/waitlist': '/download',
+  },
   // Starlight overwrites `markdown.remarkPlugins` with its own list, dropping
   // Astro's default GFM. Re-inject remark-gfm here so tables, strikethrough,
   // task lists, and autolinks work in both .md and .mdx docs.

@@ -26,6 +26,7 @@ class MahoMcpInputSynthesizer {
                      std::optional<ui::AXNodeID> ax_id);
 
   static bool Hover(content::WebContents* wc, ui::AXNodeID ax_id);
+  static bool HoverAt(content::WebContents* wc, int x_css, int y_css);
 
   static bool KeyPress(content::WebContents* wc,
                        const std::string& key,

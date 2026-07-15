@@ -28,6 +28,7 @@ struct TomlMcpServer {
     command: Option<String>,
     url: Option<String>,
     auth_keychain_id: Option<String>,
+    socket_path: Option<String>,
     // SECURITY: `trusted` is intentionally parsed but IGNORED on import.
     // Imports MUST NOT auto-trust servers; user must approve via the
     // trust-ceremony UI at first connect. Preserved in struct only for
@@ -90,6 +91,7 @@ pub fn import_profile_from_toml(
                 let transport = match mcp.transport.as_str() {
                     "stdio" => McpTransport::Stdio,
                     "http" => McpTransport::Http,
+                    "uds" => McpTransport::Uds,
                     other => return Err(format!("Unsupported MCP transport: {}", other)),
                 };
                 if transport == McpTransport::Stdio && mcp.command.is_none() {
@@ -97,6 +99,9 @@ pub fn import_profile_from_toml(
                 }
                 if transport == McpTransport::Http && mcp.url.is_none() {
                     return Err(format!("URL is required for http MCP server '{}'", mcp.name));
+                }
+                if transport == McpTransport::Uds && mcp.socket_path.is_none() {
+                    return Err(format!("Socket path is required for UDS MCP server '{}'", mcp.name));
                 }
 
                 let server_id = uuid::Uuid::new_v4().to_string();
@@ -114,6 +119,7 @@ pub fn import_profile_from_toml(
                     output_cap_bytes: mcp.output_cap_bytes.unwrap_or(10240).min(1024 * 1024),
                     created_at: now.clone(),
                     updated_at: now.clone(),
+                    socket_path: mcp.socket_path.clone(),
                 };
 
                 storage.create_mcp_server(&server).map_err(|e| e.to_string())?;

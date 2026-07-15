@@ -775,6 +775,7 @@ fn sqlite_ai_mcp_servers_and_cli_tools_crud() {
         trusted_tools: Some(vec!["tool-a".to_string()]),
         timeout_ms: 30000,
         output_cap_bytes: 5000,
+        socket_path: None,
         created_at: "2026-07-09T00:00:00Z".to_string(),
         updated_at: "2026-07-09T00:00:00Z".to_string(),
     };
@@ -790,9 +791,32 @@ fn sqlite_ai_mcp_servers_and_cli_tools_crud() {
     assert_eq!(loaded_mcp.trusted_tools.as_ref().unwrap(), &vec!["tool-a".to_string()]);
     assert_eq!(loaded_mcp.timeout_ms, 30000);
     assert_eq!(loaded_mcp.output_cap_bytes, 5000);
+    assert_eq!(loaded_mcp.socket_path, None);
+
+    // Test Uds transport
+    let mcp_uds = AiMcpServer {
+        id: "mcp-uds".to_string(),
+        workspace_id: "ws-1".to_string(),
+        name: "server-uds".to_string(),
+        transport: McpTransport::Uds,
+        command: None,
+        url: None,
+        auth_keychain_id: None,
+        trusted: false,
+        trusted_tools: None,
+        timeout_ms: 20000,
+        output_cap_bytes: 4000,
+        socket_path: Some("/tmp/test.sock".to_string()),
+        created_at: "2026-07-09T00:00:00Z".to_string(),
+        updated_at: "2026-07-09T00:00:00Z".to_string(),
+    };
+    db.create_mcp_server(&mcp_uds).unwrap();
+    let loaded_uds = db.get_mcp_server("mcp-uds").unwrap().unwrap();
+    assert_eq!(loaded_uds.transport, McpTransport::Uds);
+    assert_eq!(loaded_uds.socket_path.as_deref(), Some("/tmp/test.sock"));
 
     let list_mcp = db.list_mcp_servers("ws-1").unwrap();
-    assert_eq!(list_mcp.len(), 1);
+    assert_eq!(list_mcp.len(), 2);
 
     // Update
     let mut updated_mcp = loaded_mcp;
@@ -844,3 +868,91 @@ fn sqlite_ai_mcp_servers_and_cli_tools_crud() {
     assert!(db.get_mcp_server("mcp-1").unwrap().is_none());
     assert!(db.get_cli_tool("cli-1").unwrap().is_none());
 }
+
+#[test]
+fn test_autofill_migration_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    // 1. Create connection manually and set up OLD schema
+    {
+        let conn = rusqlite::Connection::open(db_path_str).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE autofill_addresses (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                street TEXT NOT NULL,
+                city TEXT NOT NULL,
+                state TEXT NOT NULL,
+                zip TEXT NOT NULL,
+                country TEXT NOT NULL,
+                phone TEXT,
+                email TEXT
+            );
+            CREATE TABLE autofill_payments (
+                id TEXT PRIMARY KEY,
+                card_name TEXT NOT NULL,
+                last_four TEXT NOT NULL,
+                expiry TEXT NOT NULL
+            );
+            INSERT INTO autofill_addresses (id, name, street, city, state, zip, country, phone, email)
+            VALUES ('addr-old', 'Old Name', 'Old St', 'Old City', 'OS', '12345', 'US', '123-456', 'old@test.com');
+            INSERT INTO autofill_payments (id, card_name, last_four, expiry)
+            VALUES ('card-old', 'Old Card', '4321', '12/29');"
+        ).unwrap();
+    }
+
+    // 2. Open via SqliteStorage (this runs initialize_schema -> migration)
+    let storage = SqliteStorage::open(db_path_str).unwrap();
+
+    // Verify migrations added the columns and they default to NULL / None
+    let addresses = storage.load_autofill_addresses().unwrap();
+    assert_eq!(addresses.len(), 1);
+    assert_eq!(addresses[0].0, "addr-old");
+    assert_eq!(addresses[0].9, None); // address_line2
+
+    let payments = storage.load_autofill_payments().unwrap();
+    assert_eq!(payments.len(), 1);
+    assert_eq!(payments[0].0, "card-old");
+    assert_eq!(payments[0].4, None); // card_network
+
+    // 3. Save new values using new columns
+    storage.save_autofill_address(maho_storage::sqlite::AutofillAddressParams {
+        id: "addr-new",
+        name: "New Name",
+        street: "New St",
+        city: "New City",
+        state: "NS",
+        zip: "54321",
+        country: "US",
+        phone: Some("987-654"),
+        email: Some("new@test.com"),
+        address_line2: Some("Apt 4B"),
+    }).unwrap();
+
+    storage.save_autofill_payment(
+        "card-new",
+        "New Card",
+        "1111",
+        "01/30",
+        Some("visa"),
+    ).unwrap();
+
+    // Verify round-trip
+    let addresses = storage.load_autofill_addresses().unwrap();
+    let new_addr = addresses.iter().find(|a| a.0 == "addr-new").unwrap();
+    assert_eq!(new_addr.9, Some("Apt 4B".to_string()));
+
+    let payments = storage.load_autofill_payments().unwrap();
+    let new_pay = payments.iter().find(|p| p.0 == "card-new").unwrap();
+    assert_eq!(new_pay.4, Some("visa".to_string()));
+
+    // 4. Run migrations again to verify idempotence
+    let storage = SqliteStorage::open(db_path_str).unwrap();
+
+    let addresses = storage.load_autofill_addresses().unwrap();
+    let new_addr = addresses.iter().find(|a| a.0 == "addr-new").unwrap();
+    assert_eq!(new_addr.9, Some("Apt 4B".to_string()));
+}
+

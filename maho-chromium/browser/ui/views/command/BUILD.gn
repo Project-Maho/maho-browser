@@ -34,10 +34,12 @@ source_set("maho_command_overlay") {
     "//chrome/browser/favicon",
     "//chrome/browser/devtools",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/search_engines",
     "//chrome/browser/ui:browser_navigator_params_headers",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/side_panel",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//components/search_engines",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_tab_id_helper",
@@ -71,9 +73,10 @@ source_set("maho_command_overlay") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "maho_command_action_handler_unittest.cc",
     "maho_command_model_unittest.cc",
-    # "maho_command_overlay_controller_unittest.cc",
-    # "maho_command_overlay_view_unittest.cc",
+    "maho_command_overlay_controller_unittest.cc",
+    "maho_command_overlay_view_unittest.cc",
     "maho_command_result_row_view_unittest.cc",
     "maho_unified_click_path_behavior_unittest.cc",
   ]
@@ -83,6 +86,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//maho/browser:maho_features",
+    "//maho/browser/ui/views/split_view:maho_split_view",
     "//testing/gtest",
     "//ui/base",
     "//ui/events",
@@ -95,6 +99,7 @@ source_set("interactive_tests") {
   testonly = true
   sources = [
     "maho_ai_popup_lifetime_interactive_uitest.cc",
+    "maho_command_incognito_interactive_uitest.cc",
     # TODO(other-session): re-enable once test-only APIs
     # (Get/IsSeededStateForTesting, InitializeSeededStateForTesting,
     #  GetMaxSeededVisibleResultsForTesting) are restored on

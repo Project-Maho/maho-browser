@@ -11,9 +11,13 @@
 
 MahoAiRuntimeRouter::MahoAiRuntimeRouter(
     PrefService* prefs,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    base::RepeatingCallback<bool()> ai_gate,
+    base::RepeatingCallback<Browser*()> bound_browser_resolver)
     : prefs_(prefs),
-      url_loader_factory_(std::move(url_loader_factory)) {
+      url_loader_factory_(std::move(url_loader_factory)),
+      ai_gate_(std::move(ai_gate)),
+      bound_browser_resolver_(std::move(bound_browser_resolver)) {
   RebuildAdapterIfStale();
 }
 
@@ -40,9 +44,13 @@ bool MahoAiRuntimeRouter::IsAvailable() const {
 }
 
 void MahoAiRuntimeRouter::RebuildAdapterIfStale() {
+  if (ai_gate_ && !ai_gate_.Run()) {
+    active_adapter_.reset();
+    return;
+  }
   if (active_adapter_) {
     return;
   }
-  active_adapter_ =
-      std::make_unique<MahoUnifiedAgentAdapter>(prefs_, url_loader_factory_);
+  active_adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(
+      prefs_, url_loader_factory_, ai_gate_, bound_browser_resolver_);
 }

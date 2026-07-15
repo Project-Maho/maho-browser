@@ -90,55 +90,38 @@ async function main() {
   assert(dialogOpen!.isOpen === true, "Recording dialog is open");
   assert(dialogOpen!.hasPrompt === true, "Recording dialog shows 'Record Shortcut' prompt");
 
-  step("Simulate Key Recording (⌘⇧K)");
-  // Use CDP Input.dispatchKeyEvent to simulate Meta+Shift+K
-  // Note: Key recording goes through Mojo useShortcutInterceptor which intercepts at
-  // the browser level. CDP dispatchKeyEvent may not trigger Mojo interception.
-  // Fallback: call the state setter directly if CDP keys don't propagate.
+  step("Record ⌘⇧K through the real interception path");
+  // The store exposes no public recording test hook, so drive the real browser
+  // interceptor: the open dialog sets recording mode and real CDP key input
+  // fires onShortcutRecorded. Do NOT re-add a synthetic .listener_ call.
   await cdp.send("Input.dispatchKeyEvent", {
-    type: "keyDown",
+    type: "rawKeyDown",
     modifiers: 8 + 1, // meta(8) + shift(1) = 9 on macOS
     key: "K",
     code: "KeyK",
     windowsVirtualKeyCode: 75,
     nativeVirtualKeyCode: 75
   });
-  await new Promise(r => setTimeout(r, 500));
+  await new Promise(r => setTimeout(r, 200));
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    modifiers: 8 + 1,
+    key: "K",
+    code: "KeyK",
+    windowsVirtualKeyCode: 75,
+    nativeVirtualKeyCode: 75
+  });
+  await new Promise(r => setTimeout(r, 900));
 
-  // Check if combo was recorded via Mojo path
-  let comboRecorded = await cdp.eval<string>(`(function(){
+  const comboRecorded = await cdp.eval<string>(`(function(){
     var dialog = document.querySelector('[role="dialog"]');
     if (!dialog) return '';
     var comboEl = dialog.querySelector('.font-mono.text-2xl');
     return comboEl ? comboEl.textContent.trim() : '';
   })()`);
 
-  // If CDP key dispatch didn't reach Mojo interceptor, use direct eval fallback
-  if (!comboRecorded || comboRecorded === 'None') {
-    // Trigger the Mojo interceptor callback directly via test hook
-    await cdp.eval(`(function(){
-      // The interceptor registered a keydown listener that forwards to Mojo
-      // Dispatch a synthetic keydown that the dialog's own listener won't block
-      var ev = new KeyboardEvent('keydown', {
-        key: 'K', code: 'KeyK', keyCode: 75,
-        metaKey: true, shiftKey: true, bubbles: true, cancelable: true
-      });
-      window.dispatchEvent(ev);
-    })()`);
-    await new Promise(r => setTimeout(r, 800));
-
-    comboRecorded = await cdp.eval<string>(`(function(){
-      var dialog = document.querySelector('[role="dialog"]');
-      if (!dialog) return '';
-      var comboEl = dialog.querySelector('.font-mono.text-2xl');
-      return comboEl ? comboEl.textContent.trim() : '';
-    })()`) ?? '';
-  }
-
-  // The Mojo pipeline may not respond to synthetic events in test env.
-  // Assert what we can — if recording didn't trigger, note it as a Mojo limitation.
   const comboShown = comboRecorded !== '' && comboRecorded !== 'None';
-  assert(comboShown || true, `Recording dialog combo display: "${comboRecorded}" (Mojo interceptor may require live browser; softened)`);
+  assert(comboShown === true, `Recording dialog combo display: "${comboRecorded}"`);
 
   step("Save or Cancel Recording");
   // If a combo was recorded, click Save; otherwise Cancel
@@ -191,8 +174,7 @@ async function main() {
       if (resetBtn && !resetBtn.disabled) { resetBtn.click(); return true; }
       return false;
     })()`);
-    // Reset may be disabled if the shortcut wasn't actually customized (Mojo pipeline issue)
-    assert(resetClicked === true || true, `Reset button clicked: ${resetClicked} (may be disabled if Mojo recording didn't persist)`);
+    assert(resetClicked === true, `Reset button clicked: ${resetClicked}`);
     await new Promise(r => setTimeout(r, 500));
   } else {
     // Cancel the dialog since we couldn't record

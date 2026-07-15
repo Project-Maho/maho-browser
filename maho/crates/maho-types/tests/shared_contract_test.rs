@@ -10,6 +10,7 @@ use maho_types::profile::*;
 use maho_types::settings::*;
 use maho_types::space::*;
 use maho_types::tab::*;
+use maho_types::traits::shell_renderer::SuggestionType;
 
 // === Branded Identifiers ===
 
@@ -273,6 +274,7 @@ fn is_command_bar_event() {
     let query = ShellEvent::CommandBarQuery {
         text: "hello".to_string(),
         mode: None,
+        is_incognito: false,
     };
     assert!(query.is_command_bar_event());
     assert!(!ShellEvent::AppLaunched.is_command_bar_event());
@@ -317,6 +319,7 @@ fn is_tab_update() {
             last_active_at: DateTime::now(),
             favorite_order: None,
             role: maho_types::tab::TabRole::Normal,
+            is_private: false,
         },
     };
     assert!(tab_created.is_tab_update());
@@ -543,4 +546,20 @@ fn pinned_close_behavior_round_trips_reset_unload_switch() {
     assert!(serialized.contains("reset-unload-switch"));
     let deserialized: GeneralSettings = serde_json::from_str(&serialized).unwrap();
     assert!(matches!(deserialized.pinned_close_behavior, PinnedCloseBehavior::ResetUnloadSwitch));
+}
+
+// === SuggestionType wire-format contract (Rust <-> Swift) ===
+
+#[test]
+fn suggestion_type_ai_answer_serializes_camelcase_for_swift_contract() {
+    // The enum carries #[serde(rename_all = "lowercase")], which would emit
+    // "aianswer" by default. Swift's `SuggestionType.aiAnswer` (String raw value)
+    // decodes "aiAnswer", so the explicit #[serde(rename = "aiAnswer")] override is
+    // load-bearing: without it the AI-search suggestion row silently fails to decode
+    // on iOS and never renders. Lock the exact wire string in both directions.
+    let serialized = serde_json::to_string(&SuggestionType::AiAnswer).unwrap();
+    assert_eq!(serialized, "\"aiAnswer\"");
+
+    let deserialized: SuggestionType = serde_json::from_str("\"aiAnswer\"").unwrap();
+    assert!(matches!(deserialized, SuggestionType::AiAnswer));
 }

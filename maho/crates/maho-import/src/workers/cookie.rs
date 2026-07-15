@@ -20,52 +20,10 @@ use crate::{BrowserType, DetectedBrowser, ImportResult};
 use crate::decrypt::chromium_keychain::{decrypt_cookie_v10, ChromiumKey};
 
 #[cfg(target_os = "macos")]
-use crate::decrypt::chromium_keychain::{fetch_and_derive_key, MacOsKeychain};
-
+use super::{fetch_keychain_key_with_timeout, keychain_service_account};
 use super::{is_cancelled, send_update, ImportWorker};
 
 pub struct CookieWorker;
-
-#[cfg(target_os = "macos")]
-fn keychain_service_account(browser_type: BrowserType) -> Option<(&'static str, &'static str)> {
-    match browser_type {
-        BrowserType::Chrome => Some(("Chrome Safe Storage", "Chrome")),
-        BrowserType::Brave => Some(("Brave Safe Storage", "Brave")),
-        BrowserType::Arc => Some(("Arc Safe Storage", "Arc")),
-        BrowserType::Edge => Some(("Microsoft Edge Safe Storage", "Microsoft Edge")),
-        BrowserType::Vivaldi => Some(("Vivaldi Safe Storage", "Vivaldi")),
-        BrowserType::Opera => Some(("Opera Safe Storage", "Opera")),
-        _ => None,
-    }
-}
-
-/// Fetches a Keychain entry on a background thread with a timeout.
-///
-/// macOS Security framework's `SecKeychainFindGenericPassword` blocks the
-/// caller indefinitely when the process is ad-hoc signed / lacks a stable ACL
-/// (the system prompt may be hidden behind the welcome window). Wrapping the
-/// call in a worker thread + recv_timeout lets us abandon the attempt after
-/// `timeout` and proceed with the rest of the import.
-///
-/// SAFETY: the spawned thread is leaked on timeout — the Keychain call will
-/// eventually return and drop the receiver send. This is acceptable because
-/// the worker is invoked at most once per import session.
-#[cfg(target_os = "macos")]
-fn fetch_keychain_with_timeout(
-    service: &'static str,
-    account: &'static str,
-    timeout: std::time::Duration,
-) -> Option<ChromiumKey> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name(format!("maho-import-keychain-{}", service))
-        .spawn(move || {
-            let result = fetch_and_derive_key(&MacOsKeychain, service, account).ok();
-            let _ = tx.send(result);
-        })
-        .ok()?;
-    rx.recv_timeout(timeout).ok().flatten()
-}
 
 impl ImportWorker for CookieWorker {
     fn run(
@@ -75,10 +33,6 @@ impl ImportWorker for CookieWorker {
         cancelled: &Arc<AtomicBool>,
         progress: &Sender<ImportProgress>,
     ) -> ImportResult<u32> {
-        if browser.browser_type == BrowserType::Safari {
-            return Ok(0);
-        }
-
         let profile_dir = browser
             .profile_path
             .parent()
@@ -87,6 +41,33 @@ impl ImportWorker for CookieWorker {
         let mut count = 0u32;
 
         match browser.browser_type {
+            BrowserType::Safari => {
+                // Safari stores cookies in the proprietary binarycookies format
+                // (plaintext values — no Keychain decryption needed).
+                let cookies = parsers::safari::cookies::parse_safari_cookies(profile_dir)?;
+                for cookie in &cookies {
+                    if is_cancelled(cancelled) {
+                        break;
+                    }
+                    if cookie.value.is_empty() || cookie.host.is_empty() {
+                        continue;
+                    }
+                    destination.add_cookie(
+                        &cookie.host,
+                        &cookie.name,
+                        &cookie.value,
+                        &cookie.path,
+                        cookie.expires,
+                        cookie.is_secure,
+                        cookie.is_httponly,
+                        cookie.same_site,
+                    );
+                    count += 1;
+                    if count % 500 == 0 {
+                        send_update(progress, ImportType::Cookies, count, "Importing cookies...");
+                    }
+                }
+            }
             BrowserType::Firefox | BrowserType::Zen => {
                 let cookies = parsers::firefox::cookies::parse_firefox_cookies(profile_dir)?;
                 for cookie in &cookies {
@@ -123,7 +104,7 @@ impl ImportWorker for CookieWorker {
                 #[cfg(target_os = "macos")]
                 let decryption_key: Option<ChromiumKey> = keychain_service_account(browser.browser_type)
                     .and_then(|(service, account)| {
-                        fetch_keychain_with_timeout(service, account, std::time::Duration::from_secs(5))
+                        fetch_keychain_key_with_timeout(service, account, std::time::Duration::from_secs(5))
                     });
 
                 #[cfg(target_os = "linux")]
@@ -219,7 +200,6 @@ impl ImportWorker for CookieWorker {
                     }
                 }
             }
-            _ => {}
         }
         Ok(count)
     }
@@ -249,23 +229,21 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
-    fn test_cookie_worker_skips_safari() {
+    fn test_cookie_worker_nonexistent_safari() {
         let dest = Arc::new(MockDestination::new());
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::channel();
 
         let browser = DetectedBrowser {
             browser_type: BrowserType::Safari,
             display_name: "Safari".to_string(),
-            profile_path: std::path::PathBuf::from("/nonexistent/profile"),
+            profile_path: std::path::PathBuf::from("/nonexistent/Library/Safari/Bookmarks.plist"),
             services_supported: 0xFF,
             requires_full_disk_access: false,
         };
 
         let result = CookieWorker.run(&browser, &*dest, &cancelled, &tx);
-        assert_eq!(result.unwrap(), 0);
-        let msgs: Vec<_> = rx.try_iter().collect();
-        assert!(msgs.is_empty());
+        assert!(result.is_err());
     }
 
     #[test]

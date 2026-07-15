@@ -114,6 +114,15 @@ bool maho_core_is_tab_pinned(struct MahoCore *ptr, const char *tab_id);
 
 /**
  * # Safety
+ * Same contract as `maho_core_is_tab_pinned`: `ptr` must be a valid `*mut MahoCore`
+ * produced by `maho_core_new*`; `tab_id` must be a valid NUL-terminated C string.
+ * Returns `true` for Pinned OR Favorite tabs (close-guard protection). Returns
+ * `false` on null pointer, invalid UTF-8, or when an import is in progress.
+ */
+bool maho_core_is_tab_close_protected(struct MahoCore *ptr, const char *tab_id);
+
+/**
+ * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
@@ -313,6 +322,14 @@ char *maho_core_search_passwords(struct MahoCore *ptr, const char *query);
  * `password_id` must be a valid null-terminated C string.
  */
 bool maho_core_delete_password(struct MahoCore *ptr, const char *password_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `password_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_reveal_password(struct MahoCore *ptr, const char *password_id);
 
 /**
  * # Safety
@@ -825,6 +842,18 @@ void maho_core_update_tab_preview(struct MahoCore *ptr,
                                   const char *tab_id,
                                   const uint8_t *data,
                                   uintptr_t data_len);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `tab_id` must be a valid null-terminated C string.
+ * `data` must point to `data_len` valid bytes.
+ */
+bool maho_core_update_tab_preview_with_privacy(struct MahoCore *ptr,
+                                               const char *tab_id,
+                                               bool is_private,
+                                               const uint8_t *data,
+                                               uintptr_t data_len);
 
 /**
  * # Safety
@@ -1509,6 +1538,14 @@ void maho_core_activate_space(struct MahoCore *ptr, const char *space_id);
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `space_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_activation_target_for_space(struct MahoCore *ptr, const char *space_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `name` must be a valid null-terminated C string.
  * Caller must free the returned string with `maho_string_free`.
  */
@@ -1575,6 +1612,34 @@ char *maho_core_get_sync_status(struct MahoCore *ptr);
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
+char *maho_core_get_sync_server_url(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_sync_key(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_sync_auth_token(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `message_json` must be a valid C string.
+ */
+int32_t maho_core_handle_incoming_websocket_message(struct MahoCore *ptr, const char *message_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_connected_devices(struct MahoCore *ptr);
 
 /**
@@ -1608,6 +1673,22 @@ char *maho_core_join_sync(struct MahoCore *ptr, const char *recovery_phrase);
  * `device_id` must be a valid null-terminated C string.
  */
 void maho_core_remove_sync_device(struct MahoCore *ptr, const char *device_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `device_id` must be a valid null-terminated C string.
+ */
+bool maho_core_disconnect_sync_device(struct MahoCore *ptr, const char *device_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `device_id` and `new_name` must be valid null-terminated C strings.
+ */
+bool maho_core_rename_sync_device(struct MahoCore *ptr,
+                                  const char *device_id,
+                                  const char *new_name);
 
 /**
  * Resets a pinned tab back to its original pinned URL.
@@ -1666,6 +1747,16 @@ char *maho_core_apply_remote_entities(struct MahoCore *ptr, const char *entities
  * Caller must free returned string with `maho_string_free`.
  */
 char *maho_core_drain_outgoing(struct MahoCore *ptr);
+
+/**
+ * Get and drain received tabs as a JSON array.
+ * UI calls this periodically to fetch received tabs.
+ *
+ * # Safety
+ * `ptr` must be valid.
+ * Caller must free returned string with `maho_string_free`.
+ */
+char *maho_core_drain_received_tabs(struct MahoCore *ptr);
 
 /**
  * Send a tab to another device.
@@ -2091,7 +2182,8 @@ struct MahoAgentSession *maho_agent_create_session(struct MahoCore *core,
                                                    struct MahoAgentToolResult (*browser_tool_cb)(void *user_data,
                                                                                                  const char *tool_name,
                                                                                                  const char *args_json),
-                                                   void *browser_tool_user_data);
+                                                   void *browser_tool_user_data,
+                                                   const char *space_id);
 
 /**
  * # Safety
@@ -2133,6 +2225,13 @@ bool maho_agent_send_message_simple(struct MahoAgentSession *session,
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 bool maho_agent_cancel(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ * `policy` must be a null-terminated C string (e.g. "prompt", "allow", "deny").
+ */
+void maho_agent_set_approval_policy(struct MahoAgentSession *session, const char *policy);
 
 /**
  * # Safety
@@ -2336,13 +2435,60 @@ void maho_routines_list(char **out_json);
  * `on_error` is called with an error string on failure.
  *
  * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
  * `id` must be a valid null-terminated C string.
  */
-int32_t maho_routines_run(const char *id,
+int32_t maho_routines_run(struct MahoCore *core,
+                          const char *id,
                           int32_t user_tier,
                           void (*on_complete)(void *user_data, const char *result_json),
                           void (*on_error)(void *user_data, const char *error),
                           void *user_data);
+
+/**
+ * Returns JSON array of ALL routines (built-in + user-defined custom), each an
+ * object with `id`, `name`, `cron`, `trigger`, `description`, `enabled`, and
+ * `source` ("builtin"|"custom"). Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+char *maho_routines_list_all(struct MahoCore *core);
+
+/**
+ * Create a user-defined routine from JSON `{name,prompt,schedule?,trigger?}`.
+ * Validates the cron `schedule` and/or event `trigger` string when present.
+ * Returns 0 on success, -1 on error (null args / parse failure / invalid
+ * schedule-or-trigger / empty name-or-prompt / storage failure).
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `json` must be a valid null-terminated C string.
+ */
+int32_t maho_routines_create_custom(struct MahoCore *core, const char *json);
+
+/**
+ * Delete a user-defined routine by id. Returns 0 if a row was removed, -1 on
+ * null args / not-found / storage failure.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `id` must be a valid null-terminated C string.
+ */
+int32_t maho_routines_delete_custom(struct MahoCore *core, const char *id);
+
+/**
+ * Fire browser-event-triggered custom routines matching `event_json`
+ * (`{"kind":"on_startup"}` or `{"kind":"on_many_tabs","count":N}`). Max-tier
+ * gated (mirrors the scheduler tick); fire-and-forget — the batch runs async
+ * on the shared, owned maho-core runtime so no panic crosses the FFI boundary
+ * even when called from the Chromium C++ browser thread (no ambient runtime).
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `event_json` must be a valid null-terminated C string.
+ */
+void maho_routines_fire_event(struct MahoCore *core, const char *event_json);
 
 /**
  * Tick the routines scheduler. Should be called once per minute by the Chromium shell.
@@ -2482,6 +2628,18 @@ void maho_import_orchestrator_cancel(struct MahoImportSession *handle);
  * or NULL (no-op). Must not be called more than once per handle.
  */
 void maho_import_orchestrator_free(struct MahoImportSession *handle);
+
+/**
+ * Set the user-provided passwords CSV path for the next import session.
+ *
+ * Additive companion to `maho_import_orchestrator_start`: call this BEFORE
+ * `..._start` when the user selects a Safari-exported passwords CSV. Passing
+ * NULL clears any pending path. The value is consumed by the next `..._start`.
+ *
+ * # Safety
+ * `path` must be a valid null-terminated UTF-8 C string, or NULL (clears).
+ */
+void maho_import_orchestrator_set_password_csv(const char *path);
 
 #ifdef __cplusplus
 }  // extern "C"

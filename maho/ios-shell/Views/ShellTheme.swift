@@ -13,6 +13,13 @@ struct ShellShadowStyle {
 enum ShellTheme {
     enum Palette {
         static let accent = Color.accentColor
+
+#if canImport(UIKit)
+        static func dynamicColor(light: UIColor, dark: UIColor) -> Color {
+            Color(uiColor: UIColor { traits in traits.userInterfaceStyle == .dark ? dark : light })
+        }
+#endif
+
         static var homeBackground: Color {
 #if canImport(UIKit)
             Color(uiColor: .systemBackground)
@@ -72,9 +79,58 @@ enum ShellTheme {
         static let incognitoSurfaceStrong = Color.white.opacity(0.12)
         static let incognitoBorder = Color.white.opacity(0.14)
         static let incognitoMutedForeground = Color.white.opacity(0.7)
+        static let searchOverlayMediumField = Color(red: 58.0 / 255.0, green: 58.0 / 255.0, blue: 60.0 / 255.0)
         static let incognitoSearchCanvas = Color(red: 20.0 / 255.0, green: 20.0 / 255.0, blue: 22.0 / 255.0)
         static let incognitoSearchContainer = Color(red: 42.0 / 255.0, green: 42.0 / 255.0, blue: 44.0 / 255.0)
-        static let incognitoSearchField = Color(red: 58.0 / 255.0, green: 58.0 / 255.0, blue: 60.0 / 255.0)
+        static let incognitoSearchField = searchOverlayMediumField
+
+        static let searchOverlayBackdrop = Color.black.opacity(0.58)
+        static let searchOverlayNormalCanvas = Color(red: 18.0 / 255.0, green: 18.0 / 255.0, blue: 20.0 / 255.0)
+        static let searchOverlayNormalElevatedCanvas = Color(red: 27.0 / 255.0, green: 27.0 / 255.0, blue: 30.0 / 255.0)
+        static let searchOverlayNormalField = searchOverlayMediumField
+        static let searchOverlayBrowsePillFill = Color.black.opacity(0.44)
+        static let searchOverlayBrowsePillForeground = Color.white.opacity(0.92)
+        static let searchOverlayNormalAccent = Color(red: 132.0 / 255.0, green: 185.0 / 255.0, blue: 255.0 / 255.0)
+
+        static func searchOverlayForeground(isIncognito: Bool) -> Color {
+            Color.primary
+        }
+
+        static func searchOverlayMutedForeground(isIncognito: Bool) -> Color {
+            Color.secondary
+        }
+
+        static func searchOverlaySecondaryForeground(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .tertiaryLabel)
+#else
+            Color.secondary.opacity(0.7)
+#endif
+        }
+
+        static func searchOverlayBorder(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .separator)
+#else
+            Color.primary.opacity(0.12)
+#endif
+        }
+
+        static func searchOverlayRowPressed(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .secondarySystemBackground)
+#else
+            Color.primary.opacity(0.06)
+#endif
+        }
+
+        static func searchOverlayIconFill(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .secondarySystemBackground)
+#else
+            Color.primary.opacity(0.08)
+#endif
+        }
 
         static let searchFieldFill = Color.black.opacity(0.03)
         static let searchFieldBorder = Color.black.opacity(0.035)
@@ -172,12 +228,61 @@ enum ShellTheme {
         static func bottomBarDragIndicator(isIncognito: Bool) -> Color {
             isIncognito ? Color.white.opacity(0.18) : Color.primary.opacity(0.08)
         }
+
+        static func searchOverlayCanvas(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .secondarySystemBackground)
+#else
+            Color.primary.opacity(0.06)
+#endif
+        }
+
+        static func searchOverlayElevatedCanvas(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .secondarySystemBackground)
+#else
+            Color.primary.opacity(0.06)
+#endif
+        }
+
+        static func searchOverlayFieldFill(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            Color(uiColor: .tertiarySystemBackground)
+#else
+            Color.primary.opacity(0.1)
+#endif
+        }
+
+        static func searchOverlayAccent(isIncognito: Bool) -> Color {
+            isIncognito ? incognitoForeground : searchOverlayNormalAccent
+        }
+
+        static let voiceAssistantGlowBlue = Color(red: 56.0 / 255.0, green: 189.0 / 255.0, blue: 248.0 / 255.0)
+        static let voiceAssistantGlowPurple = Color(red: 139.0 / 255.0, green: 92.0 / 255.0, blue: 246.0 / 255.0)
+        static let voiceAssistantGlowMagenta = Color(red: 14.0 / 255.0, green: 165.0 / 255.0, blue: 233.0 / 255.0)
+        static let voiceAssistantHeadlineStart = Color(red: 224.0 / 255.0, green: 242.0 / 255.0, blue: 254.0 / 255.0)
+        static let voiceAssistantHeadlineEnd = Color(red: 237.0 / 255.0, green: 233.0 / 255.0, blue: 254.0 / 255.0)
+        static let voiceAssistantFace = Color(red: 248.0 / 255.0, green: 250.0 / 255.0, blue: 252.0 / 255.0)
+        static let voiceAssistantScrimDim = Color.black.opacity(0.16)
+        static let voiceAssistantPromptHaloCore = Color.black.opacity(0.34)
+        static let voiceAssistantPromptHaloMid = Color.black.opacity(0.16)
+        static let voiceAssistantPromptHaloClear = Color.black.opacity(0)
+        static let voiceAssistantTextShadow = Color.black.opacity(0.46)
+        static let voiceAssistantWaveformFill = Color(red: 15.0 / 255.0, green: 23.0 / 255.0, blue: 42.0 / 255.0).opacity(0.38)
+        static let voiceAssistantWaveformBorder = voiceAssistantHeadlineStart.opacity(0.26)
+        static let voiceAssistantWaveformActive = Color(red: 186.0 / 255.0, green: 230.0 / 255.0, blue: 253.0 / 255.0)
+        static let voiceAssistantWaveformIdle = voiceAssistantHeadlineEnd.opacity(0.48)
+        static let voiceAssistantSecondaryText = voiceAssistantHeadlineStart.opacity(0.78)
+        static let voiceAssistantControlFill = Color(red: 15.0 / 255.0, green: 23.0 / 255.0, blue: 42.0 / 255.0).opacity(0.34)
+        static let voiceAssistantErrorFill = voiceAssistantGlowPurple.opacity(0.16)
+        static let voiceAssistantErrorBorder = voiceAssistantWaveformActive.opacity(0.28)
     }
 
     enum Materials {
         static let bottomBar: Material = .bar
         static let summaryOverlay: Material = .regularMaterial
         static let tabGridCard: Material = .thinMaterial
+        static let voiceAssistantPill: Material = .thinMaterial
     }
 
     enum Spacing {
@@ -200,12 +305,15 @@ enum ShellTheme {
     enum Radius {
         static let button: CGFloat = 10
         static let onboardingButton: CGFloat = 12
+        static let searchOverlayIcon: CGFloat = 10
+        static let searchOverlayRow: CGFloat = 14
         static let card: CGFloat = 16
         static let overlay: CGFloat = 18
         static let searchField: CGFloat = 20
         static let bottomBarControl: CGFloat = 16
         static let bottomBarCapsule: CGFloat = 18
         static let bottomBar: CGFloat = 22
+        static let searchOverlayPanel: CGFloat = 28
     }
 
     enum Size {
@@ -239,6 +347,22 @@ enum ShellTheme {
         static let summaryDetentMaxWidth: CGFloat = 560
         static let bottomInsetWithBar: CGFloat = 78
         static let bottomInsetWithoutBar: CGFloat = 24
+        static let searchOverlayMaxWidth: CGFloat = 640
+        static let searchOverlayFieldHeight: CGFloat = 54
+        static let searchOverlayIconButton: CGFloat = 34
+        static let searchOverlayLeadingIcon: CGFloat = 34
+        static let searchOverlayBrowsePillHeight: CGFloat = 30
+        static let searchOverlayEmptyIcon: CGFloat = 36
+        static let voiceAssistantHeadlineMaxWidth: CGFloat = 360
+        static let voiceAssistantPromptHaloWidth: CGFloat = 440
+        static let voiceAssistantPromptHaloHeight: CGFloat = 220
+        static let voiceAssistantPromptHaloRadius: CGFloat = 214
+        static let voiceAssistantWaveformMaxWidth: CGFloat = 292
+        static let voiceAssistantWaveformHeight: CGFloat = 74
+        static let voiceAssistantWaveformBarWidth: CGFloat = 7
+        static let voiceAssistantWaveformDot: CGFloat = 7
+        static let voiceAssistantWaveformMinBarHeight: CGFloat = 8
+        static let voiceAssistantWaveformMaxBarHeight: CGFloat = 44
     }
 
     enum Stroke {

@@ -16,10 +16,11 @@ fn bench_persistence(c: &mut Criterion) {
         let _updates = core.handle_event(ShellEvent::CreateTab {
             space_id: space_id.clone(),
             url: Some(Url::new(format!("https://example{}.com", i))),
-            parent_id: None,
-            tab_id: None,
-            window_id: None,
-        });
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private: false,
+    });
         if let Some(tab) = core.get_tab_view_models().last() {
             tab_ids.push(tab.id.clone());
         }
@@ -60,10 +61,11 @@ fn bench_persistence(c: &mut Criterion) {
                 core.handle_event(ShellEvent::CreateTab {
                     space_id: space_id.clone(),
                     url: Some(Url::new(format!("https://burst-{}.com", i))),
-                    parent_id: None,
-                    tab_id: None,
-                    window_id: None,
-                });
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private: false,
+    });
             }
         });
     });

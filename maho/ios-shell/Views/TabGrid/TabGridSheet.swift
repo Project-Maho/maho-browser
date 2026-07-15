@@ -3,7 +3,6 @@ import LucideIcons
 
 struct TabGridSheet: View {
     @Binding var isIncognito: Bool
-    let onRequestNewTab: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -52,10 +51,6 @@ struct TabGridSheet: View {
             TabGridToolbar(
                 tabCount: filteredTabs.count,
                 activeSpaceName: activeSpaceName,
-                onNewTab: {
-                    onRequestNewTab()
-                    dismiss()
-                },
                 onCloseAll: {
                     for tab in filteredTabs {
                         bridge.closeTab(id: tab.id)

@@ -259,6 +259,24 @@ This verifies:
 
 ---
 
+## 8. Linux Package-Signing GPG Key
+
+The Linux package-signing pipeline uses a GPG key to sign Debian (`.deb`) and Red Hat (`.rpm`) repositories and packages.
+
+### Key Details
+- **GPG Key ID**: `51C8C6C55603AFF0`
+- **Releases UID**: `Maho Browser Releases <releases@maho.app>`
+- **Usage**: Used in packaging scripts and package repository indexing for signing `.deb`/`.rpm` archives.
+
+---
+
+## 9. macOS Sparkle Public Key Reference
+
+- **Sparkle SUPublicEDKey**: `iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=`
+- **Manifest Public Key File**: `maho-chromium/browser/keys/manifest_pubkey.bin`
+
+---
+
 ## Related Files
 
 | File | Purpose |

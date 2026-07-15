@@ -23,6 +23,8 @@
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/models/image_model.h"
+#include "ui/color/color_id.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/view.h"
@@ -136,6 +138,7 @@ class MahoSidebarView
   MahoSidebarFooterView* footer_view_for_testing() { return footer_view_; }
   MahoSidebarSearchView* search_view_for_testing() { return search_view_; }
   MahoSidebarTopBarView* top_bar_view_for_testing() { return top_bar_view_; }
+  MahoSidebarTopBarView* top_bar_view() { return top_bar_view_; }
   views::View* tabs_surface_for_testing() { return tabs_surface_; }
   views::View* space_header_view_for_testing() { return space_header_view_; }
   views::ScrollView* tab_scroll_view_for_testing() { return tab_scroll_view_; }
@@ -176,8 +179,20 @@ class MahoSidebarView
       const;
 
   void ActivateTabById(const std::string& tab_id);
+  static bool ActivateSpaceAndTab(Browser* browser, const std::string& space_id);
+
   bool ActivateFavoriteByIndex(size_t index);
   MahoSidebarNowPlayingView* AddNowPlayingView(std::unique_ptr<MahoSidebarNowPlayingView> view);
+
+  // R-11: Called by MahoSidebarContainerView::SetPrivateAppearance to
+  // propagate private-window visual identity into the sidebar surface.
+  // No profile/pref reads; purely presentation.
+  void SetPrivateAppearance(const ui::ImageModel& identity_icon,
+                            ui::ColorId surface_color_id,
+                            ui::ColorId text_color_id);
+
+  void SetApplyingPin(bool applying) { applying_pin_ = applying; }
+  bool IsApplyingPin() const { return applying_pin_; }
 
  private:
   void BuildUi();
@@ -198,11 +213,12 @@ class MahoSidebarView
   void OpenSpaceCreateSurface();
   void OpenSpaceConfigSurface();
 
-  void RefreshFavoritesAndViewState();
-  static MahoSidebarFavoritesModel BuildFavoritesModelOnBackground(
-      const std::string& active_space_id_json);
-  void OnFavoritesModelReady(MahoSidebarFavoritesModel favorites_model);
   void RefreshAll();
+  // R-11: Rebuilds the OTR sidebar synchronously from the window-local
+  // TabStripModel only. Reads no MahoCore, Space bridge, favorites, folders,
+  // archive, library, or footer state. Used for both initial population and
+  // every tab-strip change while |is_otr_| is true.
+  void RefreshPrivateSidebar();
   // Applies the coalesced cosmetic refresh when |cosmetic_refresh_timer_|
   // fires. Structural changes cancel the timer before this runs, preventing
   // stale partial updates after a tab strip structural change.
@@ -247,6 +263,9 @@ class MahoSidebarView
   void RefreshTranslateObservation();
 
   raw_ptr<Browser> browser_;
+  // R-11: True for any off-the-record profile. Gates every MahoCore/Space read
+  // out of the sidebar so an OTR window rebuilds only from its own TabStripModel.
+  bool is_otr_ = false;
   raw_ptr<views::View> body_host_ = nullptr;
   raw_ptr<views::View> content_host_ = nullptr;
   raw_ptr<views::View> tabs_surface_ = nullptr;
@@ -284,9 +303,13 @@ class MahoSidebarView
   std::map<MahoSidebarLibraryRailView::Category, raw_ptr<views::View>>
       library_pane_cache_;
 
-  bool refresh_scheduled_ = false;
-  bool needs_re_refresh_ = false;
-  bool refresh_in_progress_ = false;
+  // The favorites+state build is a single in-flight unit: kIdle means no
+  // background build is outstanding, kInFlight means one is running. Requests
+  // arriving while kInFlight set |refresh_dirty_| so exactly one follow-up
+  // refresh runs after the current build completes.
+  enum class RefreshState { kIdle, kInFlight };
+  RefreshState refresh_state_ = RefreshState::kIdle;
+  bool refresh_dirty_ = false;
   base::OneShotTimer cosmetic_refresh_timer_;
   std::set<content::WebContents*> recently_registered_contents_;
   base::ScopedObservation<translate::ContentTranslateDriver,
@@ -296,6 +319,8 @@ class MahoSidebarView
   void OnBackgroundStateReady(SidebarStateBackgroundResult result);
 
   bool last_over_favorites_ = false;
+  bool applying_pin_ = false;
+  std::vector<base::WeakPtr<content::WebContents>> pending_pin_retries_;
 
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };

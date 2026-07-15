@@ -123,6 +123,16 @@ export interface ComposerState {
   modeLabel: string;
 }
 
+export type VoiceStatus = 'idle'|'listening'|'error'|'unsupported';
+
+export interface VoiceState {
+  active: boolean;
+  status: VoiceStatus;
+  transcript: string;
+  level: number;
+  error: string|null;
+}
+
 export const CURRENT_PAGE_ATTACHMENT: ComposerAttachment = {
   id: 'currentPage',
   kind: 'currentPage',
@@ -475,6 +485,7 @@ export interface AppState {
   approvalResultsById: Record<string, ApprovalResultRecord>;
   selectedInspector: InspectorSelection;
   composer: ComposerState;
+  voice: VoiceState;
   openTabs: OpenTabsState;
   historySearch: HistorySearchState;
   bookmarksSearch: BookmarksSearchState;
@@ -499,6 +510,14 @@ export const DEFAULT_COMPOSER_STATE: ComposerState = {
   modeLabel: 'Task',
 };
 
+export const DEFAULT_VOICE_STATE: VoiceState = {
+  active: false,
+  status: 'idle',
+  transcript: '',
+  level: 0,
+  error: null,
+};
+
 export function createInitialState(): AppState {
   return {
     initialized: false,
@@ -519,6 +538,7 @@ export function createInitialState(): AppState {
     approvalResultsById: {},
     selectedInspector: {kind: 'session'},
     composer: {...DEFAULT_COMPOSER_STATE},
+    voice: {...DEFAULT_VOICE_STATE},
     openTabs: {...DEFAULT_OPEN_TABS_STATE, items: []},
     historySearch: {...DEFAULT_HISTORY_SEARCH_STATE},
     bookmarksSearch: {...DEFAULT_BOOKMARKS_SEARCH_STATE},
@@ -772,4 +792,3 @@ export interface AiCliTool {
   createdAt: string;
   updatedAt: string;
 }
-

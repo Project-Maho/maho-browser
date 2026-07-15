@@ -18,9 +18,15 @@
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoSpaceCreateUIConfig::MahoSpaceCreateUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme,
                          maho::kMahoSpaceCreateHost) {}
+
+bool MahoSpaceCreateUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoSpaceCreateUI)
 

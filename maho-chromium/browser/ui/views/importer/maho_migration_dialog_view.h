@@ -23,6 +23,7 @@
 #include "ui/views/controls/progress_bar.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/views/view.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -83,7 +84,8 @@ class BrowserCard : public views::View {
   raw_ptr<views::Combobox> profile_combobox_ = nullptr;
 };
 
-class MahoMigrationDialogView : public views::DialogDelegate {
+class MahoMigrationDialogView : public views::DialogDelegate,
+                                public ui::SelectFileDialog::Listener {
  public:
   using CloseCallback = base::OnceCallback<void(bool was_cancelled, uint32_t imported_items_bitmask)>;
 
@@ -117,6 +119,10 @@ class MahoMigrationDialogView : public views::DialogDelegate {
   std::u16string GetWindowTitle() const override;
   void WindowClosing() override;
 
+  // ui::SelectFileDialog::Listener:
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
+
   // Accessors for testing.
   DialogState state() const { return state_; }
   bool import_button_enabled_for_testing() const;
@@ -130,6 +136,11 @@ class MahoMigrationDialogView : public views::DialogDelegate {
   bool was_cancelled_for_testing() const { return was_cancelled_; }
   uint32_t current_import_bitmask_for_testing() const {
     return current_import_bitmask_;
+  }
+  // Test-only: last passwords-CSV path forwarded to the orchestrator in
+  // FileSelected(); empty when the picker was cancelled. Never read in prod.
+  const std::string& last_password_csv_path_for_testing() const {
+    return last_password_csv_path_for_testing_;
   }
   size_t checkboxes_count_for_testing() const { return checkboxes_.size(); }
   uint32_t checkbox_flag_at_for_testing(size_t index) const {
@@ -157,6 +168,9 @@ class MahoMigrationDialogView : public views::DialogDelegate {
   void OnBrowserCardSelected(size_t index);
   void RebuildCheckboxes();
   void OnImportClicked();
+  // Starts the import for the given data-type |mask|. Assumes any Safari
+  // passwords CSV has already been supplied via the orchestrator.
+  void StartImport(uint32_t mask);
   void OnCancelClicked();
   void OnRetryClicked();
   void OnContinueClicked();
@@ -209,6 +223,14 @@ class MahoMigrationDialogView : public views::DialogDelegate {
 
   base::OneShotTimer cancel_timeout_timer_;
   std::unique_ptr<MahoImportSessionBridge> import_session_bridge_;
+
+  // File picker for the Safari-exported passwords CSV. |pending_import_bitmask_|
+  // holds the requested data types while the picker is open.
+  scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
+  uint32_t pending_import_bitmask_ = 0;
+
+  std::string last_password_csv_path_for_testing_;
+
   base::WeakPtrFactory<MahoMigrationDialogView> weak_factory_{this};
 };
 

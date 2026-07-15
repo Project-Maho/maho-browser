@@ -1,0 +1,7 @@
+@import '../../../maho_common/react/theme/tokens.css';
+@source '../app.tsx';
+@source '../../../maho_common/react/ui/**/*.tsx';
+
+:root {
+  --tp-accent-glow: color-mix(in srgb, var(--foreground) 12%, transparent);
+}

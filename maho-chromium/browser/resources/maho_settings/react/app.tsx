@@ -625,6 +625,7 @@ if (!(rootElement instanceof HTMLElement)) {
 }
 
 const settingsStore = new MahoSettingsStore();
+(window as any).settingsStore = settingsStore;
 createRoot(rootElement).render(
     <React.StrictMode>
       <SettingsApp store={settingsStore} />

@@ -3,41 +3,25 @@
 #include "maho/browser/ui/views/side_panel/maho_ai_side_panel_coordinator.h"
 
 #include <memory>
+#include <utility>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/side_panel/side_panel_content_proxy.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_scope.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/side_panel/side_panel_util.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
-#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"
-#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
-#include "maho/components/constants/webui_url_constants.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
-#include "url/gurl.h"
-
-using SidePanelWebUIViewT_MahoAIUI = SidePanelWebUIViewT<MahoAIUI>;
-BEGIN_TEMPLATE_METADATA(SidePanelWebUIViewT_MahoAIUI, SidePanelWebUIViewT)
-END_METADATA
+#include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/views/side_panel/maho_ai_side_panel_web_view.h"
+#include "ui/views/view.h"
 
 namespace {
 
 std::unique_ptr<views::View> CreateMahoAiWebView(BrowserWindowInterface* browser,
                                                  Profile* profile,
                                                  SidePanelEntryScope& scope) {
-  auto contents_wrapper =
-      std::make_unique<WebUIContentsWrapperT<MahoAIUI>>(
-          GURL(maho::kMahoAIURL), profile, /*title_string_id=*/0,
-          /*esc_closes_ui=*/false,
-          /*supports_draggable_regions=*/false);
-
-  auto view = std::make_unique<SidePanelWebUIViewT_MahoAIUI>(
-      scope, base::RepeatingClosure(), base::RepeatingClosure(),
-      std::move(contents_wrapper));
+  auto view = std::make_unique<MahoAiSidePanelWebView>(profile, scope);
   // Let MahoAIUI signal readiness through embedder()->ShowUI() once its
   // page handler is actually bound.
   return view;
@@ -49,6 +33,13 @@ namespace maho {
 
 void RegisterMahoAiSidePanel(BrowserWindowInterface* browser,
                               SidePanelRegistry* global_registry) {
+  // R-9: never register the AI side-panel entry in a non-regular (OTR/Guest/
+  // system/DevTools) context. kAI is denied for every non-regular class.
+  MahoPrivateContextToken token(browser, /*web_contents=*/nullptr);
+  if (!token.Revalidate(MahoPrivateCapability::kAI)) {
+    return;
+  }
+
   auto entry = std::make_unique<SidePanelEntry>(
       SidePanelEntry::Key(SidePanelEntry::Id::kMahoAiPanel),
       base::BindRepeating(&CreateMahoAiWebView, browser,

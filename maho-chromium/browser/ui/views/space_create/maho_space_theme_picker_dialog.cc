@@ -12,6 +12,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
@@ -20,13 +23,16 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/compositor/layer.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "url/gurl.h"
 
 namespace {
 
-constexpr int kThemeDialogWidth = 680;
+constexpr int kThemeDialogWidth = 600;
 constexpr int kThemeDialogHeight = 760;
 
 views::Widget* g_active_widget = nullptr;
@@ -59,6 +65,12 @@ class MahoSpaceThemePickerDialogDelegate : public views::DialogDelegate {
     auto web_view = std::make_unique<views::WebView>(profile);
     web_view_ = web_view.get();
     web_view_->SetPreferredSize(gfx::Size(kThemeDialogWidth, kThemeDialogHeight));
+    // Clip the web contents to the dialog's rounded corners; a views::WebView
+    // hosts a native surface that otherwise paints square corners over the
+    // rounded BubbleFrameView.
+    web_view_->SetPaintToLayer();
+    web_view_->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(12));
+    web_view_->layer()->SetIsFastRoundedCorner(true);
     web_view_->LoadInitialURL(GURL(maho::kMahoSpaceCreateURL));
     SetContentsView(std::move(web_view));
   }
@@ -69,14 +81,16 @@ class MahoSpaceThemePickerDialogDelegate : public views::DialogDelegate {
       const MahoSpaceThemePickerDialogDelegate&) = delete;
 
   void WindowClosing() override {
-    g_active_widget = nullptr;
-    g_active_delegate = nullptr;
+    if (g_active_delegate == this) {
+      g_active_delegate = nullptr;
+      g_active_widget = nullptr;
+    }
     GetPendingInitialThemeJsonStorage().clear();
 
     if (MahoSpaceThemeState::HasPreviewOverride()) {
       MahoSpaceThemeState::ClearPreviewOverride();
       MahoSpaceThemeState::UpdateFromCore();
-      ui::ColorProviderManager::Get().ResetColorProviderCache();
+      MahoSpaceThemePickerDialog::RepaintAllBrowsers();
     }
 
     if (result_callback_) {
@@ -105,6 +119,29 @@ class MahoSpaceThemePickerDialogDelegate : public views::DialogDelegate {
     }
   }
 
+  void UpdateCallbackAndInitialTheme(
+      std::string initial_theme_json,
+      MahoSpaceThemePickerDialog::ResultCallback on_result) {
+    if (result_callback_) {
+      std::move(result_callback_).Run(std::string(), true);
+    }
+    initial_theme_json_ = std::move(initial_theme_json);
+    result_callback_ = std::move(on_result);
+    committed_ = false;
+    committed_theme_json_.clear();
+
+    GetPendingInitialThemeJsonStorage() = initial_theme_json_;
+
+    if (web_view_) {
+      web_view_->GetWebContents()->GetController().Reload(
+          content::ReloadType::NORMAL, true);
+    }
+  }
+
+  bool IsHostingWebContents(content::WebContents* web_contents) const {
+    return web_view_ && web_view_->GetWebContents() == web_contents;
+  }
+
   const std::string& initial_theme_json() const { return initial_theme_json_; }
 
  private:
@@ -126,7 +163,16 @@ views::Widget* MahoSpaceThemePickerDialog::Open(
     return nullptr;
   }
 
+  if (g_active_widget && g_active_widget->IsClosed()) {
+    g_active_widget = nullptr;
+    g_active_delegate = nullptr;
+  }
+
   if (g_active_widget) {
+    if (g_active_delegate) {
+      g_active_delegate->UpdateCallbackAndInitialTheme(
+          initial_theme_json, std::move(on_result));
+    }
     g_active_widget->Activate();
     return g_active_widget;
   }
@@ -190,4 +236,31 @@ MahoSpaceThemePickerDialog::ConsumePendingInitialThemeJsonForActive() {
   std::string result = std::move(GetPendingInitialThemeJsonStorage());
   GetPendingInitialThemeJsonStorage().clear();
   return result;
+}
+
+// static
+void MahoSpaceThemePickerDialog::RepaintAllBrowsers() {
+  ui::ColorProviderManager::Get().ResetColorProviderCache();
+  GlobalBrowserCollection::GetInstance()->ForEach([](BrowserWindowInterface* browser_interface) {
+    Browser* browser = static_cast<Browser*>(browser_interface);
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (browser_view) {
+      auto* widget = browser_view->GetWidget();
+      if (widget && !widget->IsClosed()) {
+        auto* root_view = static_cast<views::internal::RootView*>(
+            widget->GetRootView());
+        if (root_view) {
+          root_view->ThemeChanged();
+        }
+        widget->NotifyColorProviderChanged();
+      }
+    }
+    return true;
+  });
+}
+
+// static
+bool MahoSpaceThemePickerDialog::IsWebContentsHostingActiveDialog(
+    content::WebContents* web_contents) {
+  return g_active_delegate && g_active_delegate->IsHostingWebContents(web_contents);
 }

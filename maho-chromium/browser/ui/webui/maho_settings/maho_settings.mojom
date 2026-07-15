@@ -105,13 +105,19 @@ struct PasswordProviderStatus {
   PasswordProviderCapabilities capabilities;
 };
 
+struct PasswordProviderOption {
+  PasswordProviderKind provider;
+  string display_name;
+  string description;
+  bool is_available;
+};
+
 struct SavedPassword {
   string id;
   string domain;
   string username;
   string created_at;
   string? last_used;
-  string? password;
 };
 
 
@@ -249,15 +255,19 @@ interface PageHandler {
   StartSync(string sync_key) => (SyncStatus status);
   JoinSync(string recovery_phrase) => (SyncStatus status);
   StopSync();
+  DisconnectSyncDevice(string device_id) => (bool success);
+  RenameSyncDevice(string device_id, string new_name) => (bool success);
 
   GetSpaces() => (array<SpaceBasicInfo> spaces);
 
   GetPasswordProviderStatus() => (PasswordProviderStatus status);
+  GetPasswordProviderOptions() => (array<PasswordProviderOption> options);
   GetSavedPasswords() => (array<SavedPassword> passwords);
   SearchPasswords(string query) => (array<SavedPassword> passwords);
   AddPassword(string domain, string username, string password) => (bool success);
   UpdatePasswordUsername(string password_id, string username) => (bool success);
   DeletePassword(string password_id) => (bool success);
+  RevealPassword(string password_id) => (string? password);
 
   GetAutofillAddresses() => (array<AutofillAddress> addresses);
   AddAutofillAddress(string id,

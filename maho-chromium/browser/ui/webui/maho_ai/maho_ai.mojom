@@ -514,6 +514,26 @@ interface PageHandler {
 
   // Active resolved tools
   GetWorkspaceEffectiveTools(string workspace_id) => (string tools_json);
+
+  // ==========================================================================
+  // Voice input methods (desktop on-device STT via whisper.cpp / maho-stt).
+  // Push-to-talk: StartVoiceSession loads the model + opens a worker session,
+  // PushAudioChunk streams 16 kHz mono f32 PCM captured by the renderer's
+  // AudioWorklet, StopVoiceSession finalizes and transcribes. Transcript
+  // results are pushed back via Page.OnVoicePartial/OnVoiceFinal/OnVoiceError.
+  // ==========================================================================
+
+  // Begin a voice capture session. Returns |accepted|=false if voice is
+  // unavailable (model missing/downloading, another session active, or the
+  // engine failed to initialize).
+  StartVoiceSession() => (bool accepted);
+
+  // Feed a chunk of 16 kHz mono f32 PCM into the active voice session.
+  // No-op if no session is active.
+  PushAudioChunk(array<float> pcm16k);
+
+  // Stop the active voice session; triggers a final transcription pass.
+  StopVoiceSession();
 };
 
 // WebUI-side interface for browser-to-page push updates.
@@ -532,4 +552,15 @@ interface Page {
   // The AI provider/model selection changed in profile prefs (e.g., user
   // saved a new provider in chrome://maho-settings?pane=maho-ai).
   OnAISettingsChanged(AISettingsInfo info);
+
+  // --- Voice input push (desktop on-device STT) ---
+
+  // An interim transcript for the in-progress utterance (may be revised).
+  OnVoicePartial(string transcript);
+
+  // The final transcript for the completed utterance.
+  OnVoiceFinal(string transcript);
+
+  // A voice session error (model load failure, transcription error, etc.).
+  OnVoiceError(string message);
 };

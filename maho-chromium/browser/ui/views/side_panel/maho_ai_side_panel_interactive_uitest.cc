@@ -33,17 +33,27 @@
 //                                          usable host.
 
 #include "base/run_loop.h"
+#include "base/functional/bind.h"
 #include "base/test/run_until.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
 namespace {
@@ -252,4 +262,158 @@ IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
     EXPECT_FALSE(GetSidePanelUI()->IsSidePanelShowing(SidePanelType::kContent))
         << "Cycle " << i << ": side panel must remain closed after close";
   }
+}
+
+namespace {
+
+// Forges a MahoAIPageHandler for the given browser + its active WebContents,
+// exactly as a hostile renderer would drive the PageHandlerFactory. The token
+// is built from the exact owning window; a denied class resets the connection
+// in the constructor.
+std::unique_ptr<MahoAIPageHandler> MakeForgedHandler(
+    Browser* browser,
+    mojo::Remote<maho_ai::mojom::PageHandler>* remote) {
+  content::WebContents* wc = browser->tab_strip_model()->GetActiveWebContents();
+  auto token = std::make_unique<MahoPrivateContextToken>(browser, wc);
+  auto loader = browser->profile()
+                    ->GetDefaultStoragePartition()
+                    ->GetURLLoaderFactoryForBrowserProcess();
+  mojo::PendingRemote<maho_ai::mojom::Page> page;
+  return std::make_unique<MahoAIPageHandler>(
+      remote->BindNewPipeAndPassReceiver(), std::move(page), std::move(token),
+      browser, browser->profile()->GetPrefs(), std::move(loader));
+}
+
+}  // namespace
+
+// task-9-ai-ui: Incognito never enables the AI WebUI and never registers the
+// side-panel entry.
+IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
+                       IncognitoWebUiAndEntryAreDisabled) {
+  Browser* incognito = CreateIncognitoBrowser();
+  ASSERT_TRUE(incognito);
+  ASSERT_TRUE(incognito->profile()->IsOffTheRecord());
+
+  MahoAIUIConfig config;
+  EXPECT_FALSE(config.IsWebUIEnabled(incognito->profile()));
+
+  SidePanelUI* ui = incognito->GetFeatures().side_panel_ui();
+  if (ui) {
+    EXPECT_FALSE(ui->IsSidePanelEntryShowing(
+        SidePanelEntryKey(kMahoAiEntryId)));
+  }
+}
+
+// task-9-ai-ui: a forged factory/handler in Incognito fails closed before any
+// runtime router/adapter is built — the receiver disconnects.
+IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
+                       ForgedFactoryStopsBeforeRouter) {
+  Browser* incognito = CreateIncognitoBrowser();
+  ASSERT_TRUE(incognito);
+
+  mojo::Remote<maho_ai::mojom::PageHandler> remote;
+  auto handler = MakeForgedHandler(incognito, &remote);
+
+  base::RunLoop run_loop;
+  remote.set_disconnect_handler(run_loop.QuitClosure());
+  run_loop.Run();
+
+  EXPECT_FALSE(remote.is_connected());
+}
+
+// task-9-ai-ui: every page-handler method fails closed for a forged OTR
+// handler — no reply is delivered and the pipe stays disconnected.
+IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
+                       EveryPageHandlerMethodFailsClosed) {
+  Browser* incognito = CreateIncognitoBrowser();
+  ASSERT_TRUE(incognito);
+
+  mojo::Remote<maho_ai::mojom::PageHandler> remote;
+  auto handler = MakeForgedHandler(incognito, &remote);
+
+  base::RunLoop disconnect_loop;
+  remote.set_disconnect_handler(disconnect_loop.QuitClosure());
+
+  bool any_reply = false;
+  remote->GetConnectionState(base::BindOnce(
+      [](bool* replied, maho_ai::mojom::RuntimeConnectionState,
+         const std::string&) { *replied = true; },
+      &any_reply));
+  remote->GetSessionList(base::BindOnce(
+      [](bool* replied,
+         std::vector<maho_ai::mojom::SessionInfoPtr>) { *replied = true; },
+      &any_reply));
+  remote->GetAiProfiles(base::BindOnce(
+      [](bool* replied, const std::string&) { *replied = true; }, &any_reply));
+
+  disconnect_loop.Run();
+  EXPECT_FALSE(remote.is_connected());
+  EXPECT_FALSE(any_reply);
+}
+
+// task-9-ai-ui: attachment/context, tab-tidy, and agent tool sinks fail closed
+// for a forged OTR handler — no reply is produced.
+IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
+                       AttachmentToolAndAgentSinksFailClosed) {
+  Browser* incognito = CreateIncognitoBrowser();
+  ASSERT_TRUE(incognito);
+
+  mojo::Remote<maho_ai::mojom::PageHandler> remote;
+  auto handler = MakeForgedHandler(incognito, &remote);
+
+  base::RunLoop disconnect_loop;
+  remote.set_disconnect_handler(disconnect_loop.QuitClosure());
+
+  bool tidy_reply = false;
+  remote->RequestTabTidy(
+      std::vector<maho_ai::mojom::TabInfoPtr>(),
+      base::BindOnce(
+          [](bool* replied,
+             std::vector<maho_ai::mojom::TidyFolderPtr>) { *replied = true; },
+          &tidy_reply));
+  // Fire-and-forget agent/attachment sink; must not reach the adapter/core.
+  remote->SubmitPrompt("ses", "hello", /*attach_browser_context=*/true,
+                       maho_ai::mojom::InteractionMode::kDeveloper,
+                       std::nullopt);
+
+  disconnect_loop.Run();
+  EXPECT_FALSE(remote.is_connected());
+  EXPECT_FALSE(tidy_reply);
+}
+
+// task-9-ai-ui: positive control — a regular-profile handler is NOT denied.
+// The runtime router builds an adapter and the connection resolves.
+//
+// TODO(R-9): the full positive control asserts exactly one loopback
+// `/v1/chat/completions` POST emitting NORMAL_AI_OK. That requires the shared
+// loopback SSE provider fixture (see plan Verification Contract 3), which does
+// not yet exist in the tree; wiring it is tracked as a residual blocker. This
+// control verifies the regular path stays open (no over-blocking).
+IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
+                       NormalFakeProviderPositiveControl) {
+  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+
+  MahoAIUIConfig config;
+  EXPECT_TRUE(config.IsWebUIEnabled(browser()->profile()));
+
+  mojo::Remote<maho_ai::mojom::PageHandler> remote;
+  auto handler = MakeForgedHandler(browser(), &remote);
+
+  bool got_state = false;
+  maho_ai::mojom::RuntimeConnectionState state =
+      maho_ai::mojom::RuntimeConnectionState::kDisconnected;
+  base::RunLoop run_loop;
+  remote->GetConnectionState(base::BindOnce(
+      [](bool* got, maho_ai::mojom::RuntimeConnectionState* out,
+         base::OnceClosure quit, maho_ai::mojom::RuntimeConnectionState value,
+         const std::string&) {
+        *got = true;
+        *out = value;
+        std::move(quit).Run();
+      },
+      &got_state, &state, run_loop.QuitClosure()));
+  run_loop.Run();
+
+  EXPECT_TRUE(got_state);
+  EXPECT_TRUE(remote.is_connected());
 }

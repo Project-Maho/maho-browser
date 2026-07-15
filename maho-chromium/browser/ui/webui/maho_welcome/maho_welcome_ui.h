@@ -20,10 +20,15 @@ class WebUI;
 
 class MahoWelcomeUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoWelcomeUIConfig
     : public content::DefaultWebUIConfig<MahoWelcomeUI> {
  public:
   MahoWelcomeUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoWelcomeUI : public ui::MojoWebUIController,

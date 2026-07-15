@@ -10,6 +10,7 @@
 #include "ui/views/widget/widget_observer.h"
 
 class Profile;
+class ScopedKeepAlive;
 
 namespace content {
 class WebContents;
@@ -62,6 +63,7 @@ class MahoWelcomeWindow : public views::WidgetObserver {
   void CreateAndShowWidget();
 
   raw_ptr<Profile> profile_;
+  std::unique_ptr<ScopedKeepAlive> keep_alive_;
   std::unique_ptr<views::Widget> widget_;
   raw_ptr<content::WebContents> web_contents_ = nullptr;
 

@@ -27,6 +27,8 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_private_context_policy.h"
+#include "chrome/browser/profiles/profile.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -47,7 +49,7 @@ class MahoTabWakeOverlay : public views::View, public views::ViewObserver {
       SetBoundsRect(gfx::Rect(parent_->bounds().size()));
     }
   }
-  
+
   ~MahoTabWakeOverlay() override {
     if (parent_) {
       parent_->RemoveObserver(this);
@@ -115,6 +117,10 @@ MahoTabPreviewCapture::~MahoTabPreviewCapture() {
 }
 
 void MahoTabPreviewCapture::OnBrowserCreated(BrowserWindowInterface* browser) {
+  // R-13-b: Never observe OTR tab strips.
+  if (!browser) return;
+  MahoPrivateContextToken token(browser, nullptr);
+  if (!token.Revalidate(MahoPrivateCapability::kPreview)) return;
   if (browser->GetTabStripModel()) {
     browser->GetTabStripModel()->AddObserver(this);
   }
@@ -131,6 +137,9 @@ void MahoTabPreviewCapture::OnTabStripModelChanged(
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
   if (selection.active_tab_changed() && selection.old_contents) {
+    // R-13-b: Skip OTR WebContents.
+    MahoPrivateContextToken tsm_token(nullptr, selection.old_contents);
+    if (!tsm_token.Revalidate(MahoPrivateCapability::kPreview)) return;
     auto* helper = MahoTabIdHelper::FromWebContents(selection.old_contents);
     if (helper) {
       CaptureViewport(selection.old_contents, helper->stable_tab_id());
@@ -141,6 +150,9 @@ void MahoTabPreviewCapture::OnTabStripModelChanged(
 
 void MahoTabPreviewCapture::CaptureViewport(content::WebContents* web_contents,
                                            const std::string& tab_id) {
+  // R-13-b: Deny capture for OTR WebContents.
+  MahoPrivateContextToken cap_token(nullptr, web_contents);
+  if (!cap_token.Revalidate(MahoPrivateCapability::kPreview)) return;
   content::RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
   if (!view || !view->IsSurfaceAvailableForCopy()) {
     return;
@@ -156,13 +168,24 @@ void MahoTabPreviewCapture::CaptureViewport(content::WebContents* web_contents,
   view->CopyFromSurface(
       src_rect, target_size, base::TimeDelta(),
       base::BindOnce(&MahoTabPreviewCapture::OnCaptureDone,
-                     weak_factory_.GetWeakPtr(), tab_id));
+                     weak_factory_.GetWeakPtr(), tab_id,
+                     web_contents->GetWeakPtr()));
 }
 
 void MahoTabPreviewCapture::OnCaptureDone(
     const std::string& tab_id,
+    base::WeakPtr<content::WebContents> web_contents,
     const content::CopyFromSurfaceResult& result) {
   if (!result.has_value()) {
+    return;
+  }
+  // R-13-b: Revalidate after the async CopyFromSurface hop; a torn-down or
+  // reclassified (OTR) WebContents is denied before any core write.
+  if (!web_contents) {
+    return;
+  }
+  MahoPrivateContextToken done_token(nullptr, web_contents.get());
+  if (!done_token.Revalidate(MahoPrivateCapability::kPreview)) {
     return;
   }
   const SkBitmap& bitmap = result->bitmap;
@@ -178,27 +201,45 @@ void MahoTabPreviewCapture::StoreAsJpeg(const std::string& tab_id,
   if (jpeg_data) {
     auto* core = maho::GetCore();
     if (core) {
-      maho_core_update_tab_preview(core, tab_id.c_str(), jpeg_data->data(),
-                                   jpeg_data->size());
+      // R-13-b: Desktop capture only reaches here after kPreview revalidation,
+      // so the additive privacy ABI is always called with is_private=false;
+      // the legacy ABI is never used from desktop capture.
+      maho_core_update_tab_preview_with_privacy(
+          core, tab_id.c_str(), /*is_private=*/false, jpeg_data->data(),
+          jpeg_data->size());
     }
   }
 }
 
 void MahoTabPreviewCapture::CaptureScrollPosition(
     content::WebContents* web_contents, const std::string& tab_id) {
+  // R-13-b: Deny scroll capture for OTR WebContents.
+  MahoPrivateContextToken scroll_token(nullptr, web_contents);
+  if (!scroll_token.Revalidate(MahoPrivateCapability::kPreview)) return;
   if (!web_contents->GetPrimaryMainFrame()) {
     return;
   }
-  web_contents->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
+  web_contents->GetPrimaryMainFrame()->ExecuteJavaScript(
       u"JSON.stringify({x: window.scrollX, y: window.scrollY})",
       base::BindOnce(&MahoTabPreviewCapture::OnScrollPositionCaptured,
-                     weak_factory_.GetWeakPtr(), tab_id),
-      0);
+                     weak_factory_.GetWeakPtr(), tab_id,
+                     web_contents->GetWeakPtr()));
 }
 
 void MahoTabPreviewCapture::OnScrollPositionCaptured(
-    const std::string& tab_id, base::Value result) {
+    const std::string& tab_id,
+    base::WeakPtr<content::WebContents> web_contents,
+    base::Value result) {
   if (!result.is_string()) {
+    return;
+  }
+  // R-13-b: Revalidate after the async JS hop; a torn-down or reclassified
+  // (OTR) WebContents dispatches no scroll event to core.
+  if (!web_contents) {
+    return;
+  }
+  MahoPrivateContextToken scroll_done_token(nullptr, web_contents.get());
+  if (!scroll_done_token.Revalidate(MahoPrivateCapability::kPreview)) {
     return;
   }
   std::optional<base::Value> parsed =
@@ -230,6 +271,9 @@ MahoTabWakeHelper::MahoTabWakeHelper(content::WebContents* web_contents,
       scroll_x_(scroll_x),
       scroll_y_(scroll_y),
       creation_time_(base::TimeTicks::Now()) {
+  // R-13-b: WakeHelper must not restore previews for OTR tabs.
+  MahoPrivateContextToken wake_token(nullptr, web_contents);
+  if (!wake_token.Revalidate(MahoPrivateCapability::kPreview)) return;
   TRACE_EVENT1("browser", "MahoTabWakeHelper::Create", "tab_id", tab_id);
   ::MahoCore* core = maho::GetCore();
   SkBitmap bitmap;
@@ -279,10 +323,9 @@ void MahoTabWakeHelper::DidFinishLoad(content::RenderFrameHost* render_frame_hos
                          "elapsed_ms", elapsed_ms);
     LOG(INFO) << "[MAHO_PERF] WakeTab.DidFinishLoad tab_id=" << tab_id_
               << " elapsed=" << elapsed_ms << "ms";
-    wc->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
+    wc->GetPrimaryMainFrame()->ExecuteJavaScript(
         base::UTF8ToUTF16(base::StringPrintf("window.scrollTo(%f, %f)", scroll_x_, scroll_y_)),
-        base::NullCallback(),
-        0);
+        base::NullCallback());
     RemoveOverlay();
   }
 }

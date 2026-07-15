@@ -9,11 +9,17 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
+class BrowserWindowInterface;
+
+#include "maho/browser/maho_private_context_policy.h"
+
 class MahoNotesPageHandler : public maho_notes::mojom::PageHandler {
  public:
   MahoNotesPageHandler(
       mojo::PendingReceiver<maho_notes::mojom::PageHandler> receiver,
-      mojo::PendingRemote<maho_notes::mojom::Page> page);
+      mojo::PendingRemote<maho_notes::mojom::Page> page,
+      BrowserWindowInterface* browser_window,
+      content::WebContents* web_contents);
   MahoNotesPageHandler(const MahoNotesPageHandler&) = delete;
   MahoNotesPageHandler& operator=(const MahoNotesPageHandler&) = delete;
   ~MahoNotesPageHandler() override;
@@ -33,6 +39,8 @@ class MahoNotesPageHandler : public maho_notes::mojom::PageHandler {
  private:
   mojo::Receiver<maho_notes::mojom::PageHandler> receiver_;
   mojo::Remote<maho_notes::mojom::Page> page_;
+  MahoPrivateContextToken context_token_;
+  base::WeakPtr<content::WebContents> host_web_contents_;
 };
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_NOTES_MAHO_NOTES_PAGE_HANDLER_H_

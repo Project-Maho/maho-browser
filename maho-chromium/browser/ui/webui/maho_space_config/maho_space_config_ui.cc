@@ -33,9 +33,15 @@ maho_space_config::mojom::InitialFocus ParseFocus(const std::string& value) {
 
 }  // namespace
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoSpaceConfigUIConfig::MahoSpaceConfigUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme,
                          maho::kMahoSpaceConfigHost) {}
+
+bool MahoSpaceConfigUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoSpaceConfigUI)
 

@@ -11,23 +11,31 @@ maho-chromium/
 ├── chromium_src/         # Upstream overrides (#define + #include pattern)
 │   └── chrome/browser/ui/views/frame/   # BrowserView layout patches
 ├── browser/
-│   ├── ai/               # LLM client, page-context extraction, tool registry
+│   ├── ai/               # LLM client, page-context extraction, tool registry (see browser/ai/AGENTS.md)
+│   ├── mcp/              # MCP server session + pipe transport (browser-side)
 │   ├── net/              # Ad-block throttle, cosmetic filters, UA throttle
-│   ├── ui/
-│   │   ├── views/        # Native Views — sidebar, command palette, split view, little arc
-│   │   │   └── sidebar/  # Biggest subsystem: container, tabs, favorites, DnD, search, spaces
-│   │   ├── webui/        # Mojo-backed WebUI surfaces (13 features)
-│   │   ├── theme/        # Color mixer, space theme state, color IDs
-│   │   ├── context_menu/ # Tab, space, folder, favorites, address bar menus
-│   │   ├── link_preview/ # Hover preview manager
-│   │   ├── find_bar/     # Find-bar theming
-│   │   ├── reader/       # Reader mode theming
-│   │   ├── downloads/    # Download UI theming
-│   │   ├── permissions/  # Permission prompt theming
-│   │   ├── tab_preview/  # Tab preview controller
-│   │   ├── notifications/ # Notification overlay
-│   │   └── site_control/ # Page info UI
-│   └── resources/        # WebUI TS + HTML per feature
+│   ├── updates/          # Update delegation per platform (mac/win/linux)
+│   ├── sync/             # Sync bridge to relay
+│   ├── os_crypt/         # OS-level key encryption wrappers
+│   ├── passwords/        # Password management integration
+│   ├── extensions/       # Extension support
+│   ├── importer/         # C++ import orchestration (see browser/importer/AGENTS.md)
+│   ├── keys/             # API key management
+│   └── ui/
+│       ├── views/        # Native Views — sidebar, command palette, split view (see browser/ui/views/AGENTS.md)
+│       │   └── sidebar/  # Biggest subsystem: container, tabs, favorites, DnD, search, spaces
+│       ├── webui/        # Mojo-backed WebUI surfaces (14 features; see browser/ui/webui/AGENTS.md)
+│       ├── theme/        # Color mixer, space theme state, color IDs
+│       ├── context_menu/ # Tab, space, folder, favorites, address bar menus
+│       ├── link_preview/ # Hover preview manager
+│       ├── find_bar/     # Find-bar theming
+│       ├── reader/       # Reader mode theming
+│       ├── downloads/    # Download UI theming
+│       ├── permissions/  # Permission prompt theming
+│       ├── tab_preview/  # Tab preview controller
+│       ├── notifications/ # Notification overlay
+│       └── site_control/ # Page info UI
+│   └── resources/        # WebUI TS + HTML per feature (see browser/resources/AGENTS.md)
 ├── components/
 │   ├── constants/        # WebUI URL constants
 │   └── maho_sidebar/     # Shared sidebar Mojo IDL
@@ -36,8 +44,6 @@ maho-chromium/
 │   ├── config/           # GN args per platform (mac, linux, win)
 │   └── scripts/          # build_maho_core.py
 ├── branding/             # App icons, logos (mac/generic)
-├── maho/browser/ui/views/sidebar/ # Duplicate dir — sidebar views (also exists above)
-├── maho-chromium/browser/ai/     # Duplicate dir — AI code (also exists above)
 └── docs/                 # Build guides, reference docs
 ```
 
@@ -48,8 +54,11 @@ maho-chromium/
 | Sidebar changes | `browser/ui/views/sidebar/` (Views) + `browser/ui/webui/maho_sidebar/` (WebUI) |
 | Command palette | `browser/ui/views/command/` (native Views only) |
 | AI / LLM features | `browser/ai/` (helpers) + `browser/ui/webui/maho_ai/` (WebUI) |
+| Browser-side MCP server | `browser/mcp/` |
 | Theme / colors | `browser/ui/theme/` — `maho_color_mixer.cc`, `maho_color_id.h` |
 | Ad blocking | `browser/net/maho_ad_block_throttle.cc` |
+| Auto-updates | `browser/updates/` — per-platform delegates (mac/win/linux) |
+| Sync bridge | `browser/sync/` |
 | Upstream patches | `chromium_src/` — Brave-style #define + #include |
 | Maho-core FFI bridge | `third_party/maho/maho_bridge.cc` + `maho_ffi.h` |
 | Build config | `build/config/args_{mac,linux,win}.gn` |
@@ -78,7 +87,7 @@ maho-chromium/
 - **Theme picker is permanently `chrome://maho-space-create`** — Do NOT migrate it to `maho_space_config`. Do NOT resurrect a native Views theme picker. Do NOT introduce a second production WebUI for theme selection. See `.sisyphus/plans/theme-picker-architecture-decision.md` (ADR, 2026-05-22) — this decision is permanent and supersedes all prior plans proposing migration.
 - **빌드 실패 시 GN 파일 강제 수정 금지** — `build_maho.py` 가 GN regen (`gn gen` / `Regenerating ninja files`) 단계 또는 그 이후 단계에서 실패하면 즉시 중단하고 사용자에게 보고. `BUILD.gn`, `chromium/src/chrome/test/BUILD.gn`, override 파일 등을 GN 통과를 위해 임의로 편집하지 말 것. unresolved deps / missing target 류 에러는 다른 세션 미완 작업·working tree dirty state 가 원인인 경우가 대부분이며, 임의 cleanup 은 추후 충돌과 데이터 손실을 부른다. **사용자 명시 승인 없이는 GN 편집 금지.**
 
-## WEBUI SURFACES (13)
+## WEBUI SURFACES (14)
 | Feature | URL | Mojom |
 |---------|-----|-------|
 | Settings | `chrome://maho-settings` | `maho_settings.mojom` |
@@ -93,6 +102,7 @@ maho-chromium/
 | Sync | `chrome://maho-sync` | `maho_sync.mojom` |
 | Live Folders | `chrome://maho-live-folders` | `maho_live_folders.mojom` |
 | Inline Edit | `chrome://maho-inline-edit` | `maho_inline_edit.mojom` |
+| Routines | `chrome://maho-routines` | `maho_routines.mojom` |
 | Test | `chrome://maho-test` | — |
 
 > **Space Create note**: Despite the directory name, this surface is the **theme picker** (sparkle/sun/moon mode chips, color swatches, brightness dial). It is the only production theme picker — invoked from the native sidebar "Choose a Theme" row via `MahoSpaceThemePickerDialog::Open` which hosts the WebUI in a `views::Widget` dialog. See ADR at `.sisyphus/plans/theme-picker-architecture-decision.md`.
@@ -121,3 +131,4 @@ ln -s ../../maho-chromium chromium/src/maho
 - Sidebar is the largest subsystem (~25 files in `browser/ui/views/sidebar/`)
 - Tests: interactive tests and unit tests in `browser/ui/views/sidebar/maho_sidebar_*_test.cc`
 - `.sisyphus/plans/` contains implementation plans for sidebar, command palette, split view, space profiles
+- New subdirectory AGENTS.md: `browser/ai/AGENTS.md`, `browser/ui/views/AGENTS.md`, `browser/ui/webui/AGENTS.md`, `browser/resources/AGENTS.md`

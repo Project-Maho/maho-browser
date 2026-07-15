@@ -135,10 +135,12 @@ enum SuggestionType: String, Codable {
     case history
     case action
     case navigation
+    case search
     case calculator
-    case unitConversion
-    case archivedTab
-    case closedTab
+    case unitConversion = "unitconversion"
+    case archivedTab = "archivedtab"
+    case closedTab = "closedtab"
+    case folder
     case aiAnswer
 }
 

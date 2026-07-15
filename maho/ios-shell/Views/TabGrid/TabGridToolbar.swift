@@ -4,42 +4,20 @@ import LucideIcons
 struct TabGridToolbar: View {
     let tabCount: Int
     let activeSpaceName: String
-    let onNewTab: () -> Void
     let onCloseAll: () -> Void
     let onDone: () -> Void
 
     var body: some View {
         HStack(spacing: ShellTheme.Spacing.medium) {
-            Button(action: onNewTab) {
-                HStack(spacing: 4) {
-                    Image(lucide: Lucide.plus)
-                        .font(.body.weight(.bold))
-                    Text("New")
-                        .font(.caption.weight(.semibold))
-                }
-                .foregroundStyle(ShellTheme.Palette.accent)
-                .padding(.horizontal, ShellTheme.Spacing.medium)
-                .padding(.vertical, ShellTheme.Spacing.small)
-                .background(
-                    Capsule()
-                        .fill(ShellTheme.Palette.tabGridMetaFill)
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("tabGridNewTabButton")
-            .accessibilityLabel("New tab in \(activeSpaceName)")
-
-            Spacer(minLength: 0)
-
-            VStack(spacing: 2) {
+            VStack(alignment: .leading, spacing: ShellTheme.Spacing.badgeVertical) {
                 Text(activeSpaceName)
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Text("\(tabCount) tab\(tabCount != 1 ? "s" : "")")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.primary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, ShellTheme.Spacing.small)
+                    .padding(.vertical, ShellTheme.Spacing.xxSmall)
                     .background(Color.primary.opacity(0.12), in: Capsule())
             }
 

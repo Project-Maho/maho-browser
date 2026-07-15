@@ -157,7 +157,7 @@ pub async fn handle_ws_message(
     let seq = match db::store_message(&db, &room_id, payload_bytes.clone()).await {
         Ok(s) => s,
         Err(e) => {
-            console_error!("store_message failed room={room_id}: {e}");
+            console_error!("store_message failed room={}: {e}", redact_key(&room_id));
             let _ = ws.send_with_str(r#"{"type":"error","msg":"storage_error"}"#);
             let _ = ws.serialize_attachment(&ctx);
             return Ok(());
@@ -266,10 +266,20 @@ async fn process_auth(
         let token_hash = hash_token_str(&token);
         match db::find_active_session_context_by_access_hash(&db, &token_hash).await {
             Ok(Some(context)) => {
-                if context.device.room_id != key {
-                    let _ = ws.send_with_str(r#"{"type":"error","msg":"room_mismatch"}"#);
-                    let _ = ws.close::<&str>(Some(1008), Some("room_mismatch"));
-                    return Ok(());
+                db::claim_room_ownership(&db, &key, context.user.id, now).await.ok();
+                match db::get_room_owner_user_id(&db, &key).await {
+                    Ok(Some(owner_id)) if owner_id != context.user.id => {
+                        let _ = ws.send_with_str(r#"{"type":"error","msg":"room_owned_by_another_user"}"#);
+                        let _ = ws.close::<&str>(Some(1008), Some("room_owned_by_another_user"));
+                        return Ok(());
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        console_error!("room ownership lookup failed key={}: {e}", redact_key(&key));
+                        let _ = ws.send_with_str(r#"{"type":"error","msg":"auth_lookup_failed"}"#);
+                        let _ = ws.close::<&str>(Some(1011), Some("auth_lookup_failed"));
+                        return Ok(());
+                    }
                 }
                 if let Err(e) = db::touch_session_and_device(&db, context.session.id, context.device.id, now).await {
                     console_error!("touch_session_and_device failed: {e}");
@@ -314,7 +324,7 @@ async fn process_auth(
                     }
                 }
             }
-            Err(e) => console_error!("catchup query failed room={key}: {e}"),
+            Err(e) => console_error!("catchup query failed room={}: {e}", redact_key(&key)),
         }
     }
 
@@ -326,4 +336,14 @@ async fn process_auth(
 
 fn is_valid_room_id(s: &str) -> bool {
     s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn redact_key(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(key.as_bytes());
+    let mut prefix = String::with_capacity(8);
+    for byte in digest.iter().take(4) {
+        prefix.push_str(&format!("{byte:02x}"));
+    }
+    prefix
 }

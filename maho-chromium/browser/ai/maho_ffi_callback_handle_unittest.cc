@@ -15,7 +15,7 @@ namespace maho {
 namespace {
 
 // A minimal owner type that provides WeakPtr support.
-class FakeOwner : public base::SupportsWeakPtr<FakeOwner> {
+class FakeOwner {
  public:
   FakeOwner() = default;
   ~FakeOwner() = default;
@@ -23,8 +23,11 @@ class FakeOwner : public base::SupportsWeakPtr<FakeOwner> {
   int callback_count() const { return callback_count_; }
   void IncrementCallbackCount() { ++callback_count_; }
 
+  base::WeakPtr<FakeOwner> AsWeakPtr() { return weak_factory_.GetWeakPtr(); }
+
  private:
   int callback_count_ = 0;
+  base::WeakPtrFactory<FakeOwner> weak_factory_{this};
 };
 
 class FfiCallbackHandleTest : public testing::Test {

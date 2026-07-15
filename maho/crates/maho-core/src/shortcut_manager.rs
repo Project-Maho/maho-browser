@@ -411,6 +411,18 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         KeyCombo::new("[", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
+        "swap_split_view",
+        "Swap Split View",
+        window.clone(),
+        KeyCombo::new("\\", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "toggle_split_view",
+        "Toggle Split View",
+        window.clone(),
+        KeyCombo::new("enter", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
+    ));
+    bindings.push(ShortcutBinding::new(
         "show_archive",
         "Show Archive",
         window.clone(),

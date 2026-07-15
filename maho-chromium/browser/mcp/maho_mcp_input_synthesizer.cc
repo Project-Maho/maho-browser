@@ -17,6 +17,10 @@
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/dom/dom_key.h"
+#include "ui/events/event_constants.h"
 
 namespace maho {
 
@@ -144,6 +148,27 @@ bool MahoMcpInputSynthesizer::Hover(content::WebContents* wc, ui::AXNodeID ax_id
 }
 
 // static
+bool MahoMcpInputSynthesizer::HoverAt(content::WebContents* wc, int x_css, int y_css) {
+  content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+  if (!view) return false;
+  content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
+  if (!rwh) return false;
+
+  gfx::Point widget_point(x_css, y_css);
+  gfx::Point screen_point = widget_point + view->GetViewBounds().origin().OffsetFromOrigin();
+
+  blink::WebMouseEvent mouse_event(
+      blink::WebInputEvent::Type::kMouseMove,
+      blink::WebInputEvent::kNoModifiers,
+      base::TimeTicks::Now());
+  mouse_event.SetPositionInWidget(widget_point.x(), widget_point.y());
+  mouse_event.SetPositionInScreen(screen_point.x(), screen_point.y());
+  
+  rwh->ForwardMouseEvent(mouse_event);
+  return true;
+}
+
+// static
 ui::KeyboardCode MahoMcpInputSynthesizer::KeyStringToKeyCode(
     const std::string& key) {
   if (key == "Enter") return ui::VKEY_RETURN;
@@ -208,11 +233,31 @@ bool MahoMcpInputSynthesizer::KeyPress(content::WebContents* wc,
   ui::KeyboardCode key_code = KeyStringToKeyCode(key);
   int web_modifiers = ModifierListToWebModifiers(modifiers);
 
+  ui::DomCode dom_code = ui::UsLayoutKeyboardCodeToDomCode(key_code);
+  
+  int event_flags = 0;
+  if (web_modifiers & blink::WebInputEvent::kShiftKey) event_flags |= ui::EF_SHIFT_DOWN;
+  if (web_modifiers & blink::WebInputEvent::kControlKey) event_flags |= ui::EF_CONTROL_DOWN;
+  if (web_modifiers & blink::WebInputEvent::kAltKey) event_flags |= ui::EF_ALT_DOWN;
+  if (web_modifiers & blink::WebInputEvent::kMetaKey) event_flags |= ui::EF_COMMAND_DOWN;
+
+  ui::DomKey dom_key;
+  ui::KeyboardCode unused_key_code;
+  if (!ui::DomCodeToUsLayoutDomKey(dom_code, event_flags, &dom_key, &unused_key_code)) {
+    if (key.size() == 1) {
+      dom_key = ui::DomKey::FromCharacter(key[0]);
+    } else {
+      dom_key = ui::DomKey::UNIDENTIFIED;
+    }
+  }
+
   // RawKeyDown
   blink::WebKeyboardEvent key_down(
       blink::WebInputEvent::Type::kRawKeyDown, web_modifiers,
       base::TimeTicks::Now());
   key_down.windows_key_code = key_code;
+  key_down.dom_code = static_cast<int>(dom_code);
+  key_down.dom_key = static_cast<int>(dom_key);
   rwh->ForwardKeyboardEvent(input::NativeWebKeyboardEvent(key_down, wc->GetNativeView()));
 
   // Char
@@ -221,6 +266,8 @@ bool MahoMcpInputSynthesizer::KeyPress(content::WebContents* wc,
         blink::WebInputEvent::Type::kChar, web_modifiers,
         base::TimeTicks::Now());
     key_char.windows_key_code = key_code;
+    key_char.dom_code = static_cast<int>(dom_code);
+    key_char.dom_key = static_cast<int>(dom_key);
     if (key == "Enter") {
       key_char.text[0] = '\r';
       key_char.unmodified_text[0] = '\r';
@@ -236,6 +283,8 @@ bool MahoMcpInputSynthesizer::KeyPress(content::WebContents* wc,
       blink::WebInputEvent::Type::kKeyUp, web_modifiers,
       base::TimeTicks::Now());
   key_up.windows_key_code = key_code;
+  key_up.dom_code = static_cast<int>(dom_code);
+  key_up.dom_key = static_cast<int>(dom_key);
   rwh->ForwardKeyboardEvent(input::NativeWebKeyboardEvent(key_up, wc->GetNativeView()));
 
   return true;

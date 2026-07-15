@@ -21,9 +21,14 @@ class WebUI;
 
 class MahoNotesUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoNotesUIConfig : public DefaultTopChromeWebUIConfig<MahoNotesUI> {
  public:
   MahoNotesUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoNotesUI : public TopChromeWebUIController,

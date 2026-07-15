@@ -24,7 +24,7 @@ pub struct SyncManager {
     // long-running sync sessions. Capacity chosen as 10k — large enough that
     // even high-churn workspaces won't see eviction pressure under normal
     // operation; small enough to bound memory.
-    entity_versions: lru::LruCache<String, (u64, u32)>,
+    entity_versions: lru::LruCache<String, (u64, u32, Option<String>, Option<String>)>,
     pub(crate) last_pulled_versions: HashMap<SyncEntityType, u64>,
     sent_entities: Vec<i64>,
 }
@@ -84,8 +84,15 @@ impl SyncManager {
         self.last_pulled_versions.insert(entity_type, version);
     }
 
-    pub fn set_entity_version_in_cache(&mut self, key: &str, version: u64, device_id: u32) {
-        self.entity_versions.put(key.to_string(), (version, device_id));
+    pub fn set_entity_version_in_cache(
+        &mut self,
+        key: &str,
+        version: u64,
+        device_id: u32,
+        fields_hlc_json: Option<String>,
+        payload_json: Option<String>,
+    ) {
+        self.entity_versions.put(key.to_string(), (version, device_id, fields_hlc_json, payload_json));
     }
 
     // === LWW Entity Sync ===
@@ -159,7 +166,7 @@ impl SyncManager {
     /// Returns true if the entity was applied.
     pub fn apply_remote_entity(
         &mut self,
-        entity: &SyncEntity,
+        entity: &mut SyncEntity,
         storage: &Option<maho_storage::sqlite::SqliteStorage>,
     ) -> bool {
         if entity.schema_version > 1 {
@@ -173,12 +180,12 @@ impl SyncManager {
         let cache_key = format!("{}:{}", entity_type_str, entity.entity_id);
 
         let local_version = if let Some(version_pair) = self.entity_versions.get(&cache_key) {
-            Some(*version_pair)
+            Some(version_pair.clone())
         } else if let Some(ref s) = storage {
             match s.get_entity_version(entity_type_str, &entity.entity_id) {
-                Ok(Some((hlc_ts, device_id))) => {
-                    self.entity_versions.put(cache_key.clone(), (hlc_ts, device_id));
-                    Some((hlc_ts, device_id))
+                Ok(Some((hlc_ts, device_id, fields_hlc_json, payload_json))) => {
+                    self.entity_versions.put(cache_key.clone(), (hlc_ts, device_id, fields_hlc_json.clone(), payload_json.clone()));
+                    Some((hlc_ts, device_id, fields_hlc_json, payload_json))
                 }
                 Ok(None) => None,
                 Err(e) => {
@@ -190,17 +197,116 @@ impl SyncManager {
             None
         };
 
-        let should_apply = match local_version {
-            Some((local_hlc_ts, local_device_id)) => {
-                (entity.version, entity.device_id) > (local_hlc_ts, local_device_id)
+        let mut should_apply = false;
+        let mut final_payload = entity.payload_json.clone();
+        let mut final_fields_hlc = entity.fields_hlc_json.clone();
+
+        if let Some((local_hlc_ts, local_device_id, local_fields_hlc_json, local_payload_json)) = local_version {
+            // Field-level LWW Conflict Resolution
+            type FieldsHlc = std::collections::HashMap<String, (u64, u32)>;
+            let local_fields: FieldsHlc = local_fields_hlc_json
+                .as_deref()
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default();
+            let remote_fields: FieldsHlc = entity.fields_hlc_json.as_ref()
+                .as_deref()
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default();
+
+            let local_val: serde_json::Value = local_payload_json
+                .as_deref()
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let remote_val: serde_json::Value = serde_json::from_str(entity.payload_json.as_str())
+                .unwrap_or(serde_json::Value::Null);
+
+            if let (serde_json::Value::Object(local_map), serde_json::Value::Object(remote_map)) = (local_val, remote_val) {
+                let mut merged_map = serde_json::Map::new();
+                let mut merged_fields = std::collections::HashMap::new();
+
+                let all_keys: std::collections::HashSet<&String> = local_map.keys().chain(remote_map.keys()).collect();
+
+                let remote_wins_overall = (entity.version, entity.device_id) > (local_hlc_ts, local_device_id);
+                if remote_wins_overall {
+                    should_apply = true;
+                }
+
+                for key in all_keys {
+                    let local_has = local_map.contains_key(key);
+                    let remote_has = remote_map.contains_key(key);
+
+                    if local_has && remote_has {
+                        let local_f_ver = local_fields.get(key).copied().unwrap_or((local_hlc_ts, local_device_id));
+                        let remote_f_ver = remote_fields.get(key).copied().unwrap_or((entity.version, entity.device_id));
+
+                        if remote_f_ver > local_f_ver {
+                            if let Some(val) = remote_map.get(key) {
+                                merged_map.insert(key.clone(), val.clone());
+                                merged_fields.insert(key.clone(), remote_f_ver);
+                                if local_map.get(key) != Some(val) {
+                                    should_apply = true;
+                                }
+                            }
+                        } else {
+                            if let Some(val) = local_map.get(key) {
+                                merged_map.insert(key.clone(), val.clone());
+                                merged_fields.insert(key.clone(), local_f_ver);
+                            }
+                        }
+                    } else if local_has {
+                        let local_f_ver = local_fields.get(key).copied().unwrap_or((local_hlc_ts, local_device_id));
+                        if let Some(val) = local_map.get(key) {
+                            merged_map.insert(key.clone(), val.clone());
+                            merged_fields.insert(key.clone(), local_f_ver);
+                        }
+                    } else {
+                        let remote_f_ver = remote_fields.get(key).copied().unwrap_or((entity.version, entity.device_id));
+                        if let Some(val) = remote_map.get(key) {
+                            merged_map.insert(key.clone(), val.clone());
+                            merged_fields.insert(key.clone(), remote_f_ver);
+                            should_apply = true;
+                        }
+                    }
+                }
+
+                if should_apply {
+                    if let Ok(json) = serde_json::to_string(&merged_map) {
+                        final_payload = json;
+                    }
+                    if let Ok(json) = serde_json::to_string(&merged_fields) {
+                        final_fields_hlc = Some(json);
+                    }
+                }
+            } else {
+                // Fall back to whole-entity tie breaking
+                should_apply = (entity.version, entity.device_id) > (local_hlc_ts, local_device_id);
             }
-            None => true,
-        };
+
+            if should_apply {
+                let final_version = entity.version.max(local_hlc_ts);
+                let final_device_id = if final_version == entity.version { entity.device_id } else { local_device_id };
+                entity.version = final_version;
+                entity.device_id = final_device_id;
+            }
+        } else {
+            // First time seeing this entity
+            should_apply = true;
+        }
 
         if should_apply {
-            self.entity_versions.put(cache_key.clone(), (entity.version, entity.device_id));
+            entity.payload_json = final_payload.clone();
+            entity.fields_hlc_json = final_fields_hlc.clone();
+
+            self.entity_versions.put(cache_key.clone(), (entity.version, entity.device_id, final_fields_hlc.clone(), Some(final_payload.clone())));
             if let Some(ref s) = storage {
-                if let Err(e) = s.save_entity_version(entity_type_str, &entity.entity_id, entity.version, entity.device_id) {
+                if let Err(e) = s.save_entity_version(
+                    entity_type_str,
+                    &entity.entity_id,
+                    entity.version,
+                    entity.device_id,
+                    final_fields_hlc.as_deref(),
+                    Some(&final_payload),
+                ) {
                     eprintln!(
                         "[sync] Failed to persist entity_version for {}:{}: {}",
                         entity_type_str, entity.entity_id, e
@@ -230,8 +336,8 @@ impl SyncManager {
         storage: &Option<maho_storage::sqlite::SqliteStorage>,
     ) -> Vec<SyncEntity> {
         let mut applied = Vec::new();
-        for entity in entities {
-            if self.apply_remote_entity(&entity, storage) {
+        for mut entity in entities {
+            if self.apply_remote_entity(&mut entity, storage) {
                 applied.push(entity);
             }
         }
@@ -274,7 +380,7 @@ impl SyncManager {
                         Some("Encrypted sync message received without key".to_string());
                 }
             },
-            SyncMessage::EntityPush { entity } => {
+            SyncMessage::EntityPush { mut entity } => {
                 #[cfg(not(test))]
                 {
                     let _ = entity;
@@ -286,7 +392,7 @@ impl SyncManager {
                 }
                 #[cfg(test)]
                 {
-                    self.apply_remote_entity(&entity, &None);
+                    self.apply_remote_entity(&mut entity, &None);
                 }
             }
             SyncMessage::EntityBatch { entities } => {
@@ -306,7 +412,7 @@ impl SyncManager {
             }
             SyncMessage::Ack { entity_id, entity_type, version, device_id } => {
                 let key = format!("{}:{}", entity_type.as_str(), entity_id);
-                self.entity_versions.put(key, (version, device_id));
+                self.entity_versions.put(key, (version, device_id, None, None));
             }
             SyncMessage::EntityPull { .. } => {
                 // EntityPull is handled by the server/peer — we don't process it here
@@ -408,6 +514,38 @@ impl SyncManager {
         });
     }
 
+    /// Disconnect a remote sync device (returns false if not found or if it's the current device)
+    pub fn disconnect_device(&mut self, device_id: &str) -> bool {
+        if device_id == self.config.device_id {
+            return false;
+        }
+        if self.devices.remove(device_id).is_some() {
+            self.outgoing_messages.push(SyncMessage::DeviceLeft {
+                device_id: device_id.to_string(),
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rename a remote connected device (best-effort)
+    pub fn rename_device(&mut self, device_id: &str, new_name: String) -> bool {
+        if device_id == self.config.device_id {
+            return false;
+        }
+        if let Some(device) = self.devices.get_mut(device_id) {
+            device.name = new_name;
+            let updated_device = device.clone();
+            self.outgoing_messages.push(SyncMessage::DeviceJoined {
+                device: updated_device,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
     // === Sync Handshake ===
 
     /// Flush pending pushes (when reconnecting after offline)
@@ -448,6 +586,7 @@ mod tests {
             payload_json: r#"{"url":"https://example.com"}"#.to_string(),
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json: None,
         }
     }
 
@@ -537,10 +676,10 @@ mod tests {
     #[test]
     fn test_apply_remote_entity_newer() {
         let mut mgr = SyncManager::new(default_config());
-        let entity = make_entity("tab-5", 10);
-        assert!(mgr.apply_remote_entity(&entity, &None));
+        let mut entity = make_entity("tab-5", 10);
+        assert!(mgr.apply_remote_entity(&mut entity, &None));
         // Version should be stored
-        assert_eq!(mgr.entity_versions.peek(&"tab:tab-5".to_string()), Some(&(10, 0)));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-5".to_string()).unwrap().0, 10);
     }
 
     // CM-06
@@ -548,13 +687,13 @@ mod tests {
     fn test_apply_remote_entity_older() {
         let mut mgr = SyncManager::new(default_config());
         // Insert a version first
-        let newer = make_entity("tab-6", 10);
-        mgr.apply_remote_entity(&newer, &None);
+        let mut newer = make_entity("tab-6", 10);
+        mgr.apply_remote_entity(&mut newer, &None);
         // Now try an older version
-        let older = make_entity("tab-6", 5);
-        assert!(!mgr.apply_remote_entity(&older, &None));
+        let mut older = make_entity("tab-6", 5);
+        assert!(!mgr.apply_remote_entity(&mut older, &None));
         // Version should remain 10
-        assert_eq!(mgr.entity_versions.peek(&"tab:tab-6".to_string()), Some(&(10, 0)));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-6".to_string()).unwrap().0, 10);
     }
 
     // CM-07
@@ -562,8 +701,8 @@ mod tests {
     fn test_apply_remote_batch() {
         let mut mgr = SyncManager::new(default_config());
         // Pre-populate some versions
-        mgr.entity_versions.put("tab:e-1".to_string(), (5, 0));
-        mgr.entity_versions.put("tab:e-2".to_string(), (5, 0));
+        mgr.entity_versions.put("tab:e-1".to_string(), (5, 0, None, None));
+        mgr.entity_versions.put("tab:e-2".to_string(), (5, 0, None, None));
 
         let batch = vec![
             make_entity("e-1", 10), // newer → apply
@@ -584,7 +723,7 @@ mod tests {
             entity: make_entity("tab-8", 5),
         };
         mgr.handle_incoming_message(msg);
-        assert_eq!(mgr.entity_versions.peek(&"tab:tab-8".to_string()), Some(&(5, 0)));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-8".to_string()).unwrap().0, 5);
     }
 
     // CM-09
@@ -604,7 +743,7 @@ mod tests {
         mgr.handle_incoming_message(SyncMessage::Encrypted {
             data: encrypted_data,
         });
-        assert_eq!(mgr.entity_versions.peek(&"tab:tab-9".to_string()), Some(&(3, 0)));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-9".to_string()).unwrap().0, 3);
         assert_ne!(mgr.status(), &SyncStatus::Error);
     }
 
@@ -742,8 +881,8 @@ mod tests {
     fn entity_versions_lru_evicts_at_cap() {
         let mut sm = SyncManager::new(default_config());
         for i in 0u64..10_001 {
-            let entity = make_entity(&format!("entity_{}", i), i + 1);
-            sm.apply_remote_entity(&entity, &None);
+            let mut entity = make_entity(&format!("entity_{}", i), i + 1);
+            sm.apply_remote_entity(&mut entity, &None);
         }
         assert!(sm.entity_versions.peek(&"tab:entity_0".to_string()).is_none());
         assert!(sm.entity_versions.peek(&"tab:entity_10000".to_string()).is_some());
@@ -759,12 +898,12 @@ mod tests {
         let mut entity2 = make_entity("tab-10", 100);
         entity2.device_id = 2;
         
-        assert!(sm.apply_remote_entity(&entity1, &None));
-        assert!(sm.apply_remote_entity(&entity2, &None));
+        assert!(sm.apply_remote_entity(&mut entity1, &None));
+        assert!(sm.apply_remote_entity(&mut entity2, &None));
         
         let mut entity3 = make_entity("tab-10", 100);
         entity3.device_id = 1;
-        assert!(!sm.apply_remote_entity(&entity3, &None));
+        assert!(!sm.apply_remote_entity(&mut entity3, &None));
         
         let mut entity4 = make_entity("tab-11", 101);
         entity4.queue_row_id = Some(42);
@@ -782,6 +921,95 @@ mod tests {
         assert!(!sm.is_leader());
         sm.set_status(SyncStatus::Synced);
         assert!(sm.is_leader());
+    }
+
+    #[test]
+    fn test_disconnect_remote_device() {
+        let mut mgr = SyncManager::new(default_config());
+        let remote_device = make_device("remote-device-1", "Remote Device");
+        mgr.handle_incoming_message(SyncMessage::DeviceJoined {
+            device: remote_device.clone(),
+        });
+        assert_eq!(mgr.get_devices().len(), 1);
+
+        // Disconnecting current device should fail
+        assert!(!mgr.disconnect_device("test-device-1"));
+        // Disconnecting nonexistent device should fail
+        assert!(!mgr.disconnect_device("nonexistent"));
+
+        // Disconnecting remote device should succeed
+        assert!(mgr.disconnect_device("remote-device-1"));
+        assert_eq!(mgr.get_devices().len(), 0);
+
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::DeviceLeft { device_id } => {
+                assert_eq!(device_id, "remote-device-1");
+            }
+            other => panic!("Expected DeviceLeft, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rename_remote_device() {
+        let mut mgr = SyncManager::new(default_config());
+        let remote_device = make_device("remote-device-1", "Old Name");
+        mgr.handle_incoming_message(SyncMessage::DeviceJoined {
+            device: remote_device.clone(),
+        });
+
+        // Renaming current device should fail
+        assert!(!mgr.rename_device("test-device-1", "New Local".to_string()));
+        // Renaming nonexistent device should fail
+        assert!(!mgr.rename_device("nonexistent", "New Name".to_string()));
+
+        // Renaming remote device should succeed
+        assert!(mgr.rename_device("remote-device-1", "New Name".to_string()));
+        assert_eq!(mgr.devices.get("remote-device-1").unwrap().name, "New Name");
+
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::DeviceJoined { device } => {
+                assert_eq!(device.id, "remote-device-1");
+                assert_eq!(device.name, "New Name");
+            }
+            other => panic!("Expected DeviceJoined, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rename_propagates_to_second_manager() {
+        let mut a = SyncManager::new(default_config());
+        a.handle_incoming_message(SyncMessage::DeviceJoined {
+            device: make_device("remote-1", "Old Name"),
+        });
+
+        assert!(a.rename_device("remote-1", "New Name".to_string()));
+
+        let outgoing = a.drain_outgoing_messages();
+        let renamed = outgoing
+            .into_iter()
+            .find(|msg| {
+                matches!(
+                    msg,
+                    SyncMessage::DeviceJoined { device }
+                        if device.id == "remote-1" && device.name == "New Name"
+                )
+            })
+            .expect("Expected outbound DeviceJoined for remote-1 with the new name");
+
+        // B uses a different device_id so "remote-1" is remote to it as well.
+        let mut config_b = default_config();
+        config_b.device_id = "test-device-2".to_string();
+        config_b.device_name = "Test Device B".to_string();
+        let mut b = SyncManager::new(config_b);
+
+        b.handle_incoming_message(renamed);
+
+        assert_eq!(b.get_devices().len(), 1);
+        assert_eq!(b.devices.get("remote-1").unwrap().name, "New Name");
     }
 }
 

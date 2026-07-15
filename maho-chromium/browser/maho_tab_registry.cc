@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/maho_private_context_policy.h"
 
 #include <string>
 #include <utility>
@@ -19,6 +20,7 @@
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -27,14 +29,25 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/third_party/maho/maho_bridge.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "url/gurl.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "base/base64.h"
+#include "components/favicon/content/content_favicon_driver.h"
+#include "components/favicon/core/favicon_driver.h"
+#include "ui/gfx/image/image.h"
 
 namespace maho {
 
 namespace {
 
 ShellEventObserver* g_tab_registry_shell_event_observer_for_testing = nullptr;
+
+// Active wake identity (see ScopedMahoTabWakeId in the header). UI-thread only.
+std::string& GetActiveWakeTabId() {
+  static base::NoDestructor<std::string> id;
+  return *id;
+}
 
 bool IsRegistryEligibleBrowser(BrowserWindowInterface* browser) {
   if (!browser) {
@@ -43,28 +56,40 @@ bool IsRegistryEligibleBrowser(BrowserWindowInterface* browser) {
   if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
     return false;
   }
-  if (!browser->GetProfile() || browser->GetProfile()->IsOffTheRecord()) {
+  Profile* profile = browser->GetProfile();
+  if (!profile) {
     return false;
   }
-  return true;
+  MahoPrivateContextClass cls = ClassifyProfileForTesting(profile);
+  return cls == MahoPrivateContextClass::kRegular;
 }
 
-bool IsCorePinnedTab(const std::string& tab_id) {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return false;
+// Fires the on_many_tabs routine event when a strip's live tab count first
+// reaches the threshold, and re-arms once it drops back below. Debounced to a
+// single fire per crossing so session restore's burst of inserts (and normal
+// churn around the boundary) cannot repeatedly re-trigger it.
+constexpr int kManyTabsThreshold = 20;
+
+void MaybeFireManyTabsEvent(int tab_count) {
+  static bool armed = true;
+  if (tab_count >= kManyTabsThreshold) {
+    if (!armed) {
+      return;
+    }
+    armed = false;
+    if (MahoCore* core = maho::GetCore()) {
+      maho_routines_fire_event(
+          core, base::StringPrintf("{\"kind\":\"on_many_tabs\",\"count\":%d}",
+                                   tab_count)
+                    .c_str());
+    }
+  } else {
+    armed = true;
   }
-  return maho_core_is_tab_pinned(core, tab_id.c_str());
 }
 
-void DispatchShellEventLocal(
-    const std::string& kind,
-    const std::vector<std::pair<std::string, std::string>>& fields) {
-  base::DictValue event;
+void DispatchShellEventLocal(const std::string& kind, base::DictValue event) {
   event.Set("kind", kind);
-  for (const auto& [key, value] : fields) {
-    event.Set(key, value);
-  }
   std::string json;
   base::JSONWriter::Write(event, &json);
   if (g_tab_registry_shell_event_observer_for_testing) {
@@ -87,9 +112,19 @@ void DispatchShellEventLocal(
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->NotifyChanged(is_structural);
   }
-  LOG(INFO) << "[MAHO_PERF] DispatchShellEventLocal kind=" << kind
-            << " HandleEvent=" << he_ms
-            << "ms NotifyChanged=" << notify_t.Elapsed().InMillisecondsF() << "ms";
+  DVLOG(1) << "[MAHO_PERF] DispatchShellEventLocal kind=" << kind
+           << " HandleEvent=" << he_ms
+           << "ms NotifyChanged=" << notify_t.Elapsed().InMillisecondsF() << "ms";
+}
+
+void DispatchShellEventLocal(
+    const std::string& kind,
+    const std::vector<std::pair<std::string, std::string>>& fields) {
+  base::DictValue event;
+  for (const auto& [key, value] : fields) {
+    event.Set(key, value);
+  }
+  DispatchShellEventLocal(kind, std::move(event));
 }
 
 void DispatchCreateTabForContents(BrowserWindowInterface* browser,
@@ -100,6 +135,21 @@ void DispatchCreateTabForContents(BrowserWindowInterface* browser,
   auto* helper = MahoTabIdHelper::FromWebContents(contents);
   if (!helper) {
     return;
+  }
+  // Wake-scoped identity adoption: this kInserted announcement fires
+  // synchronously inside WakeSuspendedTab's Navigate(), while the helper still
+  // carries the fresh UUID minted by TabHelpers. Rebinding here — before the
+  // create_tab dispatch — makes maho-core resolve the EXISTING suspended tab
+  // (create_tab_with_id no-op + restore_to_active) instead of minting a new
+  // Normal tab under the throwaway UUID. Consumed at most once per scope.
+  {
+    std::string& wake_id = GetActiveWakeTabId();
+    if (!wake_id.empty()) {
+      if (helper->stable_tab_id() != wake_id) {
+        helper->SetRestoredTabId(wake_id);
+      }
+      wake_id.clear();
+    }
   }
   if (helper->has_been_announced()) {
     return;
@@ -171,6 +221,30 @@ void DispatchTabTitleUpdated(content::WebContents* contents,
 
 }  // namespace
 
+ScopedMahoTabWakeId::ScopedMahoTabWakeId(const std::string& tab_id) {
+  GetActiveWakeTabId() = tab_id;
+}
+
+ScopedMahoTabWakeId::~ScopedMahoTabWakeId() {
+  GetActiveWakeTabId().clear();
+}
+
+bool IsCorePinnedTab(const std::string& tab_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  return maho_core_is_tab_pinned(core, tab_id.c_str());
+}
+
+bool IsCoreCloseProtectedTab(const std::string& tab_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  return maho_core_is_tab_close_protected(core, tab_id.c_str());
+}
+
 class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
  public:
   NavObserver(content::WebContents* contents, MahoTabRegistry* registry)
@@ -190,11 +264,18 @@ class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
     MaybeDispatchHistory();
     MaybeDispatchTabUrl();
     MaybeDispatchTabTitle();
+    MaybeDispatchTabFavicon();
   }
 
   void TitleWasSet(content::NavigationEntry* /*entry*/) override {
     MaybeDispatchHistory();
     MaybeDispatchTabTitle();
+  }
+
+  void DidUpdateFaviconURL(
+      content::RenderFrameHost* render_frame_host,
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override {
+    MaybeDispatchTabFavicon();
   }
 
  private:
@@ -245,6 +326,46 @@ class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
     DispatchTabTitleUpdated(contents, title);
   }
 
+  void MaybeDispatchTabFavicon() {
+    auto* contents = web_contents();
+    if (!contents) return;
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (!helper) return;
+    const std::string& tab_id = helper->stable_tab_id();
+    if (tab_id.empty()) return;
+
+    favicon::FaviconDriver* favicon_driver =
+        favicon::ContentFaviconDriver::FromWebContents(contents);
+    if (!favicon_driver) return;
+
+    gfx::Image favicon_image = favicon_driver->GetFavicon();
+    if (favicon_image.IsEmpty()) return;
+
+    scoped_refptr<base::RefCountedMemory> favicon_bytes =
+        favicon_image.As1xPNGBytes();
+    if (!favicon_bytes || favicon_bytes->size() == 0u) return;
+
+    std::string base64_data = base::Base64Encode(base::span(*favicon_bytes));
+
+    auto& cache = registry_->GetOrCreateDispatchCache(tab_id);
+    if (base64_data == cache.favicon_b64) return;
+    cache.favicon_b64 = base64_data;
+
+    base::DictValue favicon_obj;
+    favicon_obj.Set("data", base64_data);
+    favicon_obj.Set("width", favicon_image.Width());
+    favicon_obj.Set("height", favicon_image.Height());
+    favicon_obj.Set("format", "png");
+
+    base::DictValue event;
+    event.Set("tab_id", tab_id);
+    event.Set("favicon", std::move(favicon_obj));
+
+    // Route through the local dispatch path so test observers and
+    // NotifyChanged fire; the Dict overload carries the nested favicon object.
+    DispatchShellEventLocal("tab_favicon_updated", std::move(event));
+  }
+
   std::string last_url_;
   std::string last_title_;
   raw_ptr<MahoTabRegistry> registry_;
@@ -284,7 +405,7 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
       case TabStripModelChange::kMoved: ch = "Moved"; break;
       case TabStripModelChange::kReplaced: ch = "Replaced"; break;
     }
-    LOG(INFO) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged type=" << ch;
+    DVLOG(1) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged type=" << ch;
     if (change.type() == TabStripModelChange::kInserted) {
       const auto* insert = change.GetInsert();
       if (!insert) {
@@ -294,6 +415,7 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         DispatchCreateTabForContents(browser_, inserted.contents);
         AttachNavObserver(inserted.contents);
       }
+      MaybeFireManyTabsEvent(tab_strip_model->count());
     } else if (change.type() == TabStripModelChange::kRemoved) {
       // During app shutdown, Chromium destroys every WebContents which fires
       // kRemoved for every tab. We must NOT dispatch close_tab in that path —
@@ -323,10 +445,13 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         if (auto* helper = MahoTabIdHelper::FromWebContents(removed.contents);
             helper && !helper->stable_tab_id().empty()) {
           const std::string& tab_id = helper->stable_tab_id();
-          // If this tab is already known to Rust core as pinned, the sidebar/context-menu
-          // close path has already dispatched close_tab (which suspended it). Suppress the
-          // duplicate dispatch from kRemoved so it doesn't immediately escalate to 2nd-close.
-          if (IsCorePinnedTab(tab_id)) {
+          // Close-protected tabs (pinned OR favorite) must not be deleted on
+          // native close (Cmd+W / strip). Dispatch suspend_tab to move the core
+          // record Active->Suspended in lockstep with the dying WebContents, then
+          // suppress the duplicate close_tab. If CloseTabById already suspended
+          // this tab, the Rust suspend path is idempotent so re-dispatch is safe.
+          if (IsCoreCloseProtectedTab(tab_id)) {
+            DispatchShellEventLocal("suspend_tab", {{"tab_id", tab_id}});
             registry_->EraseDispatchCache(tab_id);
             continue;
           }
@@ -334,6 +459,7 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         }
         DispatchCloseTabForContents(removed.contents);
       }
+      MaybeFireManyTabsEvent(tab_strip_model->count());
     } else if (change.type() == TabStripModelChange::kReplaced) {
       const auto* replace = change.GetReplace();
       if (!replace) {
@@ -372,8 +498,8 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         AttachNavObserver(new_contents);
       }
     }
-    LOG(INFO) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged END "
-              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+    DVLOG(1) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged END "
+             << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
   }
 
  private:
@@ -444,7 +570,44 @@ void MahoTabRegistry::DetachStripObserverFor(BrowserWindowInterface* browser) {
   if (!browser) {
     return;
   }
+  // Drop dispatch-cache entries for this window's tabs before the observer
+  // goes away, otherwise a window close that does not fire per-tab kRemoved
+  // (e.g. shutdown-suppressed path) leaves the entries orphaned forever.
+  if (TabStripModel* model = browser->GetTabStripModel()) {
+    for (int i = 0; i < model->count(); ++i) {
+      if (content::WebContents* wc = model->GetWebContentsAt(i)) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+            helper && !helper->stable_tab_id().empty()) {
+          dispatch_cache_.erase(helper->stable_tab_id());
+        }
+      }
+    }
+  }
   strip_observers_.erase(browser);
+}
+
+void MahoTabRegistry::ReannounceUnannouncedTabs() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (const auto& [browser, observer] : strip_observers_) {
+    if (!browser) {
+      continue;
+    }
+    TabStripModel* model = browser->GetTabStripModel();
+    if (!model) {
+      continue;
+    }
+    for (int i = 0; i < model->count(); ++i) {
+      content::WebContents* contents = model->GetWebContentsAt(i);
+      if (!contents) {
+        continue;
+      }
+      auto* helper = MahoTabIdHelper::FromWebContents(contents);
+      if (!helper || helper->has_been_announced()) {
+        continue;
+      }
+      DispatchCreateTabForContents(browser, contents);
+    }
+  }
 }
 
 LastDispatchedTabState& MahoTabRegistry::GetOrCreateDispatchCache(const std::string& tab_id) {
@@ -464,10 +627,17 @@ void MahoTabRegistry::MigrateDispatchCache(const std::string& from_tab_id,
     return;
   }
   auto it = dispatch_cache_.find(from_tab_id);
-  if (it != dispatch_cache_.end()) {
-    dispatch_cache_[to_tab_id] = std::move(it->second);
-    dispatch_cache_.erase(it);
+  if (it == dispatch_cache_.end()) {
+    return;
   }
+  // If the target already holds a (canonical) entry, migrating would clobber
+  // it with the throwaway pre-swap source; skip the move and drop the source.
+  if (dispatch_cache_.count(to_tab_id)) {
+    dispatch_cache_.erase(it);
+    return;
+  }
+  dispatch_cache_[to_tab_id] = std::move(it->second);
+  dispatch_cache_.erase(it);
 }
 
 // static

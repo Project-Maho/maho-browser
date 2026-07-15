@@ -65,6 +65,7 @@
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/ai/maho_tab_tidy_orchestrator.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
@@ -574,8 +575,10 @@ class SidebarSeparatorRow : public views::View {
 
 class SidebarSectionDropTarget : public views::View {
  public:
-  explicit SidebarSectionDropTarget(MahoSidebarTabSection section)
-      : section_(section) {
+  explicit SidebarSectionDropTarget(
+      MahoSidebarTabSection section,
+      base::WeakPtr<MahoSidebarTabListView> tab_list_view)
+      : section_(section), tab_list_view_(tab_list_view) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, kSectionInsets,
         kRowSpacingDp));
@@ -630,7 +633,8 @@ class SidebarSectionDropTarget : public views::View {
           });
     }
     return base::BindOnce(
-        [](MahoSidebarTabSection section,
+        [](base::WeakPtr<MahoSidebarTabListView> tab_list_view,
+           MahoSidebarTabSection section,
            base::RepeatingCallback<void(const std::string&)>
                on_favorites_drop_accepted,
            const ui::DropTargetEvent& event,
@@ -646,13 +650,17 @@ class SidebarSectionDropTarget : public views::View {
           const SidebarDropPlan plan = PlanSectionDrop(section, payload);
           ExecuteDropPlan(plan);
 
+          if (tab_list_view) {
+            tab_list_view->HandlePostDropTransition(payload, plan);
+          }
+
           if (plan.favorite_transition.kind ==
                   SidebarDropPlan::FavoriteTransition::Kind::kUnfavorite &&
               on_favorites_drop_accepted) {
             on_favorites_drop_accepted.Run(payload.node_id);
           }
         },
-        section_, on_favorites_drop_accepted_);
+        tab_list_view_, section_, on_favorites_drop_accepted_);
   }
 
   void OnDragExited() override {
@@ -685,6 +693,7 @@ class SidebarSectionDropTarget : public views::View {
   }
 
   const MahoSidebarTabSection section_;
+  base::WeakPtr<MahoSidebarTabListView> tab_list_view_;
   bool drag_over_drop_target_ = false;
   bool populated_ = false;
   base::RepeatingCallback<void(const std::string&)> on_favorites_drop_accepted_;
@@ -775,15 +784,20 @@ MahoSidebarTabListModel BuildLiveStripFallbackTabListModel(
     }
   }
 
+  maho::GroupSplitTabs(fallback_model.pinned_tree, strip);
+  maho::GroupSplitTabs(fallback_model.normal_tree, strip);
+
   return fallback_model;
 }
 
-views::View* AddSectionContainer(views::View* parent,
-                                 MahoSidebarTabSection section) {
-  auto container = std::make_unique<SidebarSectionDropTarget>(section);
+views::View* AddSectionContainer(
+    views::View* parent,
+    MahoSidebarTabSection section,
+    base::WeakPtr<MahoSidebarTabListView> tab_list_view) {
+  auto container =
+      std::make_unique<SidebarSectionDropTarget>(section, tab_list_view);
   auto* raw = container.get();
-  parent->AddChildView(
-      std::unique_ptr<views::View>(container.release()));
+  parent->AddChildView(std::unique_ptr<views::View>(container.release()));
   return raw;
 }
 
@@ -866,7 +880,8 @@ class SidebarInsertionLaneView : public views::View {
                            std::string target_parent_folder_id = std::string(),
                            int target_folder_child_index = -1,
                            MahoSidebarTabSection section =
-                               MahoSidebarTabSection::kNormal)
+                               MahoSidebarTabSection::kNormal,
+                           base::WeakPtr<MahoSidebarTabListView> tab_list_view = nullptr)
       : space_id_(std::move(space_id)),
         item_id_(std::move(item_id)),
         target_kind_(target_kind),
@@ -874,7 +889,8 @@ class SidebarInsertionLaneView : public views::View {
         append_(append),
         target_parent_folder_id_(std::move(target_parent_folder_id)),
         target_folder_child_index_(target_folder_child_index),
-        section_(section) {
+        section_(section),
+        tab_list_view_(tab_list_view) {
     SetPreferredSize(gfx::Size(0, kDropIndicatorThicknessDp));
   }
 
@@ -932,7 +948,8 @@ class SidebarInsertionLaneView : public views::View {
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
     ForwardDragEnded(this);
     return base::BindOnce(
-        [](std::string space_id, std::string item_id,
+        [](base::WeakPtr<MahoSidebarTabListView> tab_list_view,
+           std::string space_id, std::string item_id,
            SidebarNodeKind target_kind, std::string target_id, bool append,
            std::string target_parent_folder_id, int target_folder_child_index,
            MahoSidebarTabSection section,
@@ -972,6 +989,9 @@ class SidebarInsertionLaneView : public views::View {
                 }
               }
               ExecuteDropPlan(plan);
+              if (tab_list_view) {
+                tab_list_view->HandlePostDropTransition(payload, plan);
+              }
               output_drag_op = ui::mojom::DragOperation::kMove;
               DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
                                      payload.node_id,
@@ -995,6 +1015,9 @@ class SidebarInsertionLaneView : public views::View {
                 }
               }
               ExecuteDropPlan(plan);
+              if (tab_list_view) {
+                tab_list_view->HandlePostDropTransition(payload, plan);
+              }
               output_drag_op = ui::mojom::DragOperation::kMove;
               DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
                                      payload.node_id,
@@ -1012,6 +1035,9 @@ class SidebarInsertionLaneView : public views::View {
               return;
             }
             ExecuteDropPlan(plan);
+            if (tab_list_view) {
+              tab_list_view->HandlePostDropTransition(payload, plan);
+            }
             output_drag_op = ui::mojom::DragOperation::kMove;
             if (target_kind == SidebarNodeKind::kTab) {
               DispatchReorderRootItem(space_id, SidebarNodeKind::kFolder,
@@ -1049,7 +1075,7 @@ class SidebarInsertionLaneView : public views::View {
             }
           }
         },
-        space_id_, item_id_, target_kind_, target_id_, append_,
+        tab_list_view_, space_id_, item_id_, target_kind_, target_id_, append_,
         target_parent_folder_id_, target_folder_child_index_, section_,
         on_favorites_drop_accepted_);
   }
@@ -1083,6 +1109,7 @@ class SidebarInsertionLaneView : public views::View {
   const std::string target_parent_folder_id_;
   const int target_folder_child_index_;
   const MahoSidebarTabSection section_;
+  base::WeakPtr<MahoSidebarTabListView> tab_list_view_;
   bool drag_over_drop_target_ = false;
   base::RepeatingCallback<void(const std::string&)> on_favorites_drop_accepted_;
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
@@ -1204,7 +1231,7 @@ views::View::DropCallback GetSectionDropCallbackForTesting(
     MahoSidebarTabSection section,
     const ui::DropTargetEvent& event,
     bool populated) {
-  SidebarSectionDropTarget target(section);
+  SidebarSectionDropTarget target(section, base::WeakPtr<MahoSidebarTabListView>());
   target.SetPopulated(populated);
   return target.GetDropCallback(event);
 }
@@ -1213,7 +1240,7 @@ SidebarSectionDropIndicatorStateForTesting
 GetSectionDropIndicatorStateForTesting(MahoSidebarTabSection section,
                                              const ui::DropTargetEvent& event,
                                              bool populated) {
-  SidebarSectionDropTarget target(section);
+  SidebarSectionDropTarget target(section, base::WeakPtr<MahoSidebarTabListView>());
   target.SetPopulated(populated);
   SidebarSectionDropIndicatorStateForTesting state;
   target.OnDragUpdated(event);
@@ -1381,8 +1408,11 @@ void MahoSidebarTabListView::ShowContextMenuForViewImpl(
 // --- Custom clipboard format for Maho sidebar drag ---
 
 const ui::ClipboardFormatType& GetMahoDragFormatType() {
+  // Must be CustomPlatformType, not Deserialize: on Windows Deserialize parses
+  // a numeric CLIPFORMAT (StringToInt CHECK) and crashes on a MIME-style name.
   static const base::NoDestructor<ui::ClipboardFormatType> kFormat(
-      ui::ClipboardFormatType::Deserialize("application/x-maho-sidebar-drag"));
+      ui::ClipboardFormatType::CustomPlatformType(
+          "application/x-maho-sidebar-drag"));
   return *kFormat;
 }
 
@@ -2111,6 +2141,9 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
               // first so it exits the folder to root, then create the split.
               if (!plan.steps.empty()) {
                 ExecuteDropPlan(plan);
+                if (list_view) {
+                  list_view->HandlePostDropTransition(single_payload, plan);
+                }
               }
               TabStripModel* model =
                   browser ? browser->tab_strip_model() : nullptr;
@@ -2275,6 +2308,9 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
             }
 
             ExecuteDropPlanTransitionsOnly(plan);
+            if (list_view) {
+              list_view->HandlePostDropTransition(single_payload, plan);
+            }
             output_drag_op = ui::mojom::DragOperation::kMove;
 
             if (drop_zone == SidebarTabDropZone::kBefore) {
@@ -3068,12 +3104,15 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
     drop_zone = ResolveDropZone(event, payload);
   }
 
+  MahoSidebarTabListView* list_view = GetTabListView();
+
   return base::BindOnce(
       [](std::string folder_id, std::string space_id, bool folder_is_pinned,
          SidebarFolderDropZone drop_zone, std::string next_sibling_folder_id,
          std::string parent_folder_id,
          base::RepeatingCallback<void(const std::string&)>
              favorites_drop_accepted,
+         MahoSidebarTabListView* list_view,
          const ui::DropTargetEvent& event,
          ui::mojom::DragOperation& output_drag_op,
          std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
@@ -3111,6 +3150,9 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
           ExecuteDropPlanTransitionsOnly(plan);
         } else {
           ExecuteDropPlan(plan);
+        }
+        if (list_view) {
+          list_view->HandlePostDropTransition(payload, plan);
         }
         output_drag_op = ui::mojom::DragOperation::kMove;
         if (payload.node_kind == SidebarNodeKind::kTab) {
@@ -3185,7 +3227,18 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
        },
        folder_id_, space_id_, folder_is_pinned_, drop_zone,
        next_sibling_folder_id_, parent_folder_id_,
-       favorites_drop_accepted_callback_);
+       favorites_drop_accepted_callback_, list_view);
+}
+
+MahoSidebarTabListView* SidebarFolderRowView::GetTabListView() {
+  views::View* v = parent();
+  while (v) {
+    if (auto* list_view = views::AsViewClass<MahoSidebarTabListView>(v)) {
+      return list_view;
+    }
+    v = v->parent();
+  }
+  return nullptr;
 }
 
 void SidebarFolderRowView::OnDragExited() {
@@ -4064,7 +4117,8 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
     const ui::DropTargetEvent& event) {
   ForwardDragEnded(this);
   return base::BindOnce(
-      [](Browser* browser, std::string space_id,
+      [](base::WeakPtr<MahoSidebarTabListView> tab_list_view,
+         Browser* browser, std::string space_id,
          base::RepeatingCallback<void(const std::string&)>
              favorites_drop_accepted,
          const ui::DropTargetEvent& event,
@@ -4085,6 +4139,9 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
             }
           }
           ExecuteDropPlan(plan);
+          if (tab_list_view) {
+            tab_list_view->HandlePostDropTransition(payload, plan);
+          }
           output_drag_op = ui::mojom::DragOperation::kMove;
           if (payload.node_kind == SidebarNodeKind::kTab &&
               !payload.node_id.empty()) {
@@ -4112,7 +4169,8 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
                              ui::PAGE_TRANSITION_LINK, false),
                          base::NullCallback());
       },
-      browser_, active_space_id_, favorites_drop_accepted_callback_);
+      weak_factory_.GetWeakPtr(), browser_, active_space_id_,
+      favorites_drop_accepted_callback_);
 }
 
 void MahoSidebarTabListView::OnDragExited() {
@@ -4367,7 +4425,8 @@ void MahoSidebarTabListView::RebuildTreeSection(
     const std::vector<SidebarTreeNode>& nodes,
     MahoSidebarTabSection section,
     Browser* browser) {
-  auto* section_container = AddSectionContainer(parent, section);
+  auto* section_container =
+      AddSectionContainer(parent, section, weak_factory_.GetWeakPtr());
 
   if (section == MahoSidebarTabSection::kPinned) {
     pinned_section_target_ = section_container;
@@ -4431,7 +4490,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       auto* before_folder_lane =
           parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
               active_space_id_, node.folder_id, SidebarNodeKind::kFolder,
-              node.folder_id, false, sibling_parent_folder_id, -1, section));
+              node.folder_id, false, sibling_parent_folder_id, -1, section,
+              weak_factory_.GetWeakPtr()));
       if (favorites_drop_accepted_callback_) {
         before_folder_lane->SetFavoritesDropAcceptedCallback(
             favorites_drop_accepted_callback_);
@@ -4484,7 +4544,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
                 active_space_id_, node.folder_id, SidebarNodeKind::kFolder,
                 next_sibling_folder_id.empty() ? node.folder_id
                                                : next_sibling_folder_id,
-                true, sibling_parent_folder_id, -1, section));
+                true, sibling_parent_folder_id, -1, section,
+                weak_factory_.GetWeakPtr()));
         if (favorites_drop_accepted_callback_) {
           append_folder_lane->SetFavoritesDropAcceptedCallback(
               favorites_drop_accepted_callback_);
@@ -4500,7 +4561,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       auto* before_tab_lane =
           parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
               active_space_id_, node.tab_id, SidebarNodeKind::kTab, node.tab_id,
-              false, parent_folder_id, static_cast<int>(index), section));
+              false, parent_folder_id, static_cast<int>(index), section,
+              weak_factory_.GetWeakPtr()));
       if (favorites_drop_accepted_callback_) {
         before_tab_lane->SetFavoritesDropAcceptedCallback(
             favorites_drop_accepted_callback_);
@@ -4514,7 +4576,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
         auto* append_tab_lane =
             parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
                 active_space_id_, node.tab_id, SidebarNodeKind::kTab, node.tab_id,
-                true, parent_folder_id, static_cast<int>(index + 1), section));
+                true, parent_folder_id, static_cast<int>(index + 1), section,
+                weak_factory_.GetWeakPtr()));
         if (favorites_drop_accepted_callback_) {
           append_tab_lane->SetFavoritesDropAcceptedCallback(
               favorites_drop_accepted_callback_);
@@ -4753,10 +4816,10 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
 
   for (size_t i = 0; i < group_node.children.size(); ++i) {
     const size_t child_start = container_ptr->children().size();
-    
+
     RebuildTreeNodes(container_ptr, {group_node.children[i]}, section,
                      browser, parent_folder_id);
-                     
+
     for (size_t v = child_start; v < container_ptr->children().size(); ++v) {
       views::View* child = container_ptr->children()[v];
       if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
@@ -5278,10 +5341,21 @@ void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {
     return;
   }
   LOG(INFO) << "[maho-tidy] starting orchestrator";
+  content::WebContents* active_wc =
+      browser_->tab_strip_model()
+          ? browser_->tab_strip_model()->GetActiveWebContents()
+          : nullptr;
+  auto token =
+      std::make_shared<MahoPrivateContextToken>(browser_, active_wc);
   maho::MahoTabTidyOrchestrator::RunOneShot(
       browser_,
       base::BindOnce(&MahoSidebarTabListView::OnTidyFinished,
-                     weak_factory_.GetWeakPtr()));
+                     weak_factory_.GetWeakPtr()),
+      base::BindRepeating(
+          [](std::shared_ptr<MahoPrivateContextToken> t) {
+            return t->Revalidate(MahoPrivateCapability::kAI);
+          },
+          std::move(token)));
 }
 
 void MahoSidebarTabListView::OnTidyFinished(int folder_count, const std::string& error_message) {
@@ -6178,6 +6252,8 @@ void MahoSidebarTabListView::OpenSelectedInSplit() {
   if (live.size() < 2) {
     return;
   }
+  // Contract: more than two eligible tabs collapse to the first two in strip
+  // order — Maho splits are strictly two-pane; never more than two panes.
   std::sort(live.begin(), live.end());
   const int first_idx = live[0].first;
   const int second_idx = live[1].first;
@@ -6310,6 +6386,59 @@ void SidebarTabRowView::OpenSelectedTabsInSplit() {
 void SidebarTabRowView::NewFolderWithSelectedTabs() {
   if (MahoSidebarTabListView* list_view = GetTabListView()) {
     list_view->NewFolderWithSelected();
+  }
+}
+
+MahoSidebarView* MahoSidebarTabListView::GetSidebarView() {
+  for (views::View* v = this; v; v = v->parent()) {
+    if (auto* sidebar_view = views::AsViewClass<MahoSidebarView>(v)) {
+      return sidebar_view;
+    }
+  }
+  return nullptr;
+}
+
+void MahoSidebarTabListView::HandlePostDropTransition(
+    const SidebarDragPayload& payload,
+    const SidebarDropPlan& plan) {
+  if (plan.pin_transition.kind == SidebarDropPlan::PinTransition::Kind::kNone) {
+    return;
+  }
+
+  const bool to_pinned =
+      (plan.pin_transition.kind == SidebarDropPlan::PinTransition::Kind::kPin);
+  const std::string& tab_id = plan.pin_transition.node_id;
+
+  int index = payload.tab_strip_index;
+  if (index < 0 || !browser_ || !browser_->tab_strip_model() ||
+      index >= browser_->tab_strip_model()->count() ||
+      FindCoreTabIdByWebContents(
+          browser_->tab_strip_model()->GetWebContentsAt(index)) != tab_id) {
+    index = ResolveTabStripIndexForTabId(tab_id);
+  }
+
+  if (index < 0) {
+    return;
+  }
+
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!model) {
+    return;
+  }
+
+  // B2: Split pane pinned, dissolve split first.
+  if (to_pinned && model->GetSplitForTab(index).has_value()) {
+    MahoSplitViewController(browser_).RemoveSplitForTab(index);
+  }
+
+  // Set the pin state on the native tab strip model
+  MahoSidebarView* sidebar_view = GetSidebarView();
+  if (sidebar_view) {
+    sidebar_view->SetApplyingPin(true);
+  }
+  model->SetTabPinned(index, to_pinned);
+  if (sidebar_view) {
+    sidebar_view->SetApplyingPin(false);
   }
 }
 

@@ -62,7 +62,9 @@ class MahoSidebarFolderHoverPopupView : public views::View,
 
  private:
   struct Level {
-    Level(std::u16string name, std::vector<SidebarTreeNode> children);
+    Level(std::u16string name,
+          std::string folder_id,
+          std::vector<SidebarTreeNode> children);
     Level(const Level&);
     Level(Level&&) noexcept;
     Level& operator=(const Level&);
@@ -70,6 +72,7 @@ class MahoSidebarFolderHoverPopupView : public views::View,
     ~Level();
 
     std::u16string name;
+    std::string folder_id;
     std::vector<SidebarTreeNode> children;
   };
 

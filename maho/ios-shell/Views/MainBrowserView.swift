@@ -51,15 +51,14 @@ struct MainBrowserView: View {
     @State private var pinchSummarySentences: [String] = []
     @State private var shellRoute: ShellRoute = .home
     @State private var homeQuery = ""
-    @State private var focusHomeSearchRequest = false
-    @State private var pendingHomeSearchFocusAfterTabGridDismiss = false
     @StateObject private var pinchSummarizer = PageSummarizer()
     @State private var browseForMeSeed = UUID()
     @State private var isSearchFocused = false
-    @State private var isAddressBarEditing = false
     @StateObject private var commandBarVM = CommandBarViewModel()
-    @State private var showAiSearch = false
-    @State private var aiSearchQuery = ""
+    @State private var showVoiceAssistant = false
+    @State private var voiceSearchManager = VoiceSearchManager()
+    @State private var showAiChat = false
+    @State private var askAIQuery = ""
 
     private let bridge = MahoBridge.shared
     private let tickTimer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
@@ -84,6 +83,7 @@ struct MainBrowserView: View {
 
             if !isBrowsing {
                 HomeSearchView(
+                    isIncognito: effectiveIsPrivate,
                     onOpenTabs: {
                         refreshState()
                         showTabGrid = true
@@ -149,18 +149,13 @@ struct MainBrowserView: View {
                     tabSwipeOffset: bottomBarTabSwipeOffset,
                     spaces: spacesMenuItems,
                     homeQuery: $homeQuery,
-                    homeSearchFocusRequest: $focusHomeSearchRequest,
-                    isSearchFocused: $isSearchFocused,
-                    isAddressBarEditing: $isAddressBarEditing,
                     onTabsTapped: {
                         refreshState()
                         showTabGrid = true
                     },
                     onAddressTapped: {
-                        isAddressBarEditing = true
-                        isSearchFocused = true
+                        presentSearchOverlay()
                     },
-                    onHomeSubmit: submitHomeQuery,
                     onGoBack: goBack,
                     onGoForward: goForward,
                     onTabSwipeLeft: {
@@ -170,9 +165,6 @@ struct MainBrowserView: View {
                         switchTab(direction: .previous)
                     },
                     onSelectSpace: selectSpace,
-                    onTogglePrivate: {
-                        setPrivate(!effectiveIsPrivate)
-                    },
                     onFindInPage: {
                         guard browsingTabId != nil else { return }
                         showFindInPage = true
@@ -270,36 +262,49 @@ struct MainBrowserView: View {
                 .zIndex(10)
             }
 
+            if showVoiceAssistant {
+                VoiceAssistantOverlayView(
+                    voiceManager: voiceSearchManager,
+                    onResult: handleVoiceAssistantResult,
+                    onDismiss: dismissVoiceAssistantOverlay
+                )
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .zIndex(90)
+            }
+
             if isSearchFocused {
-                SuggestionsListView(
+                SearchSheet(
+                    query: $homeQuery,
                     viewModel: commandBarVM,
-                    onSelect: { suggestion in
-                        isSearchFocused = false
-                        isAddressBarEditing = false
-                        if suggestion.kind == .aiAnswer {
-                            let queryText = suggestion.key.hasPrefix("ai_search:") ? String(suggestion.key.dropFirst(10)) : suggestion.title
-                            presentAiSearch(query: queryText)
-                        } else {
-                            let targetUrl = suggestion.executionPayload ?? suggestion.key
-                            createTabAndNavigate(targetUrl)
-                        }
+                    isIncognito: effectiveIsPrivate,
+                    onSubmit: { query in
+                        dismissSearchOverlay()
+                        createTabAndNavigate(query)
+                    },
+                    onSelectSuggestion: { suggestion in
+                        handleSearchSuggestionSelection(suggestion)
+                    },
+                    onBrowseForMe: { query in
+                        dismissSearchOverlay()
+                        presentAiChat(query: query)
+                    },
+                    onTogglePrivate: {
+                        toggleSearchOverlayPrivateMode()
                     },
                     onCancel: {
-                        isSearchFocused = false
-                        isAddressBarEditing = false
+                        dismissSearchOverlay()
+                    },
+                    voiceManager: voiceSearchManager,
+                    onVoiceAssistantRequested: {
+                        presentVoiceAssistantOverlay()
                     }
                 )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
                 .zIndex(100)
             }
         }
         .sheet(isPresented: $showTabGrid, onDismiss: handleTabGridDismiss) {
-            TabGridSheet(
-                isIncognito: $isIncognito,
-                onRequestNewTab: {
-                    _ = createNewTabFromGrid()
-                }
-            )
+            TabGridSheet(isIncognito: $isIncognito)
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showSettings) {
@@ -342,15 +347,14 @@ struct MainBrowserView: View {
         .sheet(isPresented: $showNotes) {
             NotesView()
         }
-        .sheet(isPresented: $showAiSearch) {
-            AiSearchOverlayView(query: aiSearchQuery, isIncognito: isIncognito)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        .onChange(of: isSearchFocused) { _, newValue in
-            if !newValue {
-                isAddressBarEditing = false
-            }
+        .sheet(isPresented: $showAiChat) {
+            ConversationListView(
+                pageUrl: browserVM.currentUrl,
+                pageTitle: browserVM.currentTitle,
+                pageText: "",
+                autoOpenChatOnAppear: true,
+                initialQuery: askAIQuery
+            )
         }
         .onAppear {
             loadBrowserState()
@@ -383,14 +387,18 @@ struct MainBrowserView: View {
         .onChange(of: homeQuery) { _, newValue in
             Task {
                 try? await Task.sleep(nanoseconds: 150 * 1_000_000)
-                guard newValue == homeQuery else { return }
-                commandBarVM.query(newValue)
+                guard newValue == homeQuery, isSearchFocused else { return }
+                commandBarVM.query(newValue, isIncognito: effectiveIsPrivate)
             }
         }
         .onChange(of: isSearchFocused) { _, newValue in
             if newValue {
-                commandBarVM.query(homeQuery)
+                commandBarVM.query(homeQuery, isIncognito: effectiveIsPrivate)
             }
+        }
+        .onChange(of: effectiveIsPrivate) { _, newValue in
+            guard isSearchFocused else { return }
+            commandBarVM.query(homeQuery, isIncognito: newValue)
         }
     }
 
@@ -406,7 +414,7 @@ struct MainBrowserView: View {
         DeepLinkHandler.shared.onNewTab = { [self] in
             activeTabId = nil
             transitionToHome()
-            isSearchFocused = true
+            presentSearchOverlay()
         }
         HandoffManager.shared.onReceiveURL = { [self] url in
             createTabAndNavigate(url.absoluteString)
@@ -416,7 +424,7 @@ struct MainBrowserView: View {
             DeepLinkHandler.shared.pendingNewTabSearch = false
             activeTabId = nil
             transitionToHome()
-            isSearchFocused = true
+            presentSearchOverlay()
         }
     }
 
@@ -709,27 +717,8 @@ struct MainBrowserView: View {
         }
     }
 
-    private func createNewTabFromGrid() -> Bool {
-        guard let targetSpaceId = activeSpaceId ?? spaces.first?.id else { return false }
-
-        shellRoute = .home
-        homeQuery = ""
-        pendingHomeSearchFocusAfterTabGridDismiss = true
-        bridge.createTab(url: nil, inSpace: targetSpaceId, isPrivate: isIncognito)
-        refreshState()
-#if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-#endif
-        return true
-    }
-
     private func handleTabGridDismiss() {
         refreshState()
-
-        if pendingHomeSearchFocusAfterTabGridDismiss {
-            pendingHomeSearchFocusAfterTabGridDismiss = false
-            focusHomeSearchRequest = true
-        }
     }
 
     private func createTabAndNavigate(_ query: String) {
@@ -742,7 +731,7 @@ struct MainBrowserView: View {
         pendingNavigationUrl = destination
         browserVM.currentUrl = destination
         browserVM.currentTitle = ""
-        bridge.createTab(url: Url(destination), inSpace: targetSpaceId, isPrivate: isIncognito)
+        bridge.createTab(url: Url(destination), inSpace: targetSpaceId, isPrivate: effectiveIsPrivate)
         refreshState()
 
         let fallbackTabId = currentSpaceTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first?.id
@@ -779,11 +768,76 @@ struct MainBrowserView: View {
         activateTab(id)
     }
 
-    private func handleSuggestionSelection(_ suggestion: SuggestionViewModel) {
-        let payload = suggestion.executionPayload ?? suggestion.title
-        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func presentSearchOverlay() {
+        homeQuery = ""
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+            isSearchFocused = true
+        }
+    }
+
+    private func dismissSearchOverlay(clearQuery: Bool = true) {
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+            isSearchFocused = false
+        }
+
+        if clearQuery {
+            homeQuery = ""
+            commandBarVM.suggestions = []
+        }
+    }
+
+    private func presentVoiceAssistantOverlay() {
+        voiceSearchManager.reset()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+            isSearchFocused = false
+            showVoiceAssistant = true
+        }
+    }
+
+    private func dismissVoiceAssistantOverlay() {
+        voiceSearchManager.reset()
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+            showVoiceAssistant = false
+        }
+    }
+
+    private func handleVoiceAssistantResult(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        voiceSearchManager.reset()
+
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+            showVoiceAssistant = false
+            isSearchFocused = false
+        }
+
         guard !trimmed.isEmpty else { return }
         createTabAndNavigate(trimmed)
+    }
+
+    private func toggleSearchOverlayPrivateMode() {
+        let targetPrivateState = !effectiveIsPrivate
+        setPrivate(targetPrivateState)
+        commandBarVM.query(homeQuery, isIncognito: targetPrivateState)
+    }
+
+    private func handleSearchSuggestionSelection(_ suggestion: SuggestionViewModel) {
+        dismissSearchOverlay()
+
+        if suggestion.kind == .aiAnswer {
+            presentAiChat(query: aiSearchQueryText(for: suggestion))
+            return
+        }
+
+        let targetUrl = suggestion.executionPayload ?? suggestion.key
+        createTabAndNavigate(targetUrl)
+    }
+
+    private func aiSearchQueryText(for suggestion: SuggestionViewModel) -> String {
+        if suggestion.key.hasPrefix("ai_search:") {
+            return String(suggestion.key.dropFirst("ai_search:".count))
+        }
+
+        return suggestion.title
     }
 
     private func transitionToHome() {
@@ -795,13 +849,9 @@ struct MainBrowserView: View {
         bottomBarTabSwipeOffset = 0
     }
 
-    private func submitHomeQuery() {
-        createTabAndNavigate(homeQuery)
-    }
-
-    private func presentAiSearch(query: String) {
-        aiSearchQuery = query
-        showAiSearch = true
+    private func presentAiChat(query: String) {
+        askAIQuery = query
+        showAiChat = true
     }
 
     private func goBack() {

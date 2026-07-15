@@ -1,6 +1,9 @@
 use maho_core::maho_core::MahoCore;
+use maho_types::common::Url;
 use maho_types::events::core_update::CoreUpdate;
+use maho_types::events::shell_event::ShellEvent;
 use maho_types::space::SpaceColor;
+use maho_types::tab::TabRole;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -423,6 +426,7 @@ mod persistence_tests {
             country: "US".to_string(),
             phone: Some("555-1234".to_string()),
             email: Some("john@test.com".to_string()),
+            address_line2: None,
         };
 
         let added = core.add_autofill_address_persisted(address);
@@ -458,6 +462,7 @@ mod persistence_tests {
             card_name: "Visa".to_string(),
             last_four: "4242".to_string(),
             expiry: "12/28".to_string(),
+            card_network: None,
         };
 
         let added = core.add_autofill_payment_persisted(payment);
@@ -736,6 +741,8 @@ mod persistence_tests {
             "remove_split_view",
             "next_split_view",
             "prev_split_view",
+            "swap_split_view",
+            "toggle_split_view",
             "show_archive",
             "open_downloads",
             "settings",
@@ -807,4 +814,75 @@ mod persistence_tests {
         assert_eq!(new_tab_binding["keyCombo"]["key"], "p");
         assert!(new_tab_binding["isCustom"].as_bool().unwrap());
     }
+}
+
+#[test]
+fn pin_unpin_routed_through_transition_seam() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let create_updates = core.handle_event(ShellEvent::CreateTab {
+        space_id: space_id.clone(),
+        url: Some(Url::new("https://example.com")),
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private: false,
+    });
+    let tab_id = create_updates
+        .iter()
+        .find_map(|u| {
+            if let CoreUpdate::TabCreated { tab } = u {
+                Some(tab.id.clone())
+            } else {
+                None
+            }
+        })
+        .expect("CreateTab must produce TabCreated");
+
+    let vm_before = core
+        .get_tab_view_models()
+        .into_iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab must exist after create");
+    assert_eq!(vm_before.role, TabRole::Normal);
+    assert!(!vm_before.is_pinned);
+
+    let pin_updates = core.handle_event(ShellEvent::PinTab { tab_id: tab_id.clone() });
+
+    assert!(
+        pin_updates.iter().any(|u| matches!(
+            u,
+            CoreUpdate::TabRoleChanged { tab_id: tid, new_role: TabRole::Pinned, .. }
+                if *tid == tab_id
+        )),
+        "PinTab must emit TabRoleChanged{{new_role: Pinned}}; got: {pin_updates:?}"
+    );
+
+    let vm_pinned = core
+        .get_tab_view_models()
+        .into_iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab must exist after pin");
+    assert_eq!(vm_pinned.role, TabRole::Pinned);
+    assert!(vm_pinned.is_pinned);
+
+    let unpin_updates = core.handle_event(ShellEvent::UnpinTab { tab_id: tab_id.clone() });
+
+    assert!(
+        unpin_updates.iter().any(|u| matches!(
+            u,
+            CoreUpdate::TabRoleChanged { tab_id: tid, new_role: TabRole::Normal, .. }
+                if *tid == tab_id
+        )),
+        "UnpinTab must emit TabRoleChanged{{new_role: Normal}}; got: {unpin_updates:?}"
+    );
+
+    let vm_unpinned = core
+        .get_tab_view_models()
+        .into_iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab must exist after unpin");
+    assert_eq!(vm_unpinned.role, TabRole::Normal);
+    assert!(!vm_unpinned.is_pinned);
 }

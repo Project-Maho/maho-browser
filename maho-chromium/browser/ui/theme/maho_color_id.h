@@ -53,6 +53,8 @@
   E_CPONLY(kMahoColorTabRowHoverBackground) \
   E_CPONLY(kMahoColorTabRowActiveBackground) \
   E_CPONLY(kMahoColorTabRowActiveHoveredBackground) \
+  E_CPONLY(kMahoColorTabRowSelectedBackground) \
+  E_CPONLY(kMahoColorTabRowSelectedHoveredBackground) \
   E_CPONLY(kMahoColorInteractiveChipIdleBackground) \
   /* Favorites */ \
   E_CPONLY(kMahoColorFavoritesEmptyCardBackground) \
@@ -148,7 +150,17 @@
   E_CPONLY(kMahoColorToastBackground) \
   E_CPONLY(kMahoColorToastForeground) \
   E_CPONLY(kMahoColorToastBodyForeground) \
-  E_CPONLY(kMahoColorToastBorder)
+  E_CPONLY(kMahoColorToastBorder) \
+  /* Private / Incognito semantic colors (R-12) */ \
+  E_CPONLY(kMahoColorPrivateSidebarBackground) \
+  E_CPONLY(kMahoColorPrivateSidebarText) \
+  E_CPONLY(kMahoColorPrivateTabRowBackground) \
+  E_CPONLY(kMahoColorPrivateTabRowHover) \
+  E_CPONLY(kMahoColorPrivateSearchBackground) \
+  E_CPONLY(kMahoColorPrivateSearchBorder) \
+  E_CPONLY(kMahoColorPrivateFooterBackground) \
+  E_CPONLY(kMahoColorPrivateIdentityIcon) \
+  E_CPONLY(kMahoColorPrivateTopBarBackground)
 // clang-format on
 
 #include "ui/color/color_id_macros.inc"

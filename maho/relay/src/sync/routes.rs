@@ -25,7 +25,8 @@ const MAX_SNAPSHOT_BYTES: usize = 100 * 1024 * 1024;
 pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
-    let room_id = auth.device.room_id.clone();
+    let room_id = db::get_latest_room_for_user(&db, auth.user.id).await?
+        .ok_or_else(|| AppError::BadRequest("no_room_for_user".to_string()))?;
 
     let payload: UploadSnapshotRequest = req.json().await
         .map_err(|e| AppError::BadRequest(format!("invalid_json: {e}")))?;
@@ -42,7 +43,7 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let now = chrono::Utc::now().timestamp();
 
     let existing = db.prepare("SELECT hlc_ts_ceiling FROM snapshots WHERE room_id = ?1")
-        .bind(&[room_id.clone().into()])?
+        .bind(&[db::js(&room_id)?])?
         .first::<serde_json::Value>(None).await?;
 
     if let Some(row) = existing {
@@ -65,11 +66,11 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let blob_js: wasm_bindgen::JsValue = serde_wasm_bindgen::to_value(&decoded)
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let stmt = stmt.bind(&[
-        room_id.into(),
-        payload.hlc_ts_ceiling.into(),
-        payload.creator_device_id.into(),
+        db::js(&room_id)?,
+        db::js(&payload.hlc_ts_ceiling)?,
+        db::js(&payload.creator_device_id)?,
         blob_js,
-        now.into(),
+        db::js(&now)?,
     ])?;
     stmt.run().await?;
 
@@ -81,7 +82,10 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
 pub async fn latest_snapshot(req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
-    let room_id = auth.device.room_id.clone();
+    let room_id = match db::get_latest_room_for_user(&db, auth.user.id).await? {
+        Some(r) => r,
+        None => return Response::error("not_found", 404).map_err(AppError::from),
+    };
 
     let db = env.d1("MAHO_DB")?;
 

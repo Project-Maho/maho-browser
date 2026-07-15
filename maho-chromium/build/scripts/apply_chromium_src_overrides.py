@@ -49,14 +49,156 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
-    "chrome/browser/ui/views/frame/browser_frame_view_win.cc": frozenset({"win"}),
-    "chrome/browser/ui/views/frame/browser_frame_view_win.h": frozenset({"win"}),
+    "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": frozenset({"win"}),
+    "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": frozenset({"win"}),
 }
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/ui/views/frame/contents_web_view.cc": [
+        Replacement(
+            old='#include "chrome/browser/ui/color/chrome_color_id.h"\n',
+            new=(
+                '#include "chrome/browser/ui/color/chrome_color_id.h"\n'
+                '#include "chrome/browser/profiles/profile.h"\n'
+                '#include "maho/browser/ui/theme/maho_color_id.h"\n'
+            ),
+            description=(
+                "Maho R-12: include Profile + Maho private color ids in "
+                "contents_web_view.cc for the exact-primary-Incognito content "
+                "background projection"
+            ),
+            guard='#include "maho/browser/ui/theme/maho_color_id.h"',
+        ),
+        Replacement(
+            old=(
+                "  const SkColor color = GetColorProvider()->GetColor(\n"
+                "      is_letterboxing() ? kColorWebContentsBackgroundLetterboxing\n"
+                "                        : kColorWebContentsBackground);\n"
+            ),
+            new=(
+                "  ui::ColorId maho_content_bg =\n"
+                "      is_letterboxing() ? kColorWebContentsBackgroundLetterboxing\n"
+                "                        : kColorWebContentsBackground;\n"
+                "  if (web_contents()) {\n"
+                "    Profile* maho_profile =\n"
+                "        Profile::FromBrowserContext(web_contents()->GetBrowserContext());\n"
+                "    if (maho_profile && maho_profile->IsIncognitoProfile() &&\n"
+                "        maho_profile->IsPrimaryOTRProfile()) {\n"
+                "      maho_content_bg = kMahoColorPrivateSidebarBackground;\n"
+                "    }\n"
+                "  }\n"
+                "  const SkColor color = GetColorProvider()->GetColor(maho_content_bg);\n"
+            ),
+            description=(
+                "Maho R-12: paint the exact-primary-Incognito content background "
+                "with the fixed private semantic surface before renderer-ready so "
+                "there is no regular-color flash; regular/Guest unchanged"
+            ),
+            guard="maho_content_bg",
+        ),
+    ],
+    "chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc": [],
+    # ── Maho extension APIs (chrome.maho.splitView / chrome.maho.sidePanel) ─────
+    "chrome/common/extensions/api/api_sources.gni": [
+        Replacement(
+            old=(
+                'uncompiled_sources_ = [\n'
+                '  "action.json",\n'
+                '  "browsing_data.json",\n'
+                '  "commands.json",\n'
+                '  "extension.json",\n'
+                '  "top_sites.json",\n'
+                ']\n'
+            ),
+            new=(
+                'uncompiled_sources_ = [\n'
+                '  "action.json",\n'
+                '  "browsing_data.json",\n'
+                '  "commands.json",\n'
+                '  "extension.json",\n'
+                '  "top_sites.json",\n'
+                '  "//maho/browser/extensions/api/maho_split_view.json",\n'
+                '  "//maho/browser/extensions/api/maho_side_panel.json",\n'
+                ']\n'
+            ),
+            description=(
+                "Register Maho extension API schemas (maho.splitView, "
+                "maho.sidePanel) in the uncompiled schema source list so the "
+                "JSON strings and function registration are generated"
+            ),
+            guard='"//maho/browser/extensions/api/maho_split_view.json"',
+        ),
+    ],
+    "chrome/common/extensions/api/_api_features.override.json": [
+        Replacement(
+            old=(
+                '{\n'
+                '  // Entries go here.\n'
+                '}\n'
+            ),
+            new=(
+                '{\n'
+                '  "maho.splitView": {\n'
+                '    "dependencies": ["permission:maho"],\n'
+                '    "contexts": ["privileged_extension"]\n'
+                '  },\n'
+                '  "maho.sidePanel": {\n'
+                '    "dependencies": ["permission:maho"],\n'
+                '    "contexts": ["privileged_extension"]\n'
+                '  }\n'
+                '}\n'
+            ),
+            description=(
+                "Declare maho.splitView and maho.sidePanel API features gated "
+                "on the 'maho' permission"
+            ),
+            guard='"maho.splitView"',
+        ),
+    ],
+    "chrome/common/extensions/api/_permission_features.override.json": [
+        Replacement(
+            old=(
+                '{\n'
+                '  // Entries go here.\n'
+                '}\n'
+            ),
+            new=(
+                '{\n'
+                '  "maho": {\n'
+                '    "channel": "stable",\n'
+                '    "extension_types": ["extension"]\n'
+                '  }\n'
+                '}\n'
+            ),
+            description="Declare the 'maho' extension permission",
+            guard='"maho":',
+        ),
+    ],
+    "extensions/browser/extension_function_histogram_value.h": [
+        Replacement(
+            old=(
+                "GLICPRIVATE_INVOKE = 1963,\n"
+                "  // Last entry: Add new entries above, then run:\n"
+            ),
+            new=(
+                "GLICPRIVATE_INVOKE = 1963,\n"
+                "  MAHO_SPLITVIEW_CREATE = 1964,\n"
+                "  MAHO_SPLITVIEW_CLOSE = 1965,\n"
+                "  MAHO_SPLITVIEW_QUERY = 1966,\n"
+                "  MAHO_SIDEPANEL_SETLAYOUT = 1967,\n"
+                "  // Last entry: Add new entries above, then run:\n"
+            ),
+            description=(
+                "Add UMA histogram enum entries for the Maho split-view and "
+                "side-panel extension functions"
+            ),
+            guard="MAHO_SPLITVIEW_CREATE = 1964,",
+        ),
+    ],
     # ── generated_resources.grd ────────────────────────────────────────────────
     "chrome/app/generated_resources.grd": [
+
         Replacement(
             old=(
                 '      <message name="IDS_LINK_COPIED_TOAST_BODY" desc="Text on a toast notification that is shown when a link is successfully copied.">\n'
@@ -718,6 +860,23 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/browser/ui/views/side_panel/BUILD.gn": [
+        Replacement(
+            old=(
+                '    "//maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.cc",\n'
+                '    "//maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.h",\n'
+            ),
+            new=(
+                '    "//maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.cc",\n'
+                '    "//maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.h",\n'
+                '    "//maho/browser/extensions/api/maho_side_panel_api.cc",\n'
+                '    "//maho/browser/extensions/api/maho_side_panel_api.h",\n'
+            ),
+            description=(
+                "Compile the maho.sidePanel ExtensionFunction into the "
+                "side_panel target, co-located with its coordinator"
+            ),
+            guard='"//maho/browser/extensions/api/maho_side_panel_api.cc"',
+        ),
         # Self-healing deduplication: collapse any previously double-injected
         # source_set("interactive_tests") blocks down to one.  Two passes are
         # needed because apply_replacements uses replace(..., 1): the first
@@ -943,6 +1102,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/browser/ui/BUILD.gn": [
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/split_view/maho_split_view_controller.cc",\n'
+                '      "//maho/browser/ui/views/split_view/maho_split_view_controller.h",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/split_view/maho_split_view_controller.cc",\n'
+                '      "//maho/browser/ui/views/split_view/maho_split_view_controller.h",\n'
+                '      "//maho/browser/extensions/api/maho_split_view_api.cc",\n'
+                '      "//maho/browser/extensions/api/maho_split_view_api.h",\n'
+            ),
+            description=(
+                "Compile the maho.splitView ExtensionFunctions into the "
+                "chrome/browser/ui:ui target, co-located with "
+                "MahoSplitViewController"
+            ),
+            guard='"//maho/browser/extensions/api/maho_split_view_api.cc"',
+        ),
         Replacement(
             old=(
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h",\n'
@@ -1186,6 +1363,103 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     # ── browser_view.cc ───────────────────────────────────────────────────────
     "chrome/browser/ui/views/frame/browser_view.cc": [
         Replacement(
+            old=(
+                "bool BrowserView::AppUsesWindowControlsOverlay() const {\n"
+                "  return browser()->app_controller() &&\n"
+                "         browser()->app_controller()->AppUsesWindowControlsOverlay();\n"
+                "}\n"
+            ),
+            new=(
+                "bool BrowserView::AppUsesWindowControlsOverlay() const {\n"
+                "#if BUILDFLAG(IS_WIN)\n"
+                "  // Maho: the Arc main window uses Window Controls Overlay on Windows\n"
+                "  // to overlay the native caption buttons on the frameless,\n"
+                "  // edge-to-edge sidebar + contents layout.\n"
+                "  if (IsMahoArcLayoutActive()) {\n"
+                "    return true;\n"
+                "  }\n"
+                "#endif\n"
+                "  return browser()->app_controller() &&\n"
+                "         browser()->app_controller()->AppUsesWindowControlsOverlay();\n"
+                "}\n"
+            ),
+            description=(
+                "Maho(win): enable Window Controls Overlay for the Arc main window so "
+                "the native caption buttons overlay the frameless edge-to-edge layout"
+            ),
+            guard="// Maho: the Arc main window uses Window Controls Overlay on Windows",
+        ),
+        Replacement(
+            old=(
+                "  bool enabled = should_show_window_controls_overlay_toggle_ &&\n"
+                "                 browser()->app_controller() &&\n"
+                "                 browser()->app_controller()->IsWindowControlsOverlayEnabled();\n"
+            ),
+            new=(
+                "#if BUILDFLAG(IS_WIN)\n"
+                "  const bool maho_wco = IsMahoArcLayoutActive();\n"
+                "#else\n"
+                "  const bool maho_wco = false;\n"
+                "#endif\n"
+                "  bool enabled = maho_wco ||\n"
+                "                 (should_show_window_controls_overlay_toggle_ &&\n"
+                "                  browser()->app_controller() &&\n"
+                "                  browser()->app_controller()->IsWindowControlsOverlayEnabled());\n"
+            ),
+            description=(
+                "Maho(win): allow Window Controls Overlay to be enabled for the Arc "
+                "main window, not only PWA app windows"
+            ),
+            guard="const bool maho_wco = IsMahoArcLayoutActive();",
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::ShowAppMenu() {\n"
+                "  auto* control = ToolbarButtonProvider::From(browser_)->GetAppMenuControl();\n"
+                "  if (!control) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  // Keep the top-of-window views revealed as long as the app menu is visible.\n"
+                "  std::unique_ptr<ImmersiveRevealedLock> revealed_lock =\n"
+                "      ImmersiveModeController::From(browser())->GetRevealedLock(\n"
+                "          ImmersiveModeController::ANIMATE_REVEAL_NO);\n"
+                "\n"
+                "  control->ShowMenu();\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserView::ShowAppMenu() {\n"
+                "#if BUILDFLAG(IS_WIN)\n"
+                "  if (IsMahoArcLayoutActive()) {\n"
+                "    if (auto* maho_sidebar_container =\n"
+                "            views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "                maho_sidebar_container_);\n"
+                "        maho_sidebar_container && maho_sidebar_container->ShowAppMenu()) {\n"
+                "      return;\n"
+                "    }\n"
+                "  }\n"
+                "#endif\n"
+                "  auto* control = ToolbarButtonProvider::From(browser_)->GetAppMenuControl();\n"
+                "  if (!control) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  // Keep the top-of-window views revealed as long as the app menu is visible.\n"
+                "  std::unique_ptr<ImmersiveRevealedLock> revealed_lock =\n"
+                "      ImmersiveModeController::From(browser())->GetRevealedLock(\n"
+                "          ImmersiveModeController::ANIMATE_REVEAL_NO);\n"
+                "\n"
+                "  control->ShowMenu();\n"
+                "}\n"
+            ),
+            description=(
+                "Maho(win): route BrowserView::ShowAppMenu through the visible "
+                "sidebar ellipsis AppMenu in Arc layout, with upstream fallback"
+            ),
+            guard="maho_sidebar_container->ShowAppMenu()",
+        ),
+        Replacement(
             old='#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"\n',
             new=(
                 '#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"\n'
@@ -1213,6 +1487,54 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "for MaybeHandleMultiTabClose"
             ),
             guard='#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"',
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"\n'
+                '#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"\n'
+            ),
+            description=(
+                "Maho R-12: include the generated Lucide vector icons header in "
+                "browser_view.cc for the private Glasses identity"
+            ),
+            guard='#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"',
+        ),
+        Replacement(
+            old=(
+                "  if (GetIsNormalType()) {\n"
+                "    maho_sidebar_container_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoSidebarContainerView>(browser_.get()));\n"
+            ),
+            new=(
+                "  if (GetIsNormalType()) {\n"
+                "    maho_sidebar_container_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoSidebarContainerView>(browser_.get()));\n"
+                "    // Maho R-12: exact primary Incognito injects the decorative\n"
+                "    // Glasses identity and fixed private semantic colors into the\n"
+                "    // already-built sidebar. Regular/Guest/other-OTR are untouched.\n"
+                "    if (Profile* maho_private_profile = browser_->profile();\n"
+                "        maho_private_profile &&\n"
+                "        maho_private_profile->IsIncognitoProfile() &&\n"
+                "        maho_private_profile->IsPrimaryOTRProfile()) {\n"
+                "      if (auto* maho_private_container =\n"
+                "              views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "                  maho_sidebar_container_)) {\n"
+                "        maho_private_container->SetPrivateAppearance(\n"
+                "            ui::ImageModel::FromVectorIcon(\n"
+                "                maho_lucide_icons::kGlassesIcon,\n"
+                "                kMahoColorPrivateIdentityIcon, /*icon_size=*/20),\n"
+                "            kMahoColorPrivateSidebarBackground,\n"
+                "            kMahoColorPrivateSidebarText);\n"
+                "      }\n"
+                "    }\n"
+            ),
+            description=(
+                "Maho R-12: call MahoSidebarContainerView::SetPrivateAppearance "
+                "with the generated Glasses icon + fixed private color ids for "
+                "exact primary Incognito windows"
+            ),
+            guard="maho_private_container->SetPrivateAppearance(",
         ),
         Replacement(
             old='#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n',
@@ -1911,6 +2233,34 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/browser.cc": [
         Replacement(
             old=(
+                '#include "chrome/browser/ui/browser.h"'
+            ),
+            new=(
+                '#include "chrome/browser/ui/browser.h"\n'
+                '#include "maho/browser/maho_browser_main_extra_parts.h"'
+            ),
+            description="Include Maho extra parts in browser.cc",
+        ),
+        Replacement(
+            old=(
+                "  // BrowserWindowFeatures need to be initialized before browser window\n"
+                "  // creation, so that the features can be used in creating components\n"
+                "  // in browser window.\n"
+                "  features_ = std::make_unique<BrowserWindowFeatures>();"
+            ),
+            new=(
+                "  if (auto* maho_parts = MahoBrowserMainExtraParts::GetInstance()) {\n"
+                "    maho_parts->MaybeInitializeForBrowser(this);\n"
+                "  }\n\n"
+                "  // BrowserWindowFeatures need to be initialized before browser window\n"
+                "  // creation, so that the features can be used in creating components\n"
+                "  // in browser window.\n"
+                "  features_ = std::make_unique<BrowserWindowFeatures>();"
+            ),
+            description="Call MaybeInitializeForBrowser before features Init",
+        ),
+        Replacement(
+            old=(
                 "void Browser::TabStripEmpty() {\n"
                 "  // Note: even though the tab strip is empty, the call to Close() may not\n"
                 "  // result in closing this Browser. This can happen in the case of closing\n"
@@ -2037,19 +2387,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  if (tabs.empty()) {\n"
                 "    // Ensure we have a browser to show.  Reuse the existing one if\n"
                 "    // USE_EXISTING selected one above, otherwise create a fresh normal window.\n"
-                "    if (!browser || !browser->is_type_normal()) {\n"
-                "      CHECK(profile_);\n"
-                "      if (Browser::GetCreationStatusForProfile(profile_) ==\n"
-                "          Browser::CreationStatus::kOk) {\n"
-                "        Browser::CreateParams params =\n"
-                "            Browser::CreateParams(profile_, false);\n"
-                "        params.creation_source =\n"
-                "            Browser::CreationSource::kStartupCreator;\n"
-                "        browser = Browser::Create(params);\n"
-                "      }\n"
+                "    // But skip this if login gate is active.\n"
+                "    bool gate_active = false;\n"
+                "    if (profile_ && profile_->GetPrefs()) {\n"
+                "      gate_active = profile_->GetPrefs()->GetBoolean(\"maho.auth.login_gate_active\");\n"
                 "    }\n"
-                "    if (browser) {\n"
-                "      browser->window()->Show();\n"
+                "    if (!gate_active) {\n"
+                "      if (!browser || !browser->is_type_normal()) {\n"
+                "        CHECK(profile_);\n"
+                "        if (Browser::GetCreationStatusForProfile(profile_) ==\n"
+                "            Browser::CreationStatus::kOk) {\n"
+                "          Browser::CreateParams params =\n"
+                "              Browser::CreateParams(profile_, false);\n"
+                "          params.creation_source =\n"
+                "              Browser::CreationSource::kStartupCreator;\n"
+                "          browser = Browser::Create(params);\n"
+                "        }\n"
+                "      }\n"
+                "      if (browser) {\n"
+                "        browser->window()->Show();\n"
+                "      }\n"
                 "    }\n"
                 "  } else {\n"
                 "  // OpenTabsInBrowser requires at least one tab be passed. As a fallback to\n"
@@ -2119,6 +2476,79 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho zero-tab: crash recovery should NOT inject a synthetic NTP",
             guard="Maho zero-tab: crash recovery should NOT inject",
+        ),
+        Replacement(
+            old=(
+                "  // Maho welcome: on first run, open onboarding as a chromeless popup.\n"
+                "  if (tabs.empty()) {\n"
+                "    PrefService* prefs = profile_->GetPrefs();\n"
+                "    if (prefs && !prefs->GetBoolean(\"maho.welcome.completed\")) {\n"
+                "      maho::MahoWelcomeWindow::Show(profile_);\n"
+                "      // No Browser is created — welcome lives in a frameless views::Widget.\n"
+                "      // Returning nullptr is acceptable: callers (MaybeShowSharedTabGroup*)\n"
+                "      // null-check their argument.\n"
+                "      return nullptr;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            new=(
+                "  // Maho login gate: while active (no valid relay session) suppress ALL\n"
+                "  // startup browser creation AND session restore so onboarding shows alone.\n"
+                "  // FinishOnboarding restores-or-creates the browser afterwards. Placed\n"
+                "  // before the SYNCHRONOUS_RESTORE block and DeleteStaleSessionData() so the\n"
+                "  // on-disk session survives for the deferred restore.\n"
+                "  if (PrefService* gate_prefs = profile_->GetPrefs();\n"
+                "      gate_prefs && gate_prefs->GetBoolean(\"maho.auth.login_gate_active\")) {\n"
+                "    maho::MahoWelcomeWindow::Show(profile_);\n"
+                "    return nullptr;\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho login gate: suppress startup browser creation AND session restore "
+                "while login_gate_active, so the returning-user restore path no longer "
+                "shows a browser window behind the onboarding gate"
+            ),
+            guard="Maho login gate: while active (no valid relay session)",
+            idempotent=True,
+        ),
+    ],
+    # ── browser_commands.cc ──────────────────────────────────────────────────
+    "chrome/browser/ui/browser_commands.cc": [
+        Replacement(
+            old='#include "chrome/browser/ui/browser.h"\n',
+            new=(
+                '#include "chrome/browser/ui/browser.h"\n'
+                '#include "maho/browser/ui/views/welcome/maho_welcome_window.h"\n'
+            ),
+            description="Add MahoWelcomeWindow include to browser_commands.cc for login-gate guard",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "void NewEmptyWindow(Profile* profile, bool should_trigger_session_restore) {\n"
+                "  bool off_the_record = profile->IsOffTheRecord();\n"
+            ),
+            new=(
+                "void NewEmptyWindow(Profile* profile, bool should_trigger_session_restore) {\n"
+                "  // Maho login gate: while active, route New Window / dock-reopen to the\n"
+                "  // onboarding gate instead of opening a browser behind it. Covers Cmd+N,\n"
+                "  // the New Window menu, and the macOS dock-reopen path (which funnels\n"
+                "  // through NewEmptyWindow via CreateBrowser in app_controller_mac.mm).\n"
+                "  if (Profile* gate_profile =\n"
+                "          profile ? profile->GetOriginalProfile() : nullptr;\n"
+                "      gate_profile &&\n"
+                "      gate_profile->GetPrefs()->GetBoolean(\"maho.auth.login_gate_active\")) {\n"
+                "    maho::MahoWelcomeWindow::Show(gate_profile);\n"
+                "    return;\n"
+                "  }\n"
+                "  bool off_the_record = profile->IsOffTheRecord();\n"
+            ),
+            description=(
+                "Maho login gate: suppress New Window / dock-reopen while login_gate_active, "
+                "redirecting to the onboarding gate"
+            ),
+            guard="Maho login gate: while active, route New Window",
+            idempotent=True,
         ),
     ],
     # ── session_restore.cc ───────────────────────────────────────────────────
@@ -2427,6 +2857,28 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard='"//maho/browser/ui/tabs:unit_tests"',
         ),
+        Replacement(
+            old='      "//maho/browser:maho_location_bar_views_unittests",\n',
+            new=(
+                '      "//maho/browser:maho_location_bar_views_unittests",\n'
+                '      "//maho/browser:maho_incognito_unittests",\n'
+            ),
+            description=(
+                "Include Maho private context policy unit tests in Chromium unit_tests"
+            ),
+            guard='"//maho/browser:maho_incognito_unittests"',
+        ),
+        Replacement(
+            old='      "//chrome/browser/ui/views/toolbar:browser_tests",\n',
+            new=(
+                '      "//maho/browser/mcp:browser_tests",\n'
+                '      "//chrome/browser/ui/views/toolbar:browser_tests",\n'
+            ),
+            description=(
+                "Include Maho MCP incognito browser tests in Chromium browser_tests"
+            ),
+            guard='"//maho/browser/mcp:browser_tests"',
+        ),
     ],
     "chrome/browser/ui/views/page_action/page_action_properties_provider.cc": [
         Replacement(
@@ -2677,108 +3129,489 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="paint no frame wash under kGlassFrame",
         ),
     ],
-    "chrome/browser/ui/views/frame/browser_frame_view_win.cc": [
+    "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": [
         Replacement(
-            old=(
-                "  caption_button_container_ =\n"
-                "      AddChildView(std::make_unique<BrowserCaptionButtonContainer>(this));\n"
-                "}\n"
-            ),
+            old="#include \"base/memory/raw_ptr.h\"\n",
             new=(
-                "  caption_button_container_ =\n"
-                "      AddChildView(std::make_unique<BrowserCaptionButtonContainer>(this));\n"
-                "  caption_button_container_->SetVisible(false);\n"
-                "}\n"
+                "#include <memory>\n"
+                "\n"
+                "#include \"base/memory/raw_ptr.h\"\n"
             ),
-            description=(
-                "Maho(win): hide native caption buttons at construction; under Arc "
-                "layout the sidebar draws Mac-style traffic lights instead"
+            description="Maho(win): include memory for Arc caption event monitor ownership",
+            guard="#include <memory>\n",
+        ),
+        Replacement(
+            old="#include \"base/scoped_observation.h\"\n",
+            new=(
+                "#include \"base/scoped_observation.h\"\n"
+                "#include \"base/timer/timer.h\"\n"
             ),
-            guard=(
-                "AddChildView(std::make_unique<BrowserCaptionButtonContainer>(this));\n"
-                "  caption_button_container_->SetVisible(false);"
+            description="Maho(win): include timer support for delayed Arc caption hide",
+            guard="#include \"base/timer/timer.h\"",
+        ),
+        Replacement(
+            old="#include \"ui/base/pointer/touch_ui_controller.h\"\n",
+            new=(
+                "#include \"ui/base/pointer/touch_ui_controller.h\"\n"
+                "#include \"ui/events/event_observer.h\"\n"
             ),
+            description="Maho(win): include event observer for Arc caption hover trigger",
+            guard="#include \"ui/events/event_observer.h\"",
         ),
         Replacement(
             old=(
-                "int BrowserFrameViewWin::GetTopInset(bool restored) const {\n"
-                "  if (GetBrowserView()->GetTabStripVisible()) {\n"
-                "    return TopAreaHeight(restored);\n"
-                "  }\n"
-                "  return ShouldBrowserCustomDrawTitlebar(GetBrowserView())\n"
-                "             ? TitlebarHeight(restored)\n"
-                "             : 0;\n"
-                "}\n"
+                "class BrowserFrameViewWin;\n"
+                "class WindowsCaptionButton;\n"
             ),
             new=(
-                "bool BrowserFrameViewWin::IsMahoArcLayoutActive() const {\n"
-                "  const views::View* container = GetBrowserView()->maho_sidebar_container();\n"
-                "  return container && container->GetVisible();\n"
-                "}\n"
+                "class BrowserFrameViewWin;\n"
+                "class WindowsCaptionButton;\n"
                 "\n"
-                "int BrowserFrameViewWin::GetTopInset(bool restored) const {\n"
-                "  if (GetBrowserView()->GetTabStripVisible()) {\n"
-                "    return TopAreaHeight(restored);\n"
-                "  }\n"
-                "  // Maho Arc layout: sidebar owns the client area edge to edge; no titlebar.\n"
-                "  if (IsMahoArcLayoutActive()) {\n"
-                "    return 0;\n"
-                "  }\n"
-                "  return ShouldBrowserCustomDrawTitlebar(GetBrowserView())\n"
-                "             ? TitlebarHeight(restored)\n"
-                "             : 0;\n"
-                "}\n"
+                "namespace views {\n"
+                "class EventMonitor;\n"
+                "}  // namespace views\n"
             ),
-            description=(
-                "Maho(win): zero the frame top inset under Arc layout so the vertical "
-                "sidebar goes edge-to-edge with no native titlebar strip"
-            ),
-            guard="bool BrowserFrameViewWin::IsMahoArcLayoutActive() const {",
+            description="Maho(win): forward declare EventMonitor for Arc caption hover tracking",
+            guard="class EventMonitor;",
         ),
         Replacement(
             old=(
-                "void BrowserFrameViewWin::LayoutCaptionButtons() {\n"
-                "  TRACE_EVENT0(\"views.frame\", \"BrowserFrameViewWin::LayoutCaptionButtons\");\n"
-                "\n"
-                "  caption_button_container_->SetVisible(!browser_widget()->IsFullscreen());\n"
+                "class BrowserCaptionButtonContainer : public views::View,\n"
+                "                                      public views::WidgetObserver {\n"
             ),
             new=(
-                "void BrowserFrameViewWin::LayoutCaptionButtons() {\n"
-                "  TRACE_EVENT0(\"views.frame\", \"BrowserFrameViewWin::LayoutCaptionButtons\");\n"
+                "class BrowserCaptionButtonContainer : public views::View,\n"
+                "                                      public views::WidgetObserver,\n"
+                "                                      public ui::EventObserver {\n"
+            ),
+            description="Maho(win): observe window mouse events for Arc caption reveal",
+            guard="public ui::EventObserver",
+        ),
+        Replacement(
+            old=(
+                "  void OnWidgetBoundsChanged(views::Widget* widget,\n"
+                "                             const gfx::Rect& new_bounds) override;\n"
+            ),
+            new=(
+                "  void OnWidgetBoundsChanged(views::Widget* widget,\n"
+                "                             const gfx::Rect& new_bounds) override;\n"
+                "  void OnWidgetShowStateChanged(views::Widget* widget) override;\n"
+                "  void OnWidgetDestroying(views::Widget* widget) override;\n"
                 "\n"
-                "  if (IsMahoArcLayoutActive()) {\n"
-                "    caption_button_container_->SetVisible(false);\n"
-                "    caption_button_container_->SetBounds(0, 0, 0, 0);\n"
+                "  // ui::EventObserver:\n"
+                "  void OnEvent(const ui::Event& event) override;\n"
+            ),
+            description="Maho(win): reset Arc caption reveal on widget state changes",
+            guard="void OnWidgetShowStateChanged(views::Widget* widget) override;",
+        ),
+        Replacement(
+            old=(
+                "  void UpdateButtonToolTipsForWindowControlsOverlay();\n"
+                "\n"
+                "  const raw_ptr<BrowserFrameViewWin> frame_view_;\n"
+            ),
+            new=(
+                "  void UpdateButtonToolTipsForWindowControlsOverlay();\n"
+                "  bool IsMahoArcCaptionMode() const;\n"
+                "  bool IsMahoArcCaptionTriggerPoint(const gfx::Point& screen_point) const;\n"
+                "  bool IsMahoArcCaptionKeepAlivePoint(const gfx::Point& screen_point) const;\n"
+                "  int GetMahoArcCaptionPreferredWidth() const;\n"
+                "  void RevealMahoArcCaptionButtons();\n"
+                "  void ScheduleHideMahoArcCaptionButtons();\n"
+                "  void HideMahoArcCaptionButtons();\n"
+                "  void ApplyMahoArcCaptionButtonVisibility();\n"
+                "  void UpdateMahoArcCaptionEventMonitor();\n"
+                "\n"
+                "  const raw_ptr<BrowserFrameViewWin> frame_view_;\n"
+            ),
+            description="Maho(win): declare Arc caption reveal helpers",
+            guard="IsMahoArcCaptionTriggerPoint",
+        ),
+        Replacement(
+            old=(
+                "  base::ScopedObservation<views::Widget, views::WidgetObserver>\n"
+                "      widget_observation_{this};\n"
+            ),
+            new=(
+                "  bool maho_arc_caption_revealed_ = false;\n"
+                "  base::OneShotTimer maho_arc_caption_hide_timer_;\n"
+                "  std::unique_ptr<views::EventMonitor> maho_arc_caption_event_monitor_;\n"
+                "\n"
+                "  base::ScopedObservation<views::Widget, views::WidgetObserver>\n"
+                "      widget_observation_{this};\n"
+            ),
+            description="Maho(win): store Arc caption reveal state, timer, and monitor",
+            guard="maho_arc_caption_event_monitor_",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": [
+        Replacement(
+            old="#include <memory>\n",
+            new=(
+                "#include <algorithm>\n"
+                "#include <memory>\n"
+                "#include <optional>\n"
+                "#include <set>\n"
+            ),
+            description="Maho(win): include containers/utilities for Arc caption reveal",
+            guard="#include <set>\n",
+        ),
+        Replacement(
+            old="#include \"chrome/browser/ui/views/frame/windows_caption_button.h\"\n",
+            new=(
+                "#include \"chrome/browser/ui/views/frame/windows_caption_button.h\"\n"
+                "#include \"base/time/time.h\"\n"
+                "#include \"ui/events/event.h\"\n"
+                "#include \"ui/gfx/scoped_animation_duration_scale_mode.h\"\n"
+                "#include \"ui/views/event_monitor.h\"\n"
+            ),
+            description="Maho(win): include event/timer APIs for Arc caption reveal",
+            guard="#include \"ui/views/event_monitor.h\"",
+        ),
+        Replacement(
+            old=(
+                "namespace {\n"
+                "\n"
+                "std::unique_ptr<WindowsCaptionButton> CreateCaptionButton(\n"
+            ),
+            new=(
+                "namespace {\n"
+                "\n"
+                "constexpr int kMahoArcCaptionRevealTriggerWidth = 96;\n"
+                "constexpr int kMahoArcCaptionRevealTriggerHeight = 8;\n"
+                "constexpr base::TimeDelta kMahoArcCaptionHideDelay =\n"
+                "    base::Milliseconds(500);\n"
+                "\n"
+                "std::unique_ptr<WindowsCaptionButton> CreateCaptionButton(\n"
+            ),
+            description="Maho(win): define Arc caption reveal trigger and hide delay",
+            guard="kMahoArcCaptionRevealTriggerWidth",
+        ),
+        Replacement(
+            old=(
+                "  DCHECK(HitTestPoint(point))\n"
+                "      << \"should only be called with a point inside this view's bounds\";\n"
+                "  // BrowserView covers the frame view when Window Controls Overlay is enabled.\n"
+            ),
+            new=(
+                "  DCHECK(HitTestPoint(point))\n"
+                "      << \"should only be called with a point inside this view's bounds\";\n"
+                "  if (IsMahoArcCaptionMode() && !maho_arc_caption_revealed_) {\n"
+                "    return HTNOWHERE;\n"
+                "  }\n"
+                "  // BrowserView covers the frame view when Window Controls Overlay is enabled.\n"
+            ),
+            description="Maho(win): hidden Arc caption container does not block hit tests",
+            guard="!maho_arc_caption_revealed_",
+        ),
+        Replacement(
+            old=(
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() &&\n"
+                "      (HitTestCaptionButton(minimize_button_, point) ||\n"
+                "       HitTestCaptionButton(maximize_button_, point) ||\n"
+                "       HitTestCaptionButton(restore_button_, point) ||\n"
+                "       HitTestCaptionButton(close_button_, point))) {\n"
+                "    return HTCLIENT;\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (!frame_view_->GetBrowserView()->IsMahoArcLayoutActive() &&\n"
+                "      frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() &&\n"
+                "      (HitTestCaptionButton(minimize_button_, point) ||\n"
+                "       HitTestCaptionButton(maximize_button_, point) ||\n"
+                "       HitTestCaptionButton(restore_button_, point) ||\n"
+                "       HitTestCaptionButton(close_button_, point))) {\n"
+                "    return HTCLIENT;\n"
+                "  }\n"
+            ),
+            description="Maho(win): let revealed Arc caption buttons return native HT codes for Snap Layout",
+            guard="!frame_view_->GetBrowserView()->IsMahoArcLayoutActive() &&",
+        ),
+        Replacement(
+            old=(
+                "  UpdateButtonToolTipsForWindowControlsOverlay();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::OnThemeChanged() {\n"
+            ),
+            new=(
+                "  UpdateButtonToolTipsForWindowControlsOverlay();\n"
+                "  UpdateMahoArcCaptionEventMonitor();\n"
+                "  ApplyMahoArcCaptionButtonVisibility();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::OnThemeChanged() {\n"
+            ),
+            description="Maho(win): refresh Arc caption monitor when WCO changes",
+            guard="UpdateMahoArcCaptionEventMonitor();\n  ApplyMahoArcCaptionButtonVisibility();",
+        ),
+        Replacement(
+            old=(
+                "  DCHECK(!widget_observation_.IsObserving());\n"
+                "  widget_observation_.Observe(widget);\n"
+                "\n"
+                "  UpdateButtons();\n"
+            ),
+            new=(
+                "  DCHECK(!widget_observation_.IsObserving());\n"
+                "  widget_observation_.Observe(widget);\n"
+                "  UpdateMahoArcCaptionEventMonitor();\n"
+                "\n"
+                "  UpdateButtons();\n"
+            ),
+            description="Maho(win): start Arc caption event monitor with widget lifecycle",
+            guard="  UpdateMahoArcCaptionEventMonitor();\n\n  UpdateButtons();",
+        ),
+        Replacement(
+            old=(
+                "void BrowserCaptionButtonContainer::RemovedFromWidget() {\n"
+                "  DCHECK(widget_observation_.IsObserving());\n"
+                "  widget_observation_.Reset();\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserCaptionButtonContainer::RemovedFromWidget() {\n"
+                "  maho_arc_caption_event_monitor_.reset();\n"
+                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "  maho_arc_caption_revealed_ = false;\n"
+                "  DCHECK(widget_observation_.IsObserving());\n"
+                "  widget_observation_.Reset();\n"
+                "}\n"
+            ),
+            description="Maho(win): stop Arc caption monitor and timer when removed",
+            guard="maho_arc_caption_event_monitor_.reset();\n  maho_arc_caption_hide_timer_.Stop();",
+        ),
+        Replacement(
+            old=(
+                "void BrowserCaptionButtonContainer::OnWidgetBoundsChanged(\n"
+                "    views::Widget* widget,\n"
+                "    const gfx::Rect& new_bounds) {\n"
+                "  UpdateButtons();\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserCaptionButtonContainer::OnWidgetBoundsChanged(\n"
+                "    views::Widget* widget,\n"
+                "    const gfx::Rect& new_bounds) {\n"
+                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "  maho_arc_caption_revealed_ = false;\n"
+                "  UpdateButtons();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::OnWidgetShowStateChanged(\n"
+                "    views::Widget* widget) {\n"
+                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "  maho_arc_caption_revealed_ = false;\n"
+                "  UpdateMahoArcCaptionEventMonitor();\n"
+                "  UpdateButtons();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::OnWidgetDestroying(\n"
+                "    views::Widget* widget) {\n"
+                "  maho_arc_caption_event_monitor_.reset();\n"
+                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::OnEvent(const ui::Event& event) {\n"
+                "  if (!IsMahoArcCaptionMode() || !maho_arc_caption_event_monitor_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  const gfx::Point screen_point =\n"
+                "      maho_arc_caption_event_monitor_->GetLastMouseLocation();\n"
+                "  if (IsMahoArcCaptionTriggerPoint(screen_point)) {\n"
+                "    RevealMahoArcCaptionButtons();\n"
+                "    return;\n"
+                "  }\n"
+                "  if (maho_arc_caption_revealed_ &&\n"
+                "      IsMahoArcCaptionKeepAlivePoint(screen_point)) {\n"
+                "    maho_arc_caption_hide_timer_.Stop();\n"
+                "    return;\n"
+                "  }\n"
+                "  ScheduleHideMahoArcCaptionButtons();\n"
+                "}\n"
+            ),
+            description="Maho(win): implement Arc caption event/state lifecycle",
+            guard="void BrowserCaptionButtonContainer::OnWidgetShowStateChanged(",
+        ),
+        Replacement(
+            old=(
+                "  if (!ShouldBrowserCustomDrawTitlebar(frame_view_->GetBrowserView())) {\n"
+                "    minimize_button_->SetVisible(false);\n"
+                "    maximize_button_->SetVisible(false);\n"
+                "    restore_button_->SetVisible(false);\n"
+                "    close_button_->SetVisible(false);\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (!ShouldBrowserCustomDrawTitlebar(frame_view_->GetBrowserView())) {\n"
+                "    minimize_button_->SetVisible(false);\n"
+                "    maximize_button_->SetVisible(false);\n"
+                "    restore_button_->SetVisible(false);\n"
+                "    close_button_->SetVisible(false);\n"
+                "    ApplyMahoArcCaptionButtonVisibility();\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            description="Maho(win): keep Arc caption hidden even when titlebar state hides buttons",
+            guard="ApplyMahoArcCaptionButtonVisibility();\n    return;",
+        ),
+        Replacement(
+            old=(
+                "  restore_button_->SetEnabled(!is_touch);\n"
+                "  maximize_button_->SetEnabled(!is_touch || !is_maximized);\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::\n"
+            ),
+            new=(
+                "  restore_button_->SetEnabled(!is_touch);\n"
+                "  maximize_button_->SetEnabled(!is_touch || !is_maximized);\n"
+                "  ApplyMahoArcCaptionButtonVisibility();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::\n"
+            ),
+            description="Maho(win): apply Arc caption reveal visibility after normal button state",
+            guard="maximize_button_->SetEnabled(!is_touch || !is_maximized);\n  ApplyMahoArcCaptionButtonVisibility();",
+        ),
+        Replacement(
+            old=(
+                "void BrowserCaptionButtonContainer::\n"
+                "    UpdateButtonToolTipsForWindowControlsOverlay() {\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {\n"
+            ),
+            new=(
+                "bool BrowserCaptionButtonContainer::IsMahoArcCaptionMode() const {\n"
+                "  return frame_view_->GetBrowserView()->IsMahoArcLayoutActive();\n"
+                "}\n"
+                "\n"
+                "bool BrowserCaptionButtonContainer::IsMahoArcCaptionTriggerPoint(\n"
+                "    const gfx::Point& screen_point) const {\n"
+                "  views::Widget* widget = GetWidget();\n"
+                "  if (!widget || widget->IsFullscreen()) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  gfx::Rect trigger_bounds = GetBoundsInScreen();\n"
+                "  if (trigger_bounds.IsEmpty()) {\n"
+                "    trigger_bounds = widget->GetWindowBoundsInScreen();\n"
+                "  }\n"
+                "  const int trigger_width =\n"
+                "      std::min(kMahoArcCaptionRevealTriggerWidth,\n"
+                "               trigger_bounds.width());\n"
+                "  if (trigger_width <= 0 || trigger_bounds.height() <= 0) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  trigger_bounds.set_x(trigger_bounds.right() - trigger_width);\n"
+                "  trigger_bounds.set_width(trigger_width);\n"
+                "  trigger_bounds.set_height(std::min(kMahoArcCaptionRevealTriggerHeight,\n"
+                "                                      trigger_bounds.height()));\n"
+                "  return trigger_bounds.Contains(screen_point);\n"
+                "}\n"
+                "\n"
+                "bool BrowserCaptionButtonContainer::IsMahoArcCaptionKeepAlivePoint(\n"
+                "    const gfx::Point& screen_point) const {\n"
+                "  return GetBoundsInScreen().Contains(screen_point) ||\n"
+                "         IsMahoArcCaptionTriggerPoint(screen_point);\n"
+                "}\n"
+                "\n"
+                "int BrowserCaptionButtonContainer::GetMahoArcCaptionPreferredWidth()\n"
+                "    const {\n"
+                "  int width = 0;\n"
+                "  if (frame_view_->GetBrowserView()->CanMinimize()) {\n"
+                "    width += minimize_button_->GetPreferredSize().width();\n"
+                "  }\n"
+                "  if (frame_view_->GetBrowserView()->CanMaximize()) {\n"
+                "    width += (frame_view_->IsMaximized() ? restore_button_\n"
+                "                                       : maximize_button_)\n"
+                "                 ->GetPreferredSize()\n"
+                "                 .width();\n"
+                "  }\n"
+                "  width += close_button_->GetPreferredSize().width();\n"
+                "  return std::max(width, kMahoArcCaptionRevealTriggerWidth);\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::RevealMahoArcCaptionButtons() {\n"
+                "  if (!IsMahoArcCaptionMode() ||\n"
+                "      frame_view_->browser_widget()->IsFullscreen()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "  if (maho_arc_caption_revealed_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  maho_arc_caption_revealed_ = true;\n"
+                "  UpdateButtons();\n"
+                "  frame_view_->InvalidateLayout();\n"
+                "  frame_view_->DeprecatedLayoutImmediately();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::ScheduleHideMahoArcCaptionButtons() {\n"
+                "  if (!maho_arc_caption_revealed_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  if (gfx::ScopedAnimationDurationScaleMode::is_zero()) {\n"
+                "    HideMahoArcCaptionButtons();\n"
+                "    return;\n"
+                "  }\n"
+                "  maho_arc_caption_hide_timer_.Start(\n"
+                "      FROM_HERE, kMahoArcCaptionHideDelay, this,\n"
+                "      &BrowserCaptionButtonContainer::HideMahoArcCaptionButtons);\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::HideMahoArcCaptionButtons() {\n"
+                "  if (!maho_arc_caption_revealed_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "  maho_arc_caption_revealed_ = false;\n"
+                "  UpdateButtons();\n"
+                "  frame_view_->InvalidateLayout();\n"
+                "  frame_view_->DeprecatedLayoutImmediately();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::\n"
+                "    ApplyMahoArcCaptionButtonVisibility() {\n"
+                "  if (!IsMahoArcCaptionMode()) {\n"
+                "    SetCanProcessEventsWithinSubtree(true);\n"
+                "    SetPreferredSize(std::nullopt);\n"
                 "    return;\n"
                 "  }\n"
                 "\n"
-                "  caption_button_container_->SetVisible(!browser_widget()->IsFullscreen());\n"
-            ),
-            description=(
-                "Maho(win): under Arc layout give the caption-button container empty "
-                "bounds so its NonClientHitTest never steals clicks from web content"
-            ),
-            guard="    caption_button_container_->SetBounds(0, 0, 0, 0);",
-        ),
-    ],
-    "chrome/browser/ui/views/frame/browser_frame_view_win.h": [
-        Replacement(
-            old=(
-                "  void LayoutCaptionButtons();\n"
-                "  void LayoutClientView();\n"
-                "  void LayoutWebAppWindowTitle(const gfx::Rect& available_space,\n"
-            ),
-            new=(
-                "  void LayoutCaptionButtons();\n"
-                "  void LayoutClientView();\n"
+                "  const bool revealed = maho_arc_caption_revealed_ &&\n"
+                "                        !frame_view_->browser_widget()->IsFullscreen();\n"
+                "  if (!revealed) {\n"
+                "    minimize_button_->SetVisible(false);\n"
+                "    maximize_button_->SetVisible(false);\n"
+                "    restore_button_->SetVisible(false);\n"
+                "    close_button_->SetVisible(false);\n"
+                "  }\n"
+                "  SetCanProcessEventsWithinSubtree(revealed);\n"
+                "  SetPreferredSize(gfx::Size(\n"
+                "      revealed ? GetMahoArcCaptionPreferredWidth()\n"
+                "               : kMahoArcCaptionRevealTriggerWidth,\n"
+                "      0));\n"
+                "}\n"
                 "\n"
-                "  // True when Maho's Arc sidebar layout owns the client area, so the\n"
-                "  // frame reserves no titlebar strip and shows no native caption buttons.\n"
-                "  bool IsMahoArcLayoutActive() const;\n"
-                "  void LayoutWebAppWindowTitle(const gfx::Rect& available_space,\n"
+                "void BrowserCaptionButtonContainer::UpdateMahoArcCaptionEventMonitor() {\n"
+                "  views::Widget* const widget = GetWidget();\n"
+                "  if (!widget || !IsMahoArcCaptionMode()) {\n"
+                "    maho_arc_caption_event_monitor_.reset();\n"
+                "    return;\n"
+                "  }\n"
+                "  if (!maho_arc_caption_event_monitor_) {\n"
+                "    maho_arc_caption_event_monitor_ = views::EventMonitor::CreateWindowMonitor(\n"
+                "        this, widget->GetNativeWindow(),\n"
+                "        {ui::EventType::kMouseMoved, ui::EventType::kMouseExited});\n"
+                "  }\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::\n"
+                "    UpdateButtonToolTipsForWindowControlsOverlay() {\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {\n"
             ),
-            description="Maho(win): declare BrowserFrameViewWin::IsMahoArcLayoutActive()",
-            guard="  bool IsMahoArcLayoutActive() const;",
+            description="Maho(win): add Arc caption reveal helpers before WCO tooltip updater",
+            guard="void BrowserCaptionButtonContainer::RevealMahoArcCaptionButtons()",
         ),
     ],
     "chrome/app/chrome_main_delegate.cc": [
@@ -2953,7 +3786,7 @@ def default_chromium_src() -> Path:
     return repo_root().parent / "chromium" / "src"
 
 
-def apply_replacements(target_file: Path, replacements: list[Replacement]) -> tuple[bool, list[str]]:
+def apply_replacements(target_file: Path, replacements: list[Replacement], dry_run: bool = False) -> tuple[bool, list[str]]:
     text = target_file.read_text()
     changed = False
     applied: list[str] = []
@@ -2981,7 +3814,7 @@ def apply_replacements(target_file: Path, replacements: list[Replacement]) -> tu
         changed = True
         applied.append(f"patched: {replacement.description}")
 
-    if changed:
+    if changed and not dry_run:
         target_file.write_text(text)
 
     return changed, applied
@@ -3003,7 +3836,25 @@ def main() -> int:
         default=host_platform(),
         help="Target platform for per-file filtering (default: auto-detected host)",
     )
+    parser.add_argument(
+        "--list-targets",
+        action="store_true",
+        help="Print the sorted, NUL-separated targets with 'chromium/src/' prefix.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate the overrides without writing to files.",
+    )
     args = parser.parse_args()
+
+    if args.list_targets:
+        targets_to_print = sorted([
+            f"chromium/src/{k}" for k in REPLACEMENTS.keys()
+            if k != "chrome/browser/ui/views/frame/multi_contents_resize_area.cc"
+        ])
+        sys.stdout.write("".join(f"{t}\0" for t in targets_to_print))
+        return 0
 
     chromium_src = args.chromium_src.resolve()
     if not chromium_src.exists():
@@ -3025,7 +3876,7 @@ def main() -> int:
             print(f"target file not found: {target_file}", file=sys.stderr)
             return 1
 
-        changed, applied = apply_replacements(target_file, replacements)
+        changed, applied = apply_replacements(target_file, replacements, dry_run=args.dry_run)
         any_changed = any_changed or changed
         print(relative_path)
         for line in applied:

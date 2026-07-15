@@ -68,3 +68,6 @@ visual-qa-output/
 # Visual QA scratch artifacts (Playwright screenshots, ad-hoc captures)
 /.playwright-mcp/
 /maho-vqa/
+
+# Local signing keys (never commit) — migrate to 1Password when team grows
+.secrets/

@@ -15,6 +15,8 @@ enum VoiceSearchState: Equatable {
 @Observable
 final class VoiceSearchManager {
     var state: VoiceSearchState = .idle
+    var audioLevel: Float = 0
+    var transcript: String = ""
 
     private let log = Logger(subsystem: "dev.maho.browser", category: "VoiceSearch")
     private var audioEngine: AVAudioEngine?
@@ -95,6 +97,7 @@ final class VoiceSearchManager {
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
+        audioLevel = 0
 
         if state == .listening {
             state = .idle
@@ -103,6 +106,8 @@ final class VoiceSearchManager {
 
     private func startAudioSession(recognizer: SFSpeechRecognizer) throws {
         stopListening()
+        transcript = ""
+        audioLevel = 0
 
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
@@ -113,7 +118,9 @@ final class VoiceSearchManager {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
+        // On-device only when supported; else server fallback. Forcing it true on
+        // the simulator/unsupported locales fails with "Failed to initialize recognizer".
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
         self.recognitionRequest = request
 
         state = .listening
@@ -125,6 +132,7 @@ final class VoiceSearchManager {
 
                 if let result {
                     let text = result.bestTranscription.formattedString
+                    self.transcript = text
                     self.resetSilenceTimer()
 
                     if result.isFinal {
@@ -149,8 +157,15 @@ final class VoiceSearchManager {
 
         let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             request.append(buffer)
+            let rmsLevel = Self.normalizedRMSLevel(from: buffer)
+
+            Task { @MainActor [weak self] in
+                guard let self, self.state == .listening else { return }
+                let smoothingWeight: Float = 0.22
+                self.audioLevel = (self.audioLevel * (1 - smoothingWeight)) + (rmsLevel * smoothingWeight)
+            }
         }
 
         engine.prepare()
@@ -183,6 +198,22 @@ final class VoiceSearchManager {
 
     func reset() {
         stopListening()
+        transcript = ""
         state = .idle
+    }
+
+    nonisolated private static func normalizedRMSLevel(from buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData?[0] else { return 0 }
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return 0 }
+
+        var sumSquares: Float = 0
+        for frame in 0..<frameLength {
+            let sample = channelData[frame]
+            sumSquares += sample * sample
+        }
+
+        let rms = sqrtf(sumSquares / Float(frameLength))
+        return min(max(rms * 18, 0), 1)
     }
 }

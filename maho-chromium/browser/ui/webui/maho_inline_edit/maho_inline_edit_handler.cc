@@ -27,10 +27,12 @@ namespace {
 }  // namespace
 
 MahoInlineEditHandler::MahoInlineEditHandler(
+    std::unique_ptr<MahoPrivateContextToken> token,
     Browser* browser,
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-    : browser_(browser),
+    : token_(std::move(token)),
+      browser_(browser),
       prefs_(prefs),
       llm_client_(prefs, std::move(url_loader_factory), nullptr, false) {
   DCHECK(prefs_);
@@ -38,6 +40,10 @@ MahoInlineEditHandler::MahoInlineEditHandler(
 
 MahoInlineEditHandler::~MahoInlineEditHandler() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+bool MahoInlineEditHandler::IsAiAllowed() {
+  return token_ && token_->Revalidate(MahoPrivateCapability::kAI);
 }
 
 content::WebContents* MahoInlineEditHandler::GetActiveWebContents() {
@@ -70,6 +76,11 @@ void MahoInlineEditHandler::InjectScriptIntoActiveTab() {
 void MahoInlineEditHandler::GetSelectedText(GetSelectedTextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!IsAiAllowed()) {
+    std::move(callback).Run("");
+    return;
+  }
+
   content::WebContents* wc = GetActiveWebContents();
   if (!wc) {
     std::move(callback).Run("");
@@ -99,6 +110,11 @@ void MahoInlineEditHandler::RequestEdit(const std::string& text,
                                         const std::string& instruction,
                                         RequestEditCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!IsAiAllowed()) {
+    std::move(callback).Run("");
+    return;
+  }
 
   if (!llm_client_.HasConfiguredCredential()) {
     std::move(callback).Run("No API key configured.");
@@ -136,6 +152,11 @@ void MahoInlineEditHandler::OnRustEventResponse(
     RequestEditCallback callback,
     std::string rust_response_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!IsAiAllowed()) {
+    std::move(callback).Run("");
+    return;
+  }
 
   auto parsed =
       base::JSONReader::Read(rust_response_json, base::JSON_PARSE_RFC);
@@ -186,6 +207,10 @@ void MahoInlineEditHandler::OnRustEventResponse(
 void MahoInlineEditHandler::StartLlmRequest(
     base::ListValue prompt_messages,
     RequestEditCallback callback) {
+  if (!IsAiAllowed()) {
+    std::move(callback).Run("");
+    return;
+  }
   pending_callback_ = std::move(callback);
 
   MahoAiLlmClient::CompletionRequest request;
@@ -201,6 +226,11 @@ void MahoInlineEditHandler::StartLlmRequest(
 void MahoInlineEditHandler::FinalizeStreaming(
     MahoAiLlmClient::CompletionResult result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!IsAiAllowed()) {
+    pending_callback_.Reset();
+    return;
+  }
 
   if (pending_callback_) {
     std::move(pending_callback_).Run(result.full_text);
@@ -227,6 +257,10 @@ void MahoInlineEditHandler::HandleLlmError(const std::string& error) {
 
 void MahoInlineEditHandler::ApplyEdit(const std::string& edited_text) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!IsAiAllowed()) {
+    return;
+  }
 
   std::string escaped = edited_text;
   base::ReplaceSubstringsAfterOffset(&escaped, 0, "\\", "\\\\");

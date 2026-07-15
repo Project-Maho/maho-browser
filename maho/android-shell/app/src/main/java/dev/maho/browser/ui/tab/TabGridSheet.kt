@@ -22,6 +22,7 @@ import dev.maho.browser.models.SpaceViewModel
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.space.SpaceChipRow
+import dev.maho.browser.ui.space.SpaceSwitcherSheet
 import dev.maho.browser.ui.theme.BrowserShellTheme
 
 @Composable
@@ -55,6 +56,8 @@ fun TabGridSheet(
         containerColor = shellColors.overlaySurface,
         contentColor = shellColors.textPrimary,
     ) {
+        var showSpaceSwitcher by remember { mutableStateOf(false) }
+
         SpaceChipRow(
             spaces = spaces,
             activeSpaceId = activeSpaceId,
@@ -64,10 +67,22 @@ fun TabGridSheet(
                 spaces = BridgeSpaces.getSpaceViewModels()
                 tabs = BridgeTabs.getTabViewModels()
             },
+            onOverflowClick = { showSpaceSwitcher = true },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         )
+
+        if (showSpaceSwitcher) {
+            SpaceSwitcherSheet(
+                onDismiss = { showSpaceSwitcher = false },
+                onSpaceSelected = { spaceId ->
+                    activeSpaceId = spaceId
+                    spaces = BridgeSpaces.getSpaceViewModels()
+                    tabs = BridgeTabs.getTabViewModels()
+                }
+            )
+        }
 
         TabGridToolbar(
             tabCount = filteredTabs.size,
@@ -93,6 +108,7 @@ fun TabGridSheet(
 
         TabGrid(
             tabs = filteredTabs,
+            spaceId = activeSpaceId,
             activeTabId = activeTabId,
             isIncognito = false,
             onTabSelected = { tabId ->

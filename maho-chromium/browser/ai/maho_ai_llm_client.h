@@ -105,7 +105,8 @@ class MahoAiLlmClient {
       PrefService* prefs,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const os_crypt_async::Encryptor* encryptor,
-      bool provider_adapter_v2_enabled);
+      bool provider_adapter_v2_enabled,
+      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>());
   MahoAiLlmClient(const MahoAiLlmClient&) = delete;
   MahoAiLlmClient& operator=(const MahoAiLlmClient&) = delete;
   ~MahoAiLlmClient();
@@ -167,6 +168,8 @@ class MahoAiLlmClient {
   std::optional<PendingRequest> pending_request_;
   CompletionRequest active_request_;
   bool is_retry_ = false;
+
+  base::RepeatingCallback<bool()> ai_gate_;
 
   base::WeakPtrFactory<MahoAiLlmClient> oscrypt_weak_factory_{this};
   base::WeakPtrFactory<MahoAiLlmClient> weak_factory_{this};

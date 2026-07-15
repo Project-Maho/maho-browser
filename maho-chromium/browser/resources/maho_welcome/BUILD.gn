@@ -3,11 +3,46 @@ import("//ui/webui/resources/tools/generate_grd.gni")
 
 assert(!is_android)
 
+import("//maho/build/templates/tailwind_css.gni")
+
+tailwind_css("build_tailwind") {
+  input = "react/theme/app.css"
+  output = "$target_gen_dir/app.generated.css"
+  sources = [
+    "../maho_common/react/theme/tokens.css",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/label.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "react/app.tsx",
+    "react/pages/appearance.tsx",
+    "react/pages/completion.tsx",
+    "react/pages/essentials.tsx",
+    "react/pages/import-data.tsx",
+    "react/pages/search-engine.tsx",
+    "react/pages/space-theme.tsx",
+    "react/pages/welcome-splash.tsx",
+    "react/theme/app.css",
+  ]
+}
+
 action("bundle_react") {
   script = "//third_party/node/node.py"
   inputs = [
     "//third_party/node/node.py",
+    "../maho_common/react/icons/lucide.ts",
+    "../maho_common/react/lib/utils.ts",
     "../maho_common/react/store_utils.ts",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/label.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/tabs.tsx",
     "maho_welcome.mojom-webui.js.d.ts",
     "react/app.tsx",
     "react/pages/welcome-splash.tsx",
@@ -33,9 +68,15 @@ action("bundle_react") {
 generate_grd("bundle_grdp") {
   grd_prefix = "maho_welcome_bundle"
   out_grd = "$target_gen_dir/maho_welcome_bundle.grdp"
-  input_files = [ "app_bundle.js" ]
+  input_files = [
+    "app_bundle.js",
+    "app.generated.css",
+  ]
   input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
-  deps = [ ":bundle_react" ]
+  deps = [
+    ":bundle_react",
+    ":build_tailwind",
+  ]
 }
 
 build_webui("build") {
@@ -43,7 +84,6 @@ build_webui("build") {
 
   static_files = [
     "welcome.html",
-    "welcome.css",
     "icons/essentials/obsidian.svg",
     "icons/essentials/discord.svg",
     "icons/essentials/trello.svg",

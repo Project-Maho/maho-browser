@@ -10,6 +10,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -19,15 +20,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import androidx.core.content.ContextCompat
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
+import dev.maho.browser.ui.voice.VoiceAssistantOverlay
 
 @Composable
 fun VoiceSearchButton(
@@ -35,38 +41,77 @@ fun VoiceSearchButton(
     onResult: (String) -> Unit,
     modifier: Modifier = Modifier,
     startListeningOnLaunch: Boolean = false,
+    compact: Boolean = false,
+    buttonModifier: Modifier = Modifier,
+    iconModifier: Modifier = Modifier,
+    idleTint: Color? = null,
+    listeningTint: Color? = null,
+    errorTint: Color? = null,
 ) {
     val context = LocalContext.current
+    var showAssistantOverlay by rememberSaveable { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
+            showAssistantOverlay = true
+            manager.reset()
             manager.startListening()
         } else {
+            showAssistantOverlay = false
             manager.reset()
+        }
+    }
+
+    fun requestVoiceCapture() {
+        showAssistantOverlay = true
+        val permission = Manifest.permission.RECORD_AUDIO
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            permission,
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            if (manager.state != VoiceSearchState.Listening && manager.state != VoiceSearchState.Processing) {
+                manager.reset()
+                manager.startListening()
+            }
+        } else {
+            permissionLauncher.launch(permission)
         }
     }
 
     LaunchedEffect(startListeningOnLaunch) {
         if (startListeningOnLaunch && manager.state == VoiceSearchState.Idle) {
-            val permission = Manifest.permission.RECORD_AUDIO
-            if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
-                manager.startListening()
-            } else {
-                permissionLauncher.launch(permission)
-            }
+            requestVoiceCapture()
         }
     }
 
-    LaunchedEffect(manager.resultText) {
-        if (manager.resultText.isNotEmpty()) {
-            onResult(manager.resultText)
+    LaunchedEffect(manager.finalResultText) {
+        val finalText = manager.finalResultText
+        if (finalText.isNotEmpty()) {
+            onResult(finalText)
+            showAssistantOverlay = false
             manager.reset()
         }
     }
 
     val isListening = manager.state == VoiceSearchState.Listening
     val isError = manager.state == VoiceSearchState.Error
+    val buttonClick: () -> Unit = {
+        when (manager.state) {
+            VoiceSearchState.Listening,
+            VoiceSearchState.Processing,
+            -> showAssistantOverlay = true
+            else -> requestVoiceCapture()
+        }
+    }
+    val iconTint = when {
+        isListening -> listeningTint ?: MaterialTheme.colorScheme.primary
+        isError -> errorTint ?: MaterialTheme.colorScheme.error
+        else -> idleTint ?: MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val contentDescription = if (isListening) "Stop voice search" else "Voice search"
 
     Box(contentAlignment = Alignment.Center, modifier = modifier) {
         if (isListening) {
@@ -91,35 +136,47 @@ fun VoiceSearchButton(
             )
         }
 
-        IconButton(
-            onClick = {
-                when (manager.state) {
-                    VoiceSearchState.Listening -> manager.stopListening()
-                    else -> {
-                        manager.reset()
-                        val hasPermission = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.RECORD_AUDIO,
-                        ) == PackageManager.PERMISSION_GRANTED
-
-                        if (hasPermission) {
-                            manager.startListening()
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
-                }
-            },
-        ) {
-            Icon(
-                painter = painterResource(id = if (isError) MahoIcon.MicOff.drawableRes else MahoIcon.Mic.drawableRes),
-                contentDescription = if (isListening) "Stop voice search" else "Voice search",
-                tint = when {
-                    isListening -> MaterialTheme.colorScheme.primary
-                    isError -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
+        if (compact) {
+            Box(
+                modifier = buttonModifier.clickable(
+                    role = Role.Button,
+                    onClick = buttonClick,
+                ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = if (isError) MahoIcon.MicOff.drawableRes else MahoIcon.Mic.drawableRes),
+                    contentDescription = contentDescription,
+                    modifier = iconModifier,
+                    tint = iconTint,
+                )
+            }
+        } else {
+            IconButton(
+                onClick = buttonClick,
+                modifier = buttonModifier,
+            ) {
+                Icon(
+                    painter = painterResource(id = if (isError) MahoIcon.MicOff.drawableRes else MahoIcon.Mic.drawableRes),
+                    contentDescription = contentDescription,
+                    modifier = iconModifier,
+                    tint = iconTint,
+                )
+            }
         }
+    }
+
+    if (showAssistantOverlay) {
+        VoiceAssistantOverlay(
+            manager = manager,
+            onDismiss = {
+                manager.stopListening()
+                manager.reset()
+                showAssistantOverlay = false
+            },
+            onRetry = {
+                requestVoiceCapture()
+            },
+        )
     }
 }

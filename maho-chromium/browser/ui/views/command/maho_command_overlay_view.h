@@ -100,6 +100,10 @@ class MahoCommandOverlayView : public views::View,
   }
   CommandOverlayMode CurrentModeForTesting() const { return mode_; }
   CommandOverlayMode OriginModeForTesting() const { return origin_mode_; }
+  void SetContextClassForTesting(MahoPrivateContextClass klass) {
+    context_class_ = klass;
+  }
+  bool AiIngressAllowedForTesting() const { return AiIngressAllowed(); }
   static int GetPanelCornerRadiusForTesting();
   static int GetSearchRowCornerRadiusForTesting();
   static int GetTopbarHorizontalInsetForTesting();
@@ -141,6 +145,10 @@ class MahoCommandOverlayView : public views::View,
   void ExitSiteSearchMode();
   void EnterAIMode();
   void ExitAIMode();
+  // AI ingress (ai+Tab, AI-mode Enter, pending-query pref write) is denied in
+  // every OTR class; allowed only for regular (kNull = unit tests without a
+  // Browser, treated as allowed so existing AI-mode tests keep passing).
+  bool AiIngressAllowed() const;
   void EnterCommandsOnlyMode();
   void ExitCommandsOnlyMode();
   void ApplyPlaceholderForMode();
@@ -149,6 +157,7 @@ class MahoCommandOverlayView : public views::View,
 
   raw_ptr<Browser> browser_;
   CommandOverlayMode mode_;
+  MahoPrivateContextClass context_class_ = MahoPrivateContextClass::kNull;
   std::unique_ptr<MahoCommandModel> model_;
   DismissCallback dismiss_callback_;
   ResizeCallback resize_callback_;

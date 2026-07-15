@@ -12,6 +12,7 @@
 #include "base/sequence_checker.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -82,6 +83,12 @@ class MahoLinkPreviewManager
   void ShowBubble(const std::u16string& text, const gfx::Rect& anchor_rect);
   void CloseBubble();
 
+  // R-9: revalidates the kAI token bound to this manager's observed
+  // WebContents + owning browser. Rebuilt on each hover and rechecked before
+  // every core/network/bubble step so OTR previews never touch core/network.
+  bool IsAiAllowed();
+
+  std::unique_ptr<MahoPrivateContextToken> token_;
   raw_ptr<PrefService> prefs_ = nullptr;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;

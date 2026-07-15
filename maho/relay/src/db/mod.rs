@@ -49,7 +49,7 @@ pub struct Session {
     pub created_at: i64,
 }
 
-fn js<T: serde::Serialize>(val: &T) -> std::result::Result<wasm_bindgen::JsValue, AppError> {
+pub(crate) fn js<T: serde::Serialize>(val: &T) -> std::result::Result<wasm_bindgen::JsValue, AppError> {
     let js_val = serde_wasm_bindgen::to_value(val).map_err(|e| AppError::Internal(e.to_string()))?;
     if js_val.is_undefined() {
         Ok(wasm_bindgen::JsValue::null())
@@ -290,6 +290,45 @@ pub async fn find_active_session_context_by_access_hash(
         })),
         _ => Ok(None),
     }
+}
+
+pub async fn claim_room_ownership(
+    db: &D1Database,
+    room_id: &str,
+    user_id: i32,
+    now: i64,
+) -> Result<()> {
+    let stmt = db.prepare(
+        "INSERT INTO room_ownership (room_id, user_id, claimed_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(room_id) DO NOTHING"
+    );
+    let stmt = stmt.bind(&[js(&room_id)?, js(&user_id)?, js(&now)?])?;
+    stmt.run().await?;
+    Ok(())
+}
+
+pub async fn get_room_owner_user_id(db: &D1Database, room_id: &str) -> Result<Option<i32>> {
+    #[derive(Deserialize)]
+    struct OwnerRow {
+        user_id: i32,
+    }
+    let stmt = db.prepare("SELECT user_id FROM room_ownership WHERE room_id = ?1");
+    let stmt = stmt.bind(&[js(&room_id)?])?;
+    let row = stmt.first::<OwnerRow>(None).await?;
+    Ok(row.map(|r| r.user_id))
+}
+
+pub async fn get_latest_room_for_user(db: &D1Database, user_id: i32) -> Result<Option<String>> {
+    #[derive(Deserialize)]
+    struct RoomRow {
+        room_id: String,
+    }
+    let stmt = db.prepare(
+        "SELECT room_id FROM room_ownership WHERE user_id = ?1 ORDER BY claimed_at DESC LIMIT 1"
+    );
+    let stmt = stmt.bind(&[js(&user_id)?])?;
+    let row = stmt.first::<RoomRow>(None).await?;
+    Ok(row.map(|r| r.room_id))
 }
 
 pub async fn has_processed_event(db: &D1Database, event_id: &str) -> Result<bool> {

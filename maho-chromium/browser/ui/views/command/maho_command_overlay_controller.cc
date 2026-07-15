@@ -12,6 +12,9 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"  // nogncheck
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_vibrancy.h"
 #include "ui/compositor/layer.h"
@@ -94,6 +97,13 @@ MahoCommandOverlayController::MahoCommandOverlayController(Browser* browser)
     : browser_(browser) {
   resize_animation_.SetSlideDuration(kResizeDuration);
   resize_animation_.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN);
+}
+
+// static
+bool MahoCommandOverlayController::ShouldCreateForContext(
+    MahoPrivateContextClass klass) {
+  return klass == MahoPrivateContextClass::kRegular ||
+         klass == MahoPrivateContextClass::kPrimaryIncognito;
 }
 
 MahoCommandOverlayController::~MahoCommandOverlayController() {
@@ -332,6 +342,11 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   DCHECK(anchor->GetWidget());
   if (!anchor || !anchor->GetWidget())
     return;
+
+  if (browser_ && !ShouldCreateForContext(
+                      ClassifyProfileForTesting(browser_->profile()))) {
+    return;
+  }
 
   open_start_ticks_ = base::TimeTicks::Now();
 

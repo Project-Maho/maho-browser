@@ -167,6 +167,8 @@ final class ChatViewModel: ObservableObject {
     private let pageTitle: String
     private let pageText: String
     private let initialSessionId: String?
+    private let initialQuery: String?
+    private var didSendInitialQuery = false
     private var sessionPtr: OpaquePointer?
     private var pollTask: Task<Void, Never>?
     private var streamingMessageID: UUID?
@@ -181,16 +183,31 @@ final class ChatViewModel: ObservableObject {
         pageUrl: String,
         pageTitle: String,
         pageText: String,
-        sessionId: String? = nil
+        sessionId: String? = nil,
+        initialQuery: String? = nil
     ) {
         self.bridge = bridge
         self.pageUrl = pageUrl
         self.pageTitle = pageTitle
         self.pageText = pageText
         self.initialSessionId = sessionId
+        self.initialQuery = initialQuery
         restoreConversationIfNeeded()
         ensureConversationRecord()
         initializeSession()
+    }
+
+    func sendInitialQueryIfNeeded() {
+        guard !didSendInitialQuery, let initialQuery else { return }
+        let trimmed = initialQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        didSendInitialQuery = true
+
+        if hasSession {
+            send(trimmed)
+        } else {
+            composerText = trimmed
+        }
     }
 
     deinit {
@@ -611,6 +628,7 @@ struct ChatView: View {
         pageTitle: String,
         pageText: String,
         sessionId: String? = nil,
+        initialQuery: String? = nil,
         bridge: MahoBridge = .shared,
         captureCurrentPageScreenshot: (@MainActor () async -> Data?)? = nil,
         onClose: (() -> Void)? = nil
@@ -623,7 +641,8 @@ struct ChatView: View {
                 pageUrl: pageUrl,
                 pageTitle: pageTitle,
                 pageText: pageText,
-                sessionId: sessionId
+                sessionId: sessionId,
+                initialQuery: initialQuery
             )
         )
     }
@@ -639,6 +658,7 @@ struct ChatView: View {
             }
         }
         .onAppear {
+            viewModel.sendInitialQueryIfNeeded()
             if viewModel.hasSession {
                 isComposerFocused = true
             }

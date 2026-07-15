@@ -15,8 +15,9 @@ namespace maho {
 gfx::ImageSkia CreateSidebarDragImage(views::View* view);
 
 gfx::ImageSkia CreateSidebarDragImageWithBackground(views::View* view,
-                                                    SkColor bg_color,
-                                                    float corner_radius_dp);
+                                                     SkColor base_color,
+                                                     SkColor overlay_color,
+                                                     float corner_radius_dp);
 
 gfx::ImageSkia CreateTransparentPixelDragImage();
 

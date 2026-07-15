@@ -5,15 +5,20 @@
 
 #include <string>
 #include <string_view>
+#include <memory>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "ui/base/models/image_model.h"
+#include "ui/color/color_id.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
 
+class AppMenu;
+class AppMenuModel;
 class Browser;
 
 namespace ui {
@@ -21,7 +26,6 @@ class Event;
 }  // namespace ui
 
 namespace views {
-class Button;
 class ImageButton;
 class View;
 }  // namespace views
@@ -38,6 +42,12 @@ class MahoSidebarTopBarView : public views::View {
   ~MahoSidebarTopBarView() override;
 
   void Update(const MahoSidebarTopBarModel& model);
+
+  // R-11: Injects private-window identity icon + text color.
+  // No-op if called before the view is built. No profile/pref reads.
+  void SetPrivateIdentityIcon(const ui::ImageModel& icon,
+                              ui::ColorId text_color_id);
+  bool ShowAppMenu();
   void SetNavClusterVisible(bool visible);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void AddedToWidget() override;
@@ -76,11 +86,11 @@ class MahoSidebarTopBarView : public views::View {
   void OnReloadPressed(const ui::Event& event);
   void OnAiPressed(const ui::Event& event);
   void OnToggleSidebarPressed(const ui::Event& event);
-
 #if BUILDFLAG(IS_WIN)
-  void OnWinClosePressed(const ui::Event& event);
-  void OnWinMinimizePressed(const ui::Event& event);
-  void OnWinMaximizePressed(const ui::Event& event);
+  void OnMenuPressed(const ui::Event& event);
+  bool ShowAppMenuWithRunFlags(int run_flags);
+  void OnAppMenuClosed(int generation);
+  void ResetAppMenu(int generation);
 #endif
 
   raw_ptr<Browser> browser_;
@@ -94,9 +104,10 @@ class MahoSidebarTopBarView : public views::View {
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
 #if BUILDFLAG(IS_WIN)
-  raw_ptr<views::Button> win_close_dot_ = nullptr;
-  raw_ptr<views::Button> win_min_dot_ = nullptr;
-  raw_ptr<views::Button> win_max_dot_ = nullptr;
+  raw_ptr<views::ImageButton> ellipsis_button_ = nullptr;
+  std::unique_ptr<AppMenuModel> app_menu_model_;
+  std::unique_ptr<AppMenu> app_menu_;
+  int app_menu_generation_ = 0;
 #endif
   MahoSidebarTopBarModel model_;
   base::WeakPtrFactory<MahoSidebarTopBarView> weak_factory_{this};

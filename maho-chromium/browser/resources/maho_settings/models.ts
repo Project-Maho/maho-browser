@@ -1,4 +1,4 @@
-export type ControlKind = 'text'|'number'|'toggle'|'select'|'color-swatch'|'slider'|'textarea';
+export type ControlKind = 'text'|'number'|'toggle'|'select'|'slider'|'textarea';
 
 export type PaneKind = 'live'|'hidden'|'embed';
 
@@ -7,20 +7,12 @@ export type DomainId =
     | 'look-and-feel'
     | 'identity'
     | 'productivity'
-    | 'protection'
-    | 'platform';
+    | 'protection';
 
 export interface ControlOption {
   value: string;
   label: string;
   displayLabel?: string;
-}
-
-export interface AccentColor {
-  r: number;
-  g: number;
-  b: number;
-  label: string;
 }
 
 export interface SettingMetadata {

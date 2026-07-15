@@ -21,6 +21,7 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "ui/gfx/image/image.h"
 
 class Browser;
@@ -154,6 +155,23 @@ class MahoCommandModel : public TabStripModelObserver,
                                        const std::string& title,
                                        const std::string& url);
 
+  // Private-context contract helpers (VerificationContract 4). Exposed for the
+  // task-10 unit tests; all are pure and take a context class or plain inputs.
+  //
+  // Saved sources (bookmarks, history, recent searches, site-search picker,
+  // Maho search engines) may only be read for kRegular.
+  static bool ShouldReadSavedSourcesForContext(MahoPrivateContextClass klass);
+  // The frozen 13 ephemeral action IDs, in the exact order emitted by the Rust
+  // CommandBarEngine::search_incognito (command_bar.rs). Must stay identical.
+  static std::vector<std::string> PrivateActionAllowlist();
+  // In primary Incognito, web search must derive solely from the OTR
+  // TemplateURLService default provider (read-only); regular uses MahoCore.
+  static bool PrivateSearchUsesDefaultProviderOnly(MahoPrivateContextClass klass);
+  static CommandSuggestion BuildDefaultProviderSearchSuggestion(
+      const std::string& query,
+      const std::string& search_url,
+      const std::string& engine_name);
+
  private:
   // Returns cached JSON (rebuilds lazily when tabs_cache_dirty_ is true).
   // Must be called on the UI sequence.
@@ -169,6 +187,13 @@ class MahoCommandModel : public TabStripModelObserver,
       bool is_incognito);
 
   void FireSearch();
+  // Exact-primary-Incognito search: builds only ephemeral sources (direct URL,
+  // OTR TemplateURLService default-provider search, current-window OTR tabs,
+  // and the frozen 13 actions) with no MahoCore call and no saved-source read.
+  void FireSearchPrivate();
+  std::vector<CommandSuggestion> BuildPrivateResults(const std::string& query);
+  std::optional<std::pair<std::string, std::string>>
+  ResolveDefaultProviderSearch(const std::string& query) const;
   void OnResults(ResultsCallback callback,
                  std::vector<CommandSuggestion> results);
   void RequestBookmarkFavicons();
@@ -196,6 +221,7 @@ class MahoCommandModel : public TabStripModelObserver,
   void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   raw_ptr<Browser> browser_;
+  MahoPrivateContextClass context_class_ = MahoPrivateContextClass::kNull;
   std::string query_;
   CommandOverlayMode mode_ = CommandOverlayMode::kSearch;
   std::vector<CommandSuggestion> results_;

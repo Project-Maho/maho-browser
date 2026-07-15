@@ -31,7 +31,9 @@ class MahoModelListFetcher {
   using RefreshedCallback = base::RepeatingCallback<void(const std::string& provider_id, const std::vector<std::string>& models)>;
 
   MahoModelListFetcher(PrefService* prefs,
-                       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+                       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+                       base::RepeatingCallback<bool()> ai_gate =
+                           base::RepeatingCallback<bool()>());
   ~MahoModelListFetcher();
 
   MahoModelListFetcher(const MahoModelListFetcher&) = delete;
@@ -81,6 +83,7 @@ class MahoModelListFetcher {
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   RefreshedCallback refreshed_callback_;
+  base::RepeatingCallback<bool()> ai_gate_;
 
   std::optional<os_crypt_async::Encryptor> local_encryptor_;
   std::vector<PendingFetch> pending_fetches_;

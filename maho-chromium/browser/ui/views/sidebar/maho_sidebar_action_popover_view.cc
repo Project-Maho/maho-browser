@@ -61,11 +61,13 @@ class ActionRow : public views::View {
 
     selection_background_ = AddChildView(std::make_unique<views::View>());
     selection_background_->SetVisible(false);
+    selection_background_->SetCanProcessEventsWithinSubtree(false);
     selection_background_->SetBackground(
         views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant,
                                            kRowCornerRadius));
 
     auto* content_row = AddChildView(std::make_unique<views::View>());
+    content_row->SetCanProcessEventsWithinSubtree(false);
     auto* row_layout =
         content_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
             views::BoxLayout::Orientation::kHorizontal,

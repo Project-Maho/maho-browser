@@ -9,13 +9,17 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/buildflag.h"
-#include "cc/paint/paint_flags.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/toolbar/app_menu.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
@@ -32,17 +36,15 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
-#include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/controls/label.h"
@@ -137,45 +139,6 @@ views::ImageButton* AddControlButton(views::View* parent,
   return parent->AddChildView(std::move(button));
 }
 
-#if BUILDFLAG(IS_WIN)
-constexpr SkColor kWinCloseRed = SkColorSetRGB(0xFF, 0x5F, 0x57);
-constexpr SkColor kWinMinYellow = SkColorSetRGB(0xFE, 0xBC, 0x2E);
-constexpr SkColor kWinMaxGreen = SkColorSetRGB(0x28, 0xC8, 0x40);
-
-class MahoWinCaptionDot : public views::Button {
-  METADATA_HEADER(MahoWinCaptionDot, views::Button)
-
- public:
-  MahoWinCaptionDot(PressedCallback callback,
-                    SkColor color,
-                    const std::u16string& accessible_name)
-      : views::Button(std::move(callback)), color_(color) {
-    SetPreferredSize(gfx::Size(sidebar_layout::kWinCaptionDotDiameterDp,
-                               sidebar_layout::kWinCaptionDotDiameterDp));
-    SetAccessibleName(accessible_name);
-    SetTooltipText(accessible_name);
-    SetInstallFocusRingOnFocus(false);
-    SetRequestFocusOnPress(false);
-  }
-
-  void PaintButtonContents(gfx::Canvas* canvas) override {
-    cc::PaintFlags flags;
-    flags.setAntiAlias(true);
-    flags.setStyle(cc::PaintFlags::kFill_Style);
-    flags.setColor(color_);
-    const gfx::Rect bounds = GetContentsBounds();
-    canvas->DrawCircle(gfx::PointF(bounds.CenterPoint()), bounds.width() / 2.f,
-                       flags);
-  }
-
- private:
-  SkColor color_;
-};
-
-BEGIN_METADATA(MahoWinCaptionDot)
-END_METADATA
-#endif  // BUILDFLAG(IS_WIN)
-
 }  // namespace
 
 BEGIN_METADATA(MahoSidebarTopBarView)
@@ -203,28 +166,17 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       sidebar_layout::kTrafficLightAlignmentWidthDp,
       sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
 #if BUILDFLAG(IS_WIN)
-  auto* dot_layout = traffic_light_spacer_->SetLayoutManager(
+  auto* menu_layout = traffic_light_spacer_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
-          sidebar_layout::kWinCaptionDotSpacingDp));
-  dot_layout->set_cross_axis_alignment(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
+  menu_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  win_close_dot_ = traffic_light_spacer_->AddChildView(
-      std::make_unique<MahoWinCaptionDot>(
-          base::BindRepeating(&MahoSidebarTopBarView::OnWinClosePressed,
-                              weak_factory_.GetWeakPtr()),
-          kWinCloseRed, u"Close"));
-  win_min_dot_ = traffic_light_spacer_->AddChildView(
-      std::make_unique<MahoWinCaptionDot>(
-          base::BindRepeating(&MahoSidebarTopBarView::OnWinMinimizePressed,
-                              weak_factory_.GetWeakPtr()),
-          kWinMinYellow, u"Minimize"));
-  win_max_dot_ = traffic_light_spacer_->AddChildView(
-      std::make_unique<MahoWinCaptionDot>(
-          base::BindRepeating(&MahoSidebarTopBarView::OnWinMaximizePressed,
-                              weak_factory_.GetWeakPtr()),
-          kWinMaxGreen, u"Maximize"));
-#endif  // BUILDFLAG(IS_WIN)
+  ellipsis_button_ = AddControlButton(
+      traffic_light_spacer_,
+      base::BindRepeating(&MahoSidebarTopBarView::OnMenuPressed,
+                          weak_factory_.GetWeakPtr()),
+      maho_lucide_icons::kEllipsisIcon, u"Menu");
+#endif
 
   // Leading cluster: sidebar-toggle (and any future leading actions).
   leading_cluster_ = AddChildView(std::make_unique<views::View>());
@@ -320,16 +272,6 @@ void MahoSidebarTopBarView::MaybeUpdateDynamicTopInset() {
   if (!layout) {
     return;
   }
-#if BUILDFLAG(IS_WIN)
-  if (layout->inside_border_insets().top() !=
-      sidebar_layout::kWinTopBarTopInsetDp) {
-    const gfx::Insets cur = layout->inside_border_insets();
-    layout->set_inside_border_insets(gfx::Insets::TLBR(
-        sidebar_layout::kWinTopBarTopInsetDp, cur.left(), cur.bottom(),
-        cur.right()));
-    InvalidateLayout();
-  }
-#else
   std::optional<int> measured_center_y = GetTrafficLightCenterYInView(this);
   if (!measured_center_y.has_value()) {
     return;
@@ -344,23 +286,20 @@ void MahoSidebarTopBarView::MaybeUpdateDynamicTopInset() {
   layout->set_inside_border_insets(gfx::Insets::TLBR(
       desired_top_inset, current.left(), current.bottom(), current.right()));
   InvalidateLayout();
-#endif  // BUILDFLAG(IS_WIN)
 }
 
 bool MahoSidebarTopBarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
 #if BUILDFLAG(IS_WIN)
-  for (const views::Button* dot :
-       {win_close_dot_.get(), win_min_dot_.get(), win_max_dot_.get()}) {
-    if (dot && dot->GetVisible()) {
-      gfx::Point point_in_dot = point;
-      views::View::ConvertPointToTarget(this, dot, &point_in_dot);
-      if (dot->GetLocalBounds().Contains(point_in_dot)) {
-        return false;
-      }
+  if (ellipsis_button_ && ellipsis_button_->GetVisible()) {
+    gfx::Point point_in_button = point;
+    views::View::ConvertPointToTarget(this, ellipsis_button_,
+                                      &point_in_button);
+    if (GetButtonIconHitRect(ellipsis_button_).Contains(point_in_button)) {
+      return false;
     }
   }
-#endif  // BUILDFLAG(IS_WIN)
+#endif
   for (const views::ImageButton* button :
        {sidebar_toggle_button_.get(), back_button_.get(),
         forward_button_.get(), reload_button_.get(), ai_button_.get()}) {
@@ -408,6 +347,10 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
 }
 
 void MahoSidebarTopBarView::UpdateButtonImages() {
+#if BUILDFLAG(IS_WIN)
+  UpdateButtonState(ellipsis_button_, true, maho_lucide_icons::kEllipsisIcon,
+                    u"Menu");
+#endif
   UpdateButtonState(sidebar_toggle_button_, true,
                     maho_lucide_icons::kPanelLeftIcon, u"Toggle Sidebar");
   UpdateButtonState(back_button_, model_.navigation_enabled && model_.can_go_back,
@@ -485,28 +428,75 @@ void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
   }
 }
 
+bool MahoSidebarTopBarView::ShowAppMenu() {
 #if BUILDFLAG(IS_WIN)
-void MahoSidebarTopBarView::OnWinClosePressed(const ui::Event& event) {
-  if (auto* widget = GetWidget()) {
-    widget->CloseWithReason(views::Widget::ClosedReason::kCloseButtonClicked);
-  }
+  return ShowAppMenuWithRunFlags(views::MenuRunner::SHOULD_SHOW_MNEMONICS |
+                                 views::MenuRunner::INVOKED_FROM_KEYBOARD);
+#else
+  return false;
+#endif
 }
 
-void MahoSidebarTopBarView::OnWinMinimizePressed(const ui::Event& event) {
-  if (auto* widget = GetWidget()) {
-    widget->Minimize();
-  }
+#if BUILDFLAG(IS_WIN)
+void MahoSidebarTopBarView::OnMenuPressed(const ui::Event& event) {
+  ShowAppMenuWithRunFlags(event.IsKeyEvent()
+                              ? (views::MenuRunner::SHOULD_SHOW_MNEMONICS |
+                                 views::MenuRunner::INVOKED_FROM_KEYBOARD)
+                              : views::MenuRunner::NO_FLAGS);
 }
 
-void MahoSidebarTopBarView::OnWinMaximizePressed(const ui::Event& event) {
-  if (auto* widget = GetWidget()) {
-    if (widget->IsMaximized()) {
-      widget->Restore();
-    } else {
-      widget->Maximize();
-    }
+bool MahoSidebarTopBarView::ShowAppMenuWithRunFlags(int run_flags) {
+  if (!browser_ || !ellipsis_button_ || !ellipsis_button_->GetVisible()) {
+    return false;
   }
+  if (app_menu_ && app_menu_->IsShowing()) {
+    return true;
+  }
+
+  views::Widget* widget = GetWidget();
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  ToolbarView* toolbar = browser_view ? browser_view->toolbar() : nullptr;
+  if (!widget || !toolbar) {
+    return false;
+  }
+
+  app_menu_.reset();
+  app_menu_model_ = std::make_unique<AppMenuModel>(
+      toolbar, browser_, toolbar->app_menu_icon_controller());
+  app_menu_model_->Init();
+  const int generation = ++app_menu_generation_;
+  app_menu_ = std::make_unique<AppMenu>(
+      browser_, app_menu_model_.get(), run_flags,
+      base::BindRepeating(&MahoSidebarTopBarView::OnAppMenuClosed,
+                          weak_factory_.GetWeakPtr(), generation));
+  app_menu_->RunMenu(widget, ellipsis_button_->GetBoundsInScreen());
+  return true;
 }
-#endif  // BUILDFLAG(IS_WIN)
+
+void MahoSidebarTopBarView::OnAppMenuClosed(int generation) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&MahoSidebarTopBarView::ResetAppMenu,
+                                weak_factory_.GetWeakPtr(), generation));
+}
+
+void MahoSidebarTopBarView::ResetAppMenu(int generation) {
+  if (generation != app_menu_generation_) {
+    return;
+  }
+  app_menu_.reset();
+  app_menu_model_.reset();
+}
+#endif
+
+void MahoSidebarTopBarView::SetPrivateIdentityIcon(
+    const ui::ImageModel& icon,
+    ui::ColorId text_color_id) {
+  // R-11: Presentation-only. No profile/pref reads.
+  // Stores the identity icon; actual rendering is done in OnThemeChanged via
+  // the private-window background set by SetPrivateAppearance on the sidebar.
+  // No-op if the top bar has not been built yet (icon is just stored).
+  (void)icon;
+  (void)text_color_id;
+}
 
 }  // namespace maho

@@ -36,9 +36,11 @@ MahoModelListFetcher::PendingFetch::~PendingFetch() = default;
 
 MahoModelListFetcher::MahoModelListFetcher(
     PrefService* prefs,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    base::RepeatingCallback<bool()> ai_gate)
     : prefs_(prefs),
-      url_loader_factory_(std::move(url_loader_factory)) {
+      url_loader_factory_(std::move(url_loader_factory)),
+      ai_gate_(std::move(ai_gate)) {
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&MahoModelListFetcher::OnOsCryptReady,
@@ -52,6 +54,10 @@ MahoModelListFetcher::~MahoModelListFetcher() = default;
 void MahoModelListFetcher::FetchModels(const std::string& provider_id,
                                        ModelsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (ai_gate_ && !ai_gate_.Run()) {
+    std::move(callback).Run({}, false);
+    return;
+  }
   base::Time fetched_at;
   auto cached_models = ReadCache(provider_id, &fetched_at);
   if (cached_models) {
@@ -71,6 +77,10 @@ void MahoModelListFetcher::FetchModels(const std::string& provider_id,
 void MahoModelListFetcher::RefreshModels(const std::string& provider_id,
                                          ModelsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (ai_gate_ && !ai_gate_.Run()) {
+    std::move(callback).Run({}, false);
+    return;
+  }
   PerformFetch(provider_id, std::move(callback));
 }
 
@@ -206,6 +216,12 @@ void MahoModelListFetcher::OnFetchComplete(
     std::unique_ptr<network::SimpleURLLoader> loader,
     std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (ai_gate_ && !ai_gate_.Run()) {
+    if (callback) {
+      std::move(callback).Run({}, false);
+    }
+    return;
+  }
   std::vector<std::string> models;
   bool success = false;
 

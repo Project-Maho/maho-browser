@@ -13,11 +13,16 @@
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -49,7 +54,8 @@ std::map<content::WebContents*, MahoWelcomeWindow*>& GetContentsMap() {
 
 // WidgetDelegate + View that owns the WebView for the Welcome WebUI.
 class MahoWelcomeWindowView : public views::WidgetDelegate,
-                              public views::View {
+                              public views::View,
+                              public content::WebContentsDelegate {
  public:
   using WindowClosingCallback = base::OnceClosure;
 
@@ -71,6 +77,15 @@ class MahoWelcomeWindowView : public views::WidgetDelegate,
     web_contents_ = web_view->GetWebContents();
     web_view_ = AddChildView(std::move(web_view));
 
+    // Route unhandled keyboard events (e.g. the Cmd+V / Ctrl+V paste key
+    // equivalent) back through the FocusManager so the platform Edit menu
+    // shortcuts reach the web content. Without a delegate the redispatch
+    // chain never starts and clipboard paste silently fails in this
+    // non-browser window.
+    if (web_contents_) {
+      web_contents_->SetDelegate(this);
+    }
+
     if (web_contents_ && window_weak_) {
       GetContentsMap()[web_contents_] = window_weak_.get();
     }
@@ -82,6 +97,14 @@ class MahoWelcomeWindowView : public views::WidgetDelegate,
 
   content::WebContents* GetHostedWebContents() { return web_contents_; }
 
+  // content::WebContentsDelegate:
+  bool HandleKeyboardEvent(
+      content::WebContents* source,
+      const input::NativeWebKeyboardEvent& event) override {
+    return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
+        event, GetFocusManager());
+  }
+
   views::Widget* GetWidget() override { return views::View::GetWidget(); }
   const views::Widget* GetWidget() const override {
     return views::View::GetWidget();
@@ -90,6 +113,7 @@ class MahoWelcomeWindowView : public views::WidgetDelegate,
 
   void WindowClosing() override {
     if (web_contents_) {
+      web_contents_->SetDelegate(nullptr);
       auto& map = GetContentsMap();
       map.erase(web_contents_);
       web_contents_ = nullptr;
@@ -123,6 +147,7 @@ class MahoWelcomeWindowView : public views::WidgetDelegate,
   raw_ptr<content::WebContents> web_contents_ = nullptr;
   WindowClosingCallback on_closing_;
   base::WeakPtr<MahoWelcomeWindow> window_weak_;
+  views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
 };
 
 }  // namespace
@@ -138,7 +163,12 @@ void MahoWelcomeWindow::Show(Profile* profile) {
     return;
   }
   storage.reset(new MahoWelcomeWindow(profile));
-  storage->CreateAndShowWidget();
+  // ctor holds a ScopedKeepAlive (pins the process while the startup browser
+  // is suppressed); defer widget creation since PostProfileInit is too early
+  // to spawn a renderer.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&MahoWelcomeWindow::CreateAndShowWidget,
+                                storage->weak_factory_.GetWeakPtr()));
 }
 
 // static
@@ -187,7 +217,10 @@ void MahoWelcomeWindow::OnWidgetDestroying(views::Widget* widget) {
       }));
 }
 
-MahoWelcomeWindow::MahoWelcomeWindow(Profile* profile) : profile_(profile) {}
+MahoWelcomeWindow::MahoWelcomeWindow(Profile* profile) : profile_(profile) {
+  keep_alive_ = std::make_unique<ScopedKeepAlive>(
+      KeepAliveOrigin::USER_MANAGER_VIEW, KeepAliveRestartOption::DISABLED);
+}
 
 MahoWelcomeWindow::~MahoWelcomeWindow() {
   if (web_contents_) {

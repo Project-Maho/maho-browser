@@ -19,6 +19,7 @@ fn test_sync_sqlite_integration_flow() {
         payload_json: payload,
         deleted: false,
         queue_row_id: None,
+        fields_hlc_json: None,
     };
 
     core.set_sync_status(SyncStatus::Synced);
@@ -71,6 +72,7 @@ fn test_sync_survives_restart_sqlite() {
             payload_json: payload,
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json: None,
         };
         let applied = core.apply_sync_remote_entities(vec![entity]);
         assert_eq!(applied.len(), 1, "first apply should accept the entity");
@@ -99,6 +101,7 @@ fn test_sync_survives_restart_sqlite() {
             payload_json: serde_json::json!({"marker": "v1"}).to_string(),
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json: None,
         };
         let applied = core2.apply_sync_remote_entities(vec![replay_entity]);
         assert!(
@@ -116,6 +119,7 @@ fn test_sync_survives_restart_sqlite() {
             payload_json: serde_json::json!({"marker": "older"}).to_string(),
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json: None,
         };
         let applied_older = core2.apply_sync_remote_entities(vec![older_replay]);
         assert!(
@@ -133,6 +137,7 @@ fn test_sync_survives_restart_sqlite() {
             payload_json: serde_json::json!({"marker": "v2"}).to_string(),
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json: None,
         };
         let applied_newer = core2.apply_sync_remote_entities(vec![newer]);
         assert_eq!(
@@ -165,6 +170,7 @@ fn test_sync_queue_survives_restart_and_flushes() {
             payload_json: payload,
             deleted: false,
             queue_row_id: None,
+            fields_hlc_json: None,
         };
         core.sync_push_entity_persisted(entity);
 

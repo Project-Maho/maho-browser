@@ -20,8 +20,14 @@
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/webui/webui_util.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoWelcomeUIConfig::MahoWelcomeUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoWelcomeHost) {}
+
+bool MahoWelcomeUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoWelcomeUI)
 
@@ -35,6 +41,9 @@ MahoWelcomeUI::MahoWelcomeUI(content::WebUI* web_ui)
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FrameSrc,
       "frame-src chrome://maho-space-create;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types default static-types;");
   content::URLDataSource::Add(
       profile,
       std::make_unique<FaviconSource>(profile,

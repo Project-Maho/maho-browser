@@ -33,6 +33,7 @@ fn create_tab(core: &mut MahoCore) -> TabId {
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
     });
     let after = core.get_tab_view_models();
     after
@@ -56,6 +57,31 @@ fn create_tab_with_url(core: &mut MahoCore, url: &str) -> TabId {
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
+    });
+    let after = core.get_tab_view_models();
+    after
+        .iter()
+        .find(|t| !before.contains(&t.id))
+        .expect("New tab should appear in view models")
+        .id
+        .clone()
+}
+
+fn create_tab_with_url_and_privacy(core: &mut MahoCore, url: &str, is_private: bool) -> TabId {
+    let space_id = core.get_active_space_id();
+    let before: Vec<TabId> = core
+        .get_tab_view_models()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    core.handle_event(ShellEvent::CreateTab {
+        space_id,
+        url: Some(Url::new(url)),
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private,
     });
     let after = core.get_tab_view_models();
     after
@@ -78,6 +104,7 @@ fn create_tab_in_space(core: &mut MahoCore, space_id: &SpaceId) -> TabId {
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
     });
     let after = core.get_tab_view_models();
     after
@@ -133,12 +160,49 @@ fn create_tab_emits_tab_created_update() {
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
     });
 
     assert!(matches!(
         updates.as_slice(),
         [CoreUpdate::TabCreated { .. }]
     ));
+}
+
+#[test]
+fn create_tab_threads_is_private_to_view_model() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: space_id.clone(),
+        url: Some(Url::new("https://private.example.com")),
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private: true,
+    });
+    core.handle_event(ShellEvent::CreateTab {
+        space_id,
+        url: Some(Url::new("https://public.example.com")),
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private: false,
+    });
+
+    let tabs = core.get_tab_view_models();
+    let private_tab = tabs
+        .iter()
+        .find(|tab| tab.url == "https://private.example.com")
+        .expect("private tab should exist");
+    let public_tab = tabs
+        .iter()
+        .find(|tab| tab.url == "https://public.example.com")
+        .expect("public tab should exist");
+
+    assert!(private_tab.is_private);
+    assert!(!public_tab.is_private);
 }
 
 #[test]
@@ -160,6 +224,22 @@ fn tab_close_decreases_count() {
         expected_space_id: None,
     });
     assert_eq!(core.get_tab_view_models().len(), before - 1);
+}
+
+#[test]
+fn private_tab_close_does_not_enter_closed_tab_suggestions() {
+    let mut core = MahoCore::new();
+    let normal_id = create_tab_with_url_and_privacy(&mut core, "https://closed-normal.example.com", false);
+    let private_id = create_tab_with_url_and_privacy(&mut core, "https://closed-private.example.com", true);
+
+    core.handle_event(ShellEvent::CloseTab { tab_id: normal_id, expected_space_id: None });
+    core.handle_event(ShellEvent::CloseTab { tab_id: private_id, expected_space_id: None });
+
+    let normal_results = core.command_bar_search_with_tabs("closed-normal", None, vec![], false);
+    let private_results = core.command_bar_search_with_tabs("closed-private", None, vec![], false);
+
+    assert!(normal_results.iter().any(|result| matches!(result.kind, SuggestionType::ClosedTab)));
+    assert!(!private_results.iter().any(|result| matches!(result.kind, SuggestionType::ClosedTab)));
 }
 
 #[test]
@@ -201,8 +281,8 @@ fn pin_tab_emits_tab_updated_with_pinned_true() {
 
     assert!(matches!(
         updates.as_slice(),
-        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
-            if *updated_id == tab_id && changes.is_pinned == Some(true)
+        [CoreUpdate::TabRoleChanged { tab_id: updated_id, old_role: _, new_role }]
+            if *updated_id == tab_id && *new_role == TabRole::Pinned
     ));
 }
 
@@ -257,8 +337,8 @@ fn unpin_tab_emits_tab_updated_with_pinned_false() {
 
     assert!(matches!(
         updates.as_slice(),
-        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
-            if *updated_id == tab_id && changes.is_pinned == Some(false)
+        [CoreUpdate::TabRoleChanged { tab_id: updated_id, old_role: _, new_role }]
+            if *updated_id == tab_id && *new_role == TabRole::Normal
     ));
 }
 
@@ -963,6 +1043,7 @@ fn space_tab_in_new_space() {
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
     });
     assert_eq!(core.get_tab_view_models().len(), before + 1);
 }
@@ -975,6 +1056,7 @@ fn command_bar_query_no_panic() {
     core.handle_event(ShellEvent::CommandBarQuery {
         text: "hello world".to_string(),
         mode: None,
+        is_incognito: false,
     });
 }
 
@@ -984,7 +1066,32 @@ fn command_bar_url_query_no_panic() {
     core.handle_event(ShellEvent::CommandBarQuery {
         text: "https://google.com".to_string(),
         mode: None,
+        is_incognito: false,
     });
+}
+
+#[test]
+fn incognito_command_bar_query_excludes_history_and_bookmarks() {
+    let mut core = MahoCore::new();
+    core.add_history_entry("https://hidden-history.example.com", "Hidden History");
+    core.add_bookmark("https://hidden-bookmark.example.com", "Hidden Bookmark", None);
+
+    let updates = core.handle_event(ShellEvent::CommandBarQuery {
+        text: "hidden".to_string(),
+        mode: None,
+        is_incognito: true,
+    });
+
+    let suggestions = updates
+        .into_iter()
+        .find_map(|update| match update {
+            CoreUpdate::CommandBarResults { suggestions } => Some(suggestions),
+            _ => None,
+        })
+        .expect("command bar results should be emitted");
+
+    assert!(!suggestions.iter().any(|result| matches!(result.kind, SuggestionType::History)));
+    assert!(!suggestions.iter().any(|result| matches!(result.kind, SuggestionType::Bookmark)));
 }
 
 #[test]
@@ -1719,7 +1826,9 @@ fn split_view_create_via_event() {
     let mut core = MahoCore::new();
     let tab1 = create_tab(&mut core);
     let tab2 = create_tab(&mut core);
+    let window_id = maho_types::identifiers::WindowId::new("window-1");
     core.handle_event(ShellEvent::CreateSplit {
+        window_id,
         tab_ids: vec![tab1, tab2],
         orientation: Orientation::Horizontal,
     });
@@ -1728,7 +1837,8 @@ fn split_view_create_via_event() {
 #[test]
 fn split_view_config_no_panic() {
     let core = MahoCore::new();
-    let _ = core.get_split_view_config();
+    let window_id = maho_types::identifiers::WindowId::new("window-1");
+    let _ = core.get_split_view_config(&window_id);
 }
 
 // ===== FIND BAR =====
@@ -1777,6 +1887,69 @@ fn history_add_and_search() {
     core.add_history_entry("https://example.com", "Example");
     // search_history requires SQLite storage; without it returns empty
     let _ = core.search_history("example", 10);
+}
+
+#[test]
+fn private_active_tab_blocks_history_bookmark_and_form_writes() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let db_path = temp_dir.path().join("maho-core.sqlite");
+    let mut core = MahoCore::new().with_storage(db_path.to_str().unwrap());
+
+    let normal_id = create_tab_with_url_and_privacy(&mut core, "https://normal-write.example.com", false);
+    core.add_history_entry("https://normal-write.example.com", "Normal Write");
+    assert_eq!(core.search_history("normal-write", 10).len(), 1);
+
+    let private_id = create_tab_with_url_and_privacy(&mut core, "https://private-write.example.com", true);
+    core.add_history_entry("https://private-write.example.com", "Private Write");
+    assert!(core.search_history("private-write", 10).is_empty());
+
+    let before_bookmarks = core.get_all_bookmark_entries().len();
+    core.add_bookmark("https://private-write.example.com", "Private Bookmark", None);
+    assert_eq!(core.get_all_bookmark_entries().len(), before_bookmarks);
+
+    core.save_form_data(private_id.as_ref(), "{\"secret\":true}".to_string());
+    assert!(core.get_crash_recovery().get_form_data(private_id.as_ref()).is_none());
+
+    core.save_form_data(normal_id.as_ref(), "{\"ok\":true}".to_string());
+    assert!(core.get_crash_recovery().get_form_data(normal_id.as_ref()).is_some());
+}
+
+#[test]
+fn incognito_search_history_returns_no_entries() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let db_path = temp_dir.path().join("maho-core.sqlite");
+    let mut core = MahoCore::new().with_storage(db_path.to_str().unwrap());
+    let _tab_id = create_tab_with_url_and_privacy(&mut core, "https://stored-history.example.com", false);
+    core.add_history_entry("https://stored-history.example.com", "Stored History");
+
+    let normal = core.handle_event(ShellEvent::SearchHistory {
+        query: "stored-history".to_string(),
+        limit: 10,
+        is_incognito: false,
+    });
+    let incognito = core.handle_event(ShellEvent::SearchHistory {
+        query: "stored-history".to_string(),
+        limit: 10,
+        is_incognito: true,
+    });
+
+    let normal_entries = normal
+        .into_iter()
+        .find_map(|update| match update {
+            CoreUpdate::HistoryResults { entries } => Some(entries),
+            _ => None,
+        })
+        .expect("normal history results should be emitted");
+    let incognito_entries = incognito
+        .into_iter()
+        .find_map(|update| match update {
+            CoreUpdate::HistoryResults { entries } => Some(entries),
+            _ => None,
+        })
+        .expect("incognito history results should be emitted");
+
+    assert!(!normal_entries.is_empty());
+    assert!(incognito_entries.is_empty());
 }
 
 #[test]
@@ -2167,6 +2340,7 @@ fn trigram_index_improves_search_results() {
     let updates = core.handle_event(ShellEvent::CommandBarQuery {
         text: "testing".to_string(),
         mode: None,
+        is_incognito: false,
     });
     let json = serde_json::to_string(&updates).unwrap();
     assert!(json.contains("testing") || json.contains("example"));
@@ -2684,6 +2858,7 @@ fn make_tab_vm(id: &str, title: &str, url: &str) -> TabViewModel {
         is_favorite: false,
         favorite_order: None,
         role: TabRole::Normal,
+        is_private: false,
         is_muted: false,
         is_playing_audio: false,
         lifecycle_state: "active".to_string(),
@@ -3143,4 +3318,30 @@ fn test_boost_discard_after_update_blocked_by_change_flag() {
     assert!(still_there.color.magic_theme, "update must still be present");
     assert_eq!(still_there.custom_css, "h1 { display: none; }");
     assert_eq!(mgr.list_for_domain("discard.com").len(), 1);
+}
+
+#[test]
+fn pinned_tab_suspend_then_close_deletes_tab() {
+    let mut core = MahoCore::new();
+    let tab_id = pin_tab_with_url(&mut core, "https://example.com");
+    let space_id = core.get_active_space_id();
+
+    // 1. First click: Suspend the pinned tab
+    core.handle_event(ShellEvent::SuspendTab { tab_id: tab_id.clone() });
+
+    // Verify it is suspended in core view model
+    let tab_vm = core.get_tab_view_models().into_iter().find(|t| t.id == tab_id).unwrap();
+    assert_eq!(tab_vm.lifecycle_state, "suspended");
+
+    // 2. Second click: Close the suspended tab
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+        expected_space_id: None,
+    });
+
+    // Verify it is fully deleted
+    let pinned = core.get_pinned_tabs(&space_id);
+    assert!(
+        !pinned.iter().any(|t| t.id == tab_id),
+        "suspended pinned tab must be fully deleted on close"
+    );
 }

@@ -15,6 +15,10 @@ impl PasswordManager {
         &self.passwords
     }
 
+    pub fn password_by_id(&self, id: &str) -> Option<&SavedPassword> {
+        self.passwords.iter().find(|p| p.id == id)
+    }
+
     pub fn search_passwords(&self, query: &str) -> Vec<&SavedPassword> {
         let q = query.to_lowercase();
         self.passwords

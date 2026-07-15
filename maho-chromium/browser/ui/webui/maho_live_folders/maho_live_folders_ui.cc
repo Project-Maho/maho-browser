@@ -12,9 +12,15 @@
 #include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h"
 #include "maho/components/constants/webui_url_constants.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoLiveFoldersUIConfig::MahoLiveFoldersUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme,
                          maho::kMahoLiveFoldersHost) {}
+
+bool MahoLiveFoldersUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoLiveFoldersUI)
 

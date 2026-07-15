@@ -131,6 +131,7 @@ impl ImportDestination for MahoCoreDestination {
             parent_id: None,
             tab_id: Some(tab_id),
             window_id: None,
+            is_private: false,
         };
         self.core_mut().handle_event(event);
         Some(tab_id_str)
@@ -350,6 +351,21 @@ impl ImportDestination for MahoCoreDestination {
         }
 
         delivered
+    }
+
+    fn add_password(&self, entry: maho_import::PasswordEntry) -> bool {
+        if self.core.0.is_null() || entry.origin_url.is_empty() {
+            return false;
+        }
+        let password = if entry.password.is_empty() {
+            None
+        } else {
+            Some(entry.password)
+        };
+        let _ = self
+            .core_mut()
+            .add_password_persisted(entry.origin_url, entry.username, password);
+        true
     }
 }
 

@@ -18,6 +18,10 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Maho uses the microphone for voice search.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Maho uses speech recognition to let you search by voice.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

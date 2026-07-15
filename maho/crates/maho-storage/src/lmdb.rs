@@ -54,6 +54,21 @@ impl LmdbStorage {
         Ok(existed)
     }
 
+    /// Read-only enumeration of `maho_state`: one read transaction, key-sorted
+    /// `(key, value)` rows, no write txn / db creation / put / delete / cursor
+    /// mutation. Value bytes match [`LmdbStorage::get`]; per-tab
+    /// `scroll_position` lives inside the `tabs` JSON value, not a separate key.
+    pub fn snapshot_entries(&self) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let rtxn = self.env.read_txn()?;
+        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for item in self.db.iter(&rtxn)? {
+            let (key, value) = item?;
+            entries.push((key.as_bytes().to_vec(), value));
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(entries)
+    }
+
     pub fn save_preview(&self, tab_id: &str, image_data: &[u8]) -> Result<(), StorageError> {
         let key = format!("preview:{}", tab_id);
         self.put(&key, image_data)

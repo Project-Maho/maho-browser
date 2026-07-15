@@ -4,8 +4,10 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/webui/maho_inline_edit/maho_inline_edit_handler.h"
 
 MahoInlineEditController::MahoInlineEditController(Browser* browser) {
@@ -14,8 +16,16 @@ MahoInlineEditController::MahoInlineEditController(Browser* browser) {
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess();
 
+  content::WebContents* active_wc =
+      browser->tab_strip_model()
+          ? browser->tab_strip_model()->GetActiveWebContents()
+          : nullptr;
+  auto token =
+      std::make_unique<MahoPrivateContextToken>(browser, active_wc);
+
   handler_ = std::make_unique<MahoInlineEditHandler>(
-      browser, profile->GetPrefs(), std::move(url_loader_factory));
+      std::move(token), browser, profile->GetPrefs(),
+      std::move(url_loader_factory));
 }
 
 MahoInlineEditController::~MahoInlineEditController() = default;

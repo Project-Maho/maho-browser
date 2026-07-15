@@ -20,9 +20,20 @@ base::flat_map<Profile*, maho::MahoExtensionSidePanelCoordinator*>& GetInstanceM
 
 namespace maho {
 
+namespace {
+
+// Fail-closed predicate: Maho extension side-panel metadata is regular-profile
+// only. A null or off-the-record profile must never reach maho::GetCore/FFI, so
+// a stale or forged coordinator cannot mutate Maho side-panel state for OTR.
+bool IsFailClosed(Profile* profile) {
+  return !profile || profile->IsOffTheRecord();
+}
+
+}  // namespace
+
 // static
 MahoExtensionSidePanelCoordinator* MahoExtensionSidePanelCoordinator::GetForProfile(Profile* profile) {
-  if (!profile || profile->IsOffTheRecord()) {
+  if (IsFailClosed(profile)) {
     return nullptr;
   }
   auto& map = GetInstanceMap();
@@ -35,6 +46,12 @@ MahoExtensionSidePanelCoordinator* MahoExtensionSidePanelCoordinator::GetForProf
 
 MahoExtensionSidePanelCoordinator::MahoExtensionSidePanelCoordinator(Profile* profile)
     : profile_(profile) {
+  // Fail closed for every OTR/null profile: register no instance and observe
+  // no service/registry so no callback can reach maho::GetCore/FFI.
+  if (IsFailClosed(profile_)) {
+    return;
+  }
+
   GetInstanceMap()[profile_] = this;
 
   auto* service = extensions::SidePanelService::Get(profile_);
@@ -55,6 +72,9 @@ MahoExtensionSidePanelCoordinator::~MahoExtensionSidePanelCoordinator() {
 void MahoExtensionSidePanelCoordinator::OnPanelOptionsChanged(
     const extensions::ExtensionId& extension_id,
     const extensions::api::side_panel::PanelOptions& updated_options) {
+  if (IsFailClosed(profile_)) {
+    return;
+  }
   MahoCore* core = maho::GetCore();
   if (!core) {
     return;
@@ -97,6 +117,39 @@ void MahoExtensionSidePanelCoordinator::OnPanelOptionsChanged(
                                 layout.c_str(), default_width);
 }
 
+void MahoExtensionSidePanelCoordinator::SetLayout(
+    const extensions::ExtensionId& extension_id,
+    const std::string& layout) {
+  if (IsFailClosed(profile_)) {
+    return;
+  }
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+
+  char* out_path = nullptr;
+  char* out_layout = nullptr;
+  int32_t out_default_width = 320;
+  bool registered = maho_core_get_side_panel_options(
+      core, extension_id.c_str(), &out_path, &out_layout, &out_default_width);
+
+  std::string path = (registered && out_path) ? out_path : std::string();
+  if (out_path) {
+    maho_string_free(out_path);
+  }
+  if (out_layout) {
+    maho_string_free(out_layout);
+  }
+
+  if (!registered || path.empty()) {
+    return;
+  }
+
+  maho_core_register_side_panel(core, extension_id.c_str(), path.c_str(),
+                                layout.c_str(), out_default_width);
+}
+
 void MahoExtensionSidePanelCoordinator::OnSidePanelServiceShutdown() {
   service_observation_.Reset();
 }
@@ -105,6 +158,9 @@ void MahoExtensionSidePanelCoordinator::OnExtensionUnloaded(
     content::BrowserContext* browser_context,
     const extensions::Extension* extension,
     extensions::UnloadedExtensionReason reason) {
+  if (IsFailClosed(profile_)) {
+    return;
+  }
   MahoCore* core = maho::GetCore();
   if (core && extension) {
     maho_core_unregister_side_panel(core, extension->id().c_str());
@@ -115,6 +171,9 @@ void MahoExtensionSidePanelCoordinator::OnExtensionUninstalled(
     content::BrowserContext* browser_context,
     const extensions::Extension* extension,
     extensions::UninstallReason reason) {
+  if (IsFailClosed(profile_)) {
+    return;
+  }
   MahoCore* core = maho::GetCore();
   if (core && extension) {
     maho_core_unregister_side_panel(core, extension->id().c_str());

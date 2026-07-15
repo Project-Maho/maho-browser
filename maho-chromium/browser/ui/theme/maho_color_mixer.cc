@@ -477,6 +477,25 @@ float GetTitlebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   return 0.15f;
 }
 
+// R-12: Private/Incognito semantic colors. These are unconditional
+// constants — never conditioned on profile in the mixer layer.
+// Profile-aware Views code calls SetPrivateAppearance() to inject them.
+void AddPrivateColors(ui::ColorMixer& mixer) {
+  // Frozen Todo-1 (DESIGN.md) private-shell tokens, assigned verbatim:
+  // shell #111214, surface #202124, elevated/search #2F3033,
+  // primary text #ECEDEF, secondary text #A7ABB1, border #858A91,
+  // hover #303134. Values are fixed and never tinted by the active Space.
+  mixer[kMahoColorPrivateSidebarBackground] = {SkColorSetRGB(0x20, 0x21, 0x24)};
+  mixer[kMahoColorPrivateSidebarText]        = {SkColorSetRGB(0xEC, 0xED, 0xEF)};
+  mixer[kMahoColorPrivateTabRowBackground]   = {SkColorSetRGB(0x20, 0x21, 0x24)};
+  mixer[kMahoColorPrivateTabRowHover]        = {SkColorSetRGB(0x30, 0x31, 0x34)};
+  mixer[kMahoColorPrivateSearchBackground]   = {SkColorSetRGB(0x2F, 0x30, 0x33)};
+  mixer[kMahoColorPrivateSearchBorder]       = {SkColorSetRGB(0x85, 0x8A, 0x91)};
+  mixer[kMahoColorPrivateFooterBackground]   = {SkColorSetRGB(0x11, 0x12, 0x14)};
+  mixer[kMahoColorPrivateIdentityIcon]       = {SkColorSetRGB(0xA7, 0xAB, 0xB1)};
+  mixer[kMahoColorPrivateTopBarBackground]   = {SkColorSetRGB(0x11, 0x12, 0x14)};
+}
+
 }  // namespace
 
 void AddMahoColorMixers(ui::ColorProvider* provider,
@@ -529,6 +548,7 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
   AddLegacyAliasColors(mixer, dark_mode);
   AddCommandBarColors(mixer, dark_mode);
   AddAccentAndSemanticColors(mixer, accent_color);
+  AddPrivateColors(mixer);  // R-12: unconditional; always registered.
 
   // Phase 4: Component theme overrides.
   MahoDownloadTheme::AddColors(mixer, dark_mode);

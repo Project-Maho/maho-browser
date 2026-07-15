@@ -84,8 +84,16 @@ impl TabPreviewManager {
         self.previews.remove(tab_id);
     }
 
-    pub fn persist_to_storage(&self, storage: &maho_storage::lmdb::LmdbStorage) {
+    pub fn persist_to_storage(
+        &self,
+        storage: &maho_storage::lmdb::LmdbStorage,
+        private_ids: &HashSet<TabId>,
+    ) {
         for (tab_id, preview) in &self.previews {
+            // Never persist private/incognito tab thumbnails to disk.
+            if private_ids.contains(tab_id) {
+                continue;
+            }
             if let Ok(serialized) = serde_json::to_vec(preview) {
                 let _ = storage.save_preview(tab_id.as_ref(), &serialized);
             }

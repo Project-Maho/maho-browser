@@ -12,6 +12,7 @@ use crate::auth::middleware::get_auth_context;
 use crate::db::*;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Digest};
+use serde::Serialize;
 
 const ACCESS_TOKEN_TTL_SECS: i64 = 60 * 60;
 const REFRESH_TOKEN_TTL_SECS: i64 = 60 * 60 * 24 * 30;
@@ -349,7 +350,7 @@ pub async fn introspect(mut req: Request, env: Env) -> Result<Response> {
     let token_hash = hash_token_str(&payload.token);
     let context = find_active_session_context_by_access_hash(&db, &token_hash).await?
         .ok_or_else(|| AppError::Auth("invalid or expired user token".to_string()))?;
-        
+
     let introspect_res = IntrospectResponse {
         user_id: context.user.id,
         tier: context.user.tier,
@@ -374,12 +375,111 @@ pub async fn request_verify(req: Request, env: Env) -> Result<Response> {
     let stmt = stmt.bind(&[js(&hashed)?, js(&expires_at)?, js(&auth.user.id)?])?;
     stmt.run().await?;
     
-    let dev_token = Some(token);
+    let resend_api_key = env.secret("RESEND_API_KEY")
+        .map(|v| v.to_string())
+        .ok()
+        .filter(|k| !k.trim().is_empty());
+    
+    if let Some(api_key) = resend_api_key.as_deref() {
+        send_verification_email(&env, api_key, &auth.user.email, &token).await?;
+    }
+    
+    // SAFETY: the plaintext token proves email ownership. Returning it in the HTTP
+    // response would let any authenticated caller self-verify without receiving the
+    // email, defeating the ownership check. Expose it ONLY when MAHO_ENV is
+    // explicitly set to a development/local value; all other values (including
+    // unset) are treated as non-dev — FAIL CLOSED by default.
+    let maho_env = env.var("MAHO_ENV").map(|v| v.to_string()).ok();
+    let dev_token = if should_expose_dev_token(maho_env.as_deref()) {
+        Some(token)
+    } else {
+        None
+    };
     
     Ok(Response::from_json(&RequestVerifyResponse {
         status: "success".to_string(),
         dev_token,
     })?)
+}
+
+fn should_expose_dev_token(maho_env: Option<&str>) -> bool {
+    matches!(
+        maho_env.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("development") | Some("local") | Some("dev")
+    )
+}
+
+// Uses the Worker's outbound Fetch (as in billing.rs); reqwest is unavailable on
+// the wasm32 Worker target. Send failures are logged and surfaced, not swallowed.
+async fn send_verification_email(
+    env: &Env,
+    api_key: &str,
+    to_email: &str,
+    token: &str,
+) -> Result<()> {
+    let from_email = env.var("MAHO_FROM_EMAIL")
+        .map(|v| v.to_string())
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "Maho <noreply@mahobrowser.com>".to_string());
+    
+    let verify_base = env.var("MAHO_VERIFY_URL")
+        .map(|v| v.to_string())
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "https://mahobrowser.com/verify".to_string());
+    
+    // Token is a 32-char lowercase-hex UUID (`.simple()`), already URL-safe.
+    let verify_link = format!("{verify_base}?token={token}");
+    
+    let html = format!(
+        "<p>Confirm your Maho email address to finish setting up your account.</p>\
+         <p><a href=\"{verify_link}\">Verify my email</a></p>\
+         <p>Or paste this link into your browser:<br>{verify_link}</p>\
+         <p>This link expires in 24 hours. If you didn't request it, you can ignore this email.</p>"
+    );
+    
+    #[derive(Serialize)]
+    struct ResendEmail<'a> {
+        from: &'a str,
+        to: [&'a str; 1],
+        subject: &'a str,
+        html: &'a str,
+    }
+    
+    let body = serde_json::to_string(&ResendEmail {
+        from: &from_email,
+        to: [to_email],
+        subject: "Verify your Maho email",
+        html: &html,
+    }).map_err(|e| AppError::Internal(format!("failed to serialize verification email: {e}")))?;
+    
+    let mut headers = Headers::new();
+    headers.set("Content-Type", "application/json")?;
+    headers.set("Authorization", &format!("Bearer {api_key}"))?;
+    
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(body.into()));
+    
+    let request = Request::new_with_init("https://api.resend.com/emails", &init)?;
+    
+    match Fetch::Request(request).send().await {
+        Ok(resp) if (200..300).contains(&resp.status_code()) => Ok(()),
+        Ok(mut resp) => {
+            let status = resp.status_code();
+            let detail = resp.text().await.unwrap_or_default();
+            console_error!("Resend verify email failed: status={status} body={detail}");
+            Err(AppError::Internal(format!(
+                "verification email send failed (status {status})"
+            )))
+        }
+        Err(e) => {
+            console_error!("Resend verify email fetch error: {e}");
+            Err(AppError::Internal(format!("verification email send error: {e}")))
+        }
+    }
 }
 
 pub async fn verify(mut req: Request, env: Env) -> Result<Response> {
@@ -616,5 +716,44 @@ impl From<Session> for PublicSession {
             last_used_at: value.last_used_at,
             created_at: value.created_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_expose_dev_token;
+
+    #[test]
+    fn dev_token_hidden_when_env_unset() {
+        // FAIL CLOSED: unset MAHO_ENV must not expose token.
+        assert!(!should_expose_dev_token(None));
+    }
+
+    #[test]
+    fn dev_token_hidden_when_env_production() {
+        assert!(!should_expose_dev_token(Some("production")));
+        assert!(!should_expose_dev_token(Some("staging")));
+        assert!(!should_expose_dev_token(Some("PRODUCTION")));
+        assert!(!should_expose_dev_token(Some("")));
+        assert!(!should_expose_dev_token(Some("   ")));
+    }
+
+    #[test]
+    fn dev_token_exposed_when_env_dev() {
+        assert!(should_expose_dev_token(Some("development")));
+        assert!(should_expose_dev_token(Some("local")));
+        assert!(should_expose_dev_token(Some("dev")));
+        // case-insensitive
+        assert!(should_expose_dev_token(Some("Development")));
+        assert!(should_expose_dev_token(Some("LOCAL")));
+    }
+
+    /// Regression: the original fail-open bug — MAHO_ENV unset AND no RESEND key
+    /// (e.g. fresh-env deploy with missing secret) must never leak the token.
+    #[test]
+    fn dev_token_hidden_when_env_and_key_both_unset() {
+        // Simulates: env.var("MAHO_ENV") -> Err (unset), env.secret("RESEND_API_KEY") -> Err (unset)
+        // The gate now depends solely on MAHO_ENV; unset = fail closed.
+        assert!(!should_expose_dev_token(None));
     }
 }

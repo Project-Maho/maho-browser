@@ -11,10 +11,11 @@ fn create_tabs(core: &mut MahoCore, space_id: &SpaceId, n: usize) -> Vec<TabId> 
         let event = ShellEvent::CreateTab {
             space_id: space_id.clone(),
             url: Some(Url::new(&url)),
-            parent_id: None,
-            tab_id: None,
-            window_id: None,
-        };
+        parent_id: None,
+        tab_id: None,
+        window_id: None,
+        is_private: false,
+    };
         let updates = core.handle_event(event);
         for update in updates {
             if let maho_types::events::core_update::CoreUpdate::TabCreated { tab } = update {

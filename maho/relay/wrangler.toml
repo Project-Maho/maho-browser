@@ -28,7 +28,7 @@ class_name = "RoomDO"
 
 [env.production.vars]
 REQUIRE_AUTH = "true"
-OPEN_REGISTRATION = "false"
+OPEN_REGISTRATION = "true"
 SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE = "3"
 LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = "10"
 MIN_PASSWORD_LENGTH = "12"
@@ -38,6 +38,9 @@ MAX_CONNECTIONS_PER_ROOM = "5"
 MAX_CONNECTIONS_PER_IP = "20"
 MAX_ROOMS_PER_IP = "10"
 RETENTION_DAYS = "30"
+MAHO_FROM_EMAIL = "Maho <noreply@mahobrowser.com>"
+MAHO_VERIFY_URL = "https://mahobrowser.com/verify"
+MAHO_ENV = "production"
 
 [[env.production.migrations]]
 tag = "v1"
@@ -71,6 +74,9 @@ MAX_CONNECTIONS_PER_ROOM = "5"
 MAX_CONNECTIONS_PER_IP = "20"
 MAX_ROOMS_PER_IP = "10"
 RETENTION_DAYS = "7"
+MAHO_FROM_EMAIL = "Maho Staging <noreply@mahobrowser.com>"
+MAHO_VERIFY_URL = "https://relay-staging.mahobrowser.com/verify"
+MAHO_ENV = "staging"
 
 [[env.staging.migrations]]
 tag = "v1"

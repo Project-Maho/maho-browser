@@ -46,3 +46,4 @@ define_id!(PaneId);
 define_id!(DownloadId);
 define_id!(FolderId);
 define_id!(ProfileId);
+define_id!(WindowId);

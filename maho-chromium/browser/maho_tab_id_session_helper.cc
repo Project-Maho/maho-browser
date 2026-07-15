@@ -20,6 +20,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -28,9 +29,12 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/views/view_utils.h"
 
 namespace maho {
 
@@ -259,6 +263,35 @@ void MahoTabIdSessionHelper::OnSessionRestoreFinished(Profile* profile, int num_
   LOG(INFO) << "Reconciliation: " << core_tab_ids.size()
             << " LMDB tabs, " << restored_count << " restored, "
             << suspended_count << " suspended (live count: " << live_tab_count << ")";
+
+  // Session restore has now applied Chromium's split-tab commands to the live
+  // TabStripModel. The sidebar's initial render can run before those land,
+  // leaving restored (loaded) split panes ungrouped until the next rebuild.
+  // Force one grouping pass now so GroupSplitTabs sees the split data.
+  // (Suspended panes absent from the model still need the core-persistence fix.)
+  if (auto* collection = GlobalBrowserCollection::GetInstance()) {
+    collection->ForEach([profile](BrowserWindowInterface* browser_interface) {
+      Browser* browser = browser_interface->GetBrowserForMigrationOnly();
+      if (!browser || browser->profile() != profile) {
+        return true;
+      }
+      BrowserView* browser_view =
+          BrowserView::GetBrowserViewForBrowser(browser);
+      if (!browser_view) {
+        return true;
+      }
+      auto* container = views::AsViewClass<MahoSidebarContainerView>(
+          browser_view->maho_sidebar_container());
+      if (!container) {
+        return true;
+      }
+      if (auto* sidebar_view =
+              views::AsViewClass<MahoSidebarView>(container->sidebar_view())) {
+        sidebar_view->ScheduleRefreshAll();
+      }
+      return true;
+    });
+  }
 }
 
 void MahoTabIdSessionHelper::PerformSessionMigration(Profile* profile, MahoCore* core) {

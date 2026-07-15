@@ -2,12 +2,29 @@ import SwiftUI
 import LucideIcons
 
 struct HomeSearchView: View {
+    let isIncognito: Bool
     let onOpenTabs: () -> Void
     let onOpenSettings: () -> Void
     let onResumeTab: (TabId) -> Void
     let onSelectSite: (String) -> Void
 
     private let bridge = MahoBridge.shared
+
+    private var primaryText: Color {
+        isIncognito ? ShellTheme.Palette.incognitoForeground : .primary
+    }
+
+    private var secondaryText: Color {
+        isIncognito ? ShellTheme.Palette.incognitoMutedForeground : .secondary
+    }
+
+    private var cardSurface: Color {
+        isIncognito ? ShellTheme.Palette.incognitoSurface : ShellTheme.Palette.tabCardSurface.opacity(0.85)
+    }
+
+    private var cardBorder: Color {
+        isIncognito ? ShellTheme.Palette.incognitoBorder : ShellTheme.Palette.overlayBorder
+    }
 
     private var activeSpaceId: SpaceId? {
         bridge.getActiveSpaceId()
@@ -74,16 +91,30 @@ struct HomeSearchView: View {
         .accessibilityIdentifier("homeSearchView")
     }
 
+    @ViewBuilder
     private var backdrop: some View {
-        LinearGradient(
-            colors: [
-                ShellTheme.Palette.homeBackgroundElevated,
-                ShellTheme.Palette.homeBackground
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
+        if isIncognito {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.incognitoBackground,
+                    ShellTheme.Palette.incognitoTint,
+                    ShellTheme.Palette.incognitoBackground
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        } else {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.homeBackgroundElevated,
+                    ShellTheme.Palette.homeBackground
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private var brandLogo: some View {
@@ -119,12 +150,12 @@ struct HomeSearchView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(tab.title.isEmpty ? "New tab" : tab.title)
                                     .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
+                                    .foregroundStyle(primaryText)
                                     .lineLimit(1)
-                                
+                                 
                                 Text(displayHost(for: tab.url))
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(secondaryText)
                                     .lineLimit(1)
                             }
                             
@@ -132,7 +163,7 @@ struct HomeSearchView: View {
                             
                             Image(lucide: Lucide.chevronRight)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(secondaryText)
                         }
                         .padding(.vertical, ShellTheme.Spacing.medium)
                         .padding(.horizontal, ShellTheme.Spacing.large)
@@ -146,10 +177,10 @@ struct HomeSearchView: View {
                     }
                 }
             }
-            .background(ShellTheme.Palette.tabCardSurface.opacity(0.85), in: RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous))
+            .background(cardSurface, in: RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
-                    .strokeBorder(ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline)
+                    .strokeBorder(cardBorder, lineWidth: ShellTheme.Stroke.hairline)
             )
         }
     }
@@ -176,21 +207,21 @@ struct HomeSearchView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(tab.title.isEmpty ? displayHost(for: tab.url) : tab.title)
                                     .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.primary)
+                                    .foregroundStyle(primaryText)
                                     .lineLimit(1)
-                                
+                                 
                                 Text(displayHost(for: tab.url))
                                     .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(secondaryText)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 0)
                         }
                         .padding(ShellTheme.Spacing.medium)
-                        .background(ShellTheme.Palette.tabCardSurface.opacity(0.85), in: RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous))
+                        .background(cardSurface, in: RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
-                                .strokeBorder(ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline)
+                                .strokeBorder(cardBorder, lineWidth: ShellTheme.Stroke.hairline)
                         )
                     }
                     .buttonStyle(.plain)
@@ -203,10 +234,10 @@ struct HomeSearchView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.headline)
-                .foregroundStyle(.primary)
+                .foregroundStyle(primaryText)
             Text(subtitle)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(secondaryText)
         }
         .padding(.leading, ShellTheme.Spacing.small)
     }

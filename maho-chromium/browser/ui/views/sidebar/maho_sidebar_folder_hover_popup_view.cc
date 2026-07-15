@@ -16,13 +16,20 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/vector_icons/vector_icons.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -32,6 +39,7 @@
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/drag_controller.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
@@ -49,19 +57,62 @@ constexpr int kCornerRadius = 16;
 constexpr int kRowCornerRadius = 10;
 constexpr int kRowHorizontalInset = 8;
 constexpr int kMaxNavDepth = 10;
+constexpr int kDragStartThresholdDp = 5;
 
-class ItemRow : public views::View {
+struct ItemRowDragData {
+  std::string tab_id;
+  std::string space_id;
+  std::string source_parent_folder_id;
+  int tab_strip_index = -1;
+  int source_folder_child_index = -1;
+};
+
+int ResolveTabStripIndex(Browser* browser, const std::string& tab_id) {
+  if (!browser || !browser->tab_strip_model() || tab_id.empty()) {
+    return -1;
+  }
+
+  TabStripModel* strip = browser->tab_strip_model();
+  for (int i = 0; i < strip->count(); ++i) {
+    content::WebContents* contents = strip->GetWebContentsAt(i);
+    if (!contents) {
+      continue;
+    }
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper && helper->stable_tab_id() == tab_id) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+std::string GetActiveSpaceIdForBrowser(Browser* browser) {
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  return bridge ? bridge->GetActiveSpaceId(browser) : std::string();
+}
+
+class ItemRow : public views::View,
+                public views::DragController {
   METADATA_HEADER(ItemRow, views::View)
  public:
   ItemRow(const ui::ImageModel& icon,
           const std::u16string& title,
           bool is_folder,
           int index,
+          ItemRowDragData drag_data,
           base::RepeatingCallback<void(int)> hover_cb,
           base::RepeatingCallback<void(int)> click_cb)
-      : index_(index), hover_cb_(std::move(hover_cb)), click_cb_(std::move(click_cb)) {
+      : is_folder_(is_folder),
+        index_(index),
+        drag_data_(std::move(drag_data)),
+        hover_cb_(std::move(hover_cb)),
+        click_cb_(std::move(click_cb)) {
     DETACH_FROM_SEQUENCE(sequence_checker_);
     SetPreferredSize(gfx::Size(kPopupWidth - 2 * kRowHorizontalInset, kRowHeight));
+
+    if (CanDragTab()) {
+      set_drag_controller(this);
+    }
     
     SetLayoutManager(std::make_unique<views::FillLayout>());
     
@@ -71,6 +122,9 @@ class ItemRow : public views::View {
         ui::kColorSysStateHoverOnSubtle, kRowCornerRadius));
         
     auto* contents = AddChildView(std::make_unique<views::View>());
+    if (CanDragTab()) {
+      contents->set_drag_controller(this);
+    }
     auto* row_layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(0, kRowHorizontalInset), 10));
     row_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
@@ -78,6 +132,9 @@ class ItemRow : public views::View {
     auto* icon_view = contents->AddChildView(std::make_unique<views::ImageView>());
     icon_view->SetImage(icon);
     icon_view->SetImageSize(gfx::Size(16, 16));
+    if (CanDragTab()) {
+      icon_view->set_drag_controller(this);
+    }
     
     auto* label = contents->AddChildView(std::make_unique<views::Label>(
         title, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3));
@@ -85,6 +142,9 @@ class ItemRow : public views::View {
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     label->SetElideBehavior(gfx::ELIDE_TAIL);
     label->SetSubpixelRenderingEnabled(false);
+    if (CanDragTab()) {
+      label->set_drag_controller(this);
+    }
     row_layout->SetFlexForView(label, 1);
     
     if (is_folder) {
@@ -118,13 +178,71 @@ class ItemRow : public views::View {
   bool OnMousePressed(const ui::MouseEvent& event) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     if (event.IsOnlyLeftMouseButton()) {
+      if (CanDragTab()) {
+        click_pending_ = true;
+        views::View::OnMousePressed(event);
+        return true;
+      }
       click_cb_.Run(index_);
       return true;
     }
     return views::View::OnMousePressed(event);
   }
-  
+
+  void OnMouseReleased(const ui::MouseEvent& event) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    const bool should_click = click_pending_;
+    click_pending_ = false;
+    views::View::OnMouseReleased(event);
+    if (should_click &&
+        (event.changed_button_flags() & ui::EF_LEFT_MOUSE_BUTTON) &&
+        HitTestPoint(event.location())) {
+      click_cb_.Run(index_);
+    }
+  }
+
+  void WriteDragDataForView(views::View* sender,
+                            const gfx::Point& press_pt,
+                            ui::OSExchangeData* data) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (!CanDragTab()) {
+      return;
+    }
+
+    click_pending_ = false;
+
+    SidebarDragPayload payload;
+    payload.node_kind = SidebarNodeKind::kTab;
+    payload.node_id = drag_data_.tab_id;
+    payload.origin = SidebarDragOrigin::kNormalSection;
+    payload.space_id = drag_data_.space_id;
+    payload.tab_strip_index = drag_data_.tab_strip_index;
+    payload.source_parent_folder_id = drag_data_.source_parent_folder_id;
+    payload.source_folder_child_index = drag_data_.source_folder_child_index;
+    WriteMahoDragData(payload, data);
+    data->provider().SetDragImage(CreateSidebarDragImage(this), gfx::Vector2d());
+  }
+
+  int GetDragOperationsForView(views::View* sender,
+                               const gfx::Point& p) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return static_cast<int>(CanDragTab() ? ui::mojom::DragOperation::kMove
+                                         : ui::mojom::DragOperation::kNone);
+  }
+
+  bool CanStartDragForView(views::View* sender,
+                           const gfx::Point& press_pt,
+                           const gfx::Point& current_pt) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return CanDragTab() &&
+           (press_pt - current_pt).Length() >= kDragStartThresholdDp;
+  }
+   
  private:
+  bool CanDragTab() const {
+    return !is_folder_ && !drag_data_.tab_id.empty();
+  }
+
   void UpdateRowBackground() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     if (selected_) {
@@ -140,12 +258,15 @@ class ItemRow : public views::View {
     }
   }
 
+  bool is_folder_ = false;
   int index_;
+  ItemRowDragData drag_data_;
   base::RepeatingCallback<void(int)> hover_cb_;
   base::RepeatingCallback<void(int)> click_cb_;
   raw_ptr<views::View> highlight_bg_ = nullptr;
   bool hovered_ = false;
   bool selected_ = false;
+  bool click_pending_ = false;
   
   SEQUENCE_CHECKER(sequence_checker_);
 };
@@ -186,8 +307,13 @@ ui::ImageModel GetFaviconForTab(Browser* browser, const SidebarTreeNode& node) {
 
 }  // namespace
 
-MahoSidebarFolderHoverPopupView::Level::Level(std::u16string name, std::vector<SidebarTreeNode> children)
-    : name(std::move(name)), children(std::move(children)) {}
+MahoSidebarFolderHoverPopupView::Level::Level(
+    std::u16string name,
+    std::string folder_id,
+    std::vector<SidebarTreeNode> children)
+    : name(std::move(name)),
+      folder_id(std::move(folder_id)),
+      children(std::move(children)) {}
 
 MahoSidebarFolderHoverPopupView::Level::Level(const Level&) = default;
 MahoSidebarFolderHoverPopupView::Level::Level(Level&&) noexcept = default;
@@ -242,7 +368,8 @@ MahoSidebarFolderHoverPopupView::MahoSidebarFolderHoverPopupView(
       root_folder_id_(std::move(folder_id)),
       activate_callback_(std::move(on_activate)) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
-  nav_stack_.push_back({std::move(folder_name), std::move(children)});
+  nav_stack_.emplace_back(std::move(folder_name), root_folder_id_,
+                          std::move(children));
   Init();
 }
 
@@ -377,7 +504,9 @@ void MahoSidebarFolderHoverPopupView::RebuildResultRows() {
     scroll_view_->ScrollToOffset(gfx::PointF(0, 0));
   }
 
-  const auto& children = nav_stack_.back().children;
+  const Level& level = nav_stack_.back();
+  const auto& children = level.children;
+  const std::string space_id = GetActiveSpaceIdForBrowser(browser_);
   if (filtered_indices_.empty()) {
     auto* empty_label = rows_container_->AddChildView(std::make_unique<views::Label>(
         children.empty() ? u"No tabs in this folder" : u"No matching results",
@@ -411,8 +540,20 @@ void MahoSidebarFolderHoverPopupView::RebuildResultRows() {
         }
       }
       
+      ItemRowDragData drag_data;
+      if (!is_folder) {
+        drag_data.tab_id = child.tab_id;
+        drag_data.space_id = space_id;
+        drag_data.source_parent_folder_id = child.parent_folder_id.empty()
+                                                ? level.folder_id
+                                                : child.parent_folder_id;
+        drag_data.tab_strip_index = ResolveTabStripIndex(browser_, child.tab_id);
+        drag_data.source_folder_child_index = child.folder_child_index;
+      }
+
       auto* row = rows_container_->AddChildView(std::make_unique<ItemRow>(
           icon, display_name, is_folder, static_cast<int>(i),
+          std::move(drag_data),
           base::BindRepeating(&MahoSidebarFolderHoverPopupView::OnRowHovered,
                               weak_factory_.GetWeakPtr()),
           base::BindRepeating(&MahoSidebarFolderHoverPopupView::OnRowClicked,
@@ -507,7 +648,8 @@ void MahoSidebarFolderHoverPopupView::PushLevel(const SidebarTreeNode& folder_no
   if (nav_stack_.size() >= kMaxNavDepth) {
     return;
   }
-  nav_stack_.push_back({folder_node.folder_name, folder_node.children});
+  nav_stack_.emplace_back(folder_node.folder_name, folder_node.folder_id,
+                          folder_node.children);
   
   if (search_field_) {
     search_field_->SetController(nullptr);

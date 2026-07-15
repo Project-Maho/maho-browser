@@ -217,6 +217,8 @@ source_set("maho_context_menus") {
     "//maho/browser:maho_tab_id_helper",
     # TODO(nicolo): Re-enable when split_view is wired up.
     # "//maho/browser/ui/views/split_view:maho_split_view",
+
+
     "//maho/components/constants",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/browser:maho_theme_support",
@@ -517,7 +519,16 @@ source_set("maho_browser_main_extra_parts") {
   sources = [
     "maho_browser_main_extra_parts.cc",
     "maho_browser_main_extra_parts.h",
+    "maho_private_context_policy.cc",
+    "maho_private_context_policy.h",
+    "ui/webui/maho_webui_private_boundary.cc",
+    "ui/webui/maho_webui_private_boundary.h",
+    "sync/maho_sync_relay_client.cc",
+    "sync/maho_sync_relay_client.h",
   ]
+
+
+
   deps = [
     ":maho_core_holder",
     ":maho_extension_state_bridge",
@@ -530,6 +541,8 @@ source_set("maho_browser_main_extra_parts") {
     "//chrome/browser:main_extra_parts",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/sessions:sessions",
+    "//services/network/public/mojom",
+
     "//maho/browser/importer",
     "//maho/browser/mcp:maho_mcp",
     "//maho/browser/updates:maho_updates_lib",
@@ -781,6 +794,7 @@ source_set("maho_theme_io_unittests") {
 test("maho_theme_io_test") {
   sources = [ "run_all_maho_unittests_main.cc" ]
   deps = [
+    ":maho_ffi_callback_handle_unittests",
     ":maho_theme_io_unittests",
     "//base",
     "//base/test:test_support",
@@ -790,6 +804,46 @@ test("maho_theme_io_test") {
     "//mojo/core/embedder",
     "//testing/gtest",
     "//ui/views:test_support",
+  ]
+}
+
+# Automated coverage for previously-manual QA items across three surfaces:
+#   A) chrome.maho.splitView / chrome.maho.sidePanel ExtensionFunctions
+#   B) migration dialog Safari passwords-CSV picker flow
+#   C) chrome://maho-routines page handler (create/list/delete)
+# Uses the shared Chrome unit-test main so a single light binary covers all
+# three without pulling in the full chrome unit_tests target.
+test("maho_qa_automation_test") {
+  sources = [
+    "extensions/api/maho_extension_api_unittest.cc",
+    "run_all_maho_unittests_main.cc",
+    "ui/views/importer/maho_migration_dialog_safari_csv_unittest.cc",
+    "ui/webui/maho_routines/maho_routines_page_handler_unittest.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/views/frame:frame",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/browser:test_support",
+    "//extensions/common",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser/importer:importer",
+    "//maho/browser/ui/views/side_panel:side_panel",
+    "//maho/browser/ui/webui/maho_routines:maho_routines",
+    "//maho/browser/ui/webui/maho_routines:mojo_bindings",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//testing/gtest",
+    "//ui/shell_dialogs",
+    "//ui/views:test_support",
+    "//url",
   ]
 }
 
@@ -810,5 +864,30 @@ source_set("maho_auth_utils") {
     "//net",
     "//services/network/public/mojom",
     "//url",
+  ]
+}
+
+source_set("maho_incognito_unittests") {
+  testonly = true
+  sources = [
+    "maho_private_context_policy_unittest.cc",
+    "ui/webui/maho_webui_private_boundary_unittest.cc",
+    "maho_preview_ffi_abi_unittest.cc",
+    "ai/maho_ai_private_boundary_unittest.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/test:test_support",
+    "//components/profile_metrics:profile_metrics",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
   ]
 }

@@ -3132,9 +3132,9 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 // (b) Pinned root tab dropped on the favorites grid must produce
-//     [unpin_tab, favorite_tab, reorder_favorite] — not just favorite_tab.
+//     [favorite_tab, reorder_favorite] — not unpin_tab.
 TEST_F(SidebarDnDDispatchTest,
-       PinnedTabDropToFavoritesGridDispatchesUnpinThenFavorite) {
+       PinnedTabDropToFavoritesGridDispatchesFavoriteAndReorder) {
   MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
   MahoSidebarFavoritesModel model;
   favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 80));
@@ -3150,17 +3150,14 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 3u);
-  EXPECT_EQ(observer_.events[0].kind, "unpin_tab");
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "favorite_tab");
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"pinned-tab\""),
             std::string::npos);
-  EXPECT_EQ(observer_.events[1].kind, "favorite_tab");
+  EXPECT_EQ(observer_.events[1].kind, "reorder_favorite");
   EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"pinned-tab\""),
             std::string::npos);
-  EXPECT_EQ(observer_.events[2].kind, "reorder_favorite");
-  EXPECT_NE(observer_.events[2].json.find("\"tab_id\":\"pinned-tab\""),
-            std::string::npos);
-  EXPECT_NE(observer_.events[2].json.find("\"new_index\":0"),
+  EXPECT_NE(observer_.events[1].json.find("\"new_index\":0"),
             std::string::npos);
 }
 
@@ -3286,9 +3283,9 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 // (d) Pinned folder-child tab dropped on the favorites grid must produce
-//     [move_tab_to_root, unpin_tab, favorite_tab, reorder_favorite].
+//     [move_tab_to_root, favorite_tab, reorder_favorite] (exactly 3 steps).
 TEST_F(SidebarDnDDispatchTest,
-       PinnedFolderChildDropToFavoritesGridDispatchesFourSteps) {
+       PinnedFolderChildDropToFavoritesGridDispatchesThreeSteps) {
   MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
   MahoSidebarFavoritesModel model;
   favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 80));
@@ -3306,16 +3303,15 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 4u);
+  ASSERT_EQ(observer_.events.size(), 3u);
   EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
   EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"pinned-folder-1\""),
             std::string::npos);
-  EXPECT_EQ(observer_.events[1].kind, "unpin_tab");
-  EXPECT_EQ(observer_.events[2].kind, "favorite_tab");
-  EXPECT_NE(observer_.events[2].json.find("\"tab_id\":\"pinned-child\""),
+  EXPECT_EQ(observer_.events[1].kind, "favorite_tab");
+  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"pinned-child\""),
             std::string::npos);
-  EXPECT_EQ(observer_.events[3].kind, "reorder_favorite");
-  EXPECT_NE(observer_.events[3].json.find("\"tab_id\":\"pinned-child\""),
+  EXPECT_EQ(observer_.events[2].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[2].json.find("\"tab_id\":\"pinned-child\""),
             std::string::npos);
 }
 
@@ -4081,7 +4077,8 @@ class SidebarSplitGroupRenderTest : public views::ViewsTestBase {
 };
 
 views::BoxLayoutView* FindSplitGroupContainer(views::View* root) {
-  if (root && root->GetClassName() == "BoxLayoutView") {
+  if (root && (root->GetClassName() == "BoxLayoutView" ||
+               root->GetClassName() == "SplitGroupContainerView")) {
     return static_cast<views::BoxLayoutView*>(root);
   }
   if (root) {
@@ -4214,7 +4211,7 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_DividerInsertedBetweenChildren) {
   views::View* divider = split_container->children()[3];
   EXPECT_EQ(divider->GetClassName(), "View");
   EXPECT_EQ(divider->GetPreferredSize().width(), 1);
-  EXPECT_EQ(divider->GetPreferredSize().height(), 16);
+  EXPECT_EQ(divider->GetPreferredSize().height(), 28);
 }
 
 TEST_F(SidebarSplitGroupRenderTest, SplitGroup_ActiveChildHighlights) {
@@ -4270,7 +4267,7 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_TwoLayoutOrientationsHaveDifferen
   
   ASSERT_EQ(split_container->children().size(), 7u);
   views::View* divider = split_container->children()[3];
-  EXPECT_EQ(divider->GetPreferredSize().width(), 16);
+  EXPECT_EQ(divider->GetPreferredSize().width(), 28);
   EXPECT_EQ(divider->GetPreferredSize().height(), 1);
 }
 

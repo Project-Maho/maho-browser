@@ -145,13 +145,17 @@ fn test_extension_sync_push_and_callback() {
     // Verify that the entity is pushed in outgoing queue
     let outgoing = core.drain_sync_outgoing();
     assert!(!outgoing.is_empty());
+    let local_version = match &outgoing[0] {
+        maho_core::sync_models::SyncMessage::EntityPush { entity } => entity.version,
+        _ => panic!("Expected EntityPush"),
+    };
 
     // Step 2: Receive remote sync entity toggling enabled state to false
     use maho_core::sync_models::{SyncEntity, SyncEntityType};
     let remote_entity = SyncEntity {
         entity_type: SyncEntityType::Extension,
         entity_id: "ext-sync-test".to_string(),
-        version: 9999, // newer version to trigger LWW update
+        version: local_version + 1, // newer version to trigger LWW update
         device_id: 0,
         schema_version: 1,
         modified_at: 12345678,
@@ -161,6 +165,7 @@ fn test_extension_sync_push_and_callback() {
         }).to_string(),
         deleted: false,
         queue_row_id: None,
+        fields_hlc_json: None,
     };
 
     let applied = core.apply_sync_remote_entities(vec![remote_entity]);

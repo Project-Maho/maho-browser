@@ -67,6 +67,8 @@ class SidebarFolderRowView;
 class SidebarVisibilityManager;
 class MahoTabPreviewController;
 class MahoSidebarFolderHoverController;
+class MahoSidebarView;
+struct SidebarDropPlan;
 
 const ui::ClipboardFormatType& GetMahoDragFormatType();
 
@@ -140,6 +142,10 @@ class MahoSidebarTabListView : public views::View,
   content::WebContents* WakeSuspendedTab(const std::string& tab_id);
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
+  // Requests that the folder with the given id enter inline name-editing mode
+  // after the next rebuild completes (used for newly-created folders).
+  void SetPendingFolderEdit(const std::string& folder_id);
+
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
   SidebarTabRowView* FindTabRowByTabIndexForTesting(int tab_index);
   SidebarTabRowView* FindActiveTabRowForTesting();
@@ -170,6 +176,9 @@ class MahoSidebarTabListView : public views::View,
   // Returns the maho-core tab_id for the given WebContents, or empty string.
   std::string FindCoreTabIdByWebContents(content::WebContents* contents) const;
 
+  MahoSidebarView* GetSidebarView();
+  void HandlePostDropTransition(const SidebarDragPayload& payload,
+                                const SidebarDropPlan& plan);
 
   void ShowTabRowContextMenu(views::View* source,
                              int live_index,
@@ -207,13 +216,31 @@ class MahoSidebarTabListView : public views::View,
   void OpenSelectedInSplit();
   void NewFolderWithSelected();
 
+  // Two-stage close-protection funnel (suspend-then-delete for pinned/favorite).
+  // Public so SidebarTabRowView's context-menu Delegate can route single-tab
+  // closes here.
+  void CloseTabById(const std::string& tab_id);
+
+  // Flushes a rebuild that was deferred while the widget held capture (drag in
+  // progress). Public so MahoSidebarView::OnDragEnded can flush after a drag
+  // that ended without a drop (e.g. ESC-cancelled), which otherwise leaves the
+  // sidebar stale until the next model change.
+  void FlushDeferredRebuild();
+
+  // Clears the tab_id->strip-index cache. Public so
+  // MahoSidebarView::OnTabStripModelChanged can invalidate it on index-only
+  // strip mutations (kMoved/kInserted/kRemoved); the linear-scan fallback in
+  // ResolveTabStripIndexForTabId keeps lookups correct after the clear.
+  void InvalidateTabIndexCache();
+
  private:
   friend class RebuildRowsBatchScoper;
+  friend class SidebarInsertionLaneView;
+  friend class SidebarSectionDropTarget;
 
   void RebuildRows(const MahoSidebarTabListModel& model, Browser* browser);
   static std::string ComputeModelFingerprint(
       const MahoSidebarTabListModel& model);
-  void FlushDeferredRebuild();
   void RevealEmptyPinnedDropLane();
   void HideEmptyPinnedDropLane();
   void UpdatePinnedDropLaneVisibility(bool visible);
@@ -226,6 +253,23 @@ class MahoSidebarTabListView : public views::View,
                         MahoSidebarTabSection section,
                         Browser* browser,
                         const std::string& parent_folder_id);
+  std::unique_ptr<SidebarTabRowView> CreateTabRowView(
+      const SidebarTreeNode& node,
+      MahoSidebarTabSection section,
+      Browser* browser);
+  // A collapsed folder keeps its active descendant visible as a single
+  // "sticky" row directly under the folder row. Returns the row (registered
+  // in tab_id_to_row_view_), or nullptr when the folder has no active
+  // descendant.
+  SidebarTabRowView* AddCollapsedActiveRow(views::View* parent,
+                                           size_t insert_index,
+                                           const SidebarTreeNode& folder_node,
+                                           MahoSidebarTabSection section,
+                                           Browser* browser);
+  // Fast-path counterpart used by UpdateActiveTabHighlightOnly: creates the
+  // sticky row for |tab_id| under the outermost collapsed folder on its
+  // last_model_ path, if any.
+  void MaterializeStickyRowForTab(const std::string& tab_id);
   void RebuildSplitGroupContainer(views::View* parent,
                                   const SidebarTreeNode& group_node,
                                   MahoSidebarTabSection section,
@@ -236,8 +280,14 @@ class MahoSidebarTabListView : public views::View,
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
   void CloseTab(int tab_index);
-  void CloseTabById(const std::string& tab_id);
   int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
+  // Rebuilds tab_id_to_index_ from the live tab strip. Shared by every path
+  // that refreshes last_model_ so the cache never diverges from the strip.
+  void RebuildTabIndexCache();
+  // Recursively erases every descendant SidebarTabRowView from
+  // tab_id_to_row_view_ (and sub-folders from folder_rows_by_id_) before their
+  // views are freed. Prevents dangling raw_ptr / UAF on folder collapse.
+  void UnregisterRowsRecursive(views::View* view);
   void MuteTabById(const std::string& tab_id);
   void OpenNewTab(const ui::Event& event);
   // Opens Maho AI side panel. Auto-firing Tab Tidy on open deferred (ADR-0010 §future).
@@ -297,7 +347,12 @@ class MahoSidebarTabListView : public views::View,
   MahoSidebarTabListModel deferred_model_;
   raw_ptr<Browser> deferred_browser_ = nullptr;
 
-  bool suppress_state_push_rebuild_ = false;
+  // Fingerprint of the model we optimistically toggled to in
+  // ToggleFolderExpanded. The matching async state-push is suppressed exactly
+  // once (it would otherwise pay a second full RebuildRows on 870+ rows). A
+  // bare bool here swallowed *any* next update, including unrelated ones, so
+  // we gate suppression on the fingerprint actually matching. Empty = disarmed.
+  std::string suppress_push_fingerprint_;
 
   std::string last_model_fingerprint_;
   std::string last_active_tab_id_;
@@ -305,9 +360,12 @@ class MahoSidebarTabListView : public views::View,
 
   std::map<std::string, raw_ptr<SidebarFolderRowView>> folder_rows_by_id_;
 
+  std::string pending_folder_edit_id_;
+
   // P3: O(1) tab_id→strip index lookup eliminates O(870) linear scan per
-  // hover event (~870 calls/hover cycle). Rebuilt on Update() success.
-  std::unordered_map<std::string, int> tab_id_to_index_;
+  // hover event (~870 calls/hover cycle). Rebuilt on Update() success. Mutable
+  // so the const resolver can self-heal a stale entry after a validated scan.
+  mutable std::unordered_map<std::string, int> tab_id_to_index_;
 
   // P4 (Fix 2): O(1) tab_id->row view lookup for UpdateActiveTabHighlightOnly.
   // Replaces two RecursiveFindView O(N) walks per active-tab change.
@@ -334,7 +392,9 @@ class MahoSidebarTabListView : public views::View,
   // Selection states
   std::unordered_set<std::string> selected_tab_ids_;
   std::string selection_anchor_tab_id_;
-  bool batch_in_progress_ = false;
+  // Depth of nested RebuildRowsBatchScoper instances. Rebuild fires only when
+  // it returns to 0, so bulk multi-select operations can nest scopers safely.
+  int batch_depth_ = 0;
   bool batch_rebuild_needed_ = false;
 
   std::vector<SidebarTabRowView*> GetTabRowsInVisualOrder();
@@ -399,6 +459,7 @@ class SidebarTabRowView : public views::View,
   void ArchiveSelectedTabs() override;
   void OpenSelectedTabsInSplit() override;
   void NewFolderWithSelectedTabs() override;
+  void CloseTabById(const std::string& tab_id) override;
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override;
@@ -471,6 +532,16 @@ class SidebarTabRowView : public views::View,
   void SetFavicon(ui::ImageModel image);
   const std::string& tab_id() const { return tab_id_; }
   const std::string& containing_folder_id() const { return source_parent_folder_id_; }
+
+  // Non-empty when this row is the sticky active-tab row a collapsed folder
+  // keeps visible; holds that (visible, collapsed) folder's id, which may be
+  // an ancestor above the tab's immediate parent folder.
+  void SetCollapsedStickyFolderId(const std::string& folder_id) {
+    collapsed_sticky_folder_id_ = folder_id;
+  }
+  const std::string& collapsed_sticky_folder_id() const {
+    return collapsed_sticky_folder_id_;
+  }
   void ApplyDisplayedTitle(const std::u16string& title);
   void UpdateAudioState(bool audible, bool muted);
 
@@ -498,6 +569,7 @@ class SidebarTabRowView : public views::View,
   const MahoSidebarTabSection section_;
   const std::string space_id_;
   const std::string source_parent_folder_id_;
+  std::string collapsed_sticky_folder_id_;
   const int folder_child_index_;
   raw_ptr<Browser> browser_ = nullptr;
   int tab_index_ = -1;
@@ -646,6 +718,7 @@ class SidebarFolderRowView : public views::View,
  private:
   SidebarFolderDropZone ResolveDropZone(const ui::DropTargetEvent& event,
                                          const SidebarDragPayload& payload) const;
+  MahoSidebarTabListView* GetTabListView();
   void EndFolderEditing(bool commit);
   void ToggleFromLabelButton(const ui::Event& event);
   void RunToggleDeferred();

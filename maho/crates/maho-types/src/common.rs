@@ -99,10 +99,73 @@ pub enum ImageFormat {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImageData {
+    #[serde(deserialize_with = "deserialize_bytes")]
     pub data: Vec<u8>,
     pub width: u32,
     pub height: u32,
     pub format: ImageFormat,
+}
+
+fn deserialize_bytes<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct BytesVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for BytesVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a base64-encoded string or a sequence of bytes")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            base64_decode(v).ok_or_else(|| E::custom("invalid base64 string"))
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element()? {
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_any(BytesVisitor)
+}
+
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = 0u32;
+    let mut num_bits = 0;
+    
+    for c in input.chars() {
+        if c == '=' {
+            break;
+        }
+        let val = match c {
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32 + 26,
+            '0'..='9' => c as u32 - '0' as u32 + 52,
+            '+' | '-' => 62,
+            '/' | '_' => 63,
+            _ => continue,
+        };
+        buffer = (buffer << 6) | val;
+        num_bits += 6;
+        if num_bits >= 8 {
+            num_bits -= 8;
+            bytes.push(((buffer >> num_bits) & 0xFF) as u8);
+        }
+    }
+    Some(bytes)
 }
 
 // === URL Pattern (for Boosts) ===
@@ -242,7 +305,7 @@ pub struct Color {
 }
 
 // === Orientation ===
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Orientation {
     Horizontal,

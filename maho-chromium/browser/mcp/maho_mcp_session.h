@@ -25,7 +25,9 @@
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
+#include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "ui/accessibility/ax_node_id_forward.h"
+#include "base/memory/ref_counted.h"
 
 class GURL;
 
@@ -34,6 +36,61 @@ class WebContents;
 }
 
 namespace maho {
+
+// R-8 non-revealing MCP target resolution.
+//
+// JSON-RPC error codes reserved for the private-context boundary. They are
+// deliberately uniform across "explicit OTR id" and "unknown id" so that an
+// attacker cannot distinguish an existing OTR tab from a non-existent one.
+inline constexpr int kMahoMcpErrorTabNotFound = -32004;
+inline constexpr int kMahoMcpErrorNoEligibleActiveTab = -32005;
+inline constexpr int kMahoMcpErrorNoEligibleActiveBrowser = -32006;
+
+inline constexpr char kMahoMcpMessageTabNotFound[] = "tab not found";
+inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
+    "no eligible active tab";
+inline constexpr char kMahoMcpMessageNoEligibleActiveBrowser[] =
+    "no eligible active browser";
+
+// Outcome of resolving a tool's target through the private-context policy.
+enum class MahoMcpTargetError {
+  kNone,
+  kTabNotFound,              // explicit OTR or unknown id -> -32004
+  kNoEligibleActiveTab,      // omitted/zero, no regular active tab -> -32005
+  kNoEligibleActiveBrowser,  // profile/new-tab, no regular browser -> -32006
+};
+
+// A generation-bound, revalidatable resolution of an MCP tool target.
+// `generation` monotonically increases on tab-strip membership/activation
+// changes so a SessionID reused after close/restore fails revalidation.
+struct ResolvedMahoMcpTarget {
+  bool valid = false;
+  int tab_id = 0;
+  int browser_id = 0;
+  int64_t generation = 0;
+};
+
+struct MahoMcpTargetResolution {
+  ResolvedMahoMcpTarget target;
+  MahoMcpTargetError error = MahoMcpTargetError::kNone;
+};
+
+class MahoMcpNetworkCaptureState : public base::RefCountedThreadSafe<MahoMcpNetworkCaptureState> {
+ public:
+  MahoMcpNetworkCaptureState();
+
+  bool active = false;
+  std::string capture_id;
+  int tab_id = 0;
+  // The resolved, generation-bound target this capture is pinned to. Stop and
+  // get-HAR revalidate this same target/generation rather than re-resolving a
+  // new active tab.
+  ResolvedMahoMcpTarget target;
+
+ private:
+  friend class base::RefCountedThreadSafe<MahoMcpNetworkCaptureState>;
+  ~MahoMcpNetworkCaptureState();
+};
 
 #if BUILDFLAG(IS_WIN)
 class MahoMcpSessionToken;
@@ -178,6 +235,7 @@ class MahoMcpSession {
 
   // Per-session network capture observer (Wave 4.4).
   std::unique_ptr<MahoMcpNetworkObserver> network_observer_;
+  scoped_refptr<MahoMcpNetworkCaptureState> network_capture_state_;
 
   // Map of tab_id (int) -> ring buffer of console messages
   std::unordered_map<int, std::vector<ConsoleMessage>> console_buffers_;
@@ -192,6 +250,10 @@ class MahoMcpSession {
 
   // Map of tab_id -> scroll_y
   std::unordered_map<int, int> scroll_y_positions_;
+
+  // R-8: target resolved for the in-flight tool call. Capture binds a copy of
+  // it and revalidates (generation + kMCP) before success serialization.
+  ResolvedMahoMcpTarget last_resolved_target_;
 
   DeferredResponseSender deferred_response_sender_;
 
@@ -210,10 +272,72 @@ class MahoMcpBrowserDelegate {
       int tab_id,
       MahoMcpSession::RefTable* out_refs) = 0;
 
+  struct PageContentResult {
+    std::string text;
+    std::string url;
+    std::string title;
+  };
+  virtual PageContentResult GetPageContent(int tab_id) = 0;
+
+  struct PageContextResult {
+    std::string url;
+    std::string title;
+    std::string content;
+  };
+  virtual PageContextResult GetPageContext(int tab_id) = 0;
+
+  struct SearchResult {
+    int match_count = 0;
+    int active_match_index = -1;
+  };
+  virtual SearchResult SearchInPage(int tab_id, const std::string& query) = 0;
+
+  struct QuerySelectorResult {
+    std::string ref_id;
+    std::string tag;
+  };
+  virtual QuerySelectorResult QuerySelector(int tab_id, const std::string& selector) = 0;
+
+  virtual std::string GetElementText(int tab_id, const std::string& ref_id) = 0;
+  virtual std::string GetElementAttribute(int tab_id, const std::string& ref_id, const std::string& attribute) = 0;
+  virtual bool WaitForSelector(int tab_id, const std::string& selector, int timeout_ms) = 0;
+
+  virtual int CreateNewTab(const GURL& url) = 0;
+  virtual bool CloseTab(int tab_id) = 0;
+
+  struct BookmarkInfo {
+    BookmarkInfo();
+    ~BookmarkInfo();
+    BookmarkInfo(const BookmarkInfo&);
+    BookmarkInfo(BookmarkInfo&&) noexcept;
+    BookmarkInfo& operator=(const BookmarkInfo&);
+    BookmarkInfo& operator=(BookmarkInfo&&) noexcept;
+
+    int64_t id = 0;
+    std::string title;
+    std::string url;
+    std::string folder;
+  };
+  virtual std::vector<BookmarkInfo> SearchBookmarks(const std::string& query) = 0;
+  virtual BookmarkInfo CreateBookmark(const std::string& title, const GURL& url, const std::string& folder) = 0;
+
+  struct HistoryEntry {
+    std::string url;
+    std::string title;
+    double visited_at = 0.0;  // Unix timestamp float (matches maho-core format)
+  };
+  virtual std::vector<HistoryEntry> SearchHistory(const std::string& query,
+                                                  size_t max_results) = 0;
+
   // Async: base64-encoded PNG passed to `callback`. Empty string on failure.
   // Callback may be invoked on any sequence.
   virtual void CaptureFullPagePngBase64(
       int tab_id,
+      base::OnceCallback<void(std::string)> callback) = 0;
+
+  virtual void CaptureElementPngBase64(
+      int tab_id,
+      ui::AXNodeID ax_id,
       base::OnceCallback<void(std::string)> callback) = 0;
 
   virtual bool Scroll(int tab_id,
@@ -232,6 +356,48 @@ class MahoMcpBrowserDelegate {
   virtual bool ActivateTab(int tab_id) = 0;
   virtual bool Navigate(int tab_id, const GURL& url) = 0;
   virtual bool SetViewportSize(int tab_id, int width, int height) = 0;
+
+  struct StartNetworkCaptureResult {
+    bool success = false;
+    int tab_id = 0;
+  };
+  using StartNetworkCaptureCallback =
+      base::OnceCallback<void(StartNetworkCaptureResult)>;
+  using StopNetworkCaptureCallback =
+      base::OnceCallback<void(std::optional<Redacted<base::DictValue>>)>;
+
+  virtual void StartNetworkCapture(
+      const std::string& capture_id,
+      int tab_id,
+      StartNetworkCaptureCallback callback) = 0;
+  virtual void StopNetworkCapture(
+      const std::string& capture_id,
+      StopNetworkCaptureCallback callback) = 0;
+  virtual void CancelNetworkCapture(const std::string& capture_id) = 0;
+
+  // Routines (FIX-4-browser): bridge the SAME maho_core routines engine over
+  // MCP. `ListRoutines` returns a JSON array of built-in + custom routines.
+  // `RunRoutine` runs by id asynchronously; the callback receives success plus
+  // the engine result JSON, or a clean error string on failure (including the
+  // Max-tier gate). Default impls keep these optional for test delegates.
+  using RunRoutineCallback =
+      base::OnceCallback<void(bool success, std::string content_or_error)>;
+  virtual std::string ListRoutines();
+  virtual void RunRoutine(const std::string& id, RunRoutineCallback callback);
+
+  // R-8 non-revealing target resolution. |requested_tab_id| == 0 means the
+  // caller omitted the id / passed 0 (active-tab request). Production
+  // implementations filter OTR/ineligible targets through
+  // MahoPrivateContextToken::Revalidate(kMCP) so an explicit OTR id is
+  // indistinguishable from an unknown id (kTabNotFound). The default
+  // implementation echoes the request as valid and is used only by test
+  // delegates that do not model private contexts.
+  virtual MahoMcpTargetResolution ResolveTabTarget(int requested_tab_id);
+  virtual MahoMcpTargetResolution ResolveProfileTarget();
+  // Revalidated immediately before a delegate mutation and before serializing
+  // a synchronous or deferred success. Returns false when the bound
+  // browser/tab/generation no longer authorizes MCP.
+  virtual bool RevalidateTarget(const ResolvedMahoMcpTarget& target);
 };
 
 }  // namespace maho

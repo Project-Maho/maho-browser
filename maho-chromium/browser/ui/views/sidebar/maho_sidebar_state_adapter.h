@@ -14,6 +14,7 @@
 #include "ui/gfx/image/image.h"
 
 class Browser;
+class TabStripModel;
 
 // Forward declaration of the opaque FFI type (defined in maho_ffi.h).
 struct MahoCore;
@@ -71,6 +72,10 @@ void SetShellEventObserverForTesting(ShellEventObserver* observer);
 void DispatchShellEvent(const std::string& kind,
                         const std::vector<std::pair<std::string, std::string>>& fields);
 
+// Creates a folder and returns the generated folder id (empty on failure).
+std::string DispatchCreateFolder(const std::string& space_id,
+                                 const std::string& name);
+
 // Variant for events with mixed string and integer fields.
 struct ShellEventField {
   enum class Type { kString, kInt, kBool };
@@ -96,6 +101,12 @@ void DispatchShellEventDict(const std::string& kind,
                             base::DictValue dict);
 
 bool IsSidebarSafeMode();
+
+// Regroups paired split tabs into a single kSplitGroup node with two ordered
+// children, marking both is_in_split and both is_active when either member is
+// the model's active tab. Needs a live TabStripModel; shared by the core-tree
+// and both fallback builders so every path renders splits identically.
+void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes, TabStripModel* model);
 
 class MahoSidebarStateAdapter {
  public:

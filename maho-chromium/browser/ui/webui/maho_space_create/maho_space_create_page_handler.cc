@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/webui/maho_space_create/maho_space_create_page_handler.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 #include <utility>
 
 #include "base/check.h"
@@ -15,25 +17,6 @@
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget.h"
 
-namespace {
-
-void RepaintBrowserAfterThemeStateChange(Browser* browser) {
-  ui::ColorProviderManager::Get().ResetColorProviderCache();
-  if (!browser) return;
-  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  if (!browser_view) return;
-  auto* widget = browser_view->GetWidget();
-  if (!widget || widget->IsClosed()) return;
-  auto* root_view = static_cast<views::internal::RootView*>(
-      widget->GetRootView());
-  if (root_view) {
-    root_view->ThemeChanged();
-  }
-  widget->NotifyColorProviderChanged();
-}
-
-}  // namespace
-
 MahoSpaceCreatePageHandler::MahoSpaceCreatePageHandler(
     mojo::PendingReceiver<maho_space_create::mojom::PageHandler> receiver,
     mojo::PendingRemote<maho_space_create::mojom::Page> page,
@@ -43,6 +26,13 @@ MahoSpaceCreatePageHandler::MahoSpaceCreatePageHandler(
       page_(std::move(page)),
       browser_(browser),
       web_contents_(web_contents) {
+  // R-4 fail-closed: forged Mojo receiver bypasses config-level denial. Do not remove.
+  if (web_contents &&
+      !MahoIsWebUIEnabled(web_contents->GetBrowserContext())) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
   // Deliver the initial theme selection (or empty default) to the WebUI so
   // its React store can transition out of the loading=true state. When opened
   // through MahoSpaceThemePickerDialog, the dialog wrapper stages the parent
@@ -50,8 +40,10 @@ MahoSpaceCreatePageHandler::MahoSpaceCreatePageHandler(
   // opened directly as a tab (no parent dialog), the slot is empty and the
   // store falls back to defaults.
   auto initial = maho_space_create::mojom::ThemeSelection::New();
-  initial->theme_json =
-      MahoSpaceThemePickerDialog::ConsumePendingInitialThemeJsonForActive();
+  if (MahoSpaceThemePickerDialog::IsWebContentsHostingActiveDialog(web_contents)) {
+    initial->theme_json =
+        MahoSpaceThemePickerDialog::ConsumePendingInitialThemeJsonForActive();
+  }
   page_->Initialize(std::move(initial));
 }
 
@@ -59,7 +51,7 @@ MahoSpaceCreatePageHandler::~MahoSpaceCreatePageHandler() {
   if (MahoSpaceThemeState::HasPreviewOverride()) {
     MahoSpaceThemeState::ClearPreviewOverride();
     MahoSpaceThemeState::UpdateFromCore();
-    RepaintBrowserAfterThemeStateChange(browser_);
+    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   }
 }
 
@@ -75,7 +67,7 @@ void MahoSpaceCreatePageHandler::PreviewTheme(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   bool ok = MahoSpaceThemeState::SetPreviewOverride(selection->theme_json);
   if (ok) {
-    RepaintBrowserAfterThemeStateChange(browser_);
+    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   }
 }
 
@@ -95,7 +87,7 @@ void MahoSpaceCreatePageHandler::CancelTheme() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   MahoSpaceThemeState::ClearPreviewOverride();
   MahoSpaceThemeState::UpdateFromCore();
-  RepaintBrowserAfterThemeStateChange(browser_);
+  MahoSpaceThemePickerDialog::RepaintAllBrowsers();
   if (cancel_callback_) {
     std::move(cancel_callback_).Run();
   }

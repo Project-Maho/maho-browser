@@ -64,7 +64,7 @@ impl CrashRecoveryManager {
             .map(|space| {
                 let space_tabs: Vec<CrashTabSnapshot> = tabs
                     .iter()
-                    .filter(|tab| tab.space_id.0 == space.id.0)
+                    .filter(|tab| tab.space_id.0 == space.id.0 && !tab.is_private)
                     .map(|tab| CrashTabSnapshot {
                         id: tab.id.0.clone(),
                         url: tab.url.clone(),

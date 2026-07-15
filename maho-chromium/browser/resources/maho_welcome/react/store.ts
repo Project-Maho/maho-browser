@@ -17,7 +17,7 @@ import {
   createInitialState,
   WelcomePage,
 } from './types.js';
-import type {AppearanceMode, ImportState, ImportStage, WelcomeState} from './types.js';
+import type {AppearanceMode, ImportState, ImportStage, WelcomeState, AuthState} from './types.js';
 
 interface MutableWelcomeState {
   currentPage: WelcomePage;
@@ -33,8 +33,10 @@ interface MutableWelcomeState {
   selectedEngine: string | null;
   essentialSites: EssentialSite[];
   selectedEssentials: Set<string>;
+  auth: AuthState;
   selectedTheme: string | null;
   localizedStrings: Map<string, string>;
+  isLocalDev: boolean;
 }
 
 const DEFAULT_IMPORT_ITEMS =
@@ -90,6 +92,9 @@ export class MahoWelcomeStore {
       this.pageHandler.getAvailableBrowsers(),
       this.pageHandler.getLocalizedStrings(),
     ]);
+    const {signedIn, welcomeCompleted, hasStoredSession, isLocalDev} =
+        await this.pageHandler.getRelayAccountStatusFromWelcome();
+
     this.patch(draft => {
       draft.searchEngines = engines;
       draft.selectedEngine = engines.find(e => e.isDefault)?.keyword ?? null;
@@ -102,6 +107,17 @@ export class MahoWelcomeStore {
             DEFAULT_IMPORT_ITEMS & browser.servicesSupported);
       }
       draft.localizedStrings = new Map(Object.entries(strings));
+      draft.isLocalDev = isLocalDev;
+
+      draft.auth = {
+        ...draft.auth,
+        status: signedIn ? 'success' : 'idle',
+        isReauthMode: welcomeCompleted,
+        hasStoredSession,
+      };
+      if (welcomeCompleted) {
+        draft.currentPage = WelcomePage.Auth;
+      }
     });
   }
 
@@ -133,6 +149,12 @@ export class MahoWelcomeStore {
   }
 
   nextPage(): void {
+    if (this.state.currentPage === WelcomePage.Auth) {
+      if (this.state.auth.status !== 'success') {
+        return;
+      }
+    }
+
     if (this.state.currentPage === WelcomePage.SourceSelect &&
         this.state.importStage === 'B') {
       this.applyDefaultBrowserChoice();
@@ -250,6 +272,105 @@ export class MahoWelcomeStore {
     });
   }
 
+  setAuthMode(mode: 'signin' | 'signup'): void {
+    this.patch(draft => {
+      draft.auth = {...draft.auth, mode, errorMessage: ''};
+    });
+  }
+
+  setAuthEmail(email: string): void {
+    this.patch(draft => {
+      draft.auth = {...draft.auth, email};
+    });
+  }
+
+  setAuthPassword(password: string): void {
+    this.patch(draft => {
+      draft.auth = {...draft.auth, password};
+    });
+  }
+
+  setAuthDisplayName(displayName: string): void {
+    this.patch(draft => {
+      draft.auth = {...draft.auth, displayName};
+    });
+  }
+
+  setIsReauthMode(isReauthMode: boolean): void {
+    this.patch(draft => {
+      draft.auth = {...draft.auth, isReauthMode};
+    });
+  }
+
+  async submitSignIn(): Promise<boolean> {
+    const {email, password} = this.state.auth;
+    if (email.trim() === '' || password.trim() === '') {
+      this.patch(draft => {
+        draft.auth = {...draft.auth, status: 'error', errorMessage: 'Email and password are required.'};
+      });
+      return false;
+    }
+    this.patch(draft => {
+      draft.auth = {...draft.auth, status: 'submitting', errorMessage: ''};
+    });
+    const {ok, errorMessage} = await this.pageHandler.loginFromWelcome(email.trim(), password);
+    if (ok) {
+      this.patch(draft => {
+        draft.auth = {...draft.auth, status: 'success', errorMessage: ''};
+      });
+      await this.refreshRelayAccountStatus();
+    } else {
+      this.patch(draft => {
+        draft.auth = {
+          ...draft.auth,
+          status: 'error',
+          errorMessage: errorMessage || 'Sign in failed.',
+        };
+      });
+    }
+    return ok;
+  }
+
+  async submitSignUp(): Promise<boolean> {
+    const {email, password, displayName} = this.state.auth;
+    if (email.trim() === '' || password.trim() === '') {
+      this.patch(draft => {
+        draft.auth = {...draft.auth, status: 'error', errorMessage: 'Email and password are required.'};
+      });
+      return false;
+    }
+    this.patch(draft => {
+      draft.auth = {...draft.auth, status: 'submitting', errorMessage: ''};
+    });
+    const {ok, errorMessage} = await this.pageHandler.signupFromWelcome(email.trim(), password, displayName.trim());
+    if (ok) {
+      this.patch(draft => {
+        draft.auth = {...draft.auth, status: 'success', errorMessage: ''};
+      });
+      await this.refreshRelayAccountStatus();
+    } else {
+      this.patch(draft => {
+        draft.auth = {
+          ...draft.auth,
+          status: 'error',
+          errorMessage: errorMessage || 'Sign up failed.',
+        };
+      });
+    }
+    return ok;
+  }
+
+  async refreshRelayAccountStatus(): Promise<void> {
+    const {signedIn} =
+        await this.pageHandler.getRelayAccountStatusFromWelcome();
+    this.patch(draft => {
+      draft.auth = {
+        ...draft.auth,
+        status: signedIn ? 'success' : 'idle',
+      };
+    });
+  }
+
   previewTheme(themeJson: string): void {
     this.pageHandler.previewTheme(themeJson);
   }
@@ -270,6 +391,10 @@ export class MahoWelcomeStore {
 
   openMainBrowser(): void {
     this.pageHandler.finishOnboarding();
+  }
+
+  devSkipOnboarding(): void {
+    this.pageHandler.devSkipOnboarding();
   }
 
   skip(): void {
@@ -304,8 +429,10 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     selectedEngine: state.selectedEngine,
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
+    auth: state.auth,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
+    isLocalDev: state.isLocalDev,
   };
 }
 
@@ -324,8 +451,10 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     selectedEngine: state.selectedEngine,
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
+    auth: state.auth,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
+    isLocalDev: state.isLocalDev,
   };
 }
 

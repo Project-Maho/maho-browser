@@ -1,5 +1,6 @@
 package dev.maho.browser.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSync
+import dev.maho.browser.bridge.BridgeTabs
 import dev.maho.browser.models.AccountSyncState
 import dev.maho.browser.models.ConnectedDevice
 import dev.maho.browser.sync.RelaySessionStore
@@ -111,25 +113,33 @@ fun SyncSettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            SectionHeader("Account")
+            var showRelayServerUrl by remember { mutableStateOf(false) }
+
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier.clickable { showRelayServerUrl = !showRelayServerUrl }
+            ) {
+                SectionHeader("Account")
+            }
             ListItem(
                 headlineContent = { Text("Relay account") },
                 supportingContent = {
                     Text("Use your relay email and password to enable authenticated background polling.")
                 },
             )
-            OutlinedTextField(
-                value = serverUrlInput,
-                onValueChange = {
-                    serverUrlInput = it
-                    SyncManager.updateServerUrl(it)
-                },
-                label = { Text("Relay Server URL") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-            )
+            if (showRelayServerUrl) {
+                OutlinedTextField(
+                    value = serverUrlInput,
+                    onValueChange = {
+                        serverUrlInput = it
+                        SyncManager.updateServerUrl(it)
+                    },
+                    label = { Text("Relay Server URL") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                )
+            }
             OutlinedTextField(
                 value = emailInput,
                 onValueChange = { emailInput = it },
@@ -311,7 +321,13 @@ fun SyncSettingsScreen(
                         trailingContent = {
                             Row {
                                 IconButton(onClick = {
-                                    BridgeSync.sendTabToDevice(url = "", title = "", deviceId = device.id)
+                                    val activeTabId = BridgeTabs.getActiveTabId()
+                                    val activeTab = BridgeTabs.getTabViewModels().firstOrNull { tab -> tab.id == activeTabId }
+                                    if (activeTab != null) {
+                                        BridgeSync.sendTabToDevice(url = activeTab.url, title = activeTab.title, deviceId = device.id)
+                                    } else {
+                                        BridgeSync.sendTabToDevice(url = "", title = "", deviceId = device.id)
+                                    }
                                 }) {
                                     Icon(painter = painterResource(id = MahoIcon.Send.drawableRes), contentDescription = "Send Tab")
                                 }

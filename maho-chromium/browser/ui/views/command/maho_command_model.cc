@@ -34,9 +34,12 @@
 #include "components/favicon_base/favicon_callback.h"
 #include "components/favicon_base/favicon_types.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
+#include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_service.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -86,11 +89,13 @@ const net::NetworkTrafficAnnotationTag kBookmarkFaviconTrafficAnnotation =
 
 bool IsEligibleBrowserForTabSearch(const BrowserWindowInterface* browser,
                                    const Profile* profile) {
+  // Regular-path enumeration only. OTR windows are never cross-enumerated here;
+  // exact-primary-Incognito builds its tab list from the single current window
+  // in FireSearchPrivate, so an OTR profile matches no browser in this scan.
   return browser && browser->GetWindow() && browser->GetTabStripModel() &&
-         browser->GetProfile() && profile &&
+         browser->GetProfile() && profile && !profile->IsOffTheRecord() &&
          browser->GetProfile() == profile &&
-         browser->GetProfile()->IsOffTheRecord() ==
-             profile->IsOffTheRecord();
+         !browser->GetProfile()->IsOffTheRecord();
 }
 
 std::string BuildStableTabId(const BrowserWindowInterface* browser,
@@ -340,8 +345,20 @@ CommandSuggestion& CommandSuggestion::operator=(CommandSuggestion&&) = default;
 CommandSuggestion::~CommandSuggestion() = default;
 
 MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {
+  context_class_ = ClassifyProfileForTesting(
+      browser_ ? browser_->profile() : nullptr);
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
+
+  if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
+    // Current-window only: observe just this browser's strip and never read
+    // saved sources (no HydrateSiteSearchEngines).
+    if (browser_ && browser_->tab_strip_model()) {
+      browser_->tab_strip_model()->AddObserver(this);
+    }
+    return;
+  }
+
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [this](BrowserWindowInterface* b) {
         if (b && b->GetTabStripModel()) {
@@ -353,6 +370,12 @@ MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {
 }
 
 MahoCommandModel::~MahoCommandModel() {
+  if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
+    if (browser_ && browser_->tab_strip_model()) {
+      browser_->tab_strip_model()->RemoveObserver(this);
+    }
+    return;
+  }
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [this](BrowserWindowInterface* b) {
         if (b && b->GetTabStripModel()) {
@@ -447,6 +470,11 @@ void MahoCommandModel::FireSearch() {
     actions_only_ = true;
   }
 
+  if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
+    FireSearchPrivate();
+    return;
+  }
+
   std::string tabs_json = actions_only_ ? std::string() : BuildTabsJson();
   std::vector<CommandSuggestion> chromium_bookmarks =
       BuildChromiumBookmarkSuggestions(browser_, search_query);
@@ -476,6 +504,64 @@ base::Value MahoCommandModel::BuildTabEntryDict(
   dict.GetDict().Set("url", url);
   return dict;
 }
+
+namespace {
+
+struct PrivateAction {
+  const char* id;
+  const char* label;
+  const char* category;
+};
+
+// Frozen 13-action allowlist, identical in id/order to the Rust
+// CommandBarEngine::search_incognito ephemeral_actions (command_bar.rs).
+constexpr PrivateAction kPrivateActions[] = {
+    {"close_tab", "Close Tab", "Tabs"},
+    {"reload_tab", "Reload Tab", "Tabs"},
+    {"hard_reload", "Hard Reload", "Tabs"},
+    {"copy_url", "Copy URL", "Navigation"},
+    {"toggle_sidebar", "Toggle Sidebar", "Navigation"},
+    {"toggle_split_view", "Toggle Split View", "Split View"},
+    {"zoom_in", "Zoom In", "View"},
+    {"zoom_out", "Zoom Out", "View"},
+    {"reset_zoom", "Reset Zoom", "View"},
+    {"find_in_page", "Find in Page", "View"},
+    {"view_source", "View Source", "View"},
+    {"toggle_dev_tools", "Toggle Developer Tools", "View"},
+    {"print_page", "Print Page", "View"},
+};
+
+CommandSuggestion MakePrivateActionSuggestion(const PrivateAction& action) {
+  CommandSuggestion suggestion;
+  suggestion.type = CommandSuggestionType::kAction;
+  suggestion.key = std::string("action:") + action.id;
+  suggestion.action_id = action.id;
+  suggestion.title = action.label;
+  suggestion.subtitle = action.category;
+  return suggestion;
+}
+
+bool PrivateActionMatchesQuery(const PrivateAction& action,
+                               const std::string& lower_query) {
+  if (lower_query.empty()) {
+    return true;
+  }
+  const std::string target =
+      base::ToLowerASCII(std::string(action.label) + " " + action.category);
+  return target.find(lower_query) != std::string::npos;
+}
+
+bool IsUrlLikeQuery(const std::string& query) {
+  if (query.empty() || query.find(' ') != std::string::npos) {
+    return false;
+  }
+  if (IsProtocolLike(query)) {
+    return true;
+  }
+  return query.find('.') != std::string::npos;
+}
+
+}  // namespace
 
 std::string MahoCommandModel::BuildTabsJson() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -525,7 +611,176 @@ std::string MahoCommandModel::BuildTabsJson() {
 }
 
 // static
+bool MahoCommandModel::ShouldReadSavedSourcesForContext(
+    MahoPrivateContextClass klass) {
+  return klass == MahoPrivateContextClass::kRegular;
+}
+
+// static
+std::vector<std::string> MahoCommandModel::PrivateActionAllowlist() {
+  std::vector<std::string> ids;
+  ids.reserve(std::size(kPrivateActions));
+  for (const auto& action : kPrivateActions) {
+    ids.emplace_back(action.id);
+  }
+  return ids;
+}
+
+// static
+bool MahoCommandModel::PrivateSearchUsesDefaultProviderOnly(
+    MahoPrivateContextClass klass) {
+  return klass == MahoPrivateContextClass::kPrimaryIncognito;
+}
+
+// static
+CommandSuggestion MahoCommandModel::BuildDefaultProviderSearchSuggestion(
+    const std::string& query,
+    const std::string& search_url,
+    const std::string& engine_name) {
+  CommandSuggestion suggestion;
+  suggestion.type = CommandSuggestionType::kSearch;
+  suggestion.key = "search:" + query;
+  suggestion.title = query + " \u2014 Search with " +
+                     (engine_name.empty() ? std::string("Search") : engine_name);
+  suggestion.execution_payload = search_url;
+  return suggestion;
+}
+
+std::optional<std::pair<std::string, std::string>>
+MahoCommandModel::ResolveDefaultProviderSearch(const std::string& query) const {
+  if (!browser_ || !browser_->profile() || query.empty()) {
+    return std::nullopt;
+  }
+  TemplateURLService* service =
+      TemplateURLServiceFactory::GetForProfile(browser_->profile());
+  if (!service) {
+    return std::nullopt;
+  }
+  const TemplateURL* default_provider = service->GetDefaultSearchProvider();
+  if (!default_provider) {
+    return std::nullopt;
+  }
+  const SearchTermsData& term_data = service->search_terms_data();
+  if (!default_provider->url_ref().SupportsReplacement(term_data)) {
+    return std::nullopt;
+  }
+  TemplateURLRef::SearchTermsArgs args(base::UTF8ToUTF16(query));
+  std::string url =
+      default_provider->url_ref().ReplaceSearchTerms(args, term_data);
+  if (url.empty()) {
+    return std::nullopt;
+  }
+  return std::make_pair(std::move(url),
+                        base::UTF16ToUTF8(default_provider->short_name()));
+}
+
+std::vector<CommandSuggestion> MahoCommandModel::BuildPrivateResults(
+    const std::string& query) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<CommandSuggestion> results;
+  const std::string lower_query = base::ToLowerASCII(query);
+
+  if (actions_only_) {
+    for (const auto& action : kPrivateActions) {
+      if (PrivateActionMatchesQuery(action, lower_query)) {
+        results.push_back(MakePrivateActionSuggestion(action));
+      }
+    }
+    return results;
+  }
+
+  if (!query.empty()) {
+    if (IsUrlLikeQuery(query)) {
+      const std::string url =
+          (base::StartsWith(query, "http://",
+                            base::CompareCase::INSENSITIVE_ASCII) ||
+           base::StartsWith(query, "https://",
+                            base::CompareCase::INSENSITIVE_ASCII))
+              ? query
+              : "https://" + query;
+      CommandSuggestion nav;
+      nav.type = CommandSuggestionType::kNavigation;
+      nav.key = "nav:" + url;
+      nav.title = "Go to " + url;
+      nav.subtitle = "Navigate";
+      nav.execution_payload = url;
+      results.push_back(std::move(nav));
+    }
+
+    if (std::optional<std::pair<std::string, std::string>> search =
+            ResolveDefaultProviderSearch(query)) {
+      results.push_back(BuildDefaultProviderSearchSuggestion(
+          query, search->first, search->second));
+    }
+  }
+
+  if (browser_ && browser_->tab_strip_model()) {
+    TabStripModel* model = browser_->tab_strip_model();
+    for (int i = 0; i < model->count(); ++i) {
+      content::WebContents* wc = model->GetWebContentsAt(i);
+      tabs::TabInterface* tab = model->GetTabAtIndex(i);
+      if (!wc) {
+        continue;
+      }
+      const std::string title = base::UTF16ToUTF8(wc->GetTitle());
+      const std::string url = wc->GetVisibleURL().spec();
+      if (!lower_query.empty()) {
+        const std::string target = base::ToLowerASCII(title + " " + url);
+        if (target.find(lower_query) == std::string::npos) {
+          continue;
+        }
+      }
+      std::string stable_id = BuildStableTabId(browser_, wc);
+      if (stable_id.empty()) {
+        continue;
+      }
+      auto* tab_helper = sessions::SessionTabHelper::FromWebContents(wc);
+      CommandSuggestion suggestion;
+      suggestion.type = CommandSuggestionType::kTab;
+      suggestion.key = "tab:" + stable_id;
+      suggestion.title = title;
+      suggestion.subtitle = url;
+      suggestion.execution_payload = url;
+      suggestion.stable_tab_id = stable_id;
+      suggestion.browser_session_id =
+          base::NumberToString(browser_->session_id().id());
+      if (tab_helper) {
+        suggestion.tab_session_id =
+            base::NumberToString(tab_helper->session_id().id());
+      }
+      if (tab) {
+        suggestion.icon = BuildImageDataFromTab(tab);
+      }
+      results.push_back(std::move(suggestion));
+    }
+  }
+
+  if (!lower_query.empty()) {
+    for (const auto& action : kPrivateActions) {
+      if (PrivateActionMatchesQuery(action, lower_query)) {
+        results.push_back(MakePrivateActionSuggestion(action));
+      }
+    }
+  }
+
+  return results;
+}
+
+void MahoCommandModel::FireSearchPrivate() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string prepared = query_;
+  if (!prepared.empty() && prepared[0] == '>') {
+    prepared = prepared.substr(1);
+    if (!prepared.empty() && prepared[0] == ' ') {
+      prepared = prepared.substr(1);
+    }
+  }
+  OnResults(pending_callback_, BuildPrivateResults(prepared));
+}
+
+// static
 std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
+
     const std::string& query,
     const std::string& tabs_json,
     const std::vector<CommandSuggestion>& chromium_bookmarks,
@@ -727,9 +982,13 @@ void MahoCommandModel::OnResults(ResultsCallback callback,
                                    search_generation_,
                                    "final_count", results_.size());
   callback.Run(results_);
-  RequestBookmarkFavicons();
-  RequestTabFavicons();
-  RequestSearchEngineFavicons();
+  // Saved-source-backed favicon loaders (bookmarks, search engines) and the
+  // cross-window tab scan must never run in exact-primary-Incognito.
+  if (context_class_ != MahoPrivateContextClass::kPrimaryIncognito) {
+    RequestBookmarkFavicons();
+    RequestTabFavicons();
+    RequestSearchEngineFavicons();
+  }
 }
 
 void MahoCommandModel::RequestBookmarkFavicons() {
@@ -1237,6 +1496,11 @@ void MahoCommandModel::OnTabChangedAt(tabs::TabInterface* tab,
 
 void MahoCommandModel::OnBrowserCreated(BrowserWindowInterface* browser) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Exact-primary-Incognito observes only its own window; never attach to a
+  // newly created (potentially other-OTR) window.
+  if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
+    return;
+  }
   if (browser && browser->GetTabStripModel()) {
     browser->GetTabStripModel()->AddObserver(this);
   }
@@ -1245,6 +1509,9 @@ void MahoCommandModel::OnBrowserCreated(BrowserWindowInterface* browser) {
 
 void MahoCommandModel::OnBrowserClosed(BrowserWindowInterface* browser) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
+    return;
+  }
   if (browser && browser->GetTabStripModel()) {
     browser->GetTabStripModel()->RemoveObserver(this);
   }

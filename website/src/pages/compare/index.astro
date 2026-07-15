@@ -1,0 +1,146 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+import JSONLD from '../../components/JSONLD.astro';
+import ScrollReveal from '../../components/motion/ScrollReveal';
+import { getSiteUrl } from '../../lib/site';
+
+const { absoluteUrl } = getSiteUrl(Astro);
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: 'Maho Comparisons',
+  url: absoluteUrl('/compare'),
+  description: 'How Maho Browser compares to other modern and agentic browsers like Aside, Arc, Zen, and Dia.'
+};
+
+const comparisons = [
+  {
+    target: 'Aside',
+    href: '/compare/aside',
+    description: 'YC F25 agentic browser vs Maho\'s user-controlled permission model, multi-provider BYOK, native Spaces, and cross-platform native shells.',
+    tag: 'Agentic'
+  },
+  {
+    target: 'Arc',
+    href: '/blog/maho-vs-arc',
+    description: 'Miss the part where the browser had a point of view? Why Maho keeps the sidebar, Spaces, and command bar, but keeps shipping.',
+    tag: 'Productivity'
+  },
+  {
+    target: 'Zen Browser',
+    href: '/blog/maho-vs-zen-browser',
+    description: 'Firefox-based Zen vs Chromium-based Maho\'s native Spaces, BYOK AI, and native mobile shells.',
+    tag: 'Privacy'
+  },
+  {
+    target: 'Dia',
+    href: '/blog/maho-vs-dia',
+    description: 'Dia\'s desktop agent vs Maho\'s robust Agent Client Protocol (ACP) standard and privacy-first local architecture.',
+    tag: 'Agentic'
+  },
+  {
+    target: 'Safari',
+    href: '/blog/maho-vs-safari',
+    description: 'Apple\'s platform-native browser vs Maho\'s cross-platform Spaces, BYOK AI, and user-controlled privacy architecture.',
+    tag: 'Mainstream'
+  },
+  {
+    target: 'Brave + Leo',
+    href: '/blog/maho-vs-brave-leo',
+    description: 'Brave\'s Leo AI sidebar vs Maho\'s multi-provider BYOK approach — privacy-first browsing with more AI flexibility.',
+    tag: 'Privacy'
+  },
+  {
+    target: 'Edge + Copilot',
+    href: '/blog/maho-vs-edge-copilot',
+    description: 'Microsoft\'s Copilot-integrated Edge vs Maho\'s open-provider AI, ad blocking, and self-hostable sync relay.',
+    tag: 'Mainstream'
+  },
+  {
+    target: 'SigmaOS',
+    href: '/blog/maho-vs-sigmaos',
+    description: 'SigmaOS\'s workspace-centric design vs Maho\'s native Spaces, cross-platform shells, and BYOK AI stack.',
+    tag: 'Productivity'
+  },
+  {
+    target: 'Vivaldi',
+    href: '/blog/maho-vs-vivaldi',
+    description: 'Vivaldi\'s deep customisation vs Maho\'s AI-first architecture, native mobile shells, and modern Spaces workflow.',
+    tag: 'Productivity'
+  },
+  {
+    target: 'Firefox',
+    href: '/blog/maho-vs-firefox',
+    description: 'Mozilla\'s open-web champion vs Maho\'s Chromium-based privacy stack, BYOK AI, and native Spaces.',
+    tag: 'Privacy'
+  },
+  {
+    target: 'Opera + Aria',
+    href: '/blog/maho-vs-opera-aria',
+    description: 'Opera\'s Aria AI and built-in VPN vs Maho\'s multi-provider BYOK, sandboxed ACP agents, and E2E encrypted sync.',
+    tag: 'Agentic'
+  }
+];
+---
+
+<BaseLayout
+  title="Maho Browser Comparisons — Choose Your Default"
+  description="Compare Maho Browser with other modern browsers including Aside, Arc, Zen, and Dia. Discover our privacy-first, power-user architecture."
+>
+  <JSONLD data={ld} />
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main id="main" class="pt-24 sm:pt-28 md:pt-32">
+      <div class="container-marketing pad-x-ladder section-rhythm">
+        <div class="mx-auto max-w-5xl">
+          <ScrollReveal client:visible variant="fade" className="max-w-3xl mb-12 sm:mb-16">
+            <header>
+              <p class="mb-4 font-mono text-xs uppercase tracking-mono-loose text-muted-foreground animate-pulse">
+                Compare
+              </p>
+              <h1 class="heading-serif mb-4 text-4xl sm:text-5xl">
+                Choose your default.
+              </h1>
+              <p class="text-lg leading-relaxed text-muted-foreground">
+                We believe in tool-sovereignty. Explore how Maho compares side-by-side with other next-generation browsers so you can make an informed choice.
+              </p>
+            </header>
+          </ScrollReveal>
+
+          <div class="grid gap-6 sm:grid-cols-2">
+            {comparisons.map((comp, idx) => (
+              <ScrollReveal client:visible variant="fade" className="flex">
+                <a
+                  id={`compare-card-${comp.target.toLowerCase().replace(/\s+/g, '-')}`}
+                  href={comp.href}
+                  class="group flex flex-col justify-between rounded-squircle-lg border border-border bg-card p-6 transition-all duration-300 hover:-translate-y-1 hover:border-foreground/30 hover:shadow-lg"
+                >
+                  <div>
+                    <div class="flex items-center justify-between mb-4">
+                      <span class="font-mono text-xs uppercase tracking-mono-loose text-muted-foreground border border-border rounded px-2.5 py-0.5 bg-background/50">
+                        {comp.tag}
+                      </span>
+                      <span class="text-xs text-muted-foreground transition-transform duration-300 group-hover:translate-x-1">
+                        Read comparison &rarr;
+                      </span>
+                    </div>
+                    <h2 class="heading-serif mb-3 text-2xl text-foreground group-hover:text-primary">
+                      Maho vs {comp.target}
+                    </h2>
+                    <p class="text-sm leading-relaxed text-muted-foreground">
+                      {comp.description}
+                    </p>
+                  </div>
+                </a>
+              </ScrollReveal>
+            ))}
+          </div>
+        </div>
+      </div>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

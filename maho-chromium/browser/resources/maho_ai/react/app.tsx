@@ -1,4 +1,4 @@
-import React, {Component, useEffect, useMemo, useRef, useState} from 'react';
+import React, {Component, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {toast} from 'sonner';
@@ -11,6 +11,7 @@ import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
 import {TabTidyModal} from './features/compact/tab-tidy-modal.js';
+import {VoiceInputModal} from './features/compact/voice-input-modal.js';
 import {SlashEditors} from './features/compact/slash-editors.js';
 import type {TidyFolderSuggestion} from './features/compact/tab-tidy-modal.js';
 import {
@@ -19,6 +20,7 @@ import {
 } from './features/compact/composer.js';
 import {DeveloperWorkspace} from './features/developer/developer-workspace.js';
 import {useAppState} from './hooks/use-app-state.js';
+import {useVoiceInput, type VoiceFinalControls} from './hooks/use-voice-input.js';
 import {cn} from '@lib/utils';
 import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
 import {Toaster} from '@ui/sonner';
@@ -187,6 +189,122 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [store]);
 
+  const handleComposerSubmit = useCallback(() => {
+    const stateSnapshot = store.getSnapshot();
+    const prompt = stateSnapshot.composer.prompt.trim();
+
+    if (prompt.startsWith('/')) {
+      const parts = prompt.split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+
+      if (cmd === '/agent') {
+        const sub = parts[1]?.toLowerCase();
+        if (sub === 'new') {
+          store.setActiveSlashEditor('agent-new');
+          store.setComposerPrompt('');
+          return;
+        } else if (sub === 'switch') {
+          const name = parts.slice(2).join(' ').trim();
+          if (name) {
+            const targetProfile = stateSnapshot.profiles.find(p => p.name.toLowerCase() === name.toLowerCase());
+            if (targetProfile && stateSnapshot.activeWorkspace) {
+              void store.switchWorkspaceProfile(stateSnapshot.activeWorkspace.id, targetProfile.id);
+            } else {
+              toast.error(`Agent profile "${name}" not found`);
+            }
+          } else {
+            toast.error('Usage: /agent switch <name>');
+          }
+          store.setComposerPrompt('');
+          return;
+        } else {
+          toast.error('Usage: /agent new | /agent switch <name>');
+          store.setComposerPrompt('');
+          return;
+        }
+      } else if (cmd === '/tools') {
+        const sub = parts[1]?.toLowerCase();
+        const target = parts[2]?.toLowerCase();
+        if (sub === 'add') {
+          if (target === 'mcp') {
+            store.setActiveSlashEditor('mcp-add');
+            store.setComposerPrompt('');
+            return;
+          } else if (target === 'cli') {
+            store.setActiveSlashEditor('cli-add');
+            store.setComposerPrompt('');
+            return;
+          } else {
+            toast.error('Usage: /tools add mcp | /tools add cli');
+            store.setComposerPrompt('');
+            return;
+          }
+        } else {
+          toast.error('Usage: /tools add mcp | /tools add cli');
+          store.setComposerPrompt('');
+          return;
+        }
+      } else if (cmd === '/workspace') {
+        const sub = parts[1]?.toLowerCase();
+        if (sub === 'import') {
+          const path = parts.slice(2).join(' ').trim();
+          if (path && stateSnapshot.activeWorkspace) {
+            void store.importProfileFromToml(stateSnapshot.activeWorkspace.id, path);
+          } else {
+            toast.error('Usage: /workspace import <path>');
+          }
+          store.setComposerPrompt('');
+          return;
+        } else {
+          toast.error('Usage: /workspace import <path>');
+          store.setComposerPrompt('');
+          return;
+        }
+      } else {
+        toast.error(`Unknown command "${cmd}". Available: /agent, /tools, /workspace`);
+        store.setComposerPrompt('');
+        return;
+      }
+    }
+
+    if (!store.getSnapshot().currentSessionId) {
+      void store.startSessionThenSubmit();
+      return;
+    }
+
+    void store.submitPrompt();
+  }, [store]);
+
+  const handleVoiceFinal = useCallback((transcript: string, controls: VoiceFinalControls) => {
+    const text = transcript.trim();
+    if (!text) {
+      store.setVoiceError("Didn't catch that");
+      return;
+    }
+
+    store.setComposerPrompt(text);
+    handleComposerSubmit();
+    void controls.stop().then(() => {
+      store.closeVoice();
+    });
+  }, [handleComposerSubmit, store]);
+
+  const {start: startVoiceInput, stop: stopVoiceInput} = useVoiceInput({
+    store,
+    onFinalTranscript: handleVoiceFinal,
+  });
+
+  const handleOpenVoice = useCallback(() => {
+    store.openVoice();
+    void startVoiceInput();
+  }, [startVoiceInput, store]);
+
+  const handleCloseVoice = useCallback(() => {
+    void stopVoiceInput().then(() => {
+      store.closeVoice();
+    });
+  }, [stopVoiceInput, store]);
+
   const composerHandlers = useMemo<ComposerHandlers>(() => ({
     onPromptChange: (value: string) => store.setComposerPrompt(value),
     onCancel: () => {
@@ -239,92 +357,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onOpenSettings: () => {
       void store.openSettings();
     },
-    onSubmit: () => {
-      const stateSnapshot = store.getSnapshot();
-      const prompt = stateSnapshot.composer.prompt.trim();
-
-      if (prompt.startsWith('/')) {
-        const parts = prompt.split(/\s+/);
-        const cmd = parts[0].toLowerCase();
-
-        if (cmd === '/agent') {
-          const sub = parts[1]?.toLowerCase();
-          if (sub === 'new') {
-            store.setActiveSlashEditor('agent-new');
-            store.setComposerPrompt('');
-            return;
-          } else if (sub === 'switch') {
-            const name = parts.slice(2).join(' ').trim();
-            if (name) {
-              const targetProfile = stateSnapshot.profiles.find(p => p.name.toLowerCase() === name.toLowerCase());
-              if (targetProfile && stateSnapshot.activeWorkspace) {
-                void store.switchWorkspaceProfile(stateSnapshot.activeWorkspace.id, targetProfile.id);
-              } else {
-                toast.error(`Agent profile "${name}" not found`);
-              }
-            } else {
-              toast.error('Usage: /agent switch <name>');
-            }
-            store.setComposerPrompt('');
-            return;
-          } else {
-            toast.error('Usage: /agent new | /agent switch <name>');
-            store.setComposerPrompt('');
-            return;
-          }
-        } else if (cmd === '/tools') {
-          const sub = parts[1]?.toLowerCase();
-          const target = parts[2]?.toLowerCase();
-          if (sub === 'add') {
-            if (target === 'mcp') {
-              store.setActiveSlashEditor('mcp-add');
-              store.setComposerPrompt('');
-              return;
-            } else if (target === 'cli') {
-              store.setActiveSlashEditor('cli-add');
-              store.setComposerPrompt('');
-              return;
-            } else {
-              toast.error('Usage: /tools add mcp | /tools add cli');
-              store.setComposerPrompt('');
-              return;
-            }
-          } else {
-            toast.error('Usage: /tools add mcp | /tools add cli');
-            store.setComposerPrompt('');
-            return;
-          }
-        } else if (cmd === '/workspace') {
-          const sub = parts[1]?.toLowerCase();
-          if (sub === 'import') {
-            const path = parts.slice(2).join(' ').trim();
-            if (path && stateSnapshot.activeWorkspace) {
-              void store.importProfileFromToml(stateSnapshot.activeWorkspace.id, path);
-            } else {
-              toast.error('Usage: /workspace import <path>');
-            }
-            store.setComposerPrompt('');
-            return;
-          } else {
-            toast.error('Usage: /workspace import <path>');
-            store.setComposerPrompt('');
-            return;
-          }
-        } else {
-          toast.error(`Unknown command "${cmd}". Available: /agent, /tools, /workspace`);
-          store.setComposerPrompt('');
-          return;
-        }
-      }
-
-      if (!store.getSnapshot().currentSessionId) {
-        void store.startSessionThenSubmit();
-        return;
-      }
-
-      void store.submitPrompt();
-    },
-  }), [store]);
+    onOpenVoice: handleOpenVoice,
+    onSubmit: handleComposerSubmit,
+  }), [handleComposerSubmit, handleOpenVoice, store]);
 
   const modeHandlers = useMemo(() => ({
     onNewSession: () => {
@@ -438,6 +473,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
           onDismiss={() => setTidySuggestions(null)}
         />
       )}
+      {state.voice.active ? (
+        <VoiceInputModal
+          state={state}
+          onClose={handleCloseVoice}
+          onRetry={handleOpenVoice}
+        />
+      ) : null}
     </div>
   );
 }

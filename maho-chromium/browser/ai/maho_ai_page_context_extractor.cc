@@ -155,8 +155,10 @@ base::Value MahoAiPageContextExtractor::PageContextResult::ToValue() const {
   return base::Value(std::move(dict));
 }
 
-MahoAiPageContextExtractor::MahoAiPageContextExtractor(Browser* browser)
-    : browser_(browser) {}
+MahoAiPageContextExtractor::MahoAiPageContextExtractor(
+    Browser* browser,
+    base::RepeatingCallback<bool()> ai_gate)
+    : browser_(browser), ai_gate_(std::move(ai_gate)) {}
 
 MahoAiPageContextExtractor::~MahoAiPageContextExtractor() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -331,6 +333,13 @@ content::WebContents* MahoAiPageContextExtractor::GetWebContentsForTabId(
 void MahoAiPageContextExtractor::GetPageContext(PageContextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (ai_gate_ && !ai_gate_.Run()) {
+    PageContextResult result;
+    result.extraction_status = PageContextResult::Status::kCannotAccess;
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+
   content::WebContents* active_wc = GetActiveWebContents();
   if (!active_wc) {
     PageContextResult result;
@@ -388,6 +397,13 @@ void MahoAiPageContextExtractor::GetPageContextForTabId(
     int tab_id,
     PageContextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (ai_gate_ && !ai_gate_.Run()) {
+    PageContextResult result;
+    result.extraction_status = PageContextResult::Status::kCannotAccess;
+    std::move(callback).Run(std::move(result));
+    return;
+  }
 
   content::WebContents* wc = GetWebContentsForTabId(tab_id);
   if (!wc) {

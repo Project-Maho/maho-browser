@@ -58,11 +58,11 @@ std::vector<DetectedBrowser> DetectInstalledBrowsers() {
       case BrowserType::kEdge:
       case BrowserType::kVivaldi:
       case BrowserType::kOpera:
-        browser.profile_path = browser.profile_path.Append("Bookmarks");
+        browser.profile_path = browser.profile_path.Append(FILE_PATH_LITERAL("Bookmarks"));
         break;
       case BrowserType::kFirefox:
       case BrowserType::kZen:
-        browser.profile_path = browser.profile_path.Append("places.sqlite");
+        browser.profile_path = browser.profile_path.Append(FILE_PATH_LITERAL("places.sqlite"));
         break;
       case BrowserType::kSafari:
         break;

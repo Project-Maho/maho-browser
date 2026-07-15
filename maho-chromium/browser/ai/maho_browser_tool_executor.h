@@ -23,8 +23,10 @@ class MahoBrowserToolExecutor {
  public:
   using ToolResultCallback = base::OnceCallback<void(base::DictValue result)>;
 
-  explicit MahoBrowserToolExecutor(Browser* browser,
-                                   bool browser_tools_v1_enabled = true);
+  explicit MahoBrowserToolExecutor(
+      Browser* browser,
+      bool browser_tools_v1_enabled = true,
+      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>());
   MahoBrowserToolExecutor(const MahoBrowserToolExecutor&) = delete;
   MahoBrowserToolExecutor& operator=(const MahoBrowserToolExecutor&) = delete;
   ~MahoBrowserToolExecutor();
@@ -74,6 +76,7 @@ class MahoBrowserToolExecutor {
 
   raw_ptr<Browser> browser_;
   bool browser_tools_v1_enabled_ = true;
+  base::RepeatingCallback<bool()> ai_gate_;
   std::unique_ptr<MahoAiPageContextExtractor> page_context_extractor_;
   base::WeakPtrFactory<MahoBrowserToolExecutor> weak_factory_{this};
 };

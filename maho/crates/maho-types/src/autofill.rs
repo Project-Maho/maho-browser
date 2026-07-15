@@ -16,6 +16,8 @@ pub struct AutofillAddress {
     pub country: String,
     pub phone: Option<String>,
     pub email: Option<String>,
+    #[serde(default)]
+    pub address_line2: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,6 +27,8 @@ pub struct AutofillPayment {
     pub card_name: String,
     pub last_four: String,
     pub expiry: String,
+    #[serde(default)]
+    pub card_network: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

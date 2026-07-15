@@ -47,6 +47,7 @@ BASE_DECLARE_FEATURE(kMahoUnifiedClickPath);
 // as a kill-switch pending end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoArcToolbarButtonProvider);
 BASE_DECLARE_FEATURE(kMahoCommandPaletteVibrancy);
+BASE_DECLARE_FEATURE(kMahoSpaceSwitchActivatesTab);
 
 // When enabled, the vertical sidebar applies a translucent DWM Acrylic backdrop
 // on Windows 11 22H2+ so it mirrors the macOS vibrancy. Kill-switch; no-op below

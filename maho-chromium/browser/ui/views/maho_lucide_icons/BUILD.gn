@@ -51,6 +51,7 @@ aggregate_vector_icons("maho_lucide_icons") {
     "arrow_up.icon",
     "arrow_left.icon",
     "gift.icon",
+    "glasses.icon",
   ]
 }
 

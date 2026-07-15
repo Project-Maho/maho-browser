@@ -20,10 +20,15 @@ class WebUI;
 
 class MahoSpaceCreateUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoSpaceCreateUIConfig
     : public content::DefaultWebUIConfig<MahoSpaceCreateUI> {
  public:
   MahoSpaceCreateUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoSpaceCreateUI : public ui::MojoWebUIController,

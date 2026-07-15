@@ -470,11 +470,13 @@ MahoAiLlmClient::MahoAiLlmClient(
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const os_crypt_async::Encryptor* encryptor,
-    bool provider_adapter_v2_enabled)
+    bool provider_adapter_v2_enabled,
+    base::RepeatingCallback<bool()> ai_gate)
     : prefs_(prefs),
       url_loader_factory_(std::move(url_loader_factory)),
       provider_adapter_v2_enabled_(provider_adapter_v2_enabled),
-      encryptor_(encryptor) {
+      encryptor_(encryptor),
+      ai_gate_(std::move(ai_gate)) {
   const std::string provider = prefs_->GetString(kMahoAiProviderPref);
   if (provider == "maho-managed") {
     provider_transport_ = std::make_unique<MahoManagedProviderTransport>();
@@ -550,6 +552,11 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
   on_complete_ = std::move(on_complete);
   on_error_ = std::move(on_error);
 
+  if (ai_gate_ && !ai_gate_.Run()) {
+    FinishWithError("AI is not available in this context");
+    return;
+  }
+
   if (provider_transport_->HasConfiguredCredential(prefs_) && !GetEncryptor()) {
     pending_request_ = PendingRequest{
         std::move(request), on_token_,
@@ -562,6 +569,11 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
 
 void MahoAiLlmClient::PerformStartCompletion(CompletionRequest request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (ai_gate_ && !ai_gate_.Run()) {
+    FinishWithError("AI is not available in this context");
+    return;
+  }
 
   const std::optional<std::string> endpoint =
       provider_transport_->ResolveEndpoint(request, prefs_);
@@ -635,6 +647,10 @@ void MahoAiLlmClient::OnResponseComplete(bool success) {
   }
 
   if (response_code == 401 && !is_retry_ && prefs_ && url_loader_factory_) {
+    if (ai_gate_ && !ai_gate_.Run()) {
+      FinishWithError("AI is not available in this context");
+      return;
+    }
     const os_crypt_async::Encryptor* encryptor = GetEncryptor();
     if (!encryptor) {
       FinishWithError("Unauthorized: Decryption helper not ready.");

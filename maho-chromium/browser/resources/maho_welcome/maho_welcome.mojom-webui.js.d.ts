@@ -49,6 +49,9 @@ export class PageHandlerRemote {
   openMigrationDialog(): Promise<{result: MigrationDialogResult}>;
   openThemePickerDialog(currentThemeJson: string): Promise<{pickedThemeJson: string}>;
   getLocalizedStrings(): Promise<{strings: Record<string, string>}>;
+  signupFromWelcome(email: string, password: string, displayName: string): Promise<{ok: boolean, errorMessage: string}>;
+  loginFromWelcome(email: string, password: string): Promise<{ok: boolean, errorMessage: string}>;
+  getRelayAccountStatusFromWelcome(): Promise<{signedIn: boolean, tier: string, subscriptionStatus: string, welcomeCompleted: boolean, hasStoredSession: boolean}>;
   finishOnboarding(): void;
 }
 

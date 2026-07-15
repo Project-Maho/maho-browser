@@ -226,9 +226,13 @@ impl SqliteStorage {
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<AiWorkspace>, StorageError> {
+        // ORDER BY created_at, id ensures deterministic output: both CLI and WebUI call this
+        // query and use workspaces[0] as the default; without ordering the first row is implicit
+        // rowid order which is not guaranteed stable across vacuums or migrations.
         let mut stmt = self.conn.prepare(
             "SELECT id, name, profile_id, space_id, workspace_root, created_at, updated_at
-             FROM ai_workspaces"
+             FROM ai_workspaces
+             ORDER BY created_at, id"
         )?;
 
         let rows = stmt.query_map(params![], |row| {
@@ -281,13 +285,14 @@ impl SqliteStorage {
         let transport_str = match server.transport {
             McpTransport::Stdio => "stdio",
             McpTransport::Http => "http",
+            McpTransport::Uds => "uds",
         };
         let trusted_val = if server.trusted { 1 } else { 0 };
         let trusted_tools_json = server.trusted_tools.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default());
 
         self.conn.execute(
-            "INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at, socket_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 server.id,
                 server.workspace_id,
@@ -302,6 +307,7 @@ impl SqliteStorage {
                 server.output_cap_bytes as i64,
                 server.created_at,
                 server.updated_at,
+                server.socket_path,
             ],
         )?;
         Ok(())
@@ -309,7 +315,7 @@ impl SqliteStorage {
 
     pub fn get_mcp_server(&self, id: &str) -> Result<Option<AiMcpServer>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at
+            "SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at, socket_path
              FROM ai_mcp_servers WHERE id = ?1"
         )?;
 
@@ -319,6 +325,7 @@ impl SqliteStorage {
             let transport_str: String = row.get(3)?;
             let transport = match transport_str.as_str() {
                 "http" => McpTransport::Http,
+                "uds" => McpTransport::Uds,
                 _ => McpTransport::Stdio,
             };
             let trusted_val: i32 = row.get(7)?;
@@ -341,6 +348,7 @@ impl SqliteStorage {
                 output_cap_bytes: output_cap_bytes as usize,
                 created_at: row.get(11)?,
                 updated_at: row.get(12)?,
+                socket_path: row.get(13)?,
             }))
         } else {
             Ok(None)
@@ -349,7 +357,7 @@ impl SqliteStorage {
 
     pub fn list_mcp_servers(&self, workspace_id: &str) -> Result<Vec<AiMcpServer>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at
+            "SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at, socket_path
              FROM ai_mcp_servers WHERE workspace_id = ?1"
         )?;
 
@@ -357,6 +365,7 @@ impl SqliteStorage {
             let transport_str: String = row.get(3)?;
             let transport = match transport_str.as_str() {
                 "http" => McpTransport::Http,
+                "uds" => McpTransport::Uds,
                 _ => McpTransport::Stdio,
             };
             let trusted_val: i32 = row.get(7)?;
@@ -379,6 +388,7 @@ impl SqliteStorage {
                 output_cap_bytes: output_cap_bytes as usize,
                 created_at: row.get(11)?,
                 updated_at: row.get(12)?,
+                socket_path: row.get(13)?,
             })
         })?;
 
@@ -393,13 +403,14 @@ impl SqliteStorage {
         let transport_str = match server.transport {
             McpTransport::Stdio => "stdio",
             McpTransport::Http => "http",
+            McpTransport::Uds => "uds",
         };
         let trusted_val = if server.trusted { 1 } else { 0 };
         let trusted_tools_json = server.trusted_tools.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default());
 
         self.conn.execute(
             "UPDATE ai_mcp_servers
-             SET name = ?3, transport = ?4, command = ?5, url = ?6, auth_keychain_id = ?7, trusted = ?8, trusted_tools_json = ?9, timeout_ms = ?10, output_cap_bytes = ?11, updated_at = ?12
+             SET name = ?3, transport = ?4, command = ?5, url = ?6, auth_keychain_id = ?7, trusted = ?8, trusted_tools_json = ?9, timeout_ms = ?10, output_cap_bytes = ?11, updated_at = ?12, socket_path = ?13
              WHERE id = ?1 AND workspace_id = ?2",
             params![
                 server.id,
@@ -414,6 +425,7 @@ impl SqliteStorage {
                 server.timeout_ms as i64,
                 server.output_cap_bytes as i64,
                 server.updated_at,
+                server.socket_path,
             ],
         )?;
         Ok(())

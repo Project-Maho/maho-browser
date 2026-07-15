@@ -93,6 +93,13 @@ class MahoCommandOverlayControllerTest : public views::ViewsTestBase {
       const MahoCommandOverlayController& controller) {
     return controller.widget_.get();
   }
+
+  // TEST_F bodies run in a derived class that does not inherit the fixture's
+  // friend grant, so private-member access must go through a fixture helper.
+  void SetOpenStartTicks(MahoCommandOverlayController& controller,
+                         base::TimeTicks ticks) {
+    controller.open_start_ticks_ = ticks;
+  }
 };
 
 namespace {
@@ -444,7 +451,7 @@ TEST_F(MahoCommandOverlayControllerTest,
   InjectVisibleWidget(*controller, parent.get());
 
   // Set open_start_ticks_ to now.
-  controller->open_start_ticks_ = base::TimeTicks::Now();
+  SetOpenStartTicks(*controller, base::TimeTicks::Now());
 
   // Simulate deactivation immediately after show.
   CallOnWidgetActivationChanged(*controller, GetOverlayWidget(*controller), false);
@@ -470,6 +477,23 @@ TEST_F(MahoCommandOverlayControllerTest,
   EXPECT_FALSE(controller->IsVisible());
 
   ReleaseInjectedWidget(*controller);
+}
+
+TEST_F(MahoCommandOverlayControllerTest, OtherOtrHasNoController) {
+  EXPECT_TRUE(MahoCommandOverlayController::ShouldCreateForContext(
+      MahoPrivateContextClass::kRegular));
+  EXPECT_TRUE(MahoCommandOverlayController::ShouldCreateForContext(
+      MahoPrivateContextClass::kPrimaryIncognito));
+
+  for (MahoPrivateContextClass klass :
+       {MahoPrivateContextClass::kOtherOtr, MahoPrivateContextClass::kGuest,
+        MahoPrivateContextClass::kSystem,
+        MahoPrivateContextClass::kDevToolsOtr,
+        MahoPrivateContextClass::kNull}) {
+    EXPECT_FALSE(MahoCommandOverlayController::ShouldCreateForContext(klass))
+        << "only regular and exact primary Incognito windows own a command "
+           "controller";
+  }
 }
 
 }  // namespace

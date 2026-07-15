@@ -10,19 +10,34 @@ import {
 import type {BrowserProfile, EssentialSite, SearchEngineInfo} from '../maho_welcome.mojom-webui.js';
 
 export enum WelcomePage {
-  Splash = 0,
-  Appearance = 1,
-  SourceSelect = 2,
-  ImportProgress = 3,
-  SearchEngine = 4,
-  Essentials = 5,
-  Completion = 6,
+  Auth = 0,
+  Splash = 1,
+  Appearance = 2,
+  SourceSelect = 3,
+  ImportProgress = 4,
+  SearchEngine = 5,
+  Essentials = 6,
+  Completion = 7,
 }
 
-export const TOTAL_PAGES = 7;
+export const TOTAL_PAGES = 8;
 
 export type AppearanceMode = 'system' | 'light' | 'dark';
 export type ImportStage = 'A' | 'B';
+
+export interface AuthState {
+  readonly mode: 'signin' | 'signup';
+  readonly email: string;
+  readonly password: string;
+  readonly displayName: string;
+  readonly status: 'idle' | 'submitting' | 'success' | 'error';
+  readonly errorMessage: string;
+  // True when onboarding was already completed → skip the wizard and go
+  // straight to browser after auth. NOTE: this does NOT mean the user ever
+  // had a relay session; use hasStoredSession for genuine session-expiry UI.
+  readonly isReauthMode: boolean;
+  readonly hasStoredSession: boolean;
+}
 
 // Mojo-generated constants are imported directly from maho_welcome.mojom-webui.js.
 
@@ -53,13 +68,16 @@ export interface WelcomeState {
   readonly essentialSites: readonly EssentialSite[];
   readonly selectedEssentials: ReadonlySet<string>;
 
+  readonly auth: AuthState;
+
   readonly selectedTheme: string | null;
   readonly localizedStrings: ReadonlyMap<string, string>;
+  readonly isLocalDev: boolean;
 }
 
 export function createInitialState(): WelcomeState {
   return {
-    currentPage: WelcomePage.Splash,
+    currentPage: WelcomePage.Auth,
     direction: 'forward',
     appearance: 'system',
     availableBrowsers: [],
@@ -72,7 +90,18 @@ export function createInitialState(): WelcomeState {
     selectedEngine: null,
     essentialSites: [],
     selectedEssentials: new Set(),
+    auth: {
+      mode: 'signin',
+      email: '',
+      password: '',
+      displayName: '',
+      status: 'idle',
+      errorMessage: '',
+      isReauthMode: false,
+      hasStoredSession: false,
+    },
     selectedTheme: null,
     localizedStrings: new Map(),
+    isLocalDev: false,
   };
 }

@@ -13,6 +13,7 @@ export type {
   FilterListInfo,
   InstalledExtension,
   PasswordProviderStatus,
+  PasswordProviderOption,
   ProfileInfo,
   SavedPassword,
   SpaceBasicInfo,

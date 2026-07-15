@@ -9,11 +9,17 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
+class BrowserWindowInterface;
+
+#include "maho/browser/maho_private_context_policy.h"
+
 class MahoEaselPageHandler : public maho_easel::mojom::PageHandler {
  public:
-  MahoEaselPageHandler(
-      mojo::PendingReceiver<maho_easel::mojom::PageHandler> receiver,
-      mojo::PendingRemote<maho_easel::mojom::Page> page);
+   MahoEaselPageHandler(
+       mojo::PendingReceiver<maho_easel::mojom::PageHandler> receiver,
+       mojo::PendingRemote<maho_easel::mojom::Page> page,
+       BrowserWindowInterface* browser_window,
+       content::WebContents* web_contents);
   MahoEaselPageHandler(const MahoEaselPageHandler&) = delete;
   MahoEaselPageHandler& operator=(const MahoEaselPageHandler&) = delete;
   ~MahoEaselPageHandler() override;
@@ -34,6 +40,8 @@ class MahoEaselPageHandler : public maho_easel::mojom::PageHandler {
  private:
   mojo::Receiver<maho_easel::mojom::PageHandler> receiver_;
   mojo::Remote<maho_easel::mojom::Page> page_;
+  MahoPrivateContextToken context_token_;
+  base::WeakPtr<content::WebContents> host_web_contents_;
 };
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_EASEL_MAHO_EASEL_PAGE_HANDLER_H_

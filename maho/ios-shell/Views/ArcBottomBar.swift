@@ -25,18 +25,13 @@ struct ArcBottomBar: View {
     let tabSwipeOffset: CGFloat
     let spaces: [SpaceMenuItem]
     @Binding var homeQuery: String
-    @Binding var homeSearchFocusRequest: Bool
-    @Binding var isSearchFocused: Bool
-    @Binding var isAddressBarEditing: Bool
     let onTabsTapped: () -> Void
     let onAddressTapped: () -> Void
-    let onHomeSubmit: () -> Void
     let onGoBack: () -> Void
     let onGoForward: () -> Void
     let onTabSwipeLeft: () -> Void
     let onTabSwipeRight: () -> Void
     let onSelectSpace: (String) -> Void
-    let onTogglePrivate: () -> Void
     let onFindInPage: () -> Void
     let onSettings: () -> Void
     let onShare: () -> Void
@@ -50,15 +45,21 @@ struct ArcBottomBar: View {
     let onPiP: () -> Void
     let onBrowseForMe: () -> Void
 
-    @FocusState private var isHomeSearchFocused: Bool
-
     var body: some View {
+        if isHomeMode {
+            homeFloatingBar
+        } else {
+            browsingBar
+        }
+    }
+
+    private var browsingBar: some View {
         let bottomBarShadow = ShellTheme.Elevation.bottomBar(isIncognito: isIncognito)
 
         return HStack(spacing: ShellTheme.Spacing.xSmall) {
             tabButton
 
-            centerCapsule
+            browsingCenterCapsule
                 .frame(maxWidth: .infinity)
 
             menuButton
@@ -92,21 +93,6 @@ struct ArcBottomBar: View {
             }
         }
         .shadow(color: bottomBarShadow.color, radius: bottomBarShadow.radius, x: bottomBarShadow.x, y: bottomBarShadow.y)
-        .onChange(of: homeSearchFocusRequest) { _, newValue in
-            guard newValue else { return }
-            isHomeSearchFocused = true
-            homeSearchFocusRequest = false
-        }
-        .onChange(of: isHomeSearchFocused) { _, newValue in
-            if isSearchFocused != newValue {
-                isSearchFocused = newValue
-            }
-        }
-        .onChange(of: isSearchFocused) { _, newValue in
-            if isHomeSearchFocused != newValue {
-                isHomeSearchFocused = newValue
-            }
-        }
         .accessibilityIdentifier("arcBottomBar")
     }
 
@@ -116,6 +102,22 @@ struct ArcBottomBar: View {
 
     private var mutedForegroundColor: Color {
         ShellTheme.Palette.bottomBarMutedForeground(isIncognito: isIncognito)
+    }
+
+    private var homeFloatingBar: some View {
+        HStack(spacing: 0) {
+            tabButton
+
+            Spacer(minLength: ShellTheme.Spacing.medium)
+
+            homeNewTabButton
+
+            Spacer(minLength: ShellTheme.Spacing.medium)
+
+            homeSettingsButton
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("arcBottomBar")
     }
 
     private var displayTitle: String {
@@ -171,14 +173,33 @@ struct ArcBottomBar: View {
         .accessibilityHint("Double tap to open the tab switcher. Touch and hold to switch spaces.")
     }
 
-    private var centerCapsule: some View {
-        Group {
-            if isHomeMode || isAddressBarEditing {
-                homeCenterCapsule
-            } else {
-                browsingCenterCapsule
-            }
+    private var homeNewTabButton: some View {
+        Button(action: onAddressTapped) {
+            Image(lucide: Lucide.plus)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(foregroundColor)
+                .frame(width: 148, height: ShellTheme.Size.bottomBarCapsuleHeight)
+                .background(capsuleBackground)
+                .overlay(capsuleStroke)
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("homeNewTabButton")
+        .accessibilityLabel("New Tab")
+        .accessibilityHint("Opens a new tab to search or enter an address.")
+    }
+
+    private var homeSettingsButton: some View {
+        Button(action: onSettings) {
+            Image(lucide: Lucide.settings)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(foregroundColor)
+                .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
+                .background(chromeCircleBackground)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("homeSettingsButton")
+        .accessibilityLabel("Settings")
+        .accessibilityHint("Opens settings.")
     }
 
     private var browsingCenterCapsule: some View {
@@ -200,16 +221,6 @@ struct ArcBottomBar: View {
             .accessibilityIdentifier("arcAddressPill")
             .accessibilityLabel("Address and search")
             .accessibilityHint("Double tap to search or enter an address. Swipe left or right to move between tabs.")
-
-            Button(action: onTogglePrivate) {
-                Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.eye)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoTint : mutedForegroundColor)
-                    .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("togglePrivateButtonBrowsing")
-            .accessibilityLabel(isIncognito ? "Exit Private" : "Enter Private")
 
             chromeNavButton(
                 icon: Lucide.chevronRight,
@@ -240,90 +251,9 @@ struct ArcBottomBar: View {
         )
     }
 
-    private var homeCenterCapsule: some View {
-        HStack(spacing: ShellTheme.Spacing.xSmall) {
-            Image(lucide: Lucide.search)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(mutedForegroundColor)
-
-            HStack(spacing: ShellTheme.Spacing.xSmall) {
-                TextField("Search or enter URL", text: $homeQuery)
-                    .textFieldStyle(.plain)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(foregroundColor)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.webSearch)
-                    .submitLabel(.search)
-                    .focused($isHomeSearchFocused)
-                    .onTapGesture {
-                        isHomeSearchFocused = true
-                    }
-                    .onSubmit(onHomeSubmit)
-                    .accessibilityIdentifier("homeSearchField")
-
-                if !homeQuery.isEmpty {
-                    Button {
-                        homeQuery = ""
-                        isHomeSearchFocused = true
-                    } label: {
-                        Image(lucide: Lucide.circleX)
-                            .font(.footnote)
-                            .foregroundStyle(mutedForegroundColor)
-                            .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("homeSearchClearButton")
-                    .accessibilityLabel("Clear search")
-                    .accessibilityHint("Clears the current search or address text.")
-                }
-
-                Button(action: onHomeSubmit) {
-                    Image(lucide: Lucide.arrowUpRight)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(homeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? mutedForegroundColor : foregroundColor)
-                        .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
-                }
-                .buttonStyle(.plain)
-                .disabled(homeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .opacity(homeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.42 : 1)
-                .accessibilityIdentifier("homeSearchSubmitButton")
-                .accessibilityLabel("Submit search")
-                .accessibilityHint("Submits the current search or address.")
-
-                Button(action: onTogglePrivate) {
-                    Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.eye)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoTint : mutedForegroundColor)
-                        .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("togglePrivateButtonHome")
-                .accessibilityLabel(isIncognito ? "Exit Private" : "Enter Private")
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("homeSearchBar")
-        }
-        .padding(.leading, ShellTheme.Spacing.medium)
-        .padding(.trailing, ShellTheme.Spacing.xSmall)
-        .padding(.vertical, 3)
-        .frame(minHeight: ShellTheme.Size.bottomBarCapsuleHeight)
-        .background(
-            capsuleBackground
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    isHomeSearchFocused = true
-                }
-        )
-        .overlay(capsuleStroke)
-        .accessibilityIdentifier("arcAddressPill")
-        .accessibilityLabel("Address and search")
-        .accessibilityHint("Double tap to search or enter an address.")
-    }
-
     private var searchButtonLabel: some View {
         HStack(spacing: ShellTheme.Spacing.xSmall) {
-            Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.search)
+            Image(lucide: Lucide.search)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(mutedForegroundColor)
 
@@ -482,6 +412,18 @@ struct ArcBottomBar: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: ShellTheme.Radius.bottomBarControl, style: .continuous)
+                    .strokeBorder(ShellTheme.Palette.bottomBarBorder(for: foregroundColor), lineWidth: ShellTheme.Stroke.hairline)
+            )
+    }
+
+    private var chromeCircleBackground: some View {
+        Circle()
+            .fill(
+                ShellTheme.Palette.bottomBarSecondaryFill(isIncognito: isIncognito)
+                    .opacity(isIncognito ? 1 : 0.58)
+            )
+            .overlay(
+                Circle()
                     .strokeBorder(ShellTheme.Palette.bottomBarBorder(for: foregroundColor), lineWidth: ShellTheme.Stroke.hairline)
             )
     }

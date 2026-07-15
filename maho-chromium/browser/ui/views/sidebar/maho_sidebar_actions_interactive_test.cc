@@ -2,23 +2,38 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include <memory>
+#include <optional>
+
 #include "base/check.h"
 #include "base/test/run_until.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/contents_web_view.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/split_tabs/split_tab_visual_data.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/native_ui_types.h"
@@ -26,6 +41,8 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/focus/focus_manager.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace maho {
 namespace {
@@ -817,6 +834,250 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   EXPECT_TRUE(observer_.HasEvent("rename_tab"))
       << "Expected rename_tab event after context-menu Rename commit";
+}
+
+// Seeds the maho-test page the same way MahoSidebarDnDBrowserTest does: a plain
+// navigation plus WaitForLoadStop. This initializes the arc-layout space so the
+// TabStripModel counts real tabs, and deliberately avoids
+// MahoSidebarInteractiveTestBase::SeedProfile, whose post-navigation RunUntil
+// on sidebar state never resolves headless and times the test out.
+void SeedTestPage(Browser* browser) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser, GURL("chrome://maho-test/?seed=2")));
+  content::WebContents* wc = browser->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(wc);
+  ASSERT_TRUE(content::WaitForLoadStop(wc));
+  base::RunLoop().RunUntilIdle();
+}
+
+// Appends a fresh foreground tab straight to the TabStripModel. The new
+// contents is navigated to about:blank before insertion, mirroring
+// MahoSplitViewController::AddSplitWithURL; an un-navigated WebContents is
+// dropped by Maho tab management and never counted. Direct insertion keeps the
+// split fixture deterministic and free of the network/seed navigations that
+// hang in headless environments.
+void AppendBlankTab(Browser* browser) {
+  TabStripModel* model = browser->tab_strip_model();
+  content::WebContents::CreateParams create_params(browser->profile());
+  std::unique_ptr<content::WebContents> contents =
+      content::WebContents::Create(create_params);
+  const GURL blank_url(url::kAboutBlankURL);
+  content::NavigationController::LoadURLParams load_params(blank_url);
+  load_params.transition_type = ui::PAGE_TRANSITION_GENERATED;
+  contents->GetController().LoadURLWithParams(load_params);
+  model->InsertWebContentsAt(model->count(), std::move(contents),
+                             AddTabTypes::ADD_ACTIVE);
+  base::RunLoop().RunUntilIdle();
+}
+
+// Builds a real two-pane split of tab strip indices 0 and 1 with index 0 as
+// the canonical active tab, using the single-partner AddToNewSplit contract.
+// This intentionally does NOT go through MahoSplitViewController::AddSplit so
+// that the next/prev activation behavior can be exercised independently of the
+// split-creation path owned by a sibling todo.
+void CreateTwoPaneSplit(TabStripModel* model) {
+  ASSERT_TRUE(model);
+  ASSERT_GE(model->count(), 2);
+  model->ActivateTabAt(
+      0, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  split_tabs::SplitTabVisualData visual_data(
+      split_tabs::SplitTabLayout::kVertical, 0.5);
+  model->AddToNewSplit({1}, visual_data,
+                       split_tabs::SplitTabCreatedSource::kToolbarButton);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(model->IsActiveTabSplit());
+  ASSERT_EQ(0, model->active_index());
+}
+
+// Happy path: in a two-pane split, next_split_view must move the canonical
+// TabStripModel active tab to the partner, and prev_split_view must move it
+// back. The active WebContents and MultiContentsView active contents must
+// converge after event processing. This fails against a view-only
+// implementation that mutates MultiContentsView::SetActiveIndex without
+// touching TabStripModel.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       NextPrevSplitPaneActivatesPartnerThroughModel) {
+  SeedTestPage(browser());
+  AppendBlankTab(browser());
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  CreateTwoPaneSplit(model);
+
+  content::WebContents* tab0 = model->GetWebContentsAt(0);
+  content::WebContents* tab1 = model->GetWebContentsAt(1);
+  ASSERT_TRUE(tab0);
+  ASSERT_TRUE(tab1);
+  ASSERT_NE(tab0, tab1);
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  MultiContentsView* mcv = browser_view->multi_contents_view();
+  ASSERT_TRUE(mcv);
+  ASSERT_TRUE(mcv->IsInSplitView());
+
+  // next_split_view: canonical active index moves to the partner.
+  ExecuteCommandAction(browser(), "next_split_view");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, model->active_index())
+      << "next_split_view must activate the partner through TabStripModel";
+  EXPECT_EQ(tab1, model->GetActiveWebContents());
+  ASSERT_TRUE(mcv->GetActiveContentsView());
+  EXPECT_EQ(model->GetActiveWebContents(),
+            mcv->GetActiveContentsView()->web_contents())
+      << "MultiContentsView active contents must converge with the model "
+         "active WebContents after next_split_view";
+
+  // prev_split_view: canonical active index moves back to the original tab.
+  ExecuteCommandAction(browser(), "prev_split_view");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(0, model->active_index())
+      << "prev_split_view must activate the partner through TabStripModel";
+  EXPECT_EQ(tab0, model->GetActiveWebContents());
+  ASSERT_TRUE(mcv->GetActiveContentsView());
+  EXPECT_EQ(model->GetActiveWebContents(),
+            mcv->GetActiveContentsView()->web_contents())
+      << "MultiContentsView active contents must converge with the model "
+         "active WebContents after prev_split_view";
+}
+
+// Edge: outside a split, next/prev split-pane commands must be a no-op — the
+// active index and tab count are unchanged and no CHECK/crash occurs.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       NextPrevSplitPaneOnRegularTabIsNoOp) {
+  SeedTestPage(browser());
+  AppendBlankTab(browser());
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_GE(model->count(), 2);
+  model->ActivateTabAt(
+      0, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_FALSE(model->IsActiveTabSplit());
+
+  const int count_before = model->count();
+  const int active_before = model->active_index();
+
+  ExecuteCommandAction(browser(), "next_split_view");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(active_before, model->active_index())
+      << "next_split_view on a regular tab must not change the active index";
+  EXPECT_EQ(count_before, model->count())
+      << "next_split_view on a regular tab must not change the tab count";
+
+  ExecuteCommandAction(browser(), "prev_split_view");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(active_before, model->active_index())
+      << "prev_split_view on a regular tab must not change the active index";
+  EXPECT_EQ(count_before, model->count())
+      << "prev_split_view on a regular tab must not change the tab count";
+}
+
+// Happy path: with tab A active and tab B in the background, the single-tab
+// context-menu split action folds the EXISTING background tab B into a split
+// with A — no new tab is created, and A stays canonical active. This fails
+// against the old context-menu path that called
+// AddSplitWithURL(GetVisibleURL()), which created a duplicate blank tab of B's
+// URL and grew the tab count. RUNTIME GREEN is CI-deferred (the maho-login-wall
+// login-gate SIGSEGVs InProcessBrowserTest startup harness-wide); the failing
+// reference to the pre-baseline-absent AddSplitForExistingTab is the source
+// -level RED proof.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       AddSplitForExistingTabFoldsBackgroundTabKeepingActive) {
+  SeedTestPage(browser());
+  AppendBlankTab(browser());
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_GE(model->count(), 2);
+
+  model->ActivateTabAt(0, TabStripUserGestureDetails(
+                              TabStripUserGestureDetails::GestureType::kOther));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(0, model->active_index());
+  ASSERT_FALSE(model->IsActiveTabSplit());
+
+  content::WebContents* tab_a = model->GetActiveWebContents();
+  content::WebContents* tab_b = model->GetWebContentsAt(1);
+  ASSERT_TRUE(tab_a);
+  ASSERT_TRUE(tab_b);
+  ASSERT_NE(tab_a, tab_b);
+
+  const int count_before = model->count();
+
+  MahoSplitViewController(browser()).AddSplitForExistingTab(1);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(count_before, model->count())
+      << "splitting an existing background tab must not create a new tab";
+  EXPECT_TRUE(model->IsActiveTabSplit());
+  EXPECT_EQ(tab_a, model->GetActiveWebContents())
+      << "tab A must remain the canonical active tab after folding in B";
+
+  std::optional<split_tabs::SplitTabId> split_a =
+      model->GetSplitForTab(model->GetIndexOfWebContents(tab_a));
+  std::optional<split_tabs::SplitTabId> split_b =
+      model->GetSplitForTab(model->GetIndexOfWebContents(tab_b));
+  ASSERT_TRUE(split_a.has_value());
+  ASSERT_TRUE(split_b.has_value());
+  EXPECT_EQ(split_a.value(), split_b.value())
+      << "A and B must share exactly one split id";
+}
+
+// Fallback path: invoking the split action on the ACTIVE tab (clicked index ==
+// active index) has no distinct existing partner, so it delegates to AddSplit()
+// and creates exactly one blank partner, yielding a valid two-pane split.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       AddSplitForExistingTabOnActiveCreatesBlankPartner) {
+  SeedTestPage(browser());
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  const int active_index = model->active_index();
+  ASSERT_NE(TabStripModel::kNoTab, active_index);
+  ASSERT_FALSE(model->IsActiveTabSplit());
+
+  const int count_before = model->count();
+
+  MahoSplitViewController(browser()).AddSplitForExistingTab(active_index);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(count_before + 1, model->count())
+      << "splitting the active tab must create exactly one blank partner";
+  EXPECT_TRUE(model->IsActiveTabSplit())
+      << "a valid two-pane split must exist after the active-tab self-split";
+}
+
+// Edge: the action is a no-op (no crash, no new tab, unchanged active index)
+// when the clicked tab is already a split member, and likewise when the active
+// pivot tab is already split.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       AddSplitForExistingTabOnSplitMemberIsNoOp) {
+  SeedTestPage(browser());
+  AppendBlankTab(browser());
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_GE(model->count(), 2);
+  CreateTwoPaneSplit(model);
+
+  const int count_before = model->count();
+  const int active_before = model->active_index();
+
+  MahoSplitViewController(browser()).AddSplitForExistingTab(1);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(count_before, model->count())
+      << "splitting an already-split clicked tab must not create a tab";
+  EXPECT_EQ(active_before, model->active_index());
+
+  MahoSplitViewController(browser()).AddSplitForExistingTab(0);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(count_before, model->count())
+      << "splitting when the active tab is already split must not create a tab";
+  EXPECT_EQ(active_before, model->active_index());
 }
 
 }  // namespace

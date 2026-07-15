@@ -2,8 +2,10 @@
 
 #include "maho/browser/ai/maho_ai_runtime_router.h"
 
+#include <memory>
 #include <string>
 
+#include "base/functional/bind.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -30,4 +32,31 @@ TEST_F(MahoAiRuntimeRouterTest, RebuildIsIdempotent) {
   MahoAiRuntimeAdapter* first = router.GetActiveAdapter();
   MahoAiRuntimeAdapter* second = router.GetActiveAdapter();
   EXPECT_EQ(first, second);
+}
+
+// R-9: an allowing kAI gate (regular class) builds the adapter.
+TEST_F(MahoAiRuntimeRouterTest, RegularTokenBuildsAdapter) {
+  MahoAiRuntimeRouter router(&prefs_, nullptr,
+                             base::BindRepeating([]() { return true; }));
+  EXPECT_NE(router.GetActiveAdapter(), nullptr);
+}
+
+// R-9: a denying kAI gate (every OTR/non-regular class) builds nothing.
+TEST_F(MahoAiRuntimeRouterTest, OtrTokenBuildsNothing) {
+  MahoAiRuntimeRouter router(&prefs_, nullptr,
+                             base::BindRepeating([]() { return false; }));
+  EXPECT_EQ(router.GetActiveAdapter(), nullptr);
+}
+
+// R-9: a gate that flips to deny (e.g. an async profile/window switch that
+// invalidates the token) rejects a subsequent resolution and drops the adapter.
+TEST_F(MahoAiRuntimeRouterTest, AsyncRevalidationRejectsProfileSwitch) {
+  auto allowed = std::make_shared<bool>(true);
+  MahoAiRuntimeRouter router(
+      &prefs_, nullptr,
+      base::BindRepeating([](std::shared_ptr<bool> a) { return *a; }, allowed));
+  EXPECT_NE(router.GetActiveAdapter(), nullptr);
+
+  *allowed = false;
+  EXPECT_EQ(router.GetActiveAdapter(), nullptr);
 }

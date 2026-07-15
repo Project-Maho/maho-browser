@@ -47,6 +47,7 @@
     { "name": "move", "file": "move.icon" },
     { "name": "arrow-up", "file": "arrow_up.icon" },
     { "name": "arrow-left", "file": "arrow_left.icon" },
-    { "name": "gift", "file": "gift.icon" }
+    { "name": "gift", "file": "gift.icon" },
+    { "name": "glasses", "file": "glasses.icon" }
   ]
 }

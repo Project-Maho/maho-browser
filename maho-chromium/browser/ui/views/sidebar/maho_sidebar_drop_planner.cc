@@ -86,7 +86,6 @@ SidebarDropPlan ResolveDropPlan(SectionKind target,
       plan.pin_transition.kind =
           SidebarDropPlan::PinTransition::Kind::kUnpin;
       plan.pin_transition.node_id = payload.node_id;
-      plan.steps.push_back({"unpin_tab", payload.node_id, {}, {}});
     }
     plan.favorite_transition.kind =
         SidebarDropPlan::FavoriteTransition::Kind::kFavorite;

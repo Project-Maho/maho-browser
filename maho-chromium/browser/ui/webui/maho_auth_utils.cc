@@ -24,6 +24,10 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
+#include <functional>
+#include "build/build_config.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_ffi.h"
 
 namespace maho::auth {
 
@@ -38,7 +42,7 @@ StoreTokensParams& StoreTokensParams::operator=(StoreTokensParams&&) noexcept =
 
 namespace {
 
-constexpr char kDefaultRelayUrl[] = "https://relay.maho.co";
+constexpr char kDefaultRelayUrl[] = "https://relay.mahobrowser.com";
 
 const net::NetworkTrafficAnnotationTag kRefreshTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("maho_auth_refresh", R"(
@@ -91,7 +95,137 @@ std::string EncryptB64(const std::string& plaintext,
   return base::Base64Encode(ciphertext);
 }
 
+const net::NetworkTrafficAnnotationTag kAuthLoginTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_auth_login", R"(
+      semantics {
+        sender: "Maho Auth Login"
+        description:
+          "Authenticates the user with the Maho relay using email and password."
+        trigger:
+          "User submits the sign-in form in the Account settings pane or welcome wizard."
+        data: "User email and password in the request body."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by an explicit user action; not background."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. The user explicitly submits "
+          "credentials in the Account settings pane or welcome wizard to authenticate with the "
+          "Maho relay service. No ambient or background network activity."
+      }
+    )");
+
+void OnLoginResponse(
+    PrefService* prefs,
+    const os_crypt_async::Encryptor& encryptor,
+    LoginResultCallback callback,
+    std::unique_ptr<network::SimpleURLLoader> loader,
+    std::optional<std::string> response_body) {
+  int net_error = loader->NetError();
+  const auto* response_info = loader->ResponseInfo();
+  int http_status =
+      response_info ? response_info->headers->response_code() : 0;
+
+  if (net_error != net::OK || !response_body.has_value()) {
+    std::move(callback).Run(false, "Network error");
+    return;
+  }
+
+  auto parsed =
+      base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    std::move(callback).Run(false, "Invalid server response.");
+    return;
+  }
+
+  const base::DictValue& dict = parsed->GetDict();
+
+  if (http_status != 200) {
+    const std::string* error_msg = dict.FindString("error");
+    std::move(callback).Run(
+        false,
+        error_msg ? *error_msg : "Authentication failed (HTTP " +
+                                      base::NumberToString(http_status) + ")");
+    return;
+  }
+
+  const std::string* access_token = dict.FindString("access_token");
+  const std::string* refresh_token = dict.FindString("refresh_token");
+  if (!access_token || !refresh_token) {
+    std::move(callback).Run(false, "Missing tokens in response.");
+    return;
+  }
+
+  int64_t expires_at = static_cast<int64_t>(
+      dict.FindDouble("expires_at").value_or(0));
+  int64_t refresh_expires_at = static_cast<int64_t>(
+      dict.FindDouble("refresh_expires_at").value_or(0));
+
+  const base::DictValue* account = dict.FindDict("account");
+  std::string user_email;
+  std::string user_id;
+  std::string user_display_name;
+  std::string user_tier;
+  if (account) {
+    if (const std::string* v = account->FindString("email"))
+      user_email = *v;
+    if (std::optional<int> v_int = account->FindInt("id"))
+      user_id = base::NumberToString(*v_int);
+    else if (const std::string* v_str = account->FindString("id"))
+      user_id = *v_str;
+    if (const std::string* v = account->FindString("display_name"))
+      user_display_name = *v;
+    if (const std::string* v = account->FindString("tier"))
+      user_tier = *v;
+  }
+
+  StoreTokensParams params;
+  params.access_token = *access_token;
+  params.refresh_token = *refresh_token;
+  params.access_expires_at = expires_at;
+  params.refresh_expires_at = refresh_expires_at;
+  params.user_email = user_email;
+  params.user_id = user_id;
+  params.user_display_name = user_display_name;
+  params.user_tier = user_tier;
+
+  if (!StoreRelayTokens(prefs, encryptor, params)) {
+    std::move(callback).Run(false, "Failed to store credentials.");
+    return;
+  }
+
+  // Fire ShellEvent::SignIn to maho-core on the thread pool.
+  {
+    base::DictValue sign_in_event;
+    base::DictValue sign_in_data;
+    sign_in_data.Set("email", user_email);
+    sign_in_data.Set("password", "");  // Don't pass password to core.
+    sign_in_data.Set("display_name", user_display_name);
+    sign_in_data.Set("access_token", *access_token);
+    sign_in_data.Set("user_id", user_id);
+    sign_in_event.Set("SignIn", std::move(sign_in_data));
+
+    std::string event_json;
+    base::JSONWriter::Write(sign_in_event, &event_json);
+
+    maho::PostCoreClosure(
+        FROM_HERE,
+        base::BindOnce(
+            [](std::string json) {
+              MahoCore* core = maho::GetCore();
+              if (!core) return;
+              char* result = maho_core_sign_in(core, json.c_str());
+              if (result) maho_string_free(result);
+            },
+            std::move(event_json)));
+  }
+
+  std::move(callback).Run(true, "");
+}
+
 }  // namespace
+
 
 std::string GetRelayAccessToken(PrefService* prefs,
                                 const os_crypt_async::Encryptor& encryptor) {
@@ -246,6 +380,138 @@ void RefreshAccessToken(
           },
           std::move(url_loader), std::move(callback)),
       /*max_body_size=*/16384);
+}
+
+void MahoRelayLogin(
+    PrefService* prefs,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor& encryptor,
+    const std::string& email,
+    const std::string& password,
+    LoginResultCallback callback) {
+  if (email.empty() || password.empty()) {
+    std::move(callback).Run(false, "Email and password are required.");
+    return;
+  }
+
+  base::DictValue body;
+  body.Set("email", email);
+  body.Set("password", password);
+#if BUILDFLAG(IS_MAC)
+  body.Set("device_name", "Maho macOS");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_WIN)
+  body.Set("device_name", "Maho Windows");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_LINUX)
+  body.Set("device_name", "Maho Linux");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_IOS)
+  body.Set("device_name", "Maho iOS");
+  body.Set("device_type", "mobile");
+#elif BUILDFLAG(IS_ANDROID)
+  body.Set("device_name", "Maho Android");
+  body.Set("device_type", "mobile");
+#else
+  body.Set("device_name", "Maho");
+  body.Set("device_type", "unknown");
+#endif
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  std::string relay_url = GetRelayBaseUrl();
+  GURL request_url(relay_url + "/auth/login");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run(false, "Invalid relay URL.");
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "POST";
+  resource_request->headers.SetHeader("Content-Type", "application/json");
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kAuthLoginTrafficAnnotation);
+  url_loader->AttachStringForUpload(body_json, "application/json");
+  url_loader->SetTimeoutDuration(base::Seconds(30));
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(&OnLoginResponse, prefs, std::cref(encryptor),
+                     std::move(callback), std::move(url_loader)),
+      /*max_body_size=*/64 * 1024);
+}
+
+void MahoRelaySignup(
+    PrefService* prefs,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor& encryptor,
+    const std::string& email,
+    const std::string& password,
+    const std::string& display_name,
+    SignupResultCallback callback) {
+  if (email.empty() || password.empty()) {
+    std::move(callback).Run(false, "Email and password are required.");
+    return;
+  }
+
+  base::DictValue body;
+  body.Set("email", email);
+  body.Set("password", password);
+  body.Set("display_name", display_name);
+#if BUILDFLAG(IS_MAC)
+  body.Set("device_name", "Maho macOS");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_WIN)
+  body.Set("device_name", "Maho Windows");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_LINUX)
+  body.Set("device_name", "Maho Linux");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_IOS)
+  body.Set("device_name", "Maho iOS");
+  body.Set("device_type", "mobile");
+#elif BUILDFLAG(IS_ANDROID)
+  body.Set("device_name", "Maho Android");
+  body.Set("device_type", "mobile");
+#else
+  body.Set("device_name", "Maho");
+  body.Set("device_type", "unknown");
+#endif
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  std::string relay_url = GetRelayBaseUrl();
+  GURL request_url(relay_url + "/auth/signup");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run(false, "Invalid relay URL.");
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "POST";
+  resource_request->headers.SetHeader("Content-Type", "application/json");
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kAuthLoginTrafficAnnotation);
+  url_loader->AttachStringForUpload(body_json, "application/json");
+  url_loader->SetTimeoutDuration(base::Seconds(30));
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(&OnLoginResponse, prefs, std::cref(encryptor),
+                     std::move(callback), std::move(url_loader)),
+      /*max_body_size=*/64 * 1024);
 }
 
 }  // namespace maho::auth

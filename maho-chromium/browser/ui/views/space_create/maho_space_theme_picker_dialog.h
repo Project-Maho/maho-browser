@@ -9,6 +9,10 @@
 
 class Browser;
 
+namespace content {
+class WebContents;
+}  // namespace content
+
 namespace views {
 class Widget;
 }  // namespace views
@@ -45,6 +49,12 @@ class MahoSpaceThemePickerDialog {
   // deliver the initial theme_json via Page::Initialize after it binds.
   // Returns the stored initial_theme_json and clears it (consume-once).
   static std::string ConsumePendingInitialThemeJsonForActive();
+
+  // Repaints all open browser windows, resetting color provider cache first.
+  static void RepaintAllBrowsers();
+
+  // Returns true if the given WebContents is hosted within the active dialog.
+  static bool IsWebContentsHostingActiveDialog(content::WebContents* web_contents);
 
  private:
   MahoSpaceThemePickerDialog() = delete;

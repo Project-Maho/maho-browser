@@ -26,7 +26,7 @@ class MahoTabPreviewCapture : public BrowserCollectionObserver,
                               public TabStripModelObserver {
  public:
   static MahoTabPreviewCapture* GetInstance();
-  
+
   MahoTabPreviewCapture();
   ~MahoTabPreviewCapture() override;
 
@@ -49,10 +49,16 @@ class MahoTabPreviewCapture : public BrowserCollectionObserver,
  private:
   void CaptureViewport(content::WebContents* web_contents,
                        const std::string& tab_id);
+  // R-13: delayed callbacks carry a weak WebContents pointer and revalidate the
+  // kPreview token before touching core/storage so a context that became OTR
+  // (or was torn down) between scheduling and completion is denied.
   void OnCaptureDone(const std::string& tab_id,
+                     base::WeakPtr<content::WebContents> web_contents,
                      const content::CopyFromSurfaceResult& result);
   void StoreAsJpeg(const std::string& tab_id, const SkBitmap& bitmap);
-  void OnScrollPositionCaptured(const std::string& tab_id, base::Value result);
+  void OnScrollPositionCaptured(const std::string& tab_id,
+                                base::WeakPtr<content::WebContents> web_contents,
+                                base::Value result);
 
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       browser_collection_observation_{this};

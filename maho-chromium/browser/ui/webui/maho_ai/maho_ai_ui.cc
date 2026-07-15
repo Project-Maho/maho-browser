@@ -3,9 +3,14 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/functional/bind.h"
+#include "base/task/thread_pool.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -28,10 +33,13 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
 #include "components/prefs/pref_service.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
+
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 
 MahoAIUIConfig::MahoAIUIConfig()
     : DefaultTopChromeWebUIConfig(content::kChromeUIScheme,
@@ -39,6 +47,10 @@ MahoAIUIConfig::MahoAIUIConfig()
 
 bool MahoAIUIConfig::ShouldAutoResizeHost() {
   return false;
+}
+
+bool MahoAIUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoAIUI)
@@ -146,35 +158,38 @@ void MahoAIUI::BindInterface(
 void MahoAIUI::CreatePageHandler(
     mojo::PendingRemote<maho_ai::mojom::Page> page,
     mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver) {
-  Browser* browser = nullptr;
-  if (auto* browser_window_interface =
-          webui::GetBrowserWindowInterface(web_ui()->GetWebContents())) {
-    browser = browser_window_interface->GetBrowserForMigrationOnly();
-  }
-  if (!browser) {
-    browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
-  }
-  if (!browser) {
-    auto* profile = Profile::FromWebUI(web_ui());
-    if (profile) {
-      browser = chrome::FindBrowserWithProfile(profile);
-    }
-  }
-  if (!browser) {
-    LOG(WARNING) << "MahoAIUI::CreatePageHandler: no browser found, dropping handler creation";
+  content::WebContents* host = web_ui()->GetWebContents();
+  BrowserWindowInterface* browser_window =
+      host ? webui::GetBrowserWindowInterface(host) : nullptr;
+  Browser* browser =
+      browser_window ? browser_window->GetBrowserForMigrationOnly() : nullptr;
+
+  Profile* profile = Profile::FromWebUI(web_ui());
+
+  // R-9: fail closed. Require the exact owning browser window whose profile
+  // agrees with the host, build a kAI token, and deny every non-regular
+  // context with no handler/data source/pref consumption and a dropped pipe.
+  if (!browser || !profile || browser_window->GetProfile() != profile) {
+    receiver.reset();
+    page.reset();
     return;
   }
 
-  Profile* profile = Profile::FromWebUI(web_ui());
+  auto token = std::make_unique<MahoPrivateContextToken>(browser_window, host);
+  if (!token->Revalidate(MahoPrivateCapability::kAI)) {
+    receiver.reset();
+    page.reset();
+    return;
+  }
+
   auto url_loader_factory =
       profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();
 
   page_handler_ = std::make_unique<MahoAIPageHandler>(
-      std::move(receiver), std::move(page), browser, profile->GetPrefs(),
-      std::move(url_loader_factory));
+      std::move(receiver), std::move(page), std::move(token), browser,
+      profile->GetPrefs(), std::move(url_loader_factory));
 
   if (embedder()) {
     embedder()->ShowUI();
   }
-
 }

@@ -1,6 +1,9 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React from 'react';
+import {Palette} from 'lucide-react';
+
+import {Button} from '@ui/button';
 import type {MahoWelcomeStore} from '../store.js';
 
 interface Props {
@@ -21,15 +24,25 @@ export function SpaceThemeSidebar({store}: {store: MahoWelcomeStore}) {
 
 export function SpaceThemeContent({store, selectedTheme, onSelectTheme, onPreviewTheme}: Props) {
   return (
-    <div className="welcome-theme-picker-content">
-      {selectedTheme ? (
-        <div className="welcome-theme-preview" style={{
+    <div className="flex h-full w-full flex-col items-center justify-center gap-6 rounded-xl border border-border bg-background/50 p-8 text-center shadow-sm">
+      <div
+        className="relative size-52 overflow-hidden rounded-2xl border border-border bg-muted shadow-2xl shadow-black/20"
+        style={selectedTheme ? {
           background: deriveGradient(selectedTheme),
-        }} />
-      ) : null}
-      <button
+        } : undefined}
+        aria-hidden="true"
+      >
+        <div className="absolute inset-0 bg-gradient-to-br from-background/20 via-transparent to-background/40" />
+        {!selectedTheme ? (
+          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+            <Palette className="size-14" aria-hidden="true" />
+          </div>
+        ) : null}
+      </div>
+      <Button
         type="button"
-        className="welcome-theme-picker-button"
+        variant={selectedTheme ? 'outline' : 'default'}
+        className="h-11 rounded-lg px-6 font-semibold shadow-lg shadow-primary/10"
         onClick={async () => {
           const currentJson = selectedTheme ?? '';
           const result = await store.openThemePickerDialog(currentJson);
@@ -41,7 +54,7 @@ export function SpaceThemeContent({store, selectedTheme, onSelectTheme, onPrevie
         {selectedTheme
           ? store.getString('IDS_MAHO_WELCOME_THEME_CHANGE')
           : store.getString('IDS_MAHO_WELCOME_THEME_PICK')}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -73,7 +86,7 @@ function deriveGradient(themeJson: string): string {
   } catch (e) {
     console.error('Failed to parse theme JSON', e);
   }
-  return 'var(--maho-toolbar-element-bg)';
+  return 'var(--muted)';
 }
 
 export function getThemeJsonById(id: string): string {

@@ -20,10 +20,15 @@ class WebUI;
 
 class MahoRoutinesUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoRoutinesUIConfig
     : public content::DefaultWebUIConfig<MahoRoutinesUI> {
  public:
   MahoRoutinesUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoRoutinesUI : public ui::MojoWebUIController,

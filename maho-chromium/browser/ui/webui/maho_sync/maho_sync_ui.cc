@@ -12,8 +12,14 @@
 #include "maho/browser/ui/webui/maho_sync/maho_sync_page_handler.h"
 #include "maho/components/constants/webui_url_constants.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoSyncUIConfig::MahoSyncUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoSyncHost) {}
+
+bool MahoSyncUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoSyncUI)
 

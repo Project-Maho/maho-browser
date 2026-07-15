@@ -1206,8 +1206,14 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
 
 // MahoTestUIConfig
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoTestUIConfig::MahoTestUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoTestHost) {}
+
+bool MahoTestUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 // MahoTestHTMLSource
 

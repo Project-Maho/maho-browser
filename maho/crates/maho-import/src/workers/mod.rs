@@ -9,6 +9,7 @@ pub mod cookie;
 pub mod essential;
 pub mod favicon;
 pub mod history;
+pub mod password;
 pub mod workspace;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,6 +57,56 @@ pub(crate) fn send_update(
     });
 }
 
+/// Maps a Chromium-family browser to its macOS Keychain `Safe Storage`
+/// service/account pair. The derived AES-128 key decrypts BOTH cookies and
+/// `Login Data` passwords (same `v10` pipeline), so cookie and password workers
+/// share this mapping. Returns `None` for non-Chromium browsers.
+#[cfg(target_os = "macos")]
+pub(crate) fn keychain_service_account(
+    browser_type: crate::BrowserType,
+) -> Option<(&'static str, &'static str)> {
+    use crate::BrowserType;
+    match browser_type {
+        BrowserType::Chrome => Some(("Chrome Safe Storage", "Chrome")),
+        BrowserType::Brave => Some(("Brave Safe Storage", "Brave")),
+        BrowserType::Arc => Some(("Arc Safe Storage", "Arc")),
+        BrowserType::Edge => Some(("Microsoft Edge Safe Storage", "Microsoft Edge")),
+        BrowserType::Vivaldi => Some(("Vivaldi Safe Storage", "Vivaldi")),
+        BrowserType::Opera => Some(("Opera Safe Storage", "Opera")),
+        _ => None,
+    }
+}
+
+/// Fetches a Keychain-derived Chromium key on a background thread with a timeout.
+///
+/// macOS Security framework's `SecKeychainFindGenericPassword` blocks the
+/// caller indefinitely when the process is ad-hoc signed / lacks a stable ACL
+/// (the system prompt may be hidden behind the welcome window). Wrapping the
+/// call in a worker thread + `recv_timeout` lets us abandon the attempt after
+/// `timeout` and proceed with the rest of the import.
+///
+/// SAFETY: the spawned thread is leaked on timeout — the Keychain call will
+/// eventually return and drop the receiver send. This is acceptable because the
+/// keychain is queried at most once per worker per import session.
+#[cfg(target_os = "macos")]
+pub(crate) fn fetch_keychain_key_with_timeout(
+    service: &'static str,
+    account: &'static str,
+    timeout: std::time::Duration,
+) -> Option<crate::decrypt::chromium_keychain::ChromiumKey> {
+    use crate::decrypt::chromium_keychain::{fetch_and_derive_key, MacOsKeychain};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(format!("maho-import-keychain-{service}"))
+        .spawn(move || {
+            let result = fetch_and_derive_key(&MacOsKeychain, service, account).ok();
+            let _ = tx.send(result);
+        })
+        .ok()?;
+    rx.recv_timeout(timeout).ok().flatten()
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::super::orchestrator::ImportDestination;
@@ -72,6 +123,7 @@ pub mod tests {
         pub cookies: Mutex<Vec<MockCookie>>,
         pub autofill: Mutex<Vec<MockAutofill>>,
         pub favicons: Mutex<Vec<MockFavicon>>,
+        pub passwords: Mutex<Vec<MockPassword>>,
         pub pinned: Mutex<Vec<String>>,
         pub favorited: Mutex<Vec<String>>,
         pub active_space: Mutex<Option<String>>,
@@ -137,6 +189,12 @@ pub mod tests {
         pub data_len: usize,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct MockPassword {
+        pub origin_url: String,
+        pub username: String,
+    }
+
     impl MockDestination {
         pub fn new() -> Self {
             Self {
@@ -148,6 +206,7 @@ pub mod tests {
                 cookies: Mutex::new(Vec::new()),
                 autofill: Mutex::new(Vec::new()),
                 favicons: Mutex::new(Vec::new()),
+                passwords: Mutex::new(Vec::new()),
                 pinned: Mutex::new(Vec::new()),
                 favorited: Mutex::new(Vec::new()),
                 active_space: Mutex::new(Some("default-space".to_string())),
@@ -294,6 +353,14 @@ pub mod tests {
             self.favicons.lock().unwrap().push(MockFavicon {
                 url: url.to_string(),
                 data_len: png_bytes.len(),
+            });
+            true
+        }
+
+        fn add_password(&self, entry: crate::PasswordEntry) -> bool {
+            self.passwords.lock().unwrap().push(MockPassword {
+                origin_url: entry.origin_url,
+                username: entry.username,
             });
             true
         }

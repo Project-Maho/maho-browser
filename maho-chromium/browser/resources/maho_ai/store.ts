@@ -15,17 +15,19 @@ import {
    AppState,
    ComposerAttachment,
    CreditBalanceInfo,
-   CURRENT_PAGE_ATTACHMENT,
-   DEFAULT_HISTORY_SEARCH_STATE,
-   DEFAULT_BOOKMARKS_SEARCH_STATE,
+    CURRENT_PAGE_ATTACHMENT,
+    DEFAULT_VOICE_STATE,
+    DEFAULT_HISTORY_SEARCH_STATE,
+    DEFAULT_BOOKMARKS_SEARCH_STATE,
    DEFAULT_OPEN_TABS_STATE,
    createFileAttachment,
    createInitialState,
    getSubmitContextAttachments,
    hasCurrentPageAttachment,
-   isRenderableTimelineEvent,
-  TimelineEntry,
- } from './types.js';
+    isRenderableTimelineEvent,
+   TimelineEntry,
+   VoiceStatus,
+  } from './types.js';
 import {notifyListeners} from '../maho_common/react/store_utils.js';
 import type {Listener} from '../maho_common/react/store_utils.js';
 import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
@@ -47,6 +49,7 @@ function cloneState(state: AppState): AppState {
     approvalResultsById: {...state.approvalResultsById},
     selectedInspector: {...state.selectedInspector},
     composer: {...state.composer, attachments: [...state.composer.attachments]},
+    voice: {...state.voice},
     openTabs: {...state.openTabs, items: [...state.openTabs.items]},
     historySearch: {...state.historySearch, items: [...state.historySearch.items]},
     bookmarksSearch: {...state.bookmarksSearch, items: [...state.bookmarksSearch.items]},
@@ -151,6 +154,53 @@ export class MahoAiStore {
   setComposerPrompt(prompt: string) {
     this.patch(state => {
       state.composer.prompt = prompt;
+    });
+  }
+
+  openVoice() {
+    this.patch(state => {
+      state.voice = {
+        active: true,
+        status: 'idle',
+        transcript: '',
+        level: 0,
+        error: null,
+      };
+    });
+  }
+
+  closeVoice() {
+    this.patch(state => {
+      state.voice = {...DEFAULT_VOICE_STATE};
+    });
+  }
+
+  setVoiceStatus(status: VoiceStatus) {
+    this.patch(state => {
+      state.voice.status = status;
+    });
+  }
+
+  setVoiceTranscript(transcript: string) {
+    this.patch(state => {
+      state.voice.transcript = transcript;
+    });
+  }
+
+  setVoiceLevel(level: number) {
+    const nextLevel = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
+    this.patch(state => {
+      state.voice.level = nextLevel;
+    });
+  }
+
+  setVoiceError(error: string|null) {
+    this.patch(state => {
+      state.voice.error = error;
+      if (error) {
+        state.voice.status = 'error';
+        state.voice.level = 0;
+      }
     });
   }
 

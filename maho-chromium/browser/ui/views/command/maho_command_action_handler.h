@@ -7,6 +7,7 @@
 
 class Browser;
 
+#include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "ui/base/window_open_disposition.h"
 
 namespace maho {
@@ -14,6 +15,15 @@ namespace maho {
 struct CommandSuggestion;
 
 void ExecuteCommandAction(Browser* browser, const std::string& action_id);
+
+// True only for the frozen 13 action IDs permitted in exact-primary-Incognito.
+// Any other (regular-only or forged) ID must be denied. Sourced from
+// MahoCommandModel::PrivateActionAllowlist so the Rust/C++ contract stays one.
+bool IsPrimaryIncognitoAllowedActionId(const std::string& action_id);
+
+// Sidebar toggle may persist prefs only for regular; primary Incognito uses an
+// in-memory container-local toggle and never writes sidebar prefs.
+bool ShouldPersistSidebarToggle(MahoPrivateContextClass klass);
 
 // Opens a command suggestion with the given disposition.
 // |disposition| controls whether navigation opens in the current tab,

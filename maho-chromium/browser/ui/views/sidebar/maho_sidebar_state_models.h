@@ -171,6 +171,7 @@ struct MahoSidebarFavoriteItemModel {
   std::string tab_id;
   bool is_favorite = true;  // L3-EXEMPT: derived from role in state_adapter.cc
   bool is_active = false;
+  std::vector<uint8_t> favicon_png_data;
 };
 
 struct MahoSidebarFavoritesModel {
@@ -235,6 +236,7 @@ struct SidebarTreeNode {
   bool is_loading = false;
   bool is_audible = false;
   bool is_muted = false;
+  bool is_suspended = false;
   std::string parent_folder_id;
   int folder_child_index = -1;
 

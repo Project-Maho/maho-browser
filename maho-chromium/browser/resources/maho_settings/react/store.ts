@@ -115,7 +115,9 @@ function createInitialState(): SettingsState {
 export class MahoSettingsStore {
   private readonly callbackRouter: PageCallbackRouter;
   private readonly listeners = new Set<Listener>();
+  private readonly accountStatusChangedListenerId: number;
   private readonly pageHandler: PageHandlerRemote;
+  private readonly settingsChangedListenerId: number;
   private state: SettingsState = createInitialState();
   private bootstrapComplete = false;
   private toastTimers = new Map<string, any>();
@@ -126,14 +128,22 @@ export class MahoSettingsStore {
     this.callbackRouter = router;
     this.pageHandler = handler;
 
-    this.callbackRouter.settingsChanged.addListener((settings: SettingValue[]) => {
+    this.settingsChangedListenerId = this.callbackRouter.settingsChanged.addListener((settings: SettingValue[]) => {
       if (!this.bootstrapComplete) {
         return;
       }
       this.replaceSettings(settings);
     });
 
-    this.callbackRouter.accountStatusChanged.addListener((status: AccountStatus) => {
+    this.accountStatusChangedListenerId = this.callbackRouter.accountStatusChanged.addListener((status: AccountStatus) => {
+      // GetBillingInfo persists the tier and then re-broadcasts account status,
+      // so refetching billing on every broadcast would loop forever
+      // (broadcast → refreshBilling → GetBillingInfo → broadcast → …). Only
+      // refetch when the signed-in identity actually changes.
+      const prev = this.state.accountStatus;
+      const isNewSignIn =
+          status.signedIn && (!prev?.signedIn || prev.userId !== status.userId);
+
       this.patch(state => ({
         ...state,
         accountError: '',
@@ -147,7 +157,7 @@ export class MahoSettingsStore {
         invoicesLoading: status.signedIn ? state.invoicesLoading : false,
       }));
 
-      if (status.signedIn) {
+      if (isNewSignIn) {
         void this.refreshBilling();
         void this.refreshInvoices();
       }
@@ -180,6 +190,11 @@ export class MahoSettingsStore {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  dispose(): void {
+    this.callbackRouter.removeListener(this.settingsChangedListenerId);
+    this.callbackRouter.removeListener(this.accountStatusChangedListenerId);
   }
 
   async bootstrap(): Promise<void> {

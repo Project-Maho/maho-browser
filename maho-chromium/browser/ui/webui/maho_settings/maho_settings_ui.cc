@@ -17,8 +17,14 @@
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/webui/webui_util.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 MahoSettingsUIConfig::MahoSettingsUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoSettingsHost) {}
+
+bool MahoSettingsUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoSettingsUI)
 

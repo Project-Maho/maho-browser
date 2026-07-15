@@ -20,6 +20,10 @@ BASE_FEATURE(kMahoCommandPaletteVibrancy,
              "MahoCommandPaletteVibrancy",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kMahoSpaceSwitchActivatesTab,
+             "MahoSpaceSwitchActivatesTab",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kMahoSidebarVibrancy,
              "MahoSidebarVibrancy",
              base::FEATURE_ENABLED_BY_DEFAULT);

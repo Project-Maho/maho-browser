@@ -427,7 +427,7 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
                   return;
                 }
                 MahoSpaceThemeState::UpdateFromCore();
-                ui::ColorProviderManager::Get().ResetColorProviderCache();
+                MahoSpaceThemePickerDialog::RepaintAllBrowsers();
               },
               space_id_));
       break;

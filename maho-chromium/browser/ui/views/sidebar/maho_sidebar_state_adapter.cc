@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -342,6 +343,9 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     std::optional<bool> favorite = dict->FindBool("isFavorite");  // L3-EXEMPT: legacy compat
     node.is_favorite = favorite.value_or(false);  // L3-EXEMPT: legacy compat
 
+    const std::string* lifecycle = dict->FindString("lifecycleState");
+    node.is_suspended = (lifecycle && *lifecycle == "suspended");
+
     // V2 path: look up prebuilt favicon from the flat_map (base64-decoded in
     // BuildViewStateModel). Falls back to legacy int-array parsing if the map
     // is empty (v1 callers during transition).
@@ -485,72 +489,6 @@ std::optional<SidebarTreeNode> ParseTreeNode(
   return node;
 }
 
-void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
-                    TabStripModel* model) {
-  for (auto& node : nodes) {
-    if (!node.children.empty()) {
-      GroupSplitTabs(node.children, model);
-    }
-  }
-
-  std::map<split_tabs::SplitTabId, std::vector<size_t>> split_groups;
-  std::vector<std::optional<split_tabs::SplitTabId>> node_splits;
-  node_splits.resize(nodes.size());
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    const auto& node = nodes[i];
-    if (node.kind != SidebarNodeKind::kTab || node.tab_strip_index < 0) {
-      continue;
-    }
-    auto split_id = model->GetSplitForTab(node.tab_strip_index);
-    node_splits[i] = split_id;
-    if (split_id.has_value()) {
-      split_groups[split_id.value()].push_back(i);
-    }
-  }
-
-  std::set<size_t> consumed_indices;
-  std::vector<SidebarTreeNode> regrouped;
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    if (consumed_indices.count(i)) {
-      continue;
-    }
-    auto& node = nodes[i];
-    if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index >= 0) {
-      const auto& split_id = node_splits[i];
-      if (split_id.has_value()) {
-        auto it = split_groups.find(split_id.value());
-        if (it != split_groups.end() && it->second.size() == 2) {
-          SidebarTreeNode group;
-          group.kind = SidebarNodeKind::kSplitGroup;
-          group.split_id = split_id.value().ToString();
-          
-          if (auto* split_data = model->GetSplitData(split_id.value())) {
-            group.split_ratio = split_data->visual_data()->split_ratio();
-            group.split_orientation =
-                (split_data->visual_data()->split_layout() == split_tabs::SplitTabLayout::kVertical)
-                    ? "vertical"
-                    : "horizontal";
-          } else {
-            group.split_ratio = 0.5;
-            group.split_orientation = "vertical";
-          }
-
-          group.depth = node.depth;
-          for (size_t idx : it->second) {
-            nodes[idx].is_in_split = true;
-            group.children.push_back(std::move(nodes[idx]));
-            consumed_indices.insert(idx);
-          }
-          regrouped.push_back(std::move(group));
-          continue;
-        }
-      }
-    }
-    regrouped.push_back(std::move(node));
-  }
-  nodes = std::move(regrouped);
-}
-
 // Overlays live active-tab fields onto a matched node so stale persisted data
 // (e.g. customTitle="newtab") never wins over the real page state.
 // Preserves any legitimate user-set custom_title; stale NTP sentinel values
@@ -561,7 +499,10 @@ void OverlayActiveTabFields(SidebarTreeNode& node,
                              content::WebContents* active_contents) {
   node.tab_strip_index = active_index;
   node.is_active = true;
-  node.is_pinned = model->IsTabPinned(active_index);
+  // is_pinned is intentionally NOT overlaid from the native strip: it is
+  // role-derived from core (Maho pinned != native strip pin) and feeds the
+  // row's SidebarDragOrigin, so overwriting it here would misreport the
+  // active pinned row as coming from the normal section during drags.
   node.title = GetTabTitle(model, active_index);
   node.host = GetTabHost(model, active_index);
   if (active_contents) {
@@ -610,6 +551,132 @@ bool FindAndOverlayActiveTabInTree(std::vector<SidebarTreeNode>& nodes,
 
 }  // namespace
 
+void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
+                    TabStripModel* model) {
+  for (auto& node : nodes) {
+    if (!node.children.empty()) {
+      GroupSplitTabs(node.children, model);
+    }
+  }
+
+  std::map<split_tabs::SplitTabId, std::vector<size_t>> split_groups;
+  std::vector<std::optional<split_tabs::SplitTabId>> node_splits;
+  node_splits.resize(nodes.size());
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    const auto& node = nodes[i];
+    if (node.kind != SidebarNodeKind::kTab || node.tab_strip_index < 0) {
+      continue;
+    }
+    auto split_id = model->GetSplitForTab(node.tab_strip_index);
+    node_splits[i] = split_id;
+    if (split_id.has_value()) {
+      split_groups[split_id.value()].push_back(i);
+    }
+  }
+
+  std::set<size_t> consumed_indices;
+  std::vector<SidebarTreeNode> regrouped;
+
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    if (consumed_indices.count(i)) {
+      continue;
+    }
+    auto& node = nodes[i];
+    if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index >= 0) {
+      const auto& split_id = node_splits[i];
+      if (split_id.has_value()) {
+        auto it = split_groups.find(split_id.value());
+        if (it != split_groups.end() && it->second.size() == 2) {
+          SidebarTreeNode group;
+          group.kind = SidebarNodeKind::kSplitGroup;
+          group.split_id = split_id.value().ToString();
+          std::vector<size_t> ordered_indices = it->second;
+          std::vector<tabs::TabInterface*> split_tab_interfaces;
+
+          if (auto* split_data = model->GetSplitData(split_id.value())) {
+            split_tab_interfaces = split_data->ListTabs();
+            group.split_ratio = split_data->visual_data()->split_ratio();
+            group.split_orientation =
+                (split_data->visual_data()->split_layout() ==
+                 split_tabs::SplitTabLayout::kVertical)
+                    ? "vertical"
+                    : "horizontal";
+          } else {
+            group.split_ratio = 0.5;
+            group.split_orientation = "vertical";
+          }
+
+          auto split_order_for_node = [&](size_t node_index) -> size_t {
+            if (node_index >= nodes.size() ||
+                !model->ContainsIndex(nodes[node_index].tab_strip_index)) {
+              return split_tab_interfaces.size();
+            }
+            content::WebContents* contents =
+                model->GetWebContentsAt(nodes[node_index].tab_strip_index);
+            for (size_t order = 0; order < split_tab_interfaces.size();
+                 ++order) {
+              if (split_tab_interfaces[order] &&
+                  split_tab_interfaces[order]->GetContents() == contents) {
+                return order;
+              }
+            }
+            return split_tab_interfaces.size();
+          };
+
+          std::stable_sort(
+              ordered_indices.begin(), ordered_indices.end(),
+              [&](size_t lhs, size_t rhs) {
+                const size_t lhs_order = split_order_for_node(lhs);
+                const size_t rhs_order = split_order_for_node(rhs);
+                if (lhs_order != rhs_order) {
+                  return lhs_order < rhs_order;
+                }
+                return nodes[lhs].tab_strip_index < nodes[rhs].tab_strip_index;
+              });
+
+          LOG(WARNING) << "[MAHO_SPLIT_SIDE_DBG] GroupSplitTabs split_id="
+                       << group.split_id << " encountered0_id="
+                       << nodes[it->second[0]].tab_id
+                       << " encountered0_index="
+                       << nodes[it->second[0]].tab_strip_index
+                       << " encountered1_id=" << nodes[it->second[1]].tab_id
+                       << " encountered1_index="
+                       << nodes[it->second[1]].tab_strip_index
+                       << " emitted0_id=" << nodes[ordered_indices[0]].tab_id
+                       << " emitted0_index="
+                       << nodes[ordered_indices[0]].tab_strip_index
+                       << " emitted1_id=" << nodes[ordered_indices[1]].tab_id
+                       << " emitted1_index="
+                       << nodes[ordered_indices[1]].tab_strip_index;
+
+          group.depth = node.depth;
+          // Both split panes are shown together in the viewport, so if either
+          // pane is the active tab, both must render as active.
+          bool split_has_active = false;
+          for (size_t idx : it->second) {
+            if (nodes[idx].is_active) {
+              split_has_active = true;
+              break;
+            }
+          }
+          for (size_t idx : ordered_indices) {
+            nodes[idx].is_in_split = true;
+            if (split_has_active) {
+              nodes[idx].is_active = true;
+            }
+            group.children.push_back(std::move(nodes[idx]));
+            consumed_indices.insert(idx);
+          }
+          regrouped.push_back(std::move(group));
+          continue;
+        }
+      }
+    }
+    regrouped.push_back(std::move(node));
+  }
+  nodes = std::move(regrouped);
+}
+
 FooterSpaceState::FooterSpaceState() = default;
 FooterSpaceState::FooterSpaceState(const FooterSpaceState&) = default;
 FooterSpaceState& FooterSpaceState::operator=(const FooterSpaceState&) = default;
@@ -630,7 +697,7 @@ void SetShellEventObserverForTesting(ShellEventObserver* observer) {
 
 void NotifyChangedHelper(const std::string& kind) {
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const bool is_structural = !(kind == "tab_title_updated" || 
+    const bool is_structural = !(kind == "tab_title_updated" ||
                                  kind == "tab_url_updated" ||
                                  kind == "tab_favicon_updated" ||
                                  kind == "tab_loading_state_changed" ||
@@ -673,6 +740,54 @@ void DispatchShellEvent(
   std::string updates = maho::core::HandleEvent(core, json.c_str());
   NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
+}
+
+std::string DispatchCreateFolder(const std::string& space_id,
+                                 const std::string& name) {
+  if (space_id.empty()) {
+    return std::string();
+  }
+  base::DictValue event;
+  event.Set("kind", "create_folder");
+  event.Set("space_id", space_id);
+  event.Set("name", name);
+  std::string json;
+  base::JSONWriter::Write(event, &json);
+  if (g_shell_event_observer_for_testing) {
+    g_shell_event_observer_for_testing->OnShellEventDispatched("create_folder",
+                                                               json);
+  }
+  ::MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::string();
+  }
+  std::string updates = maho::core::HandleEvent(core, json.c_str());
+  NotifyChangedHelper("create_folder");
+  MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
+
+  auto parsed = base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return std::string();
+  }
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* kind = dict->FindString("kind");
+    if (!kind || *kind != "folder_created") {
+      continue;
+    }
+    const auto* folder = dict->FindDict("folder");
+    if (!folder) {
+      continue;
+    }
+    const std::string* id = folder->FindString("id");
+    if (id && !id->empty()) {
+      return *id;
+    }
+  }
+  return std::string();
 }
 
 void DispatchShellEventEx(
@@ -854,6 +969,14 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
     if (id) {
       favorite_item.tab_id = *id;
     }
+    const std::string* favicon_b64 = dict->FindString("favicon");
+    if (favicon_b64 && !favicon_b64->empty()) {
+      std::string decoded_bytes;
+      if (base::Base64Decode(*favicon_b64, &decoded_bytes)) {
+        favorite_item.favicon_png_data = std::vector<uint8_t>(
+            decoded_bytes.begin(), decoded_bytes.end());
+      }
+    }
     if (!MahoDisplayPolicy::IsNtpOrBlankUrl(favorite_url)) {
       favorite_item.subtitle = favorite_url.host().empty()
                                     ? base::UTF8ToUTF16(favorite_url.spec())
@@ -992,6 +1115,10 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     }
   } else {
     build_tree_from_tab_strip();
+    if (tab_strip_model) {
+      GroupSplitTabs(model.pinned_tree, tab_strip_model);
+      GroupSplitTabs(model.normal_tree, tab_strip_model);
+    }
   }
 
   // Active-tab live overlay: refresh live fields (URL/title/loading/audio) on

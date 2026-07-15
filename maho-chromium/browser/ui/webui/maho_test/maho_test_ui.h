@@ -18,9 +18,14 @@ class WebUI;
 
 class MahoTestUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoTestUIConfig : public content::DefaultWebUIConfig<MahoTestUI> {
  public:
   MahoTestUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoTestHTMLSource : public content::URLDataSource {

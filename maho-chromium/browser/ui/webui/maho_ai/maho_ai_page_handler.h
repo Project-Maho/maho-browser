@@ -17,6 +17,7 @@
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 #include "maho/browser/ai/maho_ai_runtime_router.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -25,6 +26,7 @@
 class Browser;
 class PrefRegistrySimple;
 class PrefService;
+class MahoAiVoiceSession;
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -35,6 +37,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   MahoAIPageHandler(
       mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver,
       mojo::PendingRemote<maho_ai::mojom::Page> page,
+      std::unique_ptr<MahoPrivateContextToken> token,
       Browser* browser,
       PrefService* prefs,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
@@ -146,6 +149,11 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void GetWorkspaceEffectiveTools(const std::string& workspace_id,
                                   GetWorkspaceEffectiveToolsCallback callback) override;
 
+  // Voice input (desktop on-device STT).
+  void StartVoiceSession(StartVoiceSessionCallback callback) override;
+  void PushAudioChunk(const std::vector<float>& pcm16k) override;
+  void StopVoiceSession() override;
+
  private:
   // Translates internal runtime events into Mojo and pushes them to the Page
   // remote. Also maintains chat history for the simple chat UI.
@@ -229,11 +237,21 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   mojo::Receiver<maho_ai::mojom::PageHandler> receiver_;
   mojo::Remote<maho_ai::mojom::Page> page_;
+  std::unique_ptr<MahoPrivateContextToken> token_;
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  MahoAiRuntimeRouter runtime_router_;
-  MahoAiPageContextExtractor page_context_extractor_;
+  std::unique_ptr<MahoAiRuntimeRouter> runtime_router_;
+  std::unique_ptr<MahoAiPageContextExtractor> page_context_extractor_;
+
+  // R-9: revalidates kAI for this handler's bound context. Every Mojo method
+  // and every constructed subsystem is gated by this before touching
+  // MahoCore/network. Denied contexts get interface-native defaults and a
+  // reset receiver/page.
+  bool IsAiAllowed();
+  void DenyAndResetConnection();
+  static bool RevalidateAiThunk(base::WeakPtr<MahoAIPageHandler> self);
+  static Browser* ResolveBoundBrowserThunk(base::WeakPtr<MahoAIPageHandler> self);
 
 
   // Session state for the new contract.
@@ -258,6 +276,11 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   PrefChangeRegistrar pref_change_registrar_;
   void OnAISettingsPrefsChanged();
   maho_ai::mojom::AISettingsInfoPtr BuildAISettingsInfo() const;
+
+  // Voice input: forwards final transcripts / errors to the Page remote.
+  void OnVoiceFinalTranscript(const std::string& transcript);
+  void OnVoiceSessionError(const std::string& message);
+  std::unique_ptr<MahoAiVoiceSession> voice_session_;
 
   base::WeakPtrFactory<MahoAIPageHandler> weak_factory_{this};
   base::WeakPtrFactory<MahoAIPageHandler> session_list_weak_factory_{this};

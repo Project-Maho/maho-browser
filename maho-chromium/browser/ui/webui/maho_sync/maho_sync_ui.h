@@ -20,9 +20,14 @@ class WebUI;
 
 class MahoSyncUI;
 
+namespace content {
+class BrowserContext;
+}
+
 class MahoSyncUIConfig : public content::DefaultWebUIConfig<MahoSyncUI> {
  public:
   MahoSyncUIConfig();
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoSyncUI : public ui::MojoWebUIController,

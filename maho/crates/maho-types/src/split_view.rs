@@ -48,3 +48,19 @@ impl SplitViewConfig {
         self.panes.is_empty()
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct StablePaneIdentity {
+    pub url: String,
+    pub tab_creation_time_micros: u64,
+    pub window_session_uuid: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitViewPersistConfig {
+    pub panes: Vec<StablePaneIdentity>,
+    pub orientation: Orientation,
+    pub ratios: Vec<f64>,
+}

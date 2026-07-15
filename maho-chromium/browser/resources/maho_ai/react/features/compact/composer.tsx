@@ -37,7 +37,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@ui/tooltip';
-import {Globe, Plus, Square, Send, Search, AlertCircle} from '@icons/lucide';
+import {Globe, Plus, Square, Send, Search, AlertCircle, Mic} from '@icons/lucide';
 import {Alert, AlertDescription} from '@ui/alert';
 import {ComposerTextarea} from '../../components/composer-textarea.js';
 
@@ -58,6 +58,7 @@ export interface ComposerHandlers {
   onRemoveAttachment: (attachment: ComposerAttachment) => void;
   onSetActiveAI: (providerId: string, modelId: string) => Promise<void>;
   onOpenSettings: () => void;
+  onOpenVoice: () => void;
 }
 
 const pickerRowClassName =
@@ -365,6 +366,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
       !readOnly && !!state.currentSessionId &&
       !!state.turnPendingBySessionId[state.currentSessionId];
   const submitDisabled = readOnly || !state.composer.prompt.trim();
+  const voiceHidden = readOnly || state.voice.status === 'unsupported';
   const searchQuery = state.historySearch.query.trim();
   const trimmedDraftSearchQuery = draftSearchQuery.trim();
   const hasSearchQuery = searchQuery.length > 0;
@@ -703,6 +705,22 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
             </DropdownMenu>
           );
         })()}
+        {!voiceHidden ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Start voice input"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 rounded-full"
+                disabled={canCancel || state.voice.active}
+                onClick={handlers.onOpenVoice}>
+                <Mic className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Voice input</TooltipContent>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

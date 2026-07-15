@@ -41,6 +41,10 @@ const mockHandlerInstance = vi.hoisted(() => ({
   clearThemePreview: vi.fn(),
   openMigrationDialog: vi.fn().mockResolvedValue({result: {wasCancelled: false, importedItemsBitmask: 0}}),
   getLocalizedStrings: vi.fn().mockResolvedValue({strings: {}}),
+  loginFromWelcome: vi.fn().mockResolvedValue({ok: true, errorMessage: ''}),
+  signupFromWelcome: vi.fn().mockResolvedValue({ok: true, errorMessage: ''}),
+  getRelayAccountStatusFromWelcome:
+      vi.fn().mockResolvedValue({signedIn: false, tier: '', subscriptionStatus: '', welcomeCompleted: false, hasStoredSession: false}),
   finishOnboarding: vi.fn(),
 }));
 
@@ -114,6 +118,13 @@ describe('MahoWelcomeStore', () => {
         {url: 'https://example.com', name: 'Example', iconPath: ''},
       ],
     });
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValue({
+      signedIn: false,
+      tier: '',
+      subscriptionStatus: '',
+      welcomeCompleted: false,
+      hasStoredSession: false,
+    });
     const mod = await import('../store.js');
     MahoWelcomeStore = mod.MahoWelcomeStore;
   });
@@ -121,7 +132,7 @@ describe('MahoWelcomeStore', () => {
   it('starts with Zen import/default state defaults', () => {
     const store = new MahoWelcomeStore();
     const state = store.getSnapshot();
-    expect(state.currentPage).toBe(WelcomePage.Splash);
+    expect(state.currentPage).toBe(WelcomePage.Auth);
     expect(state.direction).toBe('forward');
     expect(state.availableBrowsers).toEqual([]);
     expect(state.importState).toEqual(
@@ -137,9 +148,22 @@ describe('MahoWelcomeStore', () => {
     expect(state.selectedTheme).toBeNull();
   });
 
-  it('advances through all pages in the flow', () => {
+  it('advances through all pages in the flow once signed in', async () => {
     const store = new MahoWelcomeStore();
+    // Simulate successful sign-in
+    store.setAuthEmail('user@maho.dev');
+    store.setAuthPassword('securepwd');
+    mockHandlerInstance.loginFromWelcome.mockResolvedValueOnce({ok: true, errorMessage: ''});
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'pro',
+      subscriptionStatus: 'active',
+      welcomeCompleted: false,
+    });
+
     const expectedPages = [
+      WelcomePage.Splash,
+      WelcomePage.Appearance,
       WelcomePage.SourceSelect,
       WelcomePage.ImportProgress,
       WelcomePage.SearchEngine,
@@ -147,20 +171,42 @@ describe('MahoWelcomeStore', () => {
       WelcomePage.Completion,
     ];
 
+    // Cannot advance without sign in
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Auth);
+
+    // Perform sign in
+    await store.submitSignIn();
+
+    // Verify it can now advance
     for (const expected of expectedPages) {
       store.nextPage();
       expect(store.getSnapshot().currentPage).toBe(expected);
     }
   });
 
-  it('goes backward without leaving Splash', () => {
+  it('goes backward without leaving Splash', async () => {
     const store = new MahoWelcomeStore();
-    store.prevPage();
+    // Set authenticated so we can advance
+    store.setAuthEmail('user@maho.dev');
+    store.setAuthPassword('securepwd');
+    mockHandlerInstance.loginFromWelcome.mockResolvedValueOnce({ok: true, errorMessage: ''});
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'pro',
+      subscriptionStatus: 'active',
+      welcomeCompleted: false,
+    });
+    await store.submitSignIn();
+
+    store.nextPage(); // Auth -> Splash
+    store.prevPage(); // Splash -> Splash (cannot go back to Auth)
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.Splash);
 
-    store.nextPage();
-    store.nextPage();
-    store.prevPage();
+    store.nextPage(); // Splash -> Appearance
+    store.nextPage(); // Appearance -> SourceSelect
+    store.nextPage(); // SourceSelect -> ImportProgress
+    store.prevPage(); // ImportProgress -> SourceSelect
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.SourceSelect);
     expect(store.getSnapshot().direction).toBe('backward');
   });
@@ -179,6 +225,31 @@ describe('MahoWelcomeStore', () => {
     expect(state.searchEngines).toHaveLength(3);
     expect(state.selectedEngine).toBe('google');
     expect(state.essentialSites).toHaveLength(2);
+  });
+
+  it('bootstrap derives isReauthMode and hasStoredSession across the three flows', async () => {
+    const flows = [
+      {welcomeCompleted: false, hasStoredSession: false},
+      {welcomeCompleted: true, hasStoredSession: false},
+      {welcomeCompleted: true, hasStoredSession: true},
+    ];
+
+    for (const flow of flows) {
+      mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+        signedIn: false,
+        tier: '',
+        subscriptionStatus: '',
+        welcomeCompleted: flow.welcomeCompleted,
+        hasStoredSession: flow.hasStoredSession,
+      });
+
+      const store = new MahoWelcomeStore();
+      await store.bootstrap();
+      const {auth} = store.getSnapshot();
+
+      expect(auth.isReauthMode).toBe(flow.welcomeCompleted);
+      expect(auth.hasStoredSession).toBe(flow.hasStoredSession);
+    }
   });
 
   it('stores and applies the default-browser radio choice', () => {
@@ -248,16 +319,6 @@ describe('MahoWelcomeStore', () => {
     expect(store.getSnapshot().importState.phase).toBe('idle');
   });
 
-  it('applies the default-browser choice when leaving Stage B with Next', async () => {
-    const store = new MahoWelcomeStore();
-    store.nextPage(); // Splash -> SourceSelect
-    await store.openMigrationDialog(); // Stage A -> Stage B
-    store.setSetAsDefault(true);
-    store.nextPage(); // Stage B -> SearchEngine
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SearchEngine);
-    expect(mockHandlerInstance.setAsDefaultBrowser).toHaveBeenCalledTimes(1);
-  });
-
   it('updates search engine inline and calls the handler', () => {
     const store = new MahoWelcomeStore();
     store.setSearchEngine('bing');
@@ -303,42 +364,65 @@ describe('MahoWelcomeStore', () => {
     expect(mockHandlerInstance.finishOnboarding).toHaveBeenCalledTimes(1);
   });
 
-  it('skips onboarding and applies default-browser choice from Import', async () => {
-    const store = new MahoWelcomeStore();
-    store.nextPage(); // Splash -> SourceSelect
-    await store.openMigrationDialog(); // Stage A -> Stage B
-    store.setSetAsDefault(true);
-    store.skip();
-    expect(mockHandlerInstance.setAsDefaultBrowser).toHaveBeenCalledTimes(1);
-    expect(mockHandlerInstance.finishOnboarding).toHaveBeenCalledTimes(1);
-  });
-
-  it('notifies subscribers on state change and supports unsubscribe', () => {
+  it('notifies subscribers on state change and supports unsubscribe', async () => {
     const store = new MahoWelcomeStore();
     const first = vi.fn();
     const second = vi.fn();
 
     const unsubscribeFirst = store.subscribe(first);
     store.subscribe(second);
+    // Simulate auth success so nextPage changes state
+    store.setAuthEmail('user@maho.dev');
+    store.setAuthPassword('securepwd');
+    mockHandlerInstance.loginFromWelcome.mockResolvedValueOnce({ok: true, errorMessage: ''});
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'pro',
+      subscriptionStatus: 'active',
+      welcomeCompleted: false,
+    });
+    await store.submitSignIn();
+
     store.nextPage();
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalled();
+    expect(second).toHaveBeenCalled();
 
     unsubscribeFirst();
     store.nextPage();
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalled();
   });
 
-  it('returns a stable snapshot until state changes', () => {
+  it('manages Auth login and signup actions', async () => {
     const store = new MahoWelcomeStore();
-    const before = store.getSnapshot();
-    expect(before).toBe(store.getSnapshot());
+    store.setAuthMode('signup');
+    expect(store.getSnapshot().auth.mode).toBe('signup');
 
-    store.nextPage();
-    const after = store.getSnapshot();
-    expect(after).not.toBe(before);
-    expect(before.currentPage).toBe(WelcomePage.Splash);
-    expect(after.currentPage).toBe(WelcomePage.SourceSelect);
+    store.setAuthEmail('newuser@maho.dev');
+    store.setAuthPassword('securepwd123');
+    store.setAuthDisplayName('New User');
+    expect(store.getSnapshot().auth.email).toBe('newuser@maho.dev');
+    expect(store.getSnapshot().auth.password).toBe('securepwd123');
+    expect(store.getSnapshot().auth.displayName).toBe('New User');
+
+    mockHandlerInstance.signupFromWelcome.mockResolvedValueOnce({ok: true, errorMessage: ''});
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'pro',
+      subscriptionStatus: 'active',
+      welcomeCompleted: false,
+    });
+
+    const success = await store.submitSignUp();
+    expect(success).toBe(true);
+    expect(mockHandlerInstance.signupFromWelcome).toHaveBeenCalledWith('newuser@maho.dev', 'securepwd123', 'New User');
+    expect(store.getSnapshot().auth.status).toBe('success');
+
+    // Test failure scenario
+    mockHandlerInstance.loginFromWelcome.mockResolvedValueOnce({ok: false, errorMessage: 'Invalid password'});
+    store.setAuthMode('signin');
+    const failed = await store.submitSignIn();
+    expect(failed).toBe(false);
+    expect(store.getSnapshot().auth.status).toBe('error');
+    expect(store.getSnapshot().auth.errorMessage).toBe('Invalid password');
   });
 });

@@ -56,7 +56,7 @@ class MahoMcpSessionToken {
 
   // Returns a span over the raw 32-byte token (for testing only).
   base::span<const uint8_t> raw_token_for_testing() const {
-    return base::make_span(token_);
+    return base::span(token_);
   }
 
   static constexpr size_t kTokenSize = 32;

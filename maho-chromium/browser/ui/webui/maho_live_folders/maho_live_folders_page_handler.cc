@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 #include <optional>
 #include <utility>
 
@@ -119,6 +121,12 @@ MahoLiveFolderPageHandler::MahoLiveFolderPageHandler(
       profile_(profile),
       url_loader_factory_(profile->GetURLLoaderFactory()) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // R-4 fail-closed: forged Mojo receiver bypasses config-level denial. Do not remove.
+  if (!MahoIsWebUIEnabled(profile)) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
   LoadFolders();
   for (const auto& [id, config] : folders_) {
     ScheduleRefresh(id);

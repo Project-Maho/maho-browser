@@ -534,9 +534,46 @@ def run_generate(manifest, write_mode):
             continue
 
         if write_mode:
-            with open(filepath, 'w', newline='\n') as f:
-                f.write(expected_content)
-            print(f'  WROTE: {filename}')
+            differs = True
+            if os.path.isfile(filepath):
+                with open(filepath, 'r') as f:
+                    existing = f.read()
+                if existing == expected_content:
+                    differs = False
+            if differs:
+                active_task = os.environ.get('ACTIVE_TASK') or os.environ.get('TASK_ID')
+                owned = True
+                if active_task:
+                    # Dynamically find the active attempt directory
+                    evidence_root = os.path.normpath(os.path.join(_MAHO_CHROMIUM_DIR, '.omo', 'evidence', 'arc-parity-incognito-desktop'))
+                    attempt_dir = None
+                    if os.path.exists(evidence_root):
+                        attempts = [d for d in os.listdir(evidence_root) if d.startswith('attempt-') and os.path.isdir(os.path.join(evidence_root, d))]
+                        if attempts:
+                            attempts.sort()
+                            attempt_dir = os.path.join(evidence_root, attempts[-1])
+
+                    tsv_path = os.path.join(attempt_dir, 'preimage', 'owned-product-paths.tsv') if attempt_dir else None
+                    rel_icon_path = os.path.relpath(filepath, _MAHO_CHROMIUM_DIR)
+
+                    owned = False
+                    if tsv_path and os.path.exists(tsv_path):
+                        with open(tsv_path, 'r') as f:
+                            for line in f:
+                                parts = line.strip().split('|')
+                                if len(parts) >= 3:
+                                    task_id, mode, path = parts[0], parts[1], parts[2]
+                                    if task_id == str(active_task) and path == rel_icon_path:
+                                        owned = True
+                                        break
+                if owned:
+                    with open(filepath, 'w', newline='\n') as f:
+                        f.write(expected_content)
+                    print(f'  WROTE: {filename}')
+                else:
+                    print(f'  Active task {active_task} does not own {filename}. Skip write.')
+            else:
+                print(f'  UNCHANGED: {filename}')
         else:
             # Check mode: compare against existing file
             if os.path.isfile(filepath):

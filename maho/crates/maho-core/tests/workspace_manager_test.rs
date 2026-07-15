@@ -61,6 +61,7 @@ fn test_register_mcp_server_and_tools() {
         trusted_tools: Some(vec!["mcp:test-mcp/test_tool".to_string()]),
         timeout_ms: 1000,
         output_cap_bytes: 1024,
+        socket_path: None,
         created_at: "".to_string(),
         updated_at: "".to_string(),
     };

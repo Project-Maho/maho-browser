@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "base/functional/bind.h"
 #include "base/test/task_environment.h"
 #include "components/prefs/testing_pref_service.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -60,6 +61,25 @@ TEST_F(MahoAiLlmClientTest, ResetIsIdempotentForIsRetry) {
   EXPECT_FALSE(MahoAiLlmClientTestHelper::GetIsRetry(&client));
   client.Reset();
   EXPECT_FALSE(MahoAiLlmClientTestHelper::GetIsRetry(&client));
+}
+
+// R-9: a denying kAI gate stops StartCompletion before any network request;
+// it reports an error and never fires the completion path.
+TEST_F(MahoAiLlmClientTest, OtrTokenStopsBeforeRequest) {
+  MahoAiLlmClient client(&prefs_, nullptr, nullptr,
+                         /*provider_adapter_v2_enabled=*/false,
+                         base::BindRepeating([]() { return false; }));
+
+  bool errored = false;
+  bool completed = false;
+  client.StartCompletion(
+      MahoAiLlmClient::CompletionRequest(), MahoAiLlmClient::TokenCallback(),
+      base::BindOnce([](bool* c, MahoAiLlmClient::CompletionResult) { *c = true; },
+                     &completed),
+      base::BindOnce([](bool* e, const std::string&) { *e = true; }, &errored));
+
+  EXPECT_TRUE(errored);
+  EXPECT_FALSE(completed);
 }
 
 }  // namespace

@@ -8,6 +8,14 @@
 
 class Browser;
 
+// Privacy boundary: kPersistent mirrors split membership to MahoCore; primary
+// Incognito uses kPrivateLocal, which must never dispatch create_split /
+// clear_split_view to maho_core_handle_event (VerificationContract 4).
+enum class MahoSplitPersistence {
+  kPersistent,
+  kPrivateLocal,
+};
+
 // Manages split-view tab layout for a single browser window.
 //
 // Lifecycle: BrowserView owns one persistent instance created lazily on first
@@ -21,17 +29,28 @@ class Browser;
 // owns instances of this class; the class itself only knows about Browser.
 class MahoSplitViewController {
  public:
-  explicit MahoSplitViewController(Browser* browser);
+  explicit MahoSplitViewController(
+      Browser* browser,
+      MahoSplitPersistence persistence = MahoSplitPersistence::kPersistent);
   ~MahoSplitViewController();
 
   MahoSplitViewController(const MahoSplitViewController&) = delete;
   MahoSplitViewController& operator=(const MahoSplitViewController&) = delete;
 
+  // Only kPersistent may mirror split membership to MahoCore; kPrivateLocal
+  // must not (primary Incognito). Shared by production and unit tests.
+  static bool ShouldDispatchPersistentSplitEvent(MahoSplitPersistence mode);
+
   static void RestoreForWindow(Browser* browser);
 
   void AddSplit();
   void AddSplitWithURL(const GURL& url);
+  // Splits the existing tab at |clicked_index| against the active pivot tab;
+  // falls back to AddSplit() (blank partner) when it is the active tab, and is
+  // a no-op if either the clicked or active tab is already split.
+  void AddSplitForExistingTab(int clicked_index);
   void RemoveSplit();
+  void RemoveSplitForTab(int tab_strip_index);
   void SwapSplit();
   void ToggleSplit();
   void ToggleSplitWithURL(const GURL& url);
@@ -39,6 +58,7 @@ class MahoSplitViewController {
 
  private:
   raw_ptr<Browser> browser_;
+  MahoSplitPersistence persistence_;
 };
 
 #endif  // MAHO_BROWSER_UI_VIEWS_SPLIT_VIEW_MAHO_SPLIT_VIEW_CONTROLLER_H_

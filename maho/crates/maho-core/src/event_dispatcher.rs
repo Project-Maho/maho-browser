@@ -29,7 +29,7 @@ pub trait TabManagerInterface {
     fn unpin_tab(&mut self, tab_id: &TabId);
     fn favorite_tab(&mut self, tab_id: &TabId);
     fn transition_tab_role(&mut self, tab_id: &TabId, new_role: TabRole) -> bool;
-    fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize);
+    fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize, space_ids: &std::collections::HashSet<SpaceId>);
     fn mute_tab(&mut self, tab_id: &TabId);
     fn unmute_tab(&mut self, tab_id: &TabId);
     fn freeze_tab(&mut self, tab_id: &TabId);
@@ -88,6 +88,7 @@ pub trait SpaceManagerInterface {
     fn get_space_order(&self) -> &[SpaceId];
     fn get_space(&self, space_id: &SpaceId) -> Option<&maho_types::space::Space>;
     fn get_space_view_model(&self, space_id: &SpaceId) -> Option<SpaceViewModel>;
+    fn get_space_ids_for_profile(&self, profile_id: &ProfileId) -> std::collections::HashSet<SpaceId>;
     fn create_folder(
         &mut self,
         space_id: &SpaceId,
@@ -420,27 +421,11 @@ impl EventDispatcher {
                     vec![]
                 }
             }
-            ShellEvent::PinTab { tab_id } => {
-                tab_mgr.pin_tab(&tab_id);
-                vec![CoreUpdate::TabUpdated {
-                    tab_id,
-                    changes: TabStateUpdate {
-                        custom_title: None,
-                        is_pinned: Some(true),
-                        ..Default::default()
-                    },
-                }]
+            ShellEvent::PinTab { .. } => {
+                unreachable!("PinTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
             }
-            ShellEvent::UnpinTab { tab_id } => {
-                tab_mgr.unpin_tab(&tab_id);
-                vec![CoreUpdate::TabUpdated {
-                    tab_id,
-                    changes: TabStateUpdate {
-                        custom_title: None,
-                        is_pinned: Some(false),
-                        ..Default::default()
-                    },
-                }]
+            ShellEvent::UnpinTab { .. } => {
+                unreachable!("UnpinTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
             }
             ShellEvent::FavoriteTab { .. } => {
                 unreachable!("FavoriteTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
@@ -1337,7 +1322,12 @@ impl EventDispatcher {
                 vec![]
             }
             ShellEvent::ReorderFavorite { tab_id, new_index } => {
-                tab_mgr.reorder_favorite(&tab_id, new_index);
+                let space_ids = tab_mgr
+                    .get_tab(&tab_id)
+                    .and_then(|tab| space_mgr.get_space(&tab.space_id))
+                    .map(|space| space_mgr.get_space_ids_for_profile(&space.profile_id))
+                    .unwrap_or_default();
+                tab_mgr.reorder_favorite(&tab_id, new_index, &space_ids);
                 let role = tab_mgr.get_tab(&tab_id).map(|t| t.role.clone());
                 let favorite_order = role.as_ref().and_then(|r| r.favorite_order()).map(Some);
                 vec![CoreUpdate::TabUpdated {

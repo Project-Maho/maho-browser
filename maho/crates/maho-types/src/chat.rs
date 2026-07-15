@@ -10,6 +10,7 @@ pub enum ChatRequestMode {
     PageTransformation,
     BrowserAction,
     ToolAssistedTask,
+    AiSearch,
 }
 
 impl Default for ChatRequestMode {

@@ -6,7 +6,16 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_ffi.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/tabs/public/split_tab_data.h"
+#include "components/split_tabs/split_tab_visual_data.h"
+#include "maho/browser/maho_features.h"
 #include "ui/base/ui_base_features.h"
+
 #include "ui/compositor/layer.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
@@ -36,6 +45,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "url/gurl.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -108,33 +118,47 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
     : browser_(browser),
       last_focused_body_view_tracker_(std::make_unique<views::ViewTracker>()) {
   BuildUi();
-  if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
-    bridge->AddObserver(this);
+
+  // R-11: OTR (Incognito/Guest/system) sidebar reads only the current
+  // window's TabStripModel. Never touch MahoCore, SpaceBridge, favorites
+  // FFI, ScheduleRefreshAll, or the live-folder warmer for any OTR profile.
+  is_otr_ = browser_ && browser_->profile() &&
+            browser_->profile()->IsOffTheRecord();
+  if (!is_otr_) {
+    if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
+      bridge->AddObserver(this);
+    }
+    RefreshTranslateObservation();
+    // Synchronously seed favorites so Cmd+1..8 works immediately at startup,
+    // before the async ScheduleRefreshAll() state build completes.
+    // Payload is tiny (~12 items) so the FFI cost is <1ms.
+    {
+      std::string active_space_id_json;
+      if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
+        const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
+        if (!active_space_id.empty()) {
+          active_space_id_json = ::base::GetQuotedJSONString(active_space_id);
+        }
+      }
+      state_adapter_.SetFavoritesModel(
+          MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+              active_space_id_json));
+    }
+    ScheduleRefreshAll();
+
+    // Warm the live folder item cache so expanded live folders show children
+    // inline immediately, without requiring the user to open the WebUI first.
+    LiveFolderCacheWarmer::WarmCache(browser_->profile());
+  } else {
+    // R-11: Populate the private rail from the window-local strip only.
+    RefreshPrivateSidebar();
   }
+
+  // TabStripModel observation is always registered: the private sidebar
+  // needs OnTabStripModelChanged to keep its local tab list current.
   if (tab_strip_model()) {
     tab_strip_model()->AddObserver(this);
   }
-  RefreshTranslateObservation();
-  // Synchronously seed favorites so Cmd+1..8 works immediately at startup,
-  // before the async BuildFavoritesModelOnBackground round-trip completes.
-  // Payload is tiny (~12 items) so the FFI cost is <1ms.
-  {
-    std::string active_space_id_json;
-    if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
-      const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
-      if (!active_space_id.empty()) {
-        active_space_id_json = ::base::GetQuotedJSONString(active_space_id);
-      }
-    }
-    state_adapter_.SetFavoritesModel(
-        MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
-            active_space_id_json));
-  }
-  ScheduleRefreshAll();
-
-  // Warm the live folder item cache so expanded live folders show children
-  // inline immediately, without requiring the user to open the WebUI first.
-  LiveFolderCacheWarmer::WarmCache(browser_->profile());
 }
 
 MahoSidebarView::~MahoSidebarView() {
@@ -656,10 +680,8 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
                   if (!browser) {
                     return;
                   }
-                  auto* bridge = MahoSpaceProfileBridge::GetInstance();
-                  if (bridge) {
-                    bridge->SwitchToSpace(browser.get(), space_id);
-                  }
+                  MahoSidebarView::ActivateSpaceAndTab(browser.get(), space_id);
+
                 },
                 browser_->AsWeakPtr()));
         spaces_view_ = library_content_host_->AddChildView(std::move(view));
@@ -774,6 +796,74 @@ void MahoSidebarView::ActivateTabById(const std::string& tab_id) {
   }
 }
 
+// static
+bool MahoSidebarView::ActivateSpaceAndTab(Browser* browser, const std::string& space_id) {
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+
+  if (!bridge) {
+    return false;
+  }
+  if (!bridge->SwitchToSpace(browser, space_id)) {
+    return false;
+  }
+
+  if (base::FeatureList::IsEnabled(maho::features::kMahoSpaceSwitchActivatesTab)) {
+    auto* core = maho::GetCore();
+    if (core) {
+      char* target_tab_raw = maho_core_get_activation_target_for_space(core, space_id.c_str());
+      if (target_tab_raw) {
+        std::string target_tab_id(target_tab_raw);
+        maho_core_free_string(target_tab_raw);
+
+        if (!target_tab_id.empty()) {
+          // Implement split-view teardown policy (T5)
+          MahoSplitViewController split_controller(browser);
+          if (split_controller.IsSplitActive()) {
+            TabStripModel* model = browser->tab_strip_model();
+            if (model) {
+              int active_index = model->active_index();
+              bool target_is_in_split = false;
+              if (active_index != TabStripModel::kNoTab) {
+                std::optional<split_tabs::SplitTabId> split_id = model->GetSplitForTab(active_index);
+                if (split_id.has_value()) {
+                  if (auto* split_data = model->GetSplitData(split_id.value())) {
+                    for (auto* split_tab : split_data->ListTabs()) {
+                      if (split_tab) {
+                        auto* helper = MahoTabIdHelper::FromWebContents(split_tab->GetContents());
+                        if (helper && helper->stable_tab_id() == target_tab_id) {
+                          target_is_in_split = true;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              if (!target_is_in_split) {
+                split_controller.RemoveSplit();
+              }
+            }
+          }
+
+          // Activate the target tab by ID
+          BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+          if (browser_view && browser_view->maho_sidebar_container()) {
+            auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
+                browser_view->maho_sidebar_container());
+            if (auto* sidebar = static_cast<MahoSidebarView*>(
+                    sidebar_container->sidebar_view())) {
+              sidebar->ActivateTabById(target_tab_id);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+
 bool MahoSidebarView::ActivateFavoriteByIndex(size_t index) {
   return favorites_view_ && favorites_view_->ActivateFavoriteByIndex(index);
 }
@@ -817,53 +907,26 @@ void MahoSidebarView::ScheduleRefreshAll() {
   // Any full-rebuild request supersedes a pending cosmetic patch: the full
   // rebuild will already emit fresh titles/URLs/favicons.
   cosmetic_refresh_timer_.Stop();
-  if (refresh_scheduled_) {
-    needs_re_refresh_ = true;
+  if (refresh_state_ == RefreshState::kInFlight) {
+    refresh_dirty_ = true;
     return;
   }
-  refresh_scheduled_ = true;
-  needs_re_refresh_ = false;
-  RefreshFavoritesAndViewState();
-}
-
-void MahoSidebarView::RefreshFavoritesAndViewState() {
-  std::string active_space_id_json;
-  if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
-    if (!active_space_id.empty()) {
-      active_space_id_json = base::GetQuotedJSONString(active_space_id);
-    }
-  }
-
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&MahoSidebarView::BuildFavoritesModelOnBackground,
-                     active_space_id_json),
-      base::BindOnce(&MahoSidebarView::OnFavoritesModelReady,
-                     weak_factory_.GetWeakPtr()));
-}
-
-// static
-MahoSidebarFavoritesModel MahoSidebarView::BuildFavoritesModelOnBackground(
-    const std::string& active_space_id_json) {
-  return MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
-      active_space_id_json);
-}
-
-void MahoSidebarView::OnFavoritesModelReady(
-    MahoSidebarFavoritesModel favorites_model) {
-  state_adapter_.SetFavoritesModel(std::move(favorites_model));
+  refresh_state_ = RefreshState::kInFlight;
+  refresh_dirty_ = false;
   RefreshAll();
 }
 
 void MahoSidebarView::RefreshAll() {
-  if (refresh_in_progress_) {
-    needs_re_refresh_ = true;
+  if (is_otr_) {
+    // R-11: OTR never posts the background state build (which reads MahoCore
+    // and the Space bridge). Rebuild synchronously from the window-local strip.
+    RefreshPrivateSidebar();
+    refresh_state_ = RefreshState::kIdle;
+    if (refresh_dirty_) {
+      refresh_dirty_ = false;
+    }
     return;
   }
-  refresh_in_progress_ = true;
-  refresh_scheduled_ = false;
-
   std::string space_id_json;
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance()) {
     space_id_json = base::GetQuotedJSONString(bridge->GetActiveSpaceId(browser_));
@@ -879,9 +942,17 @@ void MahoSidebarView::RefreshAll() {
                      weak_factory_.GetWeakPtr()));
 }
 
-void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
-  refresh_in_progress_ = false;
+void MahoSidebarView::RefreshPrivateSidebar() {
+  // R-11: Window-local, MahoCore/Space-free rebuild. BuildTabListModel reads
+  // only browser_->tab_strip_model() when no v2 FFI tree is cached (which the
+  // private path never populates); BuildSearchModel/BuildTopBarModel read only
+  // the active WebContents. No favorites/folders/footer/library sources.
+  UpdateTabList(state_adapter_.BuildTabListModel(browser_));
+  UpdateSearch(state_adapter_.BuildSearchModel(browser_));
+  UpdateTopBar(state_adapter_.BuildTopBarModel(browser_));
+}
 
+void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
   auto model = state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result));
   ApplyViewState(model);
 
@@ -891,8 +962,10 @@ void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result
       archive_view_) {
     archive_view_->ReloadArchivedTabs();
   }
-  if (needs_re_refresh_) {
-    needs_re_refresh_ = false;
+
+  refresh_state_ = RefreshState::kIdle;
+  if (refresh_dirty_) {
+    refresh_dirty_ = false;
     ScheduleRefreshAll();
   }
 }
@@ -1038,6 +1111,16 @@ void MahoSidebarView::OnTabStripModelChanged(
   LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged type=" << ch
             << " active_tab_changed=" << selection.active_tab_changed();
 
+  // Strip-index-shifting changes invalidate the tab_id->index cache; clear it
+  // so a stale entry can't resolve a row click / CloseTabById to a neighbor.
+  // Must run before the fast paths below, which return without a full refresh.
+  if (tab_list_view_ &&
+      (change.type() == TabStripModelChange::kMoved ||
+       change.type() == TabStripModelChange::kRemoved ||
+       change.type() == TabStripModelChange::kInserted)) {
+    tab_list_view_->InvalidateTabIndexCache();
+  }
+
   if (selection.active_tab_changed() ||
       change.type() == TabStripModelChange::kReplaced) {
     RefreshTranslateObservation();
@@ -1051,15 +1134,44 @@ void MahoSidebarView::OnTabStripModelChanged(
     return helper ? helper->stable_tab_id() : std::string();
   };
 
+  if (selection.active_tab_changed() && selection.new_contents) {
+    std::string new_active_tab_id = get_new_active_tab_id();
+    if (!new_active_tab_id.empty()) {
+      DispatchShellEvent("activate_tab", {{"tab_id", new_active_tab_id}});
+    }
+  }
+
+  // The fast paths below skip the full RefreshAll (RebuildRows on 870+ rows),
+  // but the search pill and top bar mirror the ACTIVE tab's live state
+  // (URL/host, display mode, back/forward/reload). A plain tab activation —
+  // sidebar row click, Ctrl+Tab, or focusing the other pane of a split
+  // (MultiContentsView::OnWebContentsFocused → ActivateTabAt, kSelectionOnly)
+  // — produces no follow-up event for an idle tab, so without this the pill
+  // keeps showing the previous tab's address (and Copy URL copies it). Both
+  // builders only read the active WebContents (no FFI), so they are cheap
+  // enough for the fast path.
+  auto refresh_active_tab_chrome = [&]() {
+    UpdateSearch(state_adapter_.BuildSearchModel(browser_));
+    UpdateTopBar(state_adapter_.BuildTopBarModel(browser_));
+  };
+
   if (change.type() == TabStripModelChange::kSelectionOnly &&
       selection.active_tab_changed() && tab_list_view_) {
-    tab_list_view_->UpdateActiveTabHighlightOnly(get_new_active_tab_id());
-    if (favorites_view_) {
-      UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+    const std::string new_active_tab_id = get_new_active_tab_id();
+    // An empty id with a live active tab means the stable id is not assigned
+    // yet (startup race). Passing "" would clear the old highlight and never
+    // paint the new one, so fall through to the full refresh instead; an
+    // empty id with no active contents is a legitimate "clear highlight".
+    if (!selection.new_contents || !new_active_tab_id.empty()) {
+      tab_list_view_->UpdateActiveTabHighlightOnly(new_active_tab_id);
+      if (favorites_view_) {
+        UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+      }
+      refresh_active_tab_chrome();
+      LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_select) "
+                << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+      return;
     }
-    LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_select) "
-              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
-    return;
   }
 
   if (change.type() == TabStripModelChange::kInserted &&
@@ -1070,6 +1182,7 @@ void MahoSidebarView::OnTabStripModelChanged(
       if (favorites_view_) {
         UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
       }
+      refresh_active_tab_chrome();
       LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake) "
                 << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
       return;
@@ -1105,6 +1218,9 @@ void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
 
 void MahoSidebarView::OnTabPinnedStateChanged(tabs::TabInterface* tab,
                                               int index) {
+  if (applying_pin_) {
+    return;
+  }
   // Sync pin state to maho-core before refreshing UI.
   const bool pinned = tab_strip_model() ? tab_strip_model()->IsTabPinned(index)
                                         : false;
@@ -1116,16 +1232,91 @@ void MahoSidebarView::OnTabPinnedStateChanged(tabs::TabInterface* tab,
     core_tab_id = tab_list_view_->FindCoreTabIdByWebContents(contents);
     sync_skipped = core_tab_id.empty();
     if (!core_tab_id.empty()) {
-      DispatchShellEvent(pinned ? "pin_tab" : "unpin_tab",
-                         {{"tab_id", core_tab_id}});
+      // Favorites are close-protected but NOT strictly pinned. Mirroring a
+      // native pin toggle into pin_tab/unpin_tab would silently demote the
+      // favorite to Pinned (or Normal), pulling its tile off the grid. Role
+      // exits from Favorite go only through change_tab_role (grid remove /
+      // drag-off), so skip the mirror for favorites entirely.
+      const bool is_favorite_role =
+          IsCoreCloseProtectedTab(core_tab_id) && !IsCorePinnedTab(core_tab_id);
+      if (is_favorite_role) {
+        sync_skipped = true;
+      } else {
+        DispatchShellEvent(pinned ? "pin_tab" : "unpin_tab",
+                           {{"tab_id", core_tab_id}});
+      }
     }
   }
   LOG(INFO) << "MahoPinnedDebug OnTabPinnedStateChanged: index=" << index
             << " pinned=" << pinned << " core_tab_id='" << core_tab_id
             << "' sync_skipped=" << sync_skipped;
   if (tab_list_view_ && sync_skipped) {
-    DLOG(WARNING) << "MahoSidebarView: Could not resolve core tab_id for "
-                  << "strip index " << index << " during pin state change";
+    if (core_tab_id.empty()) {
+      content::WebContents* contents =
+          tab_strip_model()->GetWebContentsAt(index);
+
+      // Clean up null weak pointers
+      std::erase_if(pending_pin_retries_, [](const auto& ptr) { return !ptr; });
+
+      bool already_pending = false;
+      for (const auto& ptr : pending_pin_retries_) {
+        if (ptr.get() == contents) {
+          already_pending = true;
+          break;
+        }
+      }
+
+      if (contents && !already_pending) {
+        pending_pin_retries_.push_back(contents->GetWeakPtr());
+        LOG(WARNING) << "MahoSidebarView: Could not resolve core tab_id for "
+                     << "strip index " << index << " during pin state change. Scheduling retry.";
+
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+            FROM_HERE,
+            base::BindOnce(
+                [](base::WeakPtr<MahoSidebarView> self,
+                   base::WeakPtr<content::WebContents> web_contents) {
+                  if (!self) {
+                    return;
+                  }
+                  if (web_contents) {
+                    std::erase_if(self->pending_pin_retries_, [&](const auto& ptr) {
+                      return !ptr || ptr.get() == web_contents.get();
+                    });
+                  }
+                  if (!self->browser_ || !self->tab_list_view_ || !web_contents) {
+                    return;
+                  }
+                  TabStripModel* model = self->browser_->tab_strip_model();
+                  if (!model) {
+                    return;
+                  }
+                  int current_index = model->GetIndexOfWebContents(web_contents.get());
+                  if (current_index == TabStripModel::kNoTab) {
+                    return;
+                  }
+                  std::string resolved_id =
+                      self->tab_list_view_->FindCoreTabIdByWebContents(web_contents.get());
+                  if (resolved_id.empty()) {
+                    LOG(WARNING) << "MahoSidebarView: Retry failed to resolve core tab_id for WebContents";
+                    return;
+                  }
+                  const bool pinned = model->IsTabPinned(current_index);
+                  const bool is_favorite_role =
+                      IsCoreCloseProtectedTab(resolved_id) && !IsCorePinnedTab(resolved_id);
+                  if (!is_favorite_role) {
+                    DispatchShellEvent(pinned ? "pin_tab" : "unpin_tab",
+                                       {{"tab_id", resolved_id}});
+                    self->ScheduleRefreshAll();
+                  }
+                },
+                weak_factory_.GetWeakPtr(), contents->GetWeakPtr()),
+            base::Milliseconds(150));
+      }
+    } else {
+      DLOG(WARNING) << "MahoSidebarView: Could not resolve core tab_id for "
+                    << "strip index " << index << " during pin state change";
+    }
   }
   ScheduleRefreshAll();
 }
@@ -1257,12 +1448,25 @@ void MahoSidebarView::OnDragExited() {
     favorites_view_->OnDragExited();
     favorites_view_->CollapseFromDrag();
   }
+  // Capture release can lag OnDragExited, so flush any model deferred during
+  // capture on the next loop turn rather than synchronously here.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<MahoSidebarView> self) {
+                       if (self && self->tab_list_view_) {
+                         self->tab_list_view_->FlushDeferredRebuild();
+                       }
+                     },
+                     weak_factory_.GetWeakPtr()));
 }
 
 void MahoSidebarView::OnDragEnded() {
   last_over_favorites_ = false;
   if (favorites_view_) {
     favorites_view_->OnDragEnded();
+  }
+  if (tab_list_view_) {
+    tab_list_view_->FlushDeferredRebuild();
   }
 }
 
@@ -1311,6 +1515,19 @@ void MahoSidebarView::RefreshTranslateObservation() {
       translate_client->translate_driver();
   if (driver) {
     translate_observation_.Observe(driver);
+  }
+}
+
+void MahoSidebarView::SetPrivateAppearance(
+    const ui::ImageModel& identity_icon,
+    ui::ColorId surface_color_id,
+    ui::ColorId text_color_id) {
+  // R-11: Presentation-only. No profile/pref reads.
+  // Sets private-window background and stores identity icon for top-bar.
+  SetBackground(views::CreateRoundedRectBackground(
+      surface_color_id, sidebar_layout::kRailCornerRadiusDp));
+  if (top_bar_view_) {
+    top_bar_view_->SetPrivateIdentityIcon(identity_icon, text_color_id);
   }
 }
 

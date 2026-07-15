@@ -20,6 +20,11 @@
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/webui/webui_util.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+
 MahoBoostUIConfig::MahoBoostUIConfig()
     : WebUIConfig(content::kChromeUIUntrustedScheme,
                   maho::kMahoBoostUntrustedHost) {}
@@ -30,6 +35,10 @@ std::unique_ptr<content::WebUIController>
 MahoBoostUIConfig::CreateWebUIController(content::WebUI* web_ui,
                                          const GURL& url) {
   return std::make_unique<MahoBoostUI>(web_ui);
+}
+
+bool MahoBoostUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  return MahoIsWebUIEnabled(browser_context);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoBoostUI)
@@ -74,6 +83,20 @@ void MahoBoostUI::BindInterface(
 void MahoBoostUI::CreatePageHandler(
     mojo::PendingRemote<maho_boost::mojom::PageObserver> page,
     mojo::PendingReceiver<maho_boost::mojom::PageHandler> receiver) {
+  content::WebContents* host = web_ui()->GetWebContents();
+  BrowserWindowInterface* browser_window = webui::GetBrowserWindowInterface(host);
+  if (!browser_window) {
+    content::WebContents* active_tab = maho::GetActiveTabForBoost(controller_);
+    if (active_tab) {
+      browser_window = webui::GetBrowserWindowInterface(active_tab);
+    }
+  }
+
+  if (!browser_window || Profile::FromBrowserContext(host->GetBrowserContext()) != browser_window->GetProfile() ||
+      !MahoIsWebUIEnabled(host->GetBrowserContext())) {
+    return;
+  }
+
   if (domain_.empty()) {
     const GURL& url = web_ui()->GetWebContents()->GetVisibleURL();
     std::string domain_param;
@@ -83,7 +106,8 @@ void MahoBoostUI::CreatePageHandler(
   }
 
   page_handler_ = std::make_unique<MahoBoostPageHandler>(
-      std::move(receiver), std::move(page), domain_, controller_);
+      std::move(receiver), std::move(page), domain_, controller_,
+      browser_window, host);
 
   if (controller_ && page_handler_) {
     maho::SetBoostEditorKilledCallback(

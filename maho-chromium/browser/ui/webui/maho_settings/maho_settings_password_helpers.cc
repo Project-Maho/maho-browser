@@ -41,6 +41,7 @@ MakePasswordProviderCapabilities(
   capabilities->can_delete_saved_passwords = native;
   capabilities->can_add_saved_passwords = native;
   capabilities->can_edit_saved_passwords = native;
+  capabilities->can_reveal_passwords = native;
   return capabilities;
 }
 

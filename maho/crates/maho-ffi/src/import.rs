@@ -74,6 +74,23 @@ pub struct MahoImportSession {
     thread: Option<thread::JoinHandle<()>>,
 }
 
+/// Pending user-provided passwords CSV path, set via
+/// `maho_import_orchestrator_set_password_csv` before `..._start`.
+///
+/// A process-global is sound here because the import gate allows only one
+/// import session at a time; `start` takes (clears) the value so it is consumed
+/// exactly once per session.
+static PENDING_PASSWORD_CSV: std::sync::OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> =
+    std::sync::OnceLock::new();
+
+fn pending_password_csv_slot() -> &'static std::sync::Mutex<Option<std::path::PathBuf>> {
+    PENDING_PASSWORD_CSV.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn take_pending_password_csv() -> Option<std::path::PathBuf> {
+    pending_password_csv_slot().lock().ok().and_then(|mut g| g.take())
+}
+
 /// Progress callback type invoked from the import background thread.
 ///
 /// Parameters:
@@ -215,6 +232,7 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
     let cancel_token = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel_token.clone();
     let ctx = CallbackContext { callback, user_data };
+    let password_csv_path = take_pending_password_csv();
 
     let handle = thread::Builder::new()
         .name("maho-import-orchestrator".into())
@@ -223,6 +241,9 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
             let mut orchestrator = Orchestrator::new(destination);
             if !essentials.is_empty() {
                 orchestrator.set_selected_essentials(essentials);
+            }
+            if let Some(path) = password_csv_path {
+                orchestrator.set_password_csv_path(path);
             }
             let orchestrator = Arc::new(orchestrator);
             let orchestrator_worker = orchestrator.clone();
@@ -321,6 +342,32 @@ pub unsafe extern "C" fn maho_import_orchestrator_free(handle: *mut MahoImportSe
     }, ())
 }
 
+/// Set the user-provided passwords CSV path for the next import session.
+///
+/// Additive companion to `maho_import_orchestrator_start`: call this BEFORE
+/// `..._start` when the user selects a Safari-exported passwords CSV. Passing
+/// NULL clears any pending path. The value is consumed by the next `..._start`.
+///
+/// # Safety
+/// `path` must be a valid null-terminated UTF-8 C string, or NULL (clears).
+#[no_mangle]
+pub unsafe extern "C" fn maho_import_orchestrator_set_password_csv(path: *const c_char) {
+    crate::ffi_safe!({
+
+    let slot = pending_password_csv_slot();
+    let Ok(mut guard) = slot.lock() else { return; };
+    if path.is_null() {
+        *guard = None;
+        return;
+    }
+    match CStr::from_ptr(path).to_str() {
+        Ok(s) => *guard = Some(std::path::PathBuf::from(s)),
+        Err(_) => *guard = None,
+    }
+
+    }, ())
+}
+
 struct CallbackContext {
     callback: MahoImportProgressCallback,
     user_data: *mut c_void,
@@ -370,6 +417,7 @@ fn import_type_to_bit(t: ImportType) -> u32 {
     match t {
         ImportType::History => ImportServices::HISTORY,
         ImportType::Bookmarks => ImportServices::BOOKMARKS,
+        ImportType::Passwords => ImportServices::PASSWORDS,
         ImportType::Cookies => ImportServices::COOKIES,
         ImportType::Autofill => ImportServices::AUTOFILL,
         ImportType::Favicons => ImportServices::FAVICONS,

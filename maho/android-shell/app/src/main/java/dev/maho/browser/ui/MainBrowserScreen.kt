@@ -59,6 +59,8 @@ import dev.maho.browser.models.SpaceViewModel
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.find.FindInPageSheet
+import dev.maho.browser.ui.search.SearchSheet
+import dev.maho.browser.ui.summary.PinchSummaryView
 import dev.maho.browser.ui.library.ArchiveScreen
 import dev.maho.browser.ui.library.BookmarksScreen
 import dev.maho.browser.ui.library.DownloadsScreen
@@ -125,6 +127,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var homeReturnTabId by rememberSaveable { mutableStateOf<TabId?>(null) }
     var showTabGrid by rememberSaveable { mutableStateOf(false) }
     var showFindSheet by rememberSaveable { mutableStateOf(false) }
+    var showSearchSheet by rememberSaveable { mutableStateOf(false) }
+    var showPinchSummary by rememberSaveable { mutableStateOf(false) }
+    var pinchSummarySentences by remember { mutableStateOf<List<String>>(emptyList()) }
     var overlayStack by remember { mutableStateOf(emptyList<BrowserOverlay>()) }
     var isIncognito by rememberSaveable { mutableStateOf(false) }
     var currentUrl by remember { mutableStateOf("") }
@@ -834,7 +839,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     }
                                 },
                                 onSearchClick = {
-                                    transitionToHome(returnTabId = activeTabId)
+                                    showSearchSheet = true
                                 },
                                 onGoBack = {
                                     activeTabId?.let { tabId ->
@@ -970,7 +975,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     transitionToHome(returnTabId = null)
                                 }
                             },
-                            onSearchClick = {},
+                            onSearchClick = {
+                                showSearchSheet = true
+                            },
                             onGoBack = {},
                             onGoForward = {},
                             onPreviousTab = {},
@@ -1062,6 +1069,17 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     revealBottomBar(lockMillis = 1200)
                                 }
                             },
+                            onPinchSummarize = {
+                                val webView = webViewRef
+                                if (webView != null) {
+                                    dev.maho.browser.support.PageSummarizer.extractAndSummarize(webView) { state ->
+                                        if (state is dev.maho.browser.support.PageSummarizer.State.Result) {
+                                            pinchSummarySentences = state.bullets
+                                            showPinchSummary = true
+                                        }
+                                    }
+                                }
+                            },
                             onScrollChanged = { scrollY, oldScrollY ->
                                 updateBottomBarVisibilityFromScroll(
                                     scrollY = scrollY,
@@ -1107,6 +1125,35 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                         onDismiss = { showFindSheet = false },
                     )
                 }
+            }
+
+            if (showSearchSheet && overlayStack.isEmpty()) {
+                SearchSheet(
+                    initialQuery = homeQuery,
+                    isIncognito = isIncognito,
+                    onDismiss = { showSearchSheet = false },
+                    onSubmit = { entered ->
+                        showSearchSheet = false
+                        homeQuery = entered
+                        submitSearch(entered, reuseActiveTab = false)
+                    },
+                    onToggleIncognito = {
+                        isIncognito = !isIncognito
+                    },
+                    onAskAI = { entered ->
+                        showSearchSheet = false
+                        homeQuery = entered
+                        submitSearch(entered, reuseActiveTab = false)
+                    }
+                )
+            }
+
+            if (showPinchSummary && overlayStack.isEmpty()) {
+                PinchSummaryView(
+                    title = currentTitle,
+                    sentences = pinchSummarySentences,
+                    onDismiss = { showPinchSummary = false }
+                )
             }
 
             if (showSummaryOverlay && overlayStack.isEmpty()) {

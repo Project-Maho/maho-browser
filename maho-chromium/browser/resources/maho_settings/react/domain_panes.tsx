@@ -27,9 +27,11 @@ import type {
   FilterListInfo,
   InstalledExtension,
   PasswordProviderStatus,
+  PasswordProviderOption,
   ProfileInfo,
   SavedPassword,
   SettingValue,
+  SpaceBasicInfo,
   SyncDeviceInfo,
   SyncKeyInfo,
   SyncStatus,
@@ -53,6 +55,7 @@ interface SyncPaneData {
 interface PasswordsPaneData {
   passwords: SavedPassword[];
   providerStatus: PasswordProviderStatus;
+  providerOptions: PasswordProviderOption[];
 }
 
 interface AutofillPaneData {
@@ -177,11 +180,22 @@ function isMahoNativeProvider(provider: PasswordProviderStatus['provider']): boo
   return provider === PasswordProviderKind.kMahoNative;
 }
 
+type PasswordProviderBackendValue = 'maho_native' | 'bitwarden' | 'onepassword';
+
+const PASSWORD_PROVIDER_BACKEND_VALUES = {
+  [PasswordProviderKind.kMahoNative]: 'maho_native',
+  [PasswordProviderKind.kBitwarden]: 'bitwarden',
+  [PasswordProviderKind.kOnePassword]: 'onepassword',
+} as const satisfies Record<PasswordProviderKind, PasswordProviderBackendValue>;
+
+function getPasswordProviderBackendValue(provider: PasswordProviderKind): PasswordProviderBackendValue {
+  return PASSWORD_PROVIDER_BACKEND_VALUES[provider];
+}
+
 function normalizeSavedPasswords(passwords: SavedPassword[]): SavedPassword[] {
   return passwords.map(password => ({
     ...password,
     lastUsed: password.lastUsed || null,
-    password: password.password || null,
   }));
 }
 
@@ -532,10 +546,26 @@ function ManagedSettingRow(
   );
 }
 
+function ReadOnlySettingRow(
+    {description, title}: {
+      description: React.ReactNode;
+      title: string;
+    }) {
+  return (
+    <section className={SETTING_ROW_CLASS}>
+      <div className={SETTING_COPY_CLASS}>
+        <h4 className={SETTING_TITLE_CLASS}>{title}</h4>
+        <p className={SETTING_DESCRIPTION_CLASS}>{description}</p>
+      </div>
+    </section>
+  );
+}
+
 function TextFieldShell(
-    {ariaLabel, onChange, placeholder, type = 'text', value}: {
+    {ariaLabel, onChange, onKeyDown, placeholder, type = 'text', value}: {
       ariaLabel: string;
       onChange: (value: string) => void;
+      onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
       placeholder: string;
       type?: string;
       value: string;
@@ -549,6 +579,7 @@ function TextFieldShell(
         type={type}
         value={value}
         onChange={event => onChange(event.currentTarget.value)}
+        onKeyDown={onKeyDown}
       />
     </div>
   );
@@ -558,7 +589,7 @@ function SelectShell<T extends string>(
     {ariaLabel, onChange, options, value}: {
       ariaLabel: string;
       onChange: (value: T) => void;
-      options: Array<{label: string; value: T}>;
+      options: Array<{label: string; value: T; disabled?: boolean; description?: string}>;
       value: T;
     }) {
   const placeholder = options[0]?.label || ariaLabel;
@@ -571,7 +602,14 @@ function SelectShell<T extends string>(
         </SelectTrigger>
         <SelectContent>
           {options.map(option => (
-            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+              <div className="flex flex-col text-left">
+                <span className="font-medium">{option.label}</span>
+                {option.description && (
+                  <span className="text-xs text-muted-foreground">{option.description}</span>
+                )}
+              </div>
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -691,6 +729,7 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
   const handler = store.getHandler();
   const [pattern, setPattern] = useState('');
   const [rulesState, setRulesState] = useState<LoadState<ATCRule[]>>(createLoadingState());
+  const [spacesState, setSpacesState] = useState<LoadState<SpaceBasicInfo[]>>(createLoadingState());
   const [spaceId, setSpaceId] = useState('');
 
   const loadRules = useCallback(async () => {
@@ -703,22 +742,48 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
     }
   }, [handler]);
 
+  const loadSpaces = useCallback(async () => {
+    setSpacesState(createLoadingState());
+    try {
+      const {spaces} = await handler.getSpaces();
+      setSpacesState(createLoadedState(spaces));
+    } catch {
+      setSpacesState(createErrorState('Failed to load spaces.'));
+    }
+  }, [handler]);
+
   useEffect(() => {
     void loadRules();
-  }, [loadRules]);
+    void loadSpaces();
+  }, [loadRules, loadSpaces]);
+
+  useEffect(() => {
+    if (spacesState.status === 'loaded' && spacesState.data.length > 0 && !spaceId) {
+      setSpaceId(spacesState.data[0]!.id);
+    }
+  }, [spacesState, spaceId]);
+
+  const isLoaded = rulesState.status === 'loaded' && spacesState.status === 'loaded';
+  const isAddDisabled = !pattern || !spaceId || (spacesState.status === 'loaded' && spacesState.data.length === 0);
 
   return (
     <PaneShell pane={pane}>
-      {rulesState.status === 'loading' ? <PaneLoading message="Loading rules…" /> : null}
+      {rulesState.status === 'loading' || spacesState.status === 'loading' ? (
+        <PaneLoading message="Loading routing rules and spaces…" />
+      ) : null}
       {rulesState.status === 'error' ? (
         <PaneRetry message={rulesState.message} title="Rules unavailable" onRetry={() => void loadRules()} />
       ) : null}
-      {rulesState.status === 'loaded' ? (
+      {spacesState.status === 'error' ? (
+        <PaneRetry message={spacesState.message} title="Spaces unavailable" onRetry={() => void loadSpaces()} />
+      ) : null}
+      {isLoaded ? (
         <SectionCard title="URL routing rules">
-          {rulesState.data.map(rule => (
+          {rulesState.status === 'loaded' && spacesState.status === 'loaded' && rulesState.data.map(rule => (
             <ATCRuleRow
               key={rule.id}
               rule={rule}
+              spaces={spacesState.data}
               onRemove={async () => {
                 await handler.removeATCRule(rule.id);
                 setRulesState(current => current.status === 'loaded' ?
@@ -733,6 +798,11 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
               }}
             />
           ))}
+          {spacesState.status === 'loaded' && spacesState.data.length === 0 && (
+            <div className="text-sm text-destructive px-6 py-2">
+              No spaces available. You must create at least one space to add routing rules.
+            </div>
+          )}
           <ManagedSettingRow
             controlClassName={SETTING_ACTIONS_CLASS}
             description="Route matching URLs into a target space."
@@ -743,13 +813,19 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
               value={pattern}
               onChange={setPattern}
             />
-            <TextFieldShell
-              ariaLabel="Target space ID"
-              placeholder="Target space ID"
-              value={spaceId}
-              onChange={setSpaceId}
-            />
+            {spacesState.status === 'loaded' && (
+              <SelectShell
+                ariaLabel="Target space"
+                options={spacesState.data.length > 0 ? spacesState.data.map(s => ({
+                  label: s.name || `Unnamed Space (${s.id})`,
+                  value: s.id,
+                })) : [{label: 'No spaces available', value: ''}]}
+                value={spaceId}
+                onChange={setSpaceId}
+              />
+            )}
             <ActionButton
+              disabled={isAddDisabled}
               label="Add"
               onClick={async () => {
                 if (!pattern || !spaceId) {
@@ -761,7 +837,6 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
                       createLoadedState([...current.data, rule]) :
                       current);
                   setPattern('');
-                  setSpaceId('');
                 }
               }}
             />
@@ -773,15 +848,26 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
 }
 
 function ATCRuleRow(
-    {onRemove, onToggle, rule}: {
+    {onRemove, onToggle, rule, spaces}: {
       onRemove: () => Promise<void>;
       onToggle: (nextEnabled: boolean) => Promise<void>;
       rule: ATCRule;
+      spaces: SpaceBasicInfo[];
     }) {
+  const getSpaceDisplayName = (targetId: string, spacesList: SpaceBasicInfo[]) => {
+    const space = spacesList.find(s => s.id === targetId);
+    if (space) {
+      return space.name || `Unnamed Space (${targetId})`;
+    }
+    return `Unknown Space (${targetId})`;
+  };
+
+  const displayName = getSpaceDisplayName(rule.targetSpaceId, spaces);
+
   return (
     <ManagedSettingRow
       controlClassName={SETTING_ACTIONS_CLASS}
-      description={<><img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/arrow-right.svg" /> {rule.targetSpaceId}</>}
+      description={<><img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/arrow-right.svg" /> {displayName}</>}
       title={rule.urlPattern}>
       <Toggle enabled={rule.enabled} label={rule.urlPattern} onToggle={onToggle} />
       <ActionButton ariaLabel="Remove rule" label={<img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/x.svg" />} onClick={onRemove} />
@@ -841,9 +927,10 @@ function useProviderModels(store: MahoSettingsStore, providerId: string) {
         setFromCache(false);
       }
     };
-    callbackRouter.providerModelsRefreshed.addListener(onRefreshed);
+    const listenerId = callbackRouter.providerModelsRefreshed.addListener(onRefreshed);
     return () => {
       cancelled = true;
+      callbackRouter.removeListener(listenerId);
     };
   }, [callbackRouter, providerId]);
 
@@ -930,12 +1017,16 @@ function ModelPicker({
   const isAuto = allowAuto === true && modelValue === '';
 
   const [userChoseCustom, setUserChoseCustom] = useState(false);
+  const [customDraft, setCustomDraft] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (modelInList) {
       setUserChoseCustom(false);
+    } else if (!isAuto && modelValue !== '') {
+      setCustomDraft(modelValue);
     }
-  }, [modelInList, modelValue]);
+  }, [modelInList, modelValue, isAuto]);
 
   if (modelsLoading) {
     return (
@@ -967,6 +1058,19 @@ function ModelPicker({
     selectedValue = modelValue;
   }
 
+  const handleSaveCustom = async () => {
+    const trimmed = customDraft.trim();
+    if (!trimmed) {
+      return;
+    }
+    setSaveError(null);
+    try {
+      await onCommitModel(trimmed);
+    } catch (err) {
+      setSaveError('Failed to save custom model.');
+    }
+  };
+
   return (
     <div className="flex flex-col gap-2 w-full">
       {hasModels ? (
@@ -990,12 +1094,30 @@ function ModelPicker({
         </div>
       ) : null}
       {showCustomInput && (
-        <TextFieldShell
-          ariaLabel={ariaLabel + " Text Input"}
-          placeholder={customPlaceholder}
-          value={modelValue}
-          onChange={onCommitModel}
-        />
+        <div className="flex flex-col gap-1.5 w-full">
+          <div className="flex items-center gap-2 w-full">
+            <TextFieldShell
+              ariaLabel={ariaLabel + " Text Input"}
+              placeholder={customPlaceholder}
+              value={customDraft}
+              onChange={setCustomDraft}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void handleSaveCustom();
+                }
+              }}
+            />
+            <ActionButton
+              label="Save"
+              onClick={handleSaveCustom}
+              disabled={!customDraft.trim()}
+            />
+          </div>
+          {saveError ? (
+            <p className="text-xs text-destructive mt-0.5">{saveError}</p>
+          ) : null}
+        </div>
       )}
     </div>
   );
@@ -1113,6 +1235,12 @@ function ByokFields({
             if (!success) throw new Error('Failed to save OpenAI BYOK key');
           });
         }}
+        onClear={async () => {
+          await commit(async () => {
+            const {success} = await handler.clearBYOKKey('openai');
+            if (!success) throw new Error('Failed to clear OpenAI BYOK key');
+          });
+        }}
       />
     );
   }
@@ -1129,6 +1257,12 @@ function ByokFields({
             if (!success) throw new Error('Failed to save Anthropic BYOK key');
           });
         }}
+        onClear={async () => {
+          await commit(async () => {
+            const {success} = await handler.clearBYOKKey('anthropic');
+            if (!success) throw new Error('Failed to clear Anthropic BYOK key');
+          });
+        }}
       />
     );
   }
@@ -1136,11 +1270,16 @@ function ByokFields({
     return (
       <>
         <AiFieldRow
-          initialValue=""
+          initialValue={data.hasApiKey ? '••••••••' : ''}
           label="API key"
-          placeholder={data.hasApiKey ? '••••••••  (saved — enter new value to change)' : 'Enter API key'}
+          placeholder="Enter API key"
           type="password"
           onCommit={async value => { await commit(async () => { await handler.setAIApiKey(value); }); }}
+          onClear={async () => {
+            await commit(async () => {
+              await handler.setAIApiKey("");
+            });
+          }}
         />
         <AiFieldRow
           initialValue={data.baseUrl}
@@ -1280,16 +1419,20 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
         <>
           <div className="mb-6">
             <SectionCard title="Providers">
-              {state.data.hasRelaySession ? (
-                <ProviderModeSelector
-                  provider={state.data.provider}
-                  onProviderChange={async mode => {
-                    await commit(async () => {
-                      const nextProvider = mode === 'maho-managed' ? 'maho-managed' : 'openai';
-                      await handler.setAIProvider(nextProvider);
-                    });
-                  }}
-                />
+              <ProviderModeSelector
+                provider={state.data.provider}
+                onProviderChange={async mode => {
+                  await commit(async () => {
+                    const nextProvider = mode === 'maho-managed' ? 'maho-managed' : 'openai';
+                    await handler.setAIProvider(nextProvider);
+                  });
+                }}
+              />
+
+              {!state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
+                <div className="mx-6 my-4 p-4 text-sm text-muted-foreground bg-accent/20 rounded-xl border border-border">
+                  Maho Managed AI Service is disabled because you are not connected to Sync. Please go to Sync settings to sign in or enable Sync.
+                </div>
               ) : null}
 
               {state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
@@ -1554,7 +1697,7 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
             <p className="mt-3 text-lg font-semibold tracking-tight">
               {billing.hasPaymentMethod ? 'Payment method on file' : 'No payment method'}
             </p>
-            <p className="mt-2 text-sm text-muted-foreground">Update cards, receipts, and billing details in Stripe.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Update cards, receipts, and billing details via our payment provider.</p>
             <Button className="mt-4" size="sm" type="button" variant="outline" onClick={openBillingPortal}>
               Manage
               <ArrowUpRight className="size-3.5" />
@@ -1739,10 +1882,11 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
 const MASKED_SECRET_PLACEHOLDER = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
 
 function AiFieldRow(
-    {initialValue, label, onCommit, placeholder, type = 'text'}: {
+    {initialValue, label, onCommit, onClear, placeholder, type = 'text'}: {
       initialValue: string;
       label: string;
       onCommit: (value: string) => Promise<void>;
+      onClear?: () => Promise<void>;
       placeholder?: string;
       type?: string;
     }) {
@@ -1755,6 +1899,8 @@ function AiFieldRow(
   const isUnchangedMaskedSecret =
       draft === MASKED_SECRET_PLACEHOLDER &&
       initialValue === MASKED_SECRET_PLACEHOLDER;
+
+  const hasStoredKey = initialValue !== '';
 
   return (
     <ManagedSettingRow description="" title={label}>
@@ -1771,6 +1917,17 @@ function AiFieldRow(
             return onCommit(draft);
           }}
       />
+      {onClear && hasStoredKey && (
+        <ActionButton
+            label="Clear"
+            onClick={async () => {
+              if (window.confirm(`Are you sure you want to clear the stored ${label}?`)) {
+                await onClear();
+                setDraft('');
+              }
+            }}
+        />
+      )}
     </ManagedSettingRow>
   );
 }
@@ -1802,11 +1959,93 @@ function AiSelectRow(
   );
 }
 
+function RemoteDeviceRow({
+  device,
+  editing,
+  onStartEdit,
+  onCancelEdit,
+  onSaveRename,
+  confirmingDisconnect,
+  onStartDisconnect,
+  onCancelDisconnect,
+  onConfirmDisconnect,
+  renameValue,
+  onRenameValueChange,
+  renameError,
+}: {
+  device: SyncDeviceInfo;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSaveRename: () => Promise<void>;
+  confirmingDisconnect: boolean;
+  onStartDisconnect: () => void;
+  onCancelDisconnect: () => void;
+  onConfirmDisconnect: () => Promise<void>;
+  renameValue: string;
+  onRenameValueChange: (val: string) => void;
+  renameError: string | null;
+}) {
+  if (editing) {
+    return (
+      <ManagedSettingRow
+        controlClassName={SETTING_ACTIONS_CLASS}
+        description={
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex gap-2 items-center">
+              <TextFieldShell
+                ariaLabel="New device name"
+                placeholder="New name"
+                value={renameValue}
+                onChange={onRenameValueChange}
+              />
+              <ActionButton label="Save" onClick={onSaveRename} />
+              <ActionButton label="Cancel" onClick={onCancelEdit} />
+            </div>
+            {renameError && <span className="text-xs text-destructive">{renameError}</span>}
+          </div>
+        }
+        title="Rename Device"
+      />
+    );
+  }
+
+  if (confirmingDisconnect) {
+    return (
+      <ManagedSettingRow
+        controlClassName={SETTING_ACTIONS_CLASS}
+        description="Are you sure you want to disconnect this device?"
+        title={`Disconnect ${device.name}?`}
+      >
+        <ActionButton label="Confirm" onClick={onConfirmDisconnect} />
+        <ActionButton label="Cancel" onClick={onCancelDisconnect} />
+      </ManagedSettingRow>
+    );
+  }
+
+  return (
+    <ManagedSettingRow
+      controlClassName={SETTING_ACTIONS_CLASS}
+      description={`${device.deviceType} · ${device.isOnline ? 'Online' : 'Offline'}`}
+      title={device.name}
+    >
+      <ActionButton label="Rename" onClick={onStartEdit} />
+      <ActionButton label="Disconnect" onClick={onStartDisconnect} />
+    </ManagedSettingRow>
+  );
+}
+
 function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const [joinPhrase, setJoinPhrase] = useState('');
   const [pendingKeyInfo, setPendingKeyInfo] = useState<SyncKeyInfo | null>(null);
   const [state, setState] = useState<LoadState<SyncPaneData>>(createLoadingState());
+
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [disconnectingDeviceId, setDisconnectingDeviceId] = useState<string | null>(null);
+  const [syncOperationError, setSyncOperationError] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     setState(createLoadingState());
@@ -1837,6 +2076,46 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
     void loadStatus();
   }, [loadStatus]);
 
+  const handleStartRename = (device: SyncDeviceInfo) => {
+    setEditingDeviceId(device.id);
+    setRenameName(device.name);
+    setRenameError(null);
+    setSyncOperationError(null);
+  };
+
+  const handleSaveRename = async (device: SyncDeviceInfo) => {
+    const trimmed = renameName.trim();
+    if (!trimmed) {
+      setRenameError("Device name cannot be empty.");
+      return;
+    }
+    try {
+      const {success} = await handler.renameSyncDevice(device.id, trimmed);
+      if (success) {
+        setEditingDeviceId(null);
+        await loadStatus();
+      } else {
+        setRenameError("Failed to rename device.");
+      }
+    } catch {
+      setRenameError("Failed to rename device.");
+    }
+  };
+
+  const handleConfirmDisconnect = async (device: SyncDeviceInfo) => {
+    try {
+      const {success} = await handler.disconnectSyncDevice(device.id);
+      if (success) {
+        setDisconnectingDeviceId(null);
+        await loadStatus();
+      } else {
+        setSyncOperationError("Failed to disconnect device.");
+      }
+    } catch {
+      setSyncOperationError("Failed to disconnect device.");
+    }
+  };
+
   return (
     <PaneShell pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading sync status…" /> : null}
@@ -1845,29 +2124,50 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
       ) : null}
       {state.status === 'loaded' ? (
         <SectionCard title="Connection">
-          <ManagedSettingRow
+          {syncOperationError && (
+            <div className="text-sm text-destructive px-4 py-2 border-b bg-destructive/10">{syncOperationError}</div>
+          )}
+          <ReadOnlySettingRow
             description={state.data.status.isSyncing ?
               `Syncing · ${state.data.status.statusLabel}` :
               `Not connected · ${state.data.status.statusLabel || 'idle'}`}
             title="Status"
           />
           {state.data.status.errorMessage ? (
-            <ManagedSettingRow description={state.data.status.errorMessage} title="Error" />
+            <ReadOnlySettingRow description={state.data.status.errorMessage} title="Error" />
           ) : null}
           {state.data.status.isSyncing ? (
             <>
               {state.data.devices.length > 0 ? (
-                <ManagedSettingRow description="" title="Connected devices" />
+                <ReadOnlySettingRow description="" title="Connected devices" />
               ) : null}
               {state.data.devices.map(device => (
-                <ManagedSettingRow
+                <RemoteDeviceRow
                   key={device.id}
-                  description={`${device.deviceType} · ${device.isOnline ? 'Online' : 'Offline'}`}
-                  title={device.name}
+                  device={device}
+                  editing={editingDeviceId === device.id}
+                  onStartEdit={() => handleStartRename(device)}
+                  onCancelEdit={() => setEditingDeviceId(null)}
+                  onSaveRename={() => handleSaveRename(device)}
+                  confirmingDisconnect={disconnectingDeviceId === device.id}
+                  onStartDisconnect={() => {
+                    setDisconnectingDeviceId(device.id);
+                    setSyncOperationError(null);
+                  }}
+                  onCancelDisconnect={() => setDisconnectingDeviceId(null)}
+                  onConfirmDisconnect={() => handleConfirmDisconnect(device)}
+                  renameValue={renameName}
+                  onRenameValueChange={setRenameName}
+                  renameError={renameError}
                 />
               ))}
+              {state.data.devices.length > 0 && (
+                <p className="text-xs text-muted-foreground mt-2 px-4 pb-4">
+                  Note: Remote rename and disconnect are live-session best-effort and may reset after reconnect.
+                </p>
+              )}
               {state.data.devicesError ? (
-                <ManagedSettingRow description={state.data.devicesError} title="Devices" />
+                <ReadOnlySettingRow description={state.data.devicesError} title="Devices" />
               ) : null}
               <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description="Disconnect this browser from sync." title="Stop Sync">
                 <ActionButton label="Stop Sync" onClick={async () => {
@@ -2178,8 +2478,9 @@ function PasswordsPane(
     }
 
     try {
-      const [providerResult, passwordsResult] = await Promise.all([
+      const [providerResult, optionsResult, passwordsResult] = await Promise.all([
         handler.getPasswordProviderStatus(),
+        handler.getPasswordProviderOptions(),
         nextSearchQuery ? handler.searchPasswords(nextSearchQuery) : handler.getSavedPasswords(),
       ]);
 
@@ -2191,6 +2492,7 @@ function PasswordsPane(
       setLoadState(createLoadedState({
         passwords: normalizeSavedPasswords(passwordsResult.passwords),
         providerStatus: providerResult.status,
+        providerOptions: optionsResult.options,
       }));
     } catch {
       if (requestId !== passwordsRequestIdRef.current) {
@@ -2236,15 +2538,40 @@ function PasswordsPane(
             </ManagedSettingRow>
             <ManagedSettingRow
               description={loadState.data.providerStatus.description}
-              title={`Password provider · ${loadState.data.providerStatus.displayName}`}>
-              <span className={INLINE_STATUS_CLASS}>
-                {loadState.data.providerStatus.provider === PasswordProviderKind.kMahoNative ?
-                  'Maho Native' :
-                  loadState.data.providerStatus.provider === PasswordProviderKind.kBitwarden ?
-                    'Bitwarden' :
-                    '1Password'}
-              </span>
+              title="Password provider">
+              <SelectShell
+                ariaLabel="Password provider"
+                options={loadState.data.providerOptions.map(opt => ({
+                  label: opt.displayName,
+                  value: getPasswordProviderBackendValue(opt.provider),
+                  disabled: !opt.isAvailable,
+                  description: opt.description,
+                }))}
+                value={getPasswordProviderBackendValue(loadState.data.providerStatus.provider)}
+                onChange={async nextVal => {
+                  const success = await store.commitSettingValue('autofill.password_provider', nextVal);
+                  if (success) {
+                    void loadPasswords(searchQuery, false);
+                  }
+                }}
+              />
             </ManagedSettingRow>
+            {loadState.data.providerStatus.provider !== PasswordProviderKind.kMahoNative &&
+            !loadState.data.providerStatus.isAvailable ? (
+              <div className="mx-6 my-4 p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive flex flex-col gap-2">
+                <div className="text-sm font-medium">
+                  Selected provider extension ({loadState.data.providerStatus.displayName}) is not installed or disabled.
+                </div>
+                <div className="flex gap-2">
+                  <ActionButton
+                    label="Manage Extensions"
+                    onClick={() => {
+                      void handler.openExtensionsPage();
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="px-6 py-4 text-xs leading-5 text-muted-foreground border-t border-border">
               {`Capabilities: ${loadState.data.providerStatus.capabilities.canListSavedPasswords ? 'list' : 'no list'}, ${loadState.data.providerStatus.capabilities.canSearchSavedPasswords ? 'search' : 'no search'}, ${loadState.data.providerStatus.capabilities.canAddSavedPasswords ? 'add' : 'no add'}, ${loadState.data.providerStatus.capabilities.canEditSavedPasswords ? 'edit' : 'no edit'}, ${loadState.data.providerStatus.capabilities.canRevealPasswords ? 'reveal' : 'no reveal'}, ${loadState.data.providerStatus.capabilities.canDeleteSavedPasswords ? 'delete' : 'no delete'}.`}
             </div>
@@ -2384,23 +2711,60 @@ function PasswordRow(
     }) {
   const handler = store.getHandler();
   const [draftUsername, setDraftUsername] = useState(password.username);
+  const [revealState, setRevealState] = useState<
+      {status: 'failed'} | {password: string; status: 'revealed'} | {status: 'revealing'} | null>(null);
 
   useEffect(() => {
     setDraftUsername(password.username);
   }, [password.username]);
 
+  useEffect(() => {
+    if (!isRevealed) {
+      setRevealState(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchPassword = async () => {
+      setRevealState({status: 'revealing'});
+      try {
+        const {password: val} = await handler.revealPassword(password.id);
+        if (cancelled) return;
+        if (val === null) {
+          setRevealState({status: 'failed'});
+          return;
+        }
+        setRevealState({password: val, status: 'revealed'});
+      } catch {
+        if (!cancelled) {
+          setRevealState({status: 'failed'});
+        }
+      }
+    };
+    void fetchPassword();
+    return () => {
+      cancelled = true;
+    };
+  }, [isRevealed, password.id, handler]);
+
   const description = [
     password.createdAt ? `Created ${password.createdAt}` : '',
     password.lastUsed ? `Last used ${password.lastUsed}` : '',
   ].filter(Boolean).join(' · ');
+  const passwordStatusText = isRevealed ?
+      revealState?.status === 'revealed' ?
+        `Password: ${revealState.password || '(empty)'}` :
+        revealState?.status === 'failed' ?
+          "Password: Couldn't reveal" :
+          'Password: (revealing...)' :
+      'Password: ••••••••';
 
   return (
     <ManagedSettingRow
       controlClassName={SETTING_CONTROL_STACKED_CLASS}
       description={description || 'No usage history'}
-      title={`${password.username || 'Unknown user'} @ ${password.domain || 'Unknown domain'}`}>
+       title={`${password.username || 'Unknown user'} @ ${password.domain || 'Unknown domain'}`}>
       <p className={SETTING_DESCRIPTION_CLASS}>
-        {password.password ? (isRevealed ? `Password: ${password.password}` : 'Password hidden') : 'No password stored.'}
+        {passwordStatusText}
       </p>
       <div className={SETTING_ACTIONS_CLASS}>
         {providerStatus.capabilities.canEditSavedPasswords ? (
@@ -2420,7 +2784,7 @@ function PasswordRow(
             }} />
           </>
         ) : null}
-        {providerStatus.capabilities.canRevealPasswords && password.password ? (
+        {providerStatus.capabilities.canRevealPasswords ? (
           <ActionButton label={isRevealed ? 'Hide' : 'Reveal'} onClick={async () => {
             setRevealedIds(current => {
               const next = new Set(current);
@@ -2570,9 +2934,9 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
     const onExtensionsChanged = (extensions: InstalledExtension[]) => {
       setState(createLoadedState(extensions));
     };
-    callbackRouter.installedExtensionsChanged.addListener(onExtensionsChanged);
+    const listenerId = callbackRouter.installedExtensionsChanged.addListener(onExtensionsChanged);
     return () => {
-      callbackRouter.installedExtensionsChanged.removeListener(onExtensionsChanged);
+      callbackRouter.removeListener(listenerId);
     };
   }, [callbackRouter]);
 

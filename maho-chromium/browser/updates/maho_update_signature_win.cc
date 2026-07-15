@@ -80,7 +80,7 @@ bool VerifyAuthenticode(const base::FilePath& file_path,
   cert_info.SerialNumber = signer_info->SerialNumber;
   PCCERT_CONTEXT cert_ctx = CertFindCertificateInStore(
       store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0,
-      CERT_FIND_SUBJECT_SIGNER, &cert_info, nullptr);
+      CERT_FIND_SUBJECT_CERT, &cert_info, nullptr);
 
   CryptMsgClose(msg);
   CertCloseStore(store, 0);
@@ -90,14 +90,14 @@ bool VerifyAuthenticode(const base::FilePath& file_path,
   }
 
   DWORD cn_size = CertGetNameString(cert_ctx, CERT_NAME_ATTR_TYPE, 0,
-                                    szOID_COMMON_NAME, nullptr, 0);
+                                    (void*)szOID_COMMON_NAME, nullptr, 0);
   if (cn_size <= 1) {
     CertFreeCertificateContext(cert_ctx);
     return false;
   }
 
   std::wstring wcn(cn_size, L'\0');
-  CertGetNameString(cert_ctx, CERT_NAME_ATTR_TYPE, 0, szOID_COMMON_NAME,
+  CertGetNameString(cert_ctx, CERT_NAME_ATTR_TYPE, 0, (void*)szOID_COMMON_NAME,
                     &wcn[0], cn_size);
   CertFreeCertificateContext(cert_ctx);
 

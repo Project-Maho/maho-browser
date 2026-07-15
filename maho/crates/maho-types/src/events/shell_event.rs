@@ -161,6 +161,7 @@ pub enum ShellEvent {
     MoveTabToSpace {
         tab_id: TabId,
         target_space_id: SpaceId,
+        #[serde(default)]
         section: String,
     },
     SetTabParent {

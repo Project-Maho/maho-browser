@@ -71,15 +71,14 @@ TEST_F(SidebarPlannerTest, PinnedToNormalEmitsUnpin) {
             SidebarDropPlan::PinTransition::Kind::kUnpin);
 }
 
-TEST_F(SidebarPlannerTest, PinnedToFavoritesEmitsUnpinThenFavorite) {
+TEST_F(SidebarPlannerTest, PinnedToFavoritesEmitsFavoriteOnly) {
   SidebarDragPayload payload =
       MakeTab("tab-p", SidebarDragOrigin::kPinnedSection);
   SidebarDropPlan plan = ResolveDropPlan(SectionKind::kFavorites, payload);
   EXPECT_TRUE(plan.is_valid);
-  ASSERT_EQ(plan.steps.size(), 2u)
-      << "pinned -> favorites must produce [unpin_tab, favorite_tab]";
-  EXPECT_EQ(plan.steps[0].kind, "unpin_tab");
-  EXPECT_EQ(plan.steps[1].kind, "favorite_tab");
+  ASSERT_EQ(plan.steps.size(), 1u)
+      << "pinned -> favorites must produce exactly [favorite_tab]";
+  EXPECT_EQ(plan.steps[0].kind, "favorite_tab");
   EXPECT_EQ(plan.pin_transition.kind,
             SidebarDropPlan::PinTransition::Kind::kUnpin);
   EXPECT_EQ(plan.favorite_transition.kind,

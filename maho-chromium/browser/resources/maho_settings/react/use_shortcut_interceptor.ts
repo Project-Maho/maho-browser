@@ -20,11 +20,11 @@ export function useShortcutInterceptor(
     const listener = (keyCombo: MojoKeyCombo) => {
       onRecord(keyCombo);
     };
-    router.onShortcutRecorded.addListener(listener);
+    const listenerId = router.onShortcutRecorded.addListener(listener);
 
     return () => {
       void handler.setRecordingMode(false);
-      router.onShortcutRecorded.removeListener(listener);
+      router.removeListener(listenerId);
     };
   }, [handler, router, active, onRecord]);
 }

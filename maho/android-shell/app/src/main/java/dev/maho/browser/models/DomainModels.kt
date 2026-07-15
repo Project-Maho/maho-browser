@@ -425,6 +425,7 @@ data class ConnectedDevice(
     val name: String,
     @SerialName("deviceType") val deviceType: String,
     @SerialName("lastSeen") val lastSeen: String? = null,
+    @SerialName("isOnline") val isOnline: Boolean? = null,
 )
 
 @Serializable

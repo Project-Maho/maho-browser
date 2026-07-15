@@ -28,6 +28,8 @@ source_set("maho_ai") {
     "maho_ai_page_handler.h",
     "maho_ai_ui.cc",
     "maho_ai_ui.h",
+    "maho_ai_voice_session.cc",
+    "maho_ai_voice_session.h",
   ]
 
   public_deps = [
@@ -43,6 +45,7 @@ source_set("maho_ai") {
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//crypto",
     "//maho/browser:maho_ai_popup_lifetime_tracker",
     "//maho/browser:maho_ai_runtime_adapter",
     "//maho/browser:maho_browser_ai_tools",
@@ -51,6 +54,7 @@ source_set("maho_ai") {
     "//maho/browser/resources/maho_ai:resources",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_stt_ffi",
     "//mojo/public/cpp/bindings",
     "//net",
     "//ui/webui",

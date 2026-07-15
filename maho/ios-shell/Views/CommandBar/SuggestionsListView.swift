@@ -36,19 +36,71 @@ struct SuggestionsListView: View {
                 .background(Color(uiColor: .systemGroupedBackground))
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(viewModel.suggestions) { suggestion in
-                            Button(action: { onSelect(suggestion) }) {
-                                SuggestionRow(suggestion: suggestion)
-                            }
-                            .buttonStyle(SuggestionRowButtonStyle())
-                            
-                            Divider()
-                                .padding(.leading, 48)
-                        }
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        suggestionRows(primarySuggestions)
+                        suggestionSection(title: "History", suggestions: historySuggestions)
+                        suggestionSection(title: "Commands", suggestions: actionSuggestions)
                     }
                 }
                 .background(Color(uiColor: .systemBackground))
+            }
+        }
+    }
+
+    private var primarySuggestions: [SuggestionViewModel] {
+        viewModel.suggestions.filter { suggestion in
+            switch suggestion.kind {
+            case .action, .history:
+                return false
+            default:
+                return true
+            }
+        }
+    }
+
+    private var historySuggestions: [SuggestionViewModel] {
+        viewModel.suggestions.filter { $0.kind == .history }
+    }
+
+    private var actionSuggestions: [SuggestionViewModel] {
+        viewModel.suggestions.filter { $0.kind == .action }
+    }
+
+    @ViewBuilder
+    private func suggestionSection(title: String, suggestions: [SuggestionViewModel]) -> some View {
+        if !suggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(title)
+                suggestionRows(suggestions)
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
+            Divider()
+
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
+                .padding(.horizontal, ShellTheme.Spacing.large)
+        }
+        .padding(.top, ShellTheme.Spacing.medium)
+        .padding(.bottom, ShellTheme.Spacing.xSmall)
+    }
+
+    @ViewBuilder
+    private func suggestionRows(_ suggestions: [SuggestionViewModel]) -> some View {
+        ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
+            Button(action: { onSelect(suggestion) }) {
+                SuggestionRow(suggestion: suggestion)
+            }
+            .buttonStyle(SuggestionRowButtonStyle())
+
+            if index < suggestions.count - 1 {
+                Divider()
+                    .padding(.leading, 48)
             }
         }
     }
@@ -107,6 +159,8 @@ struct SuggestionRow: View {
         case .history: return "clock"
         case .action: return "sparkles"
         case .navigation: return "globe"
+        case .search: return "magnifyingglass"
+        case .folder: return "folder"
         case .calculator: return "plus.slash.minus"
         case .unitConversion: return "arrow.left.and.right"
         case .archivedTab: return "archivebox"

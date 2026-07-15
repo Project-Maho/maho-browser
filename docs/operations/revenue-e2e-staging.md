@@ -67,4 +67,6 @@ Triggered when: relay fetch fails BUT a valid `X-Maho-Verify-Bypass` header toke
 - HTTP 200 (request proceeds with free-tier minimum)
 - `X-Maho-Degradation-Mode: bypass-override` response header
 
-**Note:** Full runtime behavior for all three modes requires a running Cloudflare Worker environment. Unit validation of the mode string constants happens via `cargo test` in `billing-proxy/src/lib.rs::tests::test_degradation_mode_strings`. End-to-end coverage is in `relay/server/tests/revenue_e2e.rs` mock paths.
+**Note:** Full runtime behavior for all three modes requires a running Cloudflare Worker environment. Unit validation of the mode string constants happens via `cargo test` in `billing-proxy/src/lib.rs::tests::test_degradation_mode_strings`. End-to-end coverage of the client↔relay contract (in-process mock relay + mock proxy, no real Cloudflare Worker) is in `maho/crates/maho-cli/tests/revenue_e2e.rs`.
+
+**Note:** The automated test at `maho/crates/maho-cli/tests/revenue_e2e.rs` SUPPLEMENTS this manual staging procedure; it does NOT replace it. The manual procedure remains the only path to exercise the real wasm32 `maho-billing-proxy` Durable-Object ceiling/reserve-commit logic.

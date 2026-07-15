@@ -5,11 +5,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "maho/browser/importer/maho_browser_detector.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -64,7 +66,18 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
   void OpenThemePickerDialog(const std::string& current_theme_json,
                              OpenThemePickerDialogCallback callback) override;
 
+  void LoginFromWelcome(const std::string& email,
+                        const std::string& password,
+                        LoginFromWelcomeCallback callback) override;
+  void SignupFromWelcome(const std::string& email,
+                         const std::string& password,
+                         const std::string& display_name,
+                         SignupFromWelcomeCallback callback) override;
+  void GetRelayAccountStatusFromWelcome(
+      GetRelayAccountStatusFromWelcomeCallback callback) override;
+
   void FinishOnboarding() override;
+  void DevSkipOnboarding() override;
   void OpenFDASettings() override;
 
   // Called by MahoImportSessionBridge from the UI thread to dispatch Mojo
@@ -76,12 +89,15 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
 
  private:
   void CloseWelcomeTab();
+  void DoFinishOnboarding();
+  void RevealBrowserAndCloseWelcome();
   void OnBrowsersDetected(GetAvailableBrowsersCallback callback,
                           std::vector<maho::DetectedBrowser> browsers);
   void OnOpenMigrationDialogBrowsersDetected(
       views::Widget* parent,
       OpenMigrationDialogCallback callback,
       std::vector<maho::DetectedBrowser> browsers);
+  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
 
   mojo::Receiver<maho_welcome::mojom::PageHandler> receiver_;
@@ -94,6 +110,8 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
   std::unique_ptr<maho::MahoImportSessionBridge> import_session_bridge_;
   std::unique_ptr<maho::EssentialImporter> essential_importer_;
   bool is_finishing_ = false;
+
+  std::optional<os_crypt_async::Encryptor> encryptor_;
 
   base::WeakPtrFactory<MahoWelcomePageHandler> weak_factory_{this};
 };

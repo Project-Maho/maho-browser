@@ -22,6 +22,7 @@ fn test_preview_round_trip_lmdb() {
             parent_id: None,
             tab_id: Some(tab_id.clone()),
             window_id: None,
+            is_private: false,
         });
 
         let image = ImageData {
@@ -54,7 +55,7 @@ fn test_preview_lru_eviction() {
 
     // 100KB each
     let size_100kb = 100 * 1024;
-    
+
     // Add 15 previews -> total 1.5MB
     for i in 0..15 {
         let tab_id = TabId::new(format!("tab-{}", i));
@@ -82,4 +83,68 @@ fn test_preview_lru_eviction() {
     for i in 5..15 {
         assert!(manager.has_preview(&TabId::new(format!("tab-{}", i))));
     }
+}
+
+#[test]
+fn normal_registered_preview_round_trips() {
+    let mut core = MahoCore::new();
+    let tab_id = TabId::new("normal-tab");
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: core.get_active_space_id(),
+        url: Some(Url::new("https://example.com")),
+        parent_id: None,
+        tab_id: Some(tab_id.clone()),
+        window_id: None,
+        is_private: false,
+    });
+    let image = ImageData {
+        data: vec![1, 2, 3],
+        width: 10,
+        height: 10,
+        format: ImageFormat::Png,
+    };
+    core.update_tab_preview(&tab_id, image);
+    let preview = core.get_tab_preview(&tab_id);
+    assert!(preview.is_some());
+    assert_eq!(preview.unwrap().thumbnail.as_ref().unwrap().data, vec![1, 2, 3]);
+}
+
+#[test]
+fn legacy_private_preview_round_trips_for_mobile_compatibility() {
+    let mut core = MahoCore::new();
+    let tab_id = TabId::new("private-tab");
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: core.get_active_space_id(),
+        url: Some(Url::new("https://example.com")),
+        parent_id: None,
+        tab_id: Some(tab_id.clone()),
+        window_id: None,
+        is_private: true,
+    });
+    let image = ImageData {
+        data: vec![4, 5, 6],
+        width: 10,
+        height: 10,
+        format: ImageFormat::Png,
+    };
+    core.update_tab_preview(&tab_id, image);
+    let preview = core.get_tab_preview(&tab_id);
+    assert!(preview.is_some());
+    assert_eq!(preview.unwrap().thumbnail.as_ref().unwrap().data, vec![4, 5, 6]);
+}
+
+#[test]
+fn unknown_legacy_behavior_matches_preedit() {
+    let mut core = MahoCore::new();
+    let tab_id = TabId::new("unknown-tab");
+    let image = ImageData {
+        data: vec![7, 8, 9],
+        width: 10,
+        height: 10,
+        format: ImageFormat::Png,
+    };
+    core.update_tab_preview(&tab_id, image);
+    let preview = core.get_tab_preview(&tab_id);
+    assert!(preview.is_some());
+    assert_eq!(preview.unwrap().thumbnail.as_ref().unwrap().data, vec![7, 8, 9]);
 }

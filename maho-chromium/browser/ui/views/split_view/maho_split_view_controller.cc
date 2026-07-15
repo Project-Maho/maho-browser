@@ -37,10 +37,17 @@ std::string GetTabIdForIndex(TabStripModel* model, int index) {
 
 }  // namespace
 
-MahoSplitViewController::MahoSplitViewController(Browser* browser)
-    : browser_(browser) {}
+MahoSplitViewController::MahoSplitViewController(Browser* browser,
+                                                 MahoSplitPersistence persistence)
+    : browser_(browser), persistence_(persistence) {}
 
 MahoSplitViewController::~MahoSplitViewController() = default;
+
+// static
+bool MahoSplitViewController::ShouldDispatchPersistentSplitEvent(
+    MahoSplitPersistence mode) {
+  return mode == MahoSplitPersistence::kPersistent;
+}
 
 void MahoSplitViewController::AddSplit() {
   AddSplitWithURL(GURL("about:blank"));
@@ -76,17 +83,74 @@ void MahoSplitViewController::AddSplitWithURL(const GURL& url) {
       split_tabs::SplitTabLayout::kVertical, 0.5);
   // Split membership is owned by TabStripModel and is persisted through the
   // session service; no extra session bookkeeping is needed here.
+  // Upstream AddToNewSplit CHECK_EQs exactly one partner index and pivots on
+  // the active tab itself; passing active_index too re-trips that CHECK.
   model->AddToNewSplit(
-      {active_index, new_index}, visual_data,
+      {new_index}, visual_data,
       split_tabs::SplitTabCreatedSource::kToolbarButton);
 
   std::string active_id = GetTabIdForIndex(model, active_index);
   std::string new_id = GetTabIdForIndex(model, new_index);
-  if (!active_id.empty() && !new_id.empty()) {
+  if (ShouldDispatchPersistentSplitEvent(persistence_) && !active_id.empty() &&
+      !new_id.empty()) {
     std::string event_json = base::StringPrintf(
         "{\"kind\":\"create_split\",\"window_id\":\"%s\",\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
         std::to_string(browser_->session_id().id()).c_str(),
         active_id.c_str(), new_id.c_str());
+    if (auto* core = maho::GetCore()) {
+      char* result = maho_core_handle_event(core, event_json.c_str());
+      if (result) {
+        maho_core_free_string(result);
+      }
+    }
+  }
+}
+
+void MahoSplitViewController::AddSplitForExistingTab(int clicked_index) {
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!model || !model->ContainsIndex(clicked_index)) {
+    return;
+  }
+
+  int active_index = model->active_index();
+  if (active_index == TabStripModel::kNoTab) {
+    return;
+  }
+
+  // The active tab is Chromium's implicit split pivot; when the clicked tab IS
+  // the active tab there is no distinct existing partner, so create a fresh
+  // blank partner through the toolbar/self-split path instead.
+  if (clicked_index == active_index) {
+    AddSplit();
+    return;
+  }
+
+  // AddToNewSplit re-splits neither participant: reject if the clicked tab or
+  // the active pivot is already a split member.
+  if (model->GetSplitForTab(clicked_index).has_value() ||
+      model->GetSplitForTab(active_index).has_value()) {
+    return;
+  }
+
+  // Capture stable ids before AddToNewSplit moves the partner adjacent to the
+  // pivot, which would invalidate clicked_index for a post-call lookup.
+  std::string active_id = GetTabIdForIndex(model, active_index);
+  std::string clicked_id = GetTabIdForIndex(model, clicked_index);
+
+  split_tabs::SplitTabVisualData visual_data(
+      split_tabs::SplitTabLayout::kVertical, 0.5);
+  // Only the clicked existing tab is passed as the single partner index; the
+  // active tab stays canonical active as the implicit pivot.
+  model->AddToNewSplit(
+      {clicked_index}, visual_data,
+      split_tabs::SplitTabCreatedSource::kTabContextMenu);
+
+  if (ShouldDispatchPersistentSplitEvent(persistence_) && !active_id.empty() &&
+      !clicked_id.empty()) {
+    std::string event_json = base::StringPrintf(
+        "{\"kind\":\"create_split\",\"window_id\":\"%s\",\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
+        std::to_string(browser_->session_id().id()).c_str(),
+        active_id.c_str(), clicked_id.c_str());
     if (auto* core = maho::GetCore()) {
       char* result = maho_core_handle_event(core, event_json.c_str());
       if (result) {
@@ -131,6 +195,35 @@ void MahoSplitViewController::RemoveSplit() {
 
   model->RemoveSplit(split_id.value());
 
+  if (!ShouldDispatchPersistentSplitEvent(persistence_)) {
+    return;
+  }
+  std::string event_json = base::StringPrintf(
+      "{\"kind\":\"clear_split_view\",\"window_id\":\"%s\"}",
+      std::to_string(browser_->session_id().id()).c_str());
+  if (auto* core = maho::GetCore()) {
+    char* result = maho_core_handle_event(core, event_json.c_str());
+    if (result) {
+      maho_core_free_string(result);
+    }
+  }
+}
+
+void MahoSplitViewController::RemoveSplitForTab(int tab_strip_index) {
+  TabStripModel* model = browser_->tab_strip_model();
+  if (!model || !model->ContainsIndex(tab_strip_index)) {
+    return;
+  }
+  std::optional<split_tabs::SplitTabId> split_id =
+      model->GetSplitForTab(tab_strip_index);
+  if (!split_id.has_value()) {
+    return;
+  }
+  model->RemoveSplit(split_id.value());
+
+  if (!ShouldDispatchPersistentSplitEvent(persistence_)) {
+    return;
+  }
   std::string event_json = base::StringPrintf(
       "{\"kind\":\"clear_split_view\",\"window_id\":\"%s\"}",
       std::to_string(browser_->session_id().id()).c_str());
@@ -145,8 +238,7 @@ void MahoSplitViewController::RemoveSplit() {
 void MahoSplitViewController::SwapSplit() {
   TabStripModel* model = browser_->tab_strip_model();
   if (!model) {
-    return;
-  }
+    return;  }
 
   int active_index = model->active_index();
   if (active_index == TabStripModel::kNoTab) {
@@ -166,7 +258,8 @@ void MahoSplitViewController::SwapSplit() {
     if (split_tabs.size() == 2) {
       std::string tab1_id = GetTabIdForContents(split_tabs[0]->GetContents());
       std::string tab2_id = GetTabIdForContents(split_tabs[1]->GetContents());
-      if (!tab1_id.empty() && !tab2_id.empty()) {
+      if (ShouldDispatchPersistentSplitEvent(persistence_) &&
+          !tab1_id.empty() && !tab2_id.empty()) {
         std::string event_json = base::StringPrintf(
             "{\"kind\":\"create_split\",\"window_id\":\"%s\",\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
             std::to_string(browser_->session_id().id()).c_str(),

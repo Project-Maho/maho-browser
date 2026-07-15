@@ -171,11 +171,11 @@ void MahoSpacesOverlayView::DismissAction() {
 }
 
 void MahoSpacesOverlayView::HandleSpaceSelected(const std::string& space_id) {
-  auto* bridge = MahoSpaceProfileBridge::GetInstance();
-  if (bridge && bridge->SwitchToSpace(browser_, space_id)) {
+  if (MahoSidebarView::ActivateSpaceAndTab(browser_, space_id)) {
     DismissAction();
   }
 }
+
 
 void MahoSpacesOverlayView::HandleTabSelected(const std::string& space_id,
                                               const std::string& tab_id) {

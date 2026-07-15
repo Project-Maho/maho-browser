@@ -2,16 +2,33 @@
 
 #include "maho/browser/ui/webui/maho_sync/maho_sync_page_handler.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/prefs/pref_service.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 namespace {
+
+// WebUI shows "Sign in to sync" when status_label=="error" &&
+// error_message=="account_login_required".
+maho_sync::mojom::SyncStatusPtr BuildAccountLoginRequiredStatus() {
+  auto status = maho_sync::mojom::SyncStatus::New();
+  status->is_syncing = false;
+  status->relay_url = "";
+  status->room_id = "";
+  status->status_label = "error";
+  status->error_message = "account_login_required";
+  status->last_sync_timestamp = 0;
+  return status;
+}
 
 maho_sync::mojom::SyncStatusPtr ParseSyncStatusJson(const std::string& json) {
   auto status = maho_sync::mojom::SyncStatus::New();
@@ -97,6 +114,12 @@ MahoSyncPageHandler::MahoSyncPageHandler(
       page_(std::move(page)),
       profile_(profile) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // R-4 fail-closed: forged Mojo receiver bypasses config-level denial. Do not remove.
+  if (!MahoIsWebUIEnabled(profile)) {
+    receiver_.reset();
+    page_.reset();
+    return;
+  }
   poll_timer_.Start(FROM_HERE, base::Seconds(5),
                     base::BindRepeating(&MahoSyncPageHandler::PollSyncStatus,
                                         weak_factory_.GetWeakPtr()));
@@ -220,6 +243,10 @@ MahoSyncPageHandler::GenerateSyncKeyOnPool() {
 void MahoSyncPageHandler::StartSync(const std::string& relay_url,
                                      StartSyncCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::auth::HasValidRelaySession(profile_->GetPrefs())) {
+    std::move(callback).Run(BuildAccountLoginRequiredStatus());
+    return;
+  }
   maho::PostCoreTaskAndReply(
       FROM_HERE,
       base::BindOnce(&MahoSyncPageHandler::StartSyncOnPool, relay_url,
@@ -232,6 +259,10 @@ void MahoSyncPageHandler::JoinSync(const std::string& room_id,
                                     const std::string& passphrase,
                                     JoinSyncCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::auth::HasValidRelaySession(profile_->GetPrefs())) {
+    std::move(callback).Run(BuildAccountLoginRequiredStatus());
+    return;
+  }
   maho::PostCoreTask<maho_sync::mojom::SyncStatusPtr>(
       FROM_HERE,
       base::BindOnce(&MahoSyncPageHandler::JoinSyncOnPool, room_id,

@@ -8,6 +8,7 @@ class PrefRegistrySimple;
 namespace maho::welcome {
 
 inline constexpr char kWelcomeCompleted[] = "maho.welcome.completed";
+inline constexpr char kLoginGateActive[] = "maho.auth.login_gate_active";
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
 

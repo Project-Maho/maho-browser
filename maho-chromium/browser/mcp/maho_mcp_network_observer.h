@@ -12,19 +12,24 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
+
+namespace blink::mojom {
+class ResourceLoadInfo;
+}
+
+namespace content {
+class NavigationHandle;
+class RenderFrameHost;
+class WebContents;
+struct GlobalRequestID;
+}  // namespace content
 
 namespace maho {
 
 // Captures network requests for a tab and produces HAR 1.2 JSON.
-//
-// In the real browser, this observes content::WebContents via
-// WebContentsObserver. For unit-testability the HAR building logic is
-// factored into a static helper that operates on the Entry vector directly.
-//
-// Observer glue (DidFinishNavigation, ResourceLoadComplete) is deferred to
-// browser-test integration (Wave 7.1).
-class MahoMcpNetworkObserver {
+class MahoMcpNetworkObserver : public content::WebContentsObserver {
  public:
   struct Entry {
     Entry();
@@ -39,19 +44,23 @@ class MahoMcpNetworkObserver {
     std::string mime_type;
     base::TimeTicks start_time;
     base::TimeDelta duration;
-    int64_t request_size = 0;
-    int64_t response_size = 0;
+    int64_t request_size = -1;
+    int64_t response_size = -1;
+    int64_t response_transfer_size = -1;
     base::DictValue request_headers;
     base::DictValue response_headers;
+    bool request_headers_available = true;
+    bool response_headers_available = true;
   };
 
   MahoMcpNetworkObserver();
-  ~MahoMcpNetworkObserver();
+  ~MahoMcpNetworkObserver() override;
 
   MahoMcpNetworkObserver(const MahoMcpNetworkObserver&) = delete;
   MahoMcpNetworkObserver& operator=(const MahoMcpNetworkObserver&) = delete;
 
   void StartCapture();
+  void StartCapture(content::WebContents* web_contents);
   void StopCapture();
   bool is_capturing() const { return capturing_; }
 
@@ -70,10 +79,15 @@ class MahoMcpNetworkObserver {
   static base::DictValue BuildHarFromEntries(
       const std::vector<Entry>& entries);
 
-  // Test-only: inject a synthetic entry for unit testing.
-  void TestOnly_AddEntry(Entry entry);
-
  private:
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void ResourceLoadComplete(
+      content::RenderFrameHost* render_frame_host,
+      const content::GlobalRequestID& request_id,
+      const blink::mojom::ResourceLoadInfo& resource_load_info) override;
+  void RecordEntry(Entry entry);
+
   bool capturing_ = false;
   std::vector<Entry> entries_;
   SEQUENCE_CHECKER(sequence_checker_);

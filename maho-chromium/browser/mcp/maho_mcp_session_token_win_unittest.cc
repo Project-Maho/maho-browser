@@ -92,10 +92,10 @@ TEST_F(MahoMcpSessionTokenWinTest, MatchesConstantTime) {
   std::vector<uint8_t> wrong(MahoMcpSessionToken::kTokenSize, 0xFF);
 
   // Correct token matches.
-  EXPECT_TRUE(token->Matches(base::make_span(correct)));
+  EXPECT_TRUE(token->Matches(base::span(correct)));
 
   // Wrong token does not match.
-  EXPECT_FALSE(token->Matches(base::make_span(wrong)));
+  EXPECT_FALSE(token->Matches(base::span(wrong)));
 }
 
 // Matches() rejects tokens with wrong length (shorter or longer).
@@ -107,16 +107,16 @@ TEST_F(MahoMcpSessionTokenWinTest, WrongLengthRejected) {
 
   // Shorter by 1 byte.
   std::vector<uint8_t> shorter(raw.begin(), raw.end() - 1);
-  EXPECT_FALSE(token->Matches(base::make_span(shorter)));
+  EXPECT_FALSE(token->Matches(base::span(shorter)));
 
   // Longer by 1 byte.
   std::vector<uint8_t> longer(raw.begin(), raw.end());
   longer.push_back(0x42);
-  EXPECT_FALSE(token->Matches(base::make_span(longer)));
+  EXPECT_FALSE(token->Matches(base::span(longer)));
 
   // Empty.
   std::vector<uint8_t> empty;
-  EXPECT_FALSE(token->Matches(base::make_span(empty)));
+  EXPECT_FALSE(token->Matches(base::span(empty)));
 }
 
 }  // namespace

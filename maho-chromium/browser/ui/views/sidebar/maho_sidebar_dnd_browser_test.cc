@@ -16,20 +16,28 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/compositor/layer_tree_owner.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 
@@ -57,6 +65,38 @@ ui::DropTargetEvent MakeDropEvent(const ui::OSExchangeData& data,
   return ui::DropTargetEvent(
       data, gfx::PointF(point), gfx::PointF(point),
       static_cast<int>(ui::mojom::DragOperation::kMove));
+}
+
+std::vector<std::string> UnsplitStableTabIdsInStripOrder(TabStripModel* model) {
+  std::vector<std::string> ids;
+  for (int i = 0; i < model->count(); ++i) {
+    if (model->GetSplitForTab(i).has_value()) {
+      continue;
+    }
+    content::WebContents* wc = model->GetWebContentsAt(i);
+    if (!wc) {
+      continue;
+    }
+    if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+        helper && !helper->stable_tab_id().empty()) {
+      ids.push_back(helper->stable_tab_id());
+    }
+  }
+  return ids;
+}
+
+int ResolveIndexForStableId(TabStripModel* model, const std::string& id) {
+  for (int i = 0; i < model->count(); ++i) {
+    content::WebContents* wc = model->GetWebContentsAt(i);
+    if (!wc) {
+      continue;
+    }
+    if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+        helper && helper->stable_tab_id() == id) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
@@ -889,6 +929,282 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
       << "Same-index favorite drop must not add or remove items";
   EXPECT_EQ(post_ids, pre_ids)
       << "Same-index reorder_favorite must leave order unchanged";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                       AddSplitCreatesTwoPaneSplitAndRetainsActiveTab) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  const int original_active_index = model->active_index();
+  ASSERT_NE(original_active_index, TabStripModel::kNoTab);
+  const int original_count = model->count();
+  ASSERT_FALSE(model->IsActiveTabSplit());
+
+  // Construct the controller directly; its only dependency is Browser*, the
+  // narrowest seam for the split-creation contract.
+  MahoSplitViewController controller(browser());
+  controller.AddSplit();
+
+  EXPECT_EQ(model->count(), original_count + 1);
+  EXPECT_EQ(model->active_index(), original_active_index)
+      << "Original active tab must remain active after AddSplit";
+  EXPECT_TRUE(model->IsActiveTabSplit());
+  EXPECT_TRUE(controller.IsSplitActive());
+
+  const int partner_index = original_active_index + 1;
+  ASSERT_TRUE(model->ContainsIndex(partner_index));
+  std::optional<split_tabs::SplitTabId> active_split =
+      model->GetSplitForTab(original_active_index);
+  std::optional<split_tabs::SplitTabId> partner_split =
+      model->GetSplitForTab(partner_index);
+  ASSERT_TRUE(active_split.has_value());
+  ASSERT_TRUE(partner_split.has_value());
+  EXPECT_EQ(*active_split, *partner_split)
+      << "Active tab and its partner must share one split ID";
+
+  auto* split_data = model->GetSplitData(*active_split);
+  ASSERT_TRUE(split_data);
+  EXPECT_EQ(split_data->ListTabs().size(), 2u)
+      << "AddToNewSplit must produce exactly a two-pane split";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                       AddSplitOnAlreadySplitActiveTabIsNoOp) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_NE(model->active_index(), TabStripModel::kNoTab);
+
+  MahoSplitViewController controller(browser());
+  controller.AddSplit();
+  ASSERT_TRUE(model->IsActiveTabSplit())
+      << "Precondition: first AddSplit must create a split";
+
+  const int count_after_first = model->count();
+  std::optional<split_tabs::SplitTabId> split_after_first =
+      model->GetSplitForTab(model->active_index());
+  ASSERT_TRUE(split_after_first.has_value());
+
+  // Invoking again while the active tab is already split must be a no-op: no
+  // new blank tab and no new split ID (AddSplitWithURL early-returns on
+  // IsSplitActive()).
+  controller.AddSplit();
+
+  EXPECT_EQ(model->count(), count_after_first)
+      << "Second AddSplit on an already-split active tab must not add a tab";
+  std::optional<split_tabs::SplitTabId> split_after_second =
+      model->GetSplitForTab(model->active_index());
+  ASSERT_TRUE(split_after_second.has_value());
+  EXPECT_EQ(*split_after_first, *split_after_second)
+      << "Second AddSplit must not create a new split";
+}
+
+// Regression for the fallback split-grouping defect (plan Todo 4). Both
+// degraded sidebar builders (BuildTabListModel's tab-strip else branch and
+// BuildLiveStripFallbackTabListModel) now run the shared maho::GroupSplitTabs
+// over their flat rows. This exercises that shared helper against a live split
+// model exactly as both fallbacks feed it: a flat kTab row per strip tab with
+// is_active set on the model active tab.
+//
+// RED baseline: maho::GroupSplitTabs was an anonymous-namespace symbol with no
+// header declaration, so this cross-TU call did not compile/link at all, and
+// the fallback branches never called it (ungrouped split rows). Exposing it in
+// the header + wiring both fallbacks is what makes this test buildable and its
+// assertions hold. Runtime GREEN is CI-deferred: the maho-login-wall gate
+// SIGSEGVs every InProcessBrowserTest at startup (see plan Verification
+// strategy), so this body is proven by build-clean + source-level RED here.
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                       FallbackBuildersGroupSplitTabsWithDualActiveState) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_NE(model->active_index(), TabStripModel::kNoTab);
+
+  MahoSplitViewController controller(browser());
+  controller.AddSplit();
+  ASSERT_TRUE(model->IsActiveTabSplit())
+      << "Precondition: AddSplit must create a live two-pane split";
+
+  const int split_a = model->active_index();
+  const int split_b = split_a + 1;
+  ASSERT_TRUE(model->ContainsIndex(split_b));
+  std::optional<split_tabs::SplitTabId> sid_a = model->GetSplitForTab(split_a);
+  std::optional<split_tabs::SplitTabId> sid_b = model->GetSplitForTab(split_b);
+  ASSERT_TRUE(sid_a.has_value());
+  ASSERT_TRUE(sid_b.has_value());
+  ASSERT_EQ(*sid_a, *sid_b);
+
+  std::vector<SidebarTreeNode> rows;
+  for (int i = 0; i < model->count(); ++i) {
+    SidebarTreeNode node;
+    node.kind = SidebarNodeKind::kTab;
+    node.tab_strip_index = i;
+    node.is_active = model->active_index() == i;
+    rows.push_back(std::move(node));
+  }
+  const size_t rows_before = rows.size();
+
+  maho::GroupSplitTabs(rows, model);
+
+  int split_group_count = 0;
+  int lone_tab_count = 0;
+  const SidebarTreeNode* split_group = nullptr;
+  for (const auto& n : rows) {
+    if (n.kind == SidebarNodeKind::kSplitGroup) {
+      ++split_group_count;
+      split_group = &n;
+    } else if (n.kind == SidebarNodeKind::kTab) {
+      ++lone_tab_count;
+      EXPECT_FALSE(n.is_in_split)
+          << "Non-split tabs must stay independent rows, not marked in-split";
+    }
+  }
+
+  ASSERT_EQ(split_group_count, 1)
+      << "Fallback grouping must emit exactly one kSplitGroup";
+  ASSERT_TRUE(split_group);
+  EXPECT_EQ(rows.size(), rows_before - 1)
+      << "The two split members collapse into a single group row";
+  EXPECT_EQ(lone_tab_count, model->count() - 2)
+      << "Every non-split tab remains its own row";
+
+  ASSERT_EQ(split_group->children.size(), 2u)
+      << "A split group carries exactly its two ordered members";
+  EXPECT_TRUE(split_group->children[0].is_in_split);
+  EXPECT_TRUE(split_group->children[1].is_in_split);
+  EXPECT_TRUE(split_group->children[0].is_active)
+      << "Dual-active: both panes render active when either is the active tab";
+  EXPECT_TRUE(split_group->children[1].is_active)
+      << "Dual-active: both panes render active when either is the active tab";
+  EXPECT_LT(split_group->children[0].tab_strip_index,
+            split_group->children[1].tab_strip_index)
+      << "Split children preserve strip order";
+}
+
+// Regression for the multi-select split eligibility gate (plan Todo 6). The
+// context menu shows/enables "Open in Split View" only when >= 2 selected tabs
+// are eligible (id resolves to a contained, unsplit strip index), and
+// OpenSelectedInSplit collapses any larger selection to the first two tabs in
+// strip order — Maho splits are strictly two-pane. With three eligible tabs,
+// exactly the first two by strip index form one two-pane split and the third
+// is left untouched, with no blank partner tab created.
+//
+// RED baseline: BuildMenuModel/IsCommandIdEnabled added and enabled the command
+// unconditionally for any multi-selection (no eligibility count), so a
+// three-tab selection surfaced the command with no proof that only two are
+// split. CountEligibleSplitTabs() + the >= 2 gate is what makes the enable
+// assertion meaningful, and the OpenSelectedInSplit contract is what leaves the
+// third tab unsplit. Runtime GREEN is CI-deferred: the maho-login-wall gate
+// SIGSEGVs every InProcessBrowserTest at startup (see plan Verification
+// strategy), so this body is proven by build-clean + source-level RED here.
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                       MultiSelectSplitSplitsFirstTwoEligibleLeavingThirdUnsplit) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+
+  while (model->count() < 3) {
+    ASSERT_TRUE(AddTabAtIndex(model->count(), GURL("chrome://maho-test/"),
+                              ui::PAGE_TRANSITION_TYPED));
+  }
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  std::vector<std::string> ids = UnsplitStableTabIdsInStripOrder(model);
+  ASSERT_GE(ids.size(), 3u) << "Need three eligible unsplit tabs";
+  const std::string first_id = ids[0];
+  const std::string second_id = ids[1];
+  const std::string third_id = ids[2];
+
+  // Eligibility gate: three eligible tabs → command enabled.
+  MahoTabContextMenu menu(browser(), 0, nullptr, first_id,
+                          {first_id, second_id, third_id});
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_OPEN_SPLIT))
+      << "Three eligible tabs must enable the multi-select split command";
+
+  tab_list_->ClearSelection();
+  tab_list_->ToggleTabSelected(first_id);
+  tab_list_->ToggleTabSelected(second_id);
+  tab_list_->ToggleTabSelected(third_id);
+  ASSERT_EQ(tab_list_->selected_tab_ids().size(), 3u);
+
+  const int count_before = model->count();
+  tab_list_->OpenSelectedInSplit();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(model->count(), count_before)
+      << "Splitting existing tabs must not create a blank partner tab";
+
+  const int first_idx = ResolveIndexForStableId(model, first_id);
+  const int second_idx = ResolveIndexForStableId(model, second_id);
+  const int third_idx = ResolveIndexForStableId(model, third_id);
+  ASSERT_GE(first_idx, 0);
+  ASSERT_GE(second_idx, 0);
+  ASSERT_GE(third_idx, 0);
+
+  std::optional<split_tabs::SplitTabId> first_split =
+      model->GetSplitForTab(first_idx);
+  std::optional<split_tabs::SplitTabId> second_split =
+      model->GetSplitForTab(second_idx);
+  ASSERT_TRUE(first_split.has_value());
+  ASSERT_TRUE(second_split.has_value());
+  EXPECT_EQ(*first_split, *second_split)
+      << "The first two tabs by strip index must share one split ID";
+  EXPECT_FALSE(model->GetSplitForTab(third_idx).has_value())
+      << "The third selected tab must be left untouched (two-pane only)";
+
+  auto* split_data = model->GetSplitData(*first_split);
+  ASSERT_TRUE(split_data);
+  EXPECT_EQ(split_data->ListTabs().size(), 2u)
+      << "Exactly one two-pane split is created";
+}
+
+// Companion to the eligibility gate: two already-split tabs are NOT eligible
+// (GetSplitForTab is set), so CountEligibleSplitTabs() < 2 and the multi-select
+// split command is both disabled and absent from the model — never an enabled
+// no-op. Same CI-deferred rationale as above (source-level RED + build-clean).
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                       MultiSelectSplitDisabledWhenSelectedTabsAlreadySplit) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_NE(model->active_index(), TabStripModel::kNoTab);
+
+  MahoSplitViewController controller(browser());
+  controller.AddSplit();
+  ASSERT_TRUE(model->IsActiveTabSplit())
+      << "Precondition: AddSplit must create a two-pane split";
+
+  const int split_a = model->active_index();
+  const int split_b = split_a + 1;
+  ASSERT_TRUE(model->ContainsIndex(split_b));
+  ASSERT_TRUE(model->GetSplitForTab(split_a).has_value());
+  ASSERT_TRUE(model->GetSplitForTab(split_b).has_value());
+
+  auto stable_id_at = [&](int index) -> std::string {
+    content::WebContents* wc = model->GetWebContentsAt(index);
+    if (!wc) {
+      return std::string();
+    }
+    auto* helper = MahoTabIdHelper::FromWebContents(wc);
+    return helper ? helper->stable_tab_id() : std::string();
+  };
+  const std::string id_a = stable_id_at(split_a);
+  const std::string id_b = stable_id_at(split_b);
+  ASSERT_FALSE(id_a.empty());
+  ASSERT_FALSE(id_b.empty());
+
+  MahoTabContextMenu menu(browser(), split_a, nullptr, id_a, {id_a, id_b});
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_OPEN_SPLIT))
+      << "Two already-split tabs are ineligible → command disabled";
+
+  std::unique_ptr<ui::SimpleMenuModel> built = menu.BuildMenuModel();
+  ASSERT_TRUE(built);
+  bool has_open_split = false;
+  for (size_t i = 0; i < built->GetItemCount(); ++i) {
+    if (built->GetCommandIdAt(i) == IDC_MAHO_TAB_OPEN_SPLIT) {
+      has_open_split = true;
+      break;
+    }
+  }
+  EXPECT_FALSE(has_open_split)
+      << "An ineligible multi-selection must omit the split command entirely";
 }
 
 }  // namespace

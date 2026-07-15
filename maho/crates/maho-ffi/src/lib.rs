@@ -23,8 +23,6 @@ struct PasswordEntryView {
     created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_used: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
 }
 
 
@@ -49,7 +47,6 @@ fn to_password_entries(passwords: Vec<&SavedPassword>) -> *mut c_char {
             username: password.username.clone(),
             created_at: password.created_at.clone(),
             last_used: password.last_used.clone(),
-            password: password.password.clone(),
         })
         .collect();
     to_json_cstring(&views)
@@ -100,7 +97,20 @@ pub unsafe extern "C" fn maho_core_handle_event(
     };
     let event: maho_types::events::shell_event::ShellEvent = match serde_json::from_str(json_str) {
         Ok(e) => e,
-        Err(_) => return ptr::null_mut(),
+        Err(e) => {
+            // Loud parse failure: return a structured error payload instead of a
+            // silent null so callers can surface the problem. Mirrors the
+            // error-payload/C-string convention used elsewhere in this crate.
+            let json = serde_json::json!({
+                "error": {
+                    "kind": "parse",
+                    "detail": e.to_string(),
+                }
+            });
+            return CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut());
+        }
     };
     let updates = core.handle_event(event);
     process_split_callbacks_for_updates(&updates);
@@ -172,6 +182,31 @@ pub unsafe extern "C" fn maho_core_is_tab_pinned(
     };
     let core = &*ptr;
     core.is_tab_pinned(tab_id_str)
+
+    }, false)
+}
+
+/// # Safety
+/// Same contract as `maho_core_is_tab_pinned`: `ptr` must be a valid `*mut MahoCore`
+/// produced by `maho_core_new*`; `tab_id` must be a valid NUL-terminated C string.
+/// Returns `true` for Pinned OR Favorite tabs (close-guard protection). Returns
+/// `false` on null pointer, invalid UTF-8, or when an import is in progress.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_tab_close_protected(
+    ptr: *mut MahoCore,
+    tab_id: *const c_char,
+) -> bool {
+    ffi_safe!({
+
+    if ptr.is_null() || tab_id.is_null() { return false; }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
+    let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let core = &*ptr;
+    core.is_tab_close_protected(tab_id_str)
 
     }, false)
 }
@@ -406,13 +441,13 @@ pub unsafe extern "C" fn maho_core_get_space_tabs(
         Ok(id) => id,
         Err(_) => return ptr::null_mut(),
     };
-    
+
     let tabs = if !window_id_ptr.is_null() {
         core.get_space_tabs_for_window(&space_id, *window_id_ptr)
     } else {
         core.get_space_tabs(&space_id)
     };
-    
+
     to_json_cstring(&tabs)
 
     }, ptr::null_mut())
@@ -501,7 +536,19 @@ pub unsafe extern "C" fn maho_core_get_favorite_tabs(
         Ok(id) => id,
         Err(_) => return ptr::null_mut(),
     };
-    to_json_cstring(&core.get_favorite_tabs(&space_id))
+    let tabs = core.get_favorite_tabs(&space_id);
+    let mut serialized_tabs = Vec::new();
+    for tab in tabs {
+        let mut tab_val = serde_json::to_value(&tab).unwrap_or(serde_json::Value::Null);
+        if let Some(tab_obj) = tab_val.as_object_mut() {
+            if let Some(ref fav_data) = tab.favicon {
+                let b64 = base64_encode(&fav_data.data);
+                tab_obj.insert("favicon".to_string(), serde_json::Value::String(b64));
+            }
+        }
+        serialized_tabs.push(tab_val);
+    }
+    to_json_cstring(&serialized_tabs)
 
     }, ptr::null_mut())
 }
@@ -874,6 +921,38 @@ pub unsafe extern "C" fn maho_core_delete_password(
     core.delete_password_persisted(password_id)
 
     }, false)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `password_id` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_reveal_password(
+    ptr: *mut MahoCore,
+    password_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+
+    if ptr.is_null() || password_id.is_null() {
+        return ptr::null_mut();
+    }
+    if import_gate::is_active() { return ptr::null_mut(); }
+    let core = &*ptr;
+    let password_id = match CStr::from_ptr(password_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    if let Some(p) = core.password_by_id(password_id) {
+        if let Some(ref pw) = p.password {
+            return CString::new(pw.clone())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut());
+        }
+    }
+    ptr::null_mut()
+
+    }, ptr::null_mut())
 }
 
 /// # Safety
@@ -2093,6 +2172,7 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
                 is_favorite: false, // L3-EXEMPT
                 favorite_order: None,
                 role: maho_types::tab::TabRole::Normal,
+                is_private: false,
                 is_muted: false,
                 is_playing_audio: false,
                 lifecycle_state: "active".to_string(),
@@ -2637,6 +2717,66 @@ pub unsafe extern "C" fn maho_core_update_tab_preview(
     core.update_tab_preview(&tid, image_data);
 
     }, ())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `tab_id` must be a valid null-terminated C string.
+/// `data` must point to `data_len` valid bytes.
+#[no_mangle]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub unsafe extern "C" fn maho_core_update_tab_preview_with_privacy(
+    ptr: *mut MahoCore,
+    tab_id: *const c_char,
+    is_private: bool,
+    data: *const u8,
+    data_len: usize,
+) -> bool {
+    ffi_safe!({
+
+    if ptr.is_null() || tab_id.is_null() {
+        return false;
+    }
+    if data_len > 0 && data.is_null() {
+        return false;
+    }
+    if data_len == 0 || data_len > 10 * 1024 * 1024 {
+        return false;
+    }
+    if is_private {
+        return false;
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
+    let core = &mut *ptr;
+    let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let tid = maho_types::identifiers::TabId::new(tab_id_str);
+
+    let is_known = core.tab_manager().get_tab(&tid).is_some();
+    if !is_known {
+        return false;
+    }
+
+    if let Some(tab) = core.tab_manager().get_tab(&tid) {
+        if tab.is_private {
+            return false;
+        }
+    }
+
+    let image_bytes = std::slice::from_raw_parts(data, data_len).to_vec();
+    let image_data = maho_types::common::ImageData {
+        data: image_bytes,
+        width: 0,
+        height: 0,
+        format: maho_types::common::ImageFormat::Png,
+    };
+    core.update_tab_preview(&tid, image_data);
+    true
+
+    }, false)
 }
 
 /// # Safety
@@ -5194,6 +5334,38 @@ pub unsafe extern "C" fn maho_core_activate_space(ptr: *mut MahoCore, space_id: 
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `space_id` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_activation_target_for_space(
+    ptr: *mut MahoCore,
+    space_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() || space_id.is_null() {
+            return ptr::null_mut();
+        }
+        if import_gate::is_active() {
+            return ptr::null_mut();
+        }
+        let core = &*ptr;
+        let id_str = match CStr::from_ptr(space_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let id = maho_types::identifiers::SpaceId::new(id_str);
+        if let Some(target) = core.get_activation_target_for_space(&id) {
+            CString::new(target.to_string())
+                .map(|c| c.into_raw())
+                .unwrap_or(ptr::null_mut())
+        } else {
+            ptr::null_mut()
+        }
+    }, ptr::null_mut())
+}
+
 // === Profile Management ===
 
 /// # Safety
@@ -5419,6 +5591,93 @@ pub unsafe extern "C" fn maho_core_get_sync_status(ptr: *mut MahoCore) -> *mut c
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sync_server_url(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        let core = &*ptr;
+        if let Some(ref url) = core.get_sync_server_url() {
+            if let Ok(c_str) = CString::new(url.clone()) {
+                c_str.into_raw()
+            } else {
+                ptr::null_mut()
+            }
+        } else {
+            ptr::null_mut()
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sync_key(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        let core = &*ptr;
+        if let Some(ref key) = core.get_sync_key() {
+            if let Ok(c_str) = CString::new(key.clone()) {
+                c_str.into_raw()
+            } else {
+                ptr::null_mut()
+            }
+        } else {
+            ptr::null_mut()
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sync_auth_token(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        let core = &*ptr;
+        let token = core.get_sync_auth_token();
+        CString::new(token)
+            .map(CString::into_raw)
+            .unwrap_or(ptr::null_mut())
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `message_json` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_handle_incoming_websocket_message(
+    ptr: *mut MahoCore,
+    message_json: *const c_char,
+) -> i32 {
+    ffi_safe!({
+        if ptr.is_null() || message_json.is_null() {
+            return -1;
+        }
+        // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+        if import_gate::is_active() { return -1; }
+        let core = &mut *ptr;
+        let json_str = match CStr::from_ptr(message_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        match core.handle_incoming_websocket_message(json_str) {
+            Ok(_) => 0,
+            Err(_) => -1,
+        }
+    }, -1)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
 pub unsafe extern "C" fn maho_core_get_connected_devices(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
 
@@ -5544,6 +5803,59 @@ pub unsafe extern "C" fn maho_core_remove_sync_device(
     core.remove_sync_device(id_str);
 
     }, ())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `device_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_disconnect_sync_device(
+    ptr: *mut MahoCore,
+    device_id: *const c_char,
+) -> bool {
+    ffi_safe!({
+
+    if ptr.is_null() || device_id.is_null() {
+        return false;
+    }
+    if import_gate::is_active() { return false; }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(device_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.disconnect_sync_device(id_str)
+
+    }, false)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `device_id` and `new_name` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_rename_sync_device(
+    ptr: *mut MahoCore,
+    device_id: *const c_char,
+    new_name: *const c_char,
+) -> bool {
+    ffi_safe!({
+
+    if ptr.is_null() || device_id.is_null() || new_name.is_null() {
+        return false;
+    }
+    if import_gate::is_active() { return false; }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(device_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let name_str = match CStr::from_ptr(new_name).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return false,
+    };
+    core.rename_sync_device(id_str, name_str)
+
+    }, false)
 }
 
 /// Resets a pinned tab back to its original pinned URL.
@@ -5700,6 +6012,28 @@ pub unsafe extern "C" fn maho_core_drain_outgoing(ptr: *mut MahoCore) -> *mut c_
     let core = &mut *ptr;
     let messages = core.drain_sync_outgoing();
     to_json_cstring(&messages)
+
+    }, ptr::null_mut())
+}
+
+/// Get and drain received tabs as a JSON array.
+/// UI calls this periodically to fetch received tabs.
+///
+/// # Safety
+/// `ptr` must be valid.
+/// Caller must free returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_drain_received_tabs(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
+    let core = &mut *ptr;
+    let tabs = core.drain_received_tabs();
+    to_json_cstring(&tabs)
 
     }, ptr::null_mut())
 }
@@ -7408,6 +7742,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
         args_json: *const c_char,
     ) -> MahoAgentToolResult>,
     browser_tool_user_data: *mut std::ffi::c_void,
+    space_id: *const c_char,
 ) -> *mut MahoAgentSession {
     ffi_safe!({
         if core.is_null() || session_id.is_null() {
@@ -7431,7 +7766,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 return std::ptr::null_mut();
             }
         };
-        
+
         let workspace_path = if workspace_root.is_null() {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         } else {
@@ -7451,7 +7786,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 return std::ptr::null_mut();
             }
         };
-        
+
         let storage = match maho_storage::sqlite::SqliteStorage::open(db_path) {
             Ok(s) => s,
             Err(e) => {
@@ -7462,9 +7797,9 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 return std::ptr::null_mut();
             }
         };
-        
+
         let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
-        
+
         let permission_callback = permission_cb.map(|cb| {
             let user_data_ptr = SendableUserData(permission_user_data as usize);
             let cb_sendable = SendableCallback(cb);
@@ -7573,6 +7908,14 @@ pub unsafe extern "C" fn maho_agent_create_session(
             runtime.set_browser_tool_bridge(bridge).unwrap();
         }
 
+        if !space_id.is_null() {
+            if let Ok(sid) = CStr::from_ptr(space_id).to_str() {
+                if !sid.is_empty() {
+                    runtime.set_active_space_id(Some(sid.to_string()));
+                }
+            }
+        }
+
         let isolation = match SessionRuntime::new() {
             Ok(i) => Arc::new(i),
             Err(e) => {
@@ -7583,7 +7926,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 return std::ptr::null_mut();
             }
         };
-        
+
         Box::into_raw(Box::new(MahoAgentSession {
             runtime,
             isolation,
@@ -7628,7 +7971,7 @@ pub unsafe extern "C" fn maho_agent_send_message(
         };
         let runtime = Arc::clone(&session.runtime);
         let session_id = session.session_id.clone();
-        
+
         let on_token_cb = on_token.map(|cb| {
             let cb_sendable = SendableCallback(cb);
             let user_data_val = SendableUserData(user_data as usize);
@@ -7645,11 +7988,11 @@ pub unsafe extern "C" fn maho_agent_send_message(
             });
             callback
         });
-        
+
         let on_complete = SendableCallback(on_complete);
         let on_error = SendableCallback(on_error);
         let user_data_val = SendableUserData(user_data as usize);
-        
+
         let fut = async move {
             let user_chat_msg = maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
             match runtime.run_turn(&session_id, user_chat_msg, on_token_cb).await {
@@ -7678,12 +8021,12 @@ pub unsafe extern "C" fn maho_agent_send_message(
                 }
             }
         };
-        
+
         let isolation = Arc::clone(&session.isolation);
         let _handle = isolation.block_on(async move {
             tokio::spawn(fut);
         });
-        
+
         true
     }, false)
 }
@@ -7785,13 +8128,32 @@ pub unsafe extern "C" fn maho_agent_cancel(
         let session = &*session;
         let runtime = Arc::clone(&session.runtime);
         let session_id = session.session_id.clone();
-        
+
         let isolation = Arc::clone(&session.isolation);
         let res = isolation.block_on(async move {
             runtime.cancel(&session_id).await
         });
         res.is_ok()
     }, false)
+}
+
+/// # Safety
+/// `session` must be a valid pointer to a `MahoAgentSession`.
+/// `policy` must be a null-terminated C string (e.g. "prompt", "allow", "deny").
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_set_approval_policy(
+    session: *mut MahoAgentSession,
+    policy: *const c_char,
+) {
+    ffi_safe!({
+        if session.is_null() || policy.is_null() {
+            return;
+        }
+        let session = &*session;
+        if let Ok(p) = CStr::from_ptr(policy).to_str() {
+            session.runtime.set_approval_policy(p.to_string());
+        }
+    }, ())
 }
 
 /// # Safety
@@ -7806,17 +8168,17 @@ pub unsafe extern "C" fn maho_agent_list_tools(
         }
         let session = &*session;
         let runtime = Arc::clone(&session.runtime);
-        
+
         let isolation = Arc::clone(&session.isolation);
         let tools_res = isolation.block_on(async move {
             runtime.list_tools().await
         });
-        
+
         let tools = match tools_res {
             Ok(Ok(t)) => t,
             _ => return std::ptr::null_mut(),
         };
-        
+
         match serde_json::to_string(&tools) {
             Ok(json) => CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap()).into_raw(),
             Err(_) => std::ptr::null_mut(),
@@ -8478,7 +8840,7 @@ pub unsafe extern "C" fn maho_ai_workspace_get_tools(
             Ok(s) => s,
             Err(_) => return ptr::null_mut(),
         };
-        
+
         let core_ref = &*core;
         let registry = core_ref.tool_registry();
         match manager.get_effective_tools(ws_str, registry) {
@@ -8547,9 +8909,11 @@ pub unsafe extern "C" fn maho_routines_list(out_json: *mut *mut c_char) {
 /// `on_error` is called with an error string on failure.
 ///
 /// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
 /// `id` must be a valid null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn maho_routines_run(
+    core: *mut MahoCore,
     id: *const c_char,
     user_tier: i32,
     on_complete: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, result_json: *const c_char)>,
@@ -8558,9 +8922,13 @@ pub unsafe extern "C" fn maho_routines_run(
 ) -> i32 {
     ffi_safe!({
 
-    if id.is_null() {
+    if core.is_null() || id.is_null() {
         return -1;
     }
+    let db_path = match (&*core).sqlite_db_path() {
+        Some(p) => p.to_string(),
+        None => return -1,
+    };
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s.to_string(),
         Err(_) => return -1,
@@ -8576,11 +8944,68 @@ pub unsafe extern "C" fn maho_routines_run(
     let on_error_cb = SendableCallback(on_error);
     let user_data_val = SendableUserData(user_data as usize);
 
-    tokio::spawn(async move {
-        let result = maho_core::routines::run_routine(
+    // Dispatch onto the shared, owned maho-core runtime instead of the ambient
+    // runtime. `maho_routines_run` is called from the Chromium C++ browser
+    // thread which has NO ambient tokio runtime; a bare `tokio::spawn` there
+    // panics and the routine silently never executes.
+    //
+    // `run_routine_resolved` borrows a `!Send` SqliteStorage across an await, so
+    // it cannot ride the shared multi-threaded runtime via `spawn` (which
+    // requires `Send`). Run it on a dedicated current-thread runtime pinned to a
+    // `spawn_blocking` thread: the future is created and driven entirely on that
+    // one thread and never migrates, so no `Send` bound is imposed and no panic
+    // can cross the FFI boundary.
+    maho_core::memory_manager::get_runtime().spawn_blocking(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("[maho_routines_run] failed to build runtime: {e}");
+                return;
+            }
+        };
+        rt.block_on(async move {
+        let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(cb) = on_error_cb.0 {
+                    let err_c = CString::new(format!("Failed to open storage: {e}")).unwrap_or_else(|_| CString::new("error").unwrap());
+                    cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                }
+                return;
+            }
+        };
+        let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+        let backend = SwiftideBackend::new(
+            Arc::new(agent_storage),
+            None,
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            true,
+        );
+
+        // Resolution needs its own read handle: the agent's storage was moved
+        // into the backend above. Route through `run_routine_resolved` so that
+        // user-defined custom recipes are runnable in addition to built-ins.
+        let resolve_storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(cb) = on_error_cb.0 {
+                    let err_c = CString::new(format!("Failed to open storage: {e}")).unwrap_or_else(|_| CString::new("error").unwrap());
+                    cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                }
+                return;
+            }
+        };
+
+        let result = maho_core::routines::run_routine_resolved(
             &id_str,
             tier,
-            |_prompt| async { Ok("Routine execution placeholder".to_string()) },
+            &resolve_storage,
+            |prompt| async move {
+                backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
+            },
         )
         .await;
 
@@ -8599,11 +9024,283 @@ pub unsafe extern "C" fn maho_routines_run(
                 }
             }
         }
+        });
     });
 
     0
 
     }, -1)
+}
+
+// ============================================================
+// Custom Routines FFI (list-all / create / delete / fire-event)
+// ============================================================
+
+#[derive(serde::Deserialize)]
+struct CreateCustomRoutineInput {
+    name: String,
+    prompt: String,
+    #[serde(default)]
+    schedule: Option<String>,
+    #[serde(default)]
+    trigger: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FireRoutineEventInput {
+    kind: String,
+    #[serde(default)]
+    count: Option<u32>,
+}
+
+/// Returns JSON array of ALL routines (built-in + user-defined custom), each an
+/// object with `id`, `name`, `cron`, `trigger`, `description`, `enabled`, and
+/// `source` ("builtin"|"custom"). Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_list_all(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+
+    if core.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
+    let db_path = match (&*core).sqlite_db_path() {
+        Some(p) => p.to_string(),
+        None => return ptr::null_mut(),
+    };
+    let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    match maho_core::routines::list_all_routines(&storage) {
+        Ok(views) => to_json_cstring(&views),
+        Err(_) => ptr::null_mut(),
+    }
+
+    }, ptr::null_mut())
+}
+
+/// Create a user-defined routine from JSON `{name,prompt,schedule?,trigger?}`.
+/// Validates the cron `schedule` and/or event `trigger` string when present.
+/// Returns 0 on success, -1 on error (null args / parse failure / invalid
+/// schedule-or-trigger / empty name-or-prompt / storage failure).
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `json` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_create_custom(
+    core: *mut MahoCore,
+    json: *const c_char,
+) -> i32 {
+    ffi_safe!({
+
+    if core.is_null() || json.is_null() {
+        return -1;
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return -1; }
+    let json_str = match CStr::from_ptr(json).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let input: CreateCustomRoutineInput = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    if input.name.trim().is_empty() || input.prompt.trim().is_empty() {
+        return -1;
+    }
+    // Normalize blank strings to None so an empty form field is treated as
+    // "no trigger" rather than an invalid one.
+    let schedule = input.schedule.filter(|s| !s.trim().is_empty());
+    let trigger = input.trigger.filter(|s| !s.trim().is_empty());
+    // Validate whichever trigger the caller supplied.
+    if let Some(ref cron) = schedule {
+        if maho_core::routines::CronSchedule::parse(cron).is_none() {
+            return -1;
+        }
+    }
+    if let Some(ref ev) = trigger {
+        if maho_core::routines::RoutineEvent::parse(ev).is_none() {
+            return -1;
+        }
+    }
+    let db_path = match (&*core).sqlite_db_path() {
+        Some(p) => p.to_string(),
+        None => return -1,
+    };
+    let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let routine = maho_storage::CustomRoutine {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: input.name,
+        prompt: input.prompt,
+        schedule,
+        trigger,
+        enabled: true,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    match storage.create_custom_routine(&routine) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+
+    }, -1)
+}
+
+/// Delete a user-defined routine by id. Returns 0 if a row was removed, -1 on
+/// null args / not-found / storage failure.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_delete_custom(
+    core: *mut MahoCore,
+    id: *const c_char,
+) -> i32 {
+    ffi_safe!({
+
+    if core.is_null() || id.is_null() {
+        return -1;
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return -1; }
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let db_path = match (&*core).sqlite_db_path() {
+        Some(p) => p.to_string(),
+        None => return -1,
+    };
+    let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match storage.delete_custom_routine(id_str) {
+        Ok(true) => 0,
+        Ok(false) => -1,
+        Err(_) => -1,
+    }
+
+    }, -1)
+}
+
+/// Fire browser-event-triggered custom routines matching `event_json`
+/// (`{"kind":"on_startup"}` or `{"kind":"on_many_tabs","count":N}`). Max-tier
+/// gated (mirrors the scheduler tick); fire-and-forget — the batch runs async
+/// on the shared, owned maho-core runtime so no panic crosses the FFI boundary
+/// even when called from the Chromium C++ browser thread (no ambient runtime).
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `event_json` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_fire_event(
+    core: *mut MahoCore,
+    event_json: *const c_char,
+) {
+    ffi_safe!({
+
+    if core.is_null() || event_json.is_null() {
+        return;
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
+    let core_ref = &*core;
+    // Only Max users get event-triggered routines.
+    match core_ref.get_account_tier() {
+        Some(maho_types::account::UserTier::Max) => {}
+        _ => return,
+    };
+    let json_str = match CStr::from_ptr(event_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let input: FireRoutineEventInput = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let event = match input.kind.as_str() {
+        "on_startup" => maho_core::routines::RoutineEvent::OnStartup,
+        // The fired event's `threshold` carries the ACTUAL live tab count; a
+        // configured routine matches when its threshold <= this actual count.
+        "on_many_tabs" => maho_core::routines::RoutineEvent::OnManyTabs {
+            threshold: input.count.unwrap_or(0),
+        },
+        _ => return,
+    };
+    let db_path = match core_ref.sqlite_db_path() {
+        Some(p) => p.to_string(),
+        None => return,
+    };
+
+    // Dispatch onto the shared, owned maho-core runtime (see `maho_routines_run`
+    // for the no-ambient-runtime rationale). `fire_event_routines` borrows a
+    // `!Send` SqliteStorage across an await, so drive it on a current-thread
+    // runtime pinned to a `spawn_blocking` thread (the future never migrates).
+    maho_core::memory_manager::get_runtime().spawn_blocking(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("[maho_routines_fire_event] failed to build runtime: {e}");
+                return;
+            }
+        };
+        rt.block_on(async move {
+        // Read handle for routine resolution.
+        let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[maho_routines_fire_event] failed to open storage: {e}");
+                return;
+            }
+        };
+        // Separate handle backing the agent's own memory/session storage.
+        let agent_storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+            Ok(s) => MutexAgentStorage(Arc::new(Mutex::new(s))),
+            Err(e) => {
+                eprintln!("[maho_routines_fire_event] failed to open agent storage: {e}");
+                return;
+            }
+        };
+        let backend = Arc::new(SwiftideBackend::new(
+            Arc::new(agent_storage),
+            None,
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            true,
+        ));
+        // `fire_event_routines` requires `Fn` (it may run several routines), so
+        // clone the shared backend into each per-routine future.
+        let runner = |prompt: String| {
+            let backend = backend.clone();
+            async move { backend.run_prompt(&prompt).await.map_err(|e| e.to_string()) }
+        };
+        if let Err(e) = maho_core::routines::fire_event_routines(
+            event,
+            maho_core::routines::UserTier::Max,
+            &storage,
+            runner,
+        )
+        .await
+        {
+            eprintln!("[maho_routines_fire_event] failed: {e}");
+        }
+        });
+    });
+
+    }, ())
 }
 
 // ============================================================
@@ -8641,6 +9338,11 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
         _ => return -1,
     };
 
+    let db_path = match core_ref.sqlite_db_path() {
+        Some(p) => p.to_string(),
+        None => return -2,
+    };
+
     let last_runs_mutex = get_last_runs();
     let mut last_runs = match last_runs_mutex.lock() {
         Ok(guard) => guard,
@@ -8663,14 +9365,41 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
         if now_sec >= next_fire {
             // Fire the routine asynchronously via the existing run_routine mechanism
             let id_str = routine.id.to_string();
+            let db_path_clone = db_path.clone();
 
-            tokio::spawn(async move {
-                let _ = maho_core::routines::run_routine(
+            // Spawn onto the shared, owned maho-core runtime. `maho_routines_tick`
+            // is called once/minute from the Chromium C++ browser thread which has
+            // NO ambient tokio runtime; a bare `tokio::spawn` there panics and the
+            // scheduled routine silently never fires. `Runtime::spawn` spawns onto
+            // its own runtime, so no panic can cross the FFI boundary.
+            maho_core::memory_manager::get_runtime().spawn(async move {
+                let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path_clone) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[routines scheduled] failed to open sqlite storage: {:?}", e);
+                        return;
+                    }
+                };
+                let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+                let backend = SwiftideBackend::new(
+                    Arc::new(agent_storage),
+                    None,
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                    true,
+                );
+
+                let result = maho_core::routines::run_routine(
                     &id_str,
                     maho_core::routines::UserTier::Max,
-                    |_prompt| async { Ok("Routine execution placeholder".to_string()) },
+                    |prompt| async move {
+                        backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
+                    },
                 )
                 .await;
+
+                if let Err(e) = result {
+                    eprintln!("[RoutineScheduler] routine {} failed: {}", id_str, e);
+                }
             });
 
             // Update last_run timestamp
@@ -8937,6 +9666,7 @@ mod tests {
             parent_id: None,
             tab_id: None,
             window_id: None,
+            is_private: false,
         });
         let tab_id = core
             .get_tab_view_models()
@@ -8966,6 +9696,108 @@ mod tests {
             maho_core_is_tab_pinned(std::ptr::null_mut(), pinned_id_cstr.as_ptr())
         };
         assert!(!result3, "is_tab_pinned must return false on null ptr");
+    }
+
+    /// `maho_core_is_tab_close_protected` returns true for Pinned OR Favorite tabs
+    /// (close-guard), false for Normal tabs, unknown ids, and null pointer.
+    #[test]
+    fn is_tab_close_protected_returns_true_for_favorite() {
+        use maho_core::maho_core::MahoCore;
+        use maho_types::events::shell_event::ShellEvent;
+        use std::ffi::CString;
+
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+
+        // Helper: create a tab and return its freshly-assigned id.
+        let make_tab = |core: &mut MahoCore| {
+            let before: Vec<_> =
+                core.get_tab_view_models().iter().map(|t| t.id.clone()).collect();
+            core.handle_event(ShellEvent::CreateTab {
+                space_id: space_id.clone(),
+                url: None,
+                parent_id: None,
+                tab_id: None,
+                window_id: None,
+                is_private: false,
+            });
+            core.get_tab_view_models()
+                .iter()
+                .find(|t| !before.contains(&t.id))
+                .expect("new tab should be visible in view models")
+                .id
+                .clone()
+        };
+
+        let pinned_id = make_tab(&mut core);
+        let favorite_id = make_tab(&mut core);
+        let normal_id = make_tab(&mut core);
+
+        core.handle_event(ShellEvent::PinTab { tab_id: pinned_id.clone() });
+        core.handle_event(ShellEvent::FavoriteTab { tab_id: favorite_id.clone() });
+
+        let core_ptr: *mut MahoCore = &mut core;
+
+        // Pinned → true
+        let pinned_cstr = CString::new(pinned_id.0.as_str()).unwrap();
+        assert!(
+            unsafe { maho_core_is_tab_close_protected(core_ptr, pinned_cstr.as_ptr()) },
+            "close-protected must be true for a pinned tab"
+        );
+
+        // Favorite → true
+        let favorite_cstr = CString::new(favorite_id.0.as_str()).unwrap();
+        assert!(
+            unsafe { maho_core_is_tab_close_protected(core_ptr, favorite_cstr.as_ptr()) },
+            "close-protected must be true for a favorite tab"
+        );
+
+        // Normal → false
+        let normal_cstr = CString::new(normal_id.0.as_str()).unwrap();
+        assert!(
+            !unsafe { maho_core_is_tab_close_protected(core_ptr, normal_cstr.as_ptr()) },
+            "close-protected must be false for a normal tab"
+        );
+
+        // Unknown id → false
+        let unknown = CString::new("00000000-0000-0000-0000-000000000000").unwrap();
+        assert!(
+            !unsafe { maho_core_is_tab_close_protected(core_ptr, unknown.as_ptr()) },
+            "close-protected must be false for an unknown tab"
+        );
+
+        // Null pointer → false (no panic)
+        assert!(
+            !unsafe {
+                maho_core_is_tab_close_protected(std::ptr::null_mut(), pinned_cstr.as_ptr())
+            },
+            "close-protected must be false on null ptr"
+        );
+    }
+
+    /// Malformed JSON passed to `maho_core_handle_event` must return a NON-null
+    /// error payload (not a silent null), parseable as `{"error":{"kind":"parse",...}}`.
+    #[test]
+    fn handle_event_returns_error_payload_on_bad_json() {
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::{CStr, CString};
+
+        let mut core = MahoCore::new();
+        let core_ptr: *mut MahoCore = &mut core;
+
+        let bad = CString::new("{ this is : not json }").unwrap();
+        let ret = unsafe { maho_core_handle_event(core_ptr, bad.as_ptr()) };
+        assert!(!ret.is_null(), "malformed JSON must return a non-null error payload");
+
+        let decoded = unsafe { CStr::from_ptr(ret).to_str().unwrap().to_owned() };
+        let value: serde_json::Value =
+            serde_json::from_str(&decoded).expect("error payload must be valid JSON");
+        assert_eq!(
+            value["error"]["kind"], "parse",
+            "error payload must report error.kind == \"parse\", got: {decoded}"
+        );
+
+        unsafe { maho_string_free(ret) };
     }
 
     #[test]
@@ -9009,6 +9841,97 @@ mod tests {
         assert_eq!(result, -2, "null ptr should return -2");
     }
 
+    /// REGRESSION GUARD (prod-breaking): `maho_routines_run` must dispatch its
+    /// async work onto the shared, owned maho-core runtime — NOT via a bare
+    /// `tokio::spawn` — so it does not panic when invoked from a thread with no
+    /// ambient tokio runtime (the normal case for the Chromium C++ browser
+    /// thread). Before the fix, the bare `tokio::spawn` panicked; `ffi_safe!`
+    /// swallowed the panic and returned -1, so the routine silently never ran.
+    /// After the fix it returns 0 (queued) with no panic crossing the boundary.
+    #[test]
+    fn routines_run_does_not_panic_without_ambient_runtime() {
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::CString;
+
+        // Run on a freshly-spawned OS thread that is guaranteed to have NO
+        // ambient tokio runtime, mirroring the Chromium browser-thread call site.
+        let handle = std::thread::spawn(|| {
+            // Prove the precondition: there is genuinely no ambient runtime here.
+            assert!(
+                tokio::runtime::Handle::try_current().is_err(),
+                "test precondition: this thread must have no ambient tokio runtime"
+            );
+
+            // A core backed by a real (temp) sqlite path so `sqlite_db_path()`
+            // is Some and the FFI reaches the spawn line under test.
+            let db = std::env::temp_dir().join(format!(
+                "maho_routines_run_regression_{}.sqlite",
+                std::process::id()
+            ));
+            let db_path = db.to_string_lossy().to_string();
+            let mut core = MahoCore::new().with_storage(&db_path);
+            let core_ptr: *mut MahoCore = &mut core;
+
+            let id = CString::new("morning_briefing").unwrap();
+
+            // No callbacks / user_data: we only care that the dispatch path
+            // does not panic and returns the success code.
+            let rc = unsafe {
+                maho_routines_run(
+                    core_ptr,
+                    id.as_ptr(),
+                    2, // Max tier
+                    None,
+                    None,
+                    std::ptr::null_mut(),
+                )
+            };
+
+            // Best-effort cleanup of the temp db.
+            let _ = std::fs::remove_file(&db);
+            rc
+        });
+
+        let rc = handle.join().expect("FFI call must not panic across the thread boundary");
+        assert_eq!(
+            rc, 0,
+            "maho_routines_run must return 0 (queued) off-runtime; a non-zero code \
+             means the spawn panicked and was swallowed by ffi_safe! (the regression)"
+        );
+    }
+
+    /// Direct guard for the shared-runtime dispatch mechanism used by BOTH
+    /// `maho_routines_run` and `maho_routines_tick`: spawning onto the owned
+    /// maho-core runtime must succeed from a non-tokio thread, whereas a bare
+    /// `tokio::spawn` in the same context would panic.
+    #[test]
+    fn shared_runtime_spawn_works_off_runtime() {
+        let handle = std::thread::spawn(|| {
+            assert!(
+                tokio::runtime::Handle::try_current().is_err(),
+                "test precondition: no ambient tokio runtime on this thread"
+            );
+
+            // This is exactly what the routines FFI now does. It must not panic.
+            let (tx, rx) = std::sync::mpsc::channel::<u32>();
+            let join = maho_core::memory_manager::get_runtime().spawn(async move {
+                let _ = tx.send(7);
+            });
+            // The spawned task actually runs on the owned runtime.
+            let got = rx.recv_timeout(std::time::Duration::from_secs(5));
+            (join.is_finished(), got)
+        });
+
+        let (_, got) = handle
+            .join()
+            .expect("spawning onto the shared runtime must not panic off-runtime");
+        assert_eq!(
+            got.ok(),
+            Some(7),
+            "task spawned on the shared maho-core runtime must execute off-runtime"
+        );
+    }
+
     /// Routines tick: no double-fire when called twice with same timestamp.
     #[test]
     fn routines_tick_no_double_fire() {
@@ -9022,5 +9945,103 @@ mod tests {
         let schedule = maho_core::routines::CronSchedule::parse("0 8 * * *").unwrap();
         let next = schedule.next_fire_after(t);
         assert!(next > t, "next_fire_after must be strictly after last_run");
+    }
+
+    /// Custom-routine FFI roundtrip: create -> list_all (includes it as custom)
+    /// -> delete -> list_all (gone). Exercises `maho_routines_create_custom`,
+    /// `maho_routines_list_all`, and `maho_routines_delete_custom` end to end
+    /// against a real (temp) sqlite-backed core.
+    #[test]
+    fn custom_routine_ffi_create_list_delete_roundtrip() {
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::{CStr, CString};
+
+        let db = std::env::temp_dir().join(format!(
+            "maho_routines_ffi_roundtrip_{}.sqlite",
+            std::process::id()
+        ));
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+
+        // Create a valid cron-scheduled custom routine.
+        let create_json =
+            CString::new(r#"{"name":"My Recipe","prompt":"Summarize tabs","schedule":"0 9 * * *"}"#)
+                .unwrap();
+        let rc = unsafe { maho_routines_create_custom(core_ptr, create_json.as_ptr()) };
+        assert_eq!(rc, 0, "create must succeed for a valid cron routine");
+
+        // Invalid cron must be rejected.
+        let bad_json =
+            CString::new(r#"{"name":"Bad","prompt":"x","schedule":"not a cron"}"#).unwrap();
+        let bad_rc = unsafe { maho_routines_create_custom(core_ptr, bad_json.as_ptr()) };
+        assert_eq!(bad_rc, -1, "create must reject an invalid cron string");
+
+        // list_all returns 4 built-ins + 1 custom, and the custom carries source=custom.
+        let list_ptr = unsafe { maho_routines_list_all(core_ptr) };
+        assert!(!list_ptr.is_null(), "list_all must return JSON");
+        let list_json = unsafe { CStr::from_ptr(list_ptr).to_str().unwrap().to_string() };
+        unsafe { maho_string_free(list_ptr) };
+        let views: Vec<serde_json::Value> =
+            serde_json::from_str(&list_json).expect("list_all must be a valid JSON array");
+        assert_eq!(views.len(), 5, "4 built-ins + 1 custom");
+        let custom = views
+            .iter()
+            .find(|v| v["source"] == "custom")
+            .expect("custom routine must appear in list_all");
+        assert_eq!(custom["name"], "My Recipe");
+        assert_eq!(custom["cron"], "0 9 * * *");
+        let custom_id = custom["id"].as_str().unwrap().to_string();
+
+        // Delete it by id.
+        let id_c = CString::new(custom_id).unwrap();
+        let del_rc = unsafe { maho_routines_delete_custom(core_ptr, id_c.as_ptr()) };
+        assert_eq!(del_rc, 0, "delete must succeed for an existing custom routine");
+
+        // Deleting again must report not-found.
+        let del_rc2 = unsafe { maho_routines_delete_custom(core_ptr, id_c.as_ptr()) };
+        assert_eq!(del_rc2, -1, "second delete must return -1 (not found)");
+
+        // list_all is back to just the 4 built-ins.
+        let list_ptr2 = unsafe { maho_routines_list_all(core_ptr) };
+        let list_json2 = unsafe { CStr::from_ptr(list_ptr2).to_str().unwrap().to_string() };
+        unsafe { maho_string_free(list_ptr2) };
+        let views2: Vec<serde_json::Value> =
+            serde_json::from_str(&list_json2).unwrap();
+        assert_eq!(views2.len(), 4, "custom routine must be gone after delete");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// `maho_routines_fire_event` must be a safe no-op (no panic) on a null core
+    /// and on a non-Max-tier core (tier gate), matching the scheduler's silent
+    /// tier behavior. Also proves the event-JSON parse path does not panic.
+    #[test]
+    fn fire_event_null_and_tier_gate_are_noops() {
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::CString;
+
+        let startup = CString::new(r#"{"kind":"on_startup"}"#).unwrap();
+
+        // Null core → no-op, no panic.
+        unsafe { maho_routines_fire_event(std::ptr::null_mut(), startup.as_ptr()) };
+
+        // Default (unauthenticated / non-Max) core → tier gate makes this a
+        // no-op before any spawn; must not panic.
+        let db = std::env::temp_dir().join(format!(
+            "maho_routines_ffi_fire_event_{}.sqlite",
+            std::process::id()
+        ));
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+
+        unsafe { maho_routines_fire_event(core_ptr, startup.as_ptr()) };
+
+        // Malformed event JSON is also a safe no-op.
+        let bad = CString::new(r#"{"kind":"nope"}"#).unwrap();
+        unsafe { maho_routines_fire_event(core_ptr, bad.as_ptr()) };
+
+        let _ = std::fs::remove_file(&db);
     }
 }

@@ -9,12 +9,13 @@
 //! - Workers run synchronously on the calling thread (no spawn) — the C++ side
 //!   already posts to a background thread before calling into Rust.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::workers::{self, ImportWorker};
-use crate::{DetectedBrowser, ImportResult, ImportServices};
+use crate::{DetectedBrowser, ImportResult, ImportServices, PasswordEntry};
 
 // Re-export the trait from this module for convenience.
 pub use crate::workers::ImportWorker as Worker;
@@ -24,6 +25,7 @@ pub use crate::workers::ImportWorker as Worker;
 pub enum ImportType {
     History,
     Bookmarks,
+    Passwords,
     Cookies,
     Autofill,
     Favicons,
@@ -37,6 +39,7 @@ impl ImportType {
         match bit {
             ImportServices::HISTORY => Some(Self::History),
             ImportServices::BOOKMARKS => Some(Self::Bookmarks),
+            ImportServices::PASSWORDS => Some(Self::Passwords),
             ImportServices::COOKIES => Some(Self::Cookies),
             ImportServices::AUTOFILL => Some(Self::Autofill),
             ImportServices::FAVICONS => Some(Self::Favicons),
@@ -51,6 +54,7 @@ impl ImportType {
         match self {
             Self::History => ImportServices::HISTORY,
             Self::Bookmarks => ImportServices::BOOKMARKS,
+            Self::Passwords => ImportServices::PASSWORDS,
             Self::Cookies => ImportServices::COOKIES,
             Self::Autofill => ImportServices::AUTOFILL,
             Self::Favicons => ImportServices::FAVICONS,
@@ -135,6 +139,11 @@ pub trait ImportDestination: Send + Sync {
     ) -> bool;
     /// Add a favicon. Returns true on success.
     fn add_favicon(&self, url: &str, png_bytes: &[u8]) -> bool;
+    /// Add a saved password (secret, never logged). Default no-op returns false.
+    fn add_password(&self, entry: PasswordEntry) -> bool {
+        let _ = entry;
+        false
+    }
 }
 
 /// The import orchestrator — coordinates workers and manages progress reporting.
@@ -142,6 +151,7 @@ pub struct Orchestrator {
     destination: Arc<dyn ImportDestination>,
     cancelled: Arc<AtomicBool>,
     selected_essentials: Vec<String>,
+    password_csv_path: Option<PathBuf>,
 }
 
 impl Orchestrator {
@@ -151,12 +161,18 @@ impl Orchestrator {
             destination,
             cancelled: Arc::new(AtomicBool::new(false)),
             selected_essentials: Vec::new(),
+            password_csv_path: None,
         }
     }
 
     /// Set the selected essential site URLs (for welcome flow import).
     pub fn set_selected_essentials(&mut self, urls: Vec<String>) {
         self.selected_essentials = urls;
+    }
+
+    /// Set the user-provided passwords CSV path (Safari `Export → Passwords`).
+    pub fn set_password_csv_path(&mut self, path: PathBuf) {
+        self.password_csv_path = Some(path);
     }
 
     /// Start the import process. Runs workers sequentially for the requested types.
@@ -240,6 +256,7 @@ impl Orchestrator {
             (ImportServices::BOOKMARKS, ImportType::Bookmarks),
             (ImportServices::HISTORY, ImportType::History),
             (ImportServices::COOKIES, ImportType::Cookies),
+            (ImportServices::PASSWORDS, ImportType::Passwords),
             (ImportServices::AUTOFILL, ImportType::Autofill),
             (ImportServices::FAVICONS, ImportType::Favicons),
             (IMPORT_ESSENTIAL_BIT, ImportType::Essential),
@@ -272,6 +289,11 @@ impl Orchestrator {
                 let worker = workers::cookie::CookieWorker;
                 worker.run(browser, &*self.destination, &self.cancelled, progress)
             }
+            ImportType::Passwords => {
+                let worker =
+                    workers::password::PasswordWorker::new(self.password_csv_path.clone());
+                worker.run(browser, &*self.destination, &self.cancelled, progress)
+            }
             ImportType::Autofill => {
                 let worker = workers::autofill::AutofillWorker;
                 worker.run(browser, &*self.destination, &self.cancelled, progress)
@@ -297,6 +319,7 @@ fn import_type_name(t: ImportType) -> &'static str {
     match t {
         ImportType::History => "history",
         ImportType::Bookmarks => "bookmarks",
+        ImportType::Passwords => "passwords",
         ImportType::Cookies => "cookies",
         ImportType::Autofill => "autofill",
         ImportType::Favicons => "favicons",
@@ -467,6 +490,7 @@ mod tests {
     fn test_resolve_types_order() {
         let mask = ImportServices::HISTORY
             | ImportServices::BOOKMARKS
+            | ImportServices::PASSWORDS
             | ImportServices::COOKIES
             | ImportServices::AUTOFILL
             | ImportServices::WORKSPACES
@@ -480,10 +504,64 @@ mod tests {
                 ImportType::Bookmarks,
                 ImportType::History,
                 ImportType::Cookies,
+                ImportType::Passwords,
                 ImportType::Autofill,
                 ImportType::Favicons,
                 ImportType::Essential,
             ]
         );
+    }
+
+    #[test]
+    fn test_passwords_bit_roundtrip() {
+        assert_eq!(
+            ImportType::from_bit(ImportServices::PASSWORDS),
+            Some(ImportType::Passwords)
+        );
+        assert_eq!(ImportType::Passwords.to_bit(), ImportServices::PASSWORDS);
+    }
+
+    #[test]
+    fn test_orchestrator_imports_passwords_from_csv_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("safari-passwords.csv");
+        std::fs::write(
+            &path,
+            "Title,URL,Username,Password,Notes,OTPAuth\n\
+             Apple,https://apple.com,user@example.com,hunter2,,\n\
+             GitHub,https://github.com,octocat,s3cr3t,,\n",
+        )
+        .unwrap();
+
+        let dest = Arc::new(MockDestination::new());
+        let mut orch = Orchestrator::new(dest.clone());
+        orch.set_password_csv_path(path);
+
+        let browser = make_browser(BrowserType::Safari, ImportServices::PASSWORDS);
+        let (tx, rx) = mpsc::channel();
+        orch.start_import(&browser, ImportServices::PASSWORDS, tx)
+            .unwrap();
+
+        let msgs: Vec<_> = rx.try_iter().collect();
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ImportProgress::Starting {
+                import_type: ImportType::Passwords
+            }
+        )));
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ImportProgress::TypeComplete {
+                import_type: ImportType::Passwords,
+                count: 2
+            }
+        )));
+        assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete));
+
+        let passwords = dest.passwords.lock().unwrap();
+        assert_eq!(passwords.len(), 2);
+        assert_eq!(passwords[0].origin_url, "https://apple.com");
+        assert_eq!(passwords[0].username, "user@example.com");
+        assert_eq!(passwords[1].origin_url, "https://github.com");
     }
 }

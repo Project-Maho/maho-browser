@@ -20,6 +20,7 @@
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "base/functional/bind.h"
 
 namespace maho_theme {
 namespace {
@@ -1038,11 +1039,47 @@ TEST(MahoAiLlmClientTest, ResetClearsRetryAndPendingRequest) {
 
 class MahoUnifiedAgentAdapterTestHelper {
  public:
-  static MahoAgentPermissionDecision OnAgentPermissionOnSequence(
+  static MahoAgentPermissionDecision EvaluatePermissionSync(
       MahoUnifiedAgentAdapter* adapter,
       const char* tool_name,
       const char* arguments) {
-    return adapter->OnAgentPermissionOnSequence(tool_name, arguments);
+    std::optional<PromptDecision> decided = adapter->EvaluatePermissionSync(
+        tool_name ? tool_name : "", adapter->permission_extension_id_);
+    if (!decided) {
+      return MahoAgentPermissionDecision_Deny;
+    }
+    return *decided == PromptDecision::kDeny ? MahoAgentPermissionDecision_Deny
+                                             : MahoAgentPermissionDecision_Allow;
+  }
+
+  static MahoAgentPermissionDecision OnAgentPermission(void* user_data,
+                                                       const char* tool_name,
+                                                       const char* arguments) {
+    return MahoUnifiedAgentAdapter::OnAgentPermission(user_data, tool_name, arguments);
+  }
+
+  static void SetPromptOverride(MahoUnifiedAgentAdapter* adapter,
+                                PromptDecision decision) {
+    adapter->permission_prompt_override_for_testing_ = base::BindRepeating(
+        [](PromptDecision d, const std::string&, const std::string&) { return d; },
+        decision);
+  }
+
+  static MahoAgentPermissionDecision RunDialog(MahoUnifiedAgentAdapter* adapter,
+                                               const std::string& tool,
+                                               const std::string& ext) {
+    return adapter->RunPermissionDialogForTest(tool, ext);
+  }
+
+  static MahoAgentPermissionDecision EvaluateWithExt(MahoUnifiedAgentAdapter* adapter,
+                                                     const std::string& tool,
+                                                     const std::string& ext) {
+    std::optional<PromptDecision> decided = adapter->EvaluatePermissionSync(tool, ext);
+    if (!decided) {
+      return MahoAgentPermissionDecision_Deny;
+    }
+    return *decided == PromptDecision::kDeny ? MahoAgentPermissionDecision_Deny
+                                             : MahoAgentPermissionDecision_Allow;
   }
 };
 
@@ -1055,18 +1092,137 @@ TEST(MahoUnifiedAgentAdapterTest, ApprovalPolicyThreeWaySplit) {
 
   // 1. With "allow" policy: should return Allow immediately for fs_read
   prefs.SetString(maho::ai_prefs::kApprovalPolicy, "allow");
-  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermissionOnSequence(&adapter, "fs_read", "{}"),
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, "fs_read", "{}"),
             MahoAgentPermissionDecision_Allow);
 
   // 2. With "deny" policy: should return Deny immediately for fs_read
   prefs.SetString(maho::ai_prefs::kApprovalPolicy, "deny");
-  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermissionOnSequence(&adapter, "fs_read", "{}"),
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, "fs_read", "{}"),
             MahoAgentPermissionDecision_Deny);
 
   // 3. With "prompt" policy: when permission_extension_id_ is empty and tool is shell_exec, should return Deny
   prefs.SetString(maho::ai_prefs::kApprovalPolicy, "prompt");
-  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermissionOnSequence(&adapter, "shell_exec", "{}"),
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, "shell_exec", "{}"),
             MahoAgentPermissionDecision_Deny);
+}
+
+TEST(MahoUnifiedAgentAdapterTest, PolicyDenyBlocksAutoAllowedPageTools) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+
+  prefs.SetString(maho::ai_prefs::kApprovalPolicy, "deny");
+  for (const char* tool : {"read_current_page", "get_selected_text",
+                           "search_in_page", "fs_read", "web_search",
+                           "unknown_tool"}) {
+    EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, tool, "{}"),
+              MahoAgentPermissionDecision_Deny)
+        << "tool=" << tool;
+  }
+}
+
+TEST(MahoUnifiedAgentAdapterTest, PolicyAllowPermitsUnknownTools) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+
+  prefs.SetString(maho::ai_prefs::kApprovalPolicy, "allow");
+  for (const char* tool : {"read_current_page", "fs_read", "unknown_tool"}) {
+    EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, tool, "{}"),
+              MahoAgentPermissionDecision_Allow)
+        << "tool=" << tool;
+  }
+}
+
+TEST(MahoUnifiedAgentAdapterTest, ShellExecAlwaysDeniedEvenUnderAllow) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+
+  for (const char* policy : {"allow", "prompt", ""}) {
+    prefs.SetString(maho::ai_prefs::kApprovalPolicy, policy);
+    EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, "shell_exec", "{}"),
+              MahoAgentPermissionDecision_Deny)
+        << "policy=" << policy;
+  }
+}
+
+TEST(MahoUnifiedAgentAdapterTest, PolicyPromptAutoAllowsPageTools) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+
+  for (const char* tool : {"read_current_page", "get_active_tab",
+                           "extract_structured_page_context"}) {
+    EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluatePermissionSync(&adapter, tool, "{}"),
+              MahoAgentPermissionDecision_Allow)
+        << "tool=" << tool;
+  }
+}
+
+TEST(MahoUnifiedAgentAdapterTest, NullUserDataDeniesAllTools) {
+  for (const char* tool : {"shell_exec", "fs_read", "web_search",
+                           "read_current_page"}) {
+    EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermission(nullptr, tool, "{}"),
+              MahoAgentPermissionDecision_Deny)
+        << "tool=" << tool;
+  }
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermission(nullptr, nullptr, "{}"),
+            MahoAgentPermissionDecision_Deny);
+}
+
+TEST(MahoUnifiedAgentAdapterTest, DialogAllowPersistsGrantToPrefs) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+  MahoUnifiedAgentAdapterTestHelper::SetPromptOverride(&adapter, PromptDecision::kAllow);
+
+  // #5/#6 dialog path: "kAllow" must persist a durable grant into prefs.
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::RunDialog(&adapter, "mytool", "myext"),
+            MahoAgentPermissionDecision_Allow);
+
+  const auto& grants = prefs.GetDict(maho::ai_prefs::kAgentToolGrants);
+  const auto* list = grants.FindList("myext");
+  ASSERT_TRUE(list);
+  bool found = false;
+  for (const auto& item : *list) {
+    if (item.is_string() && item.GetString() == "mytool") {
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found) << "kAllow must persist the grant under the extension id";
+}
+
+TEST(MahoUnifiedAgentAdapterTest, DialogAllowOnceGrantsSessionButNotPersisted) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+  MahoUnifiedAgentAdapterTestHelper::SetPromptOverride(&adapter, PromptDecision::kAllowOnce);
+
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::RunDialog(&adapter, "mytool", "myext"),
+            MahoAgentPermissionDecision_Allow);
+
+  // kAllowOnce must NOT persist to prefs...
+  const auto& grants = prefs.GetDict(maho::ai_prefs::kAgentToolGrants);
+  EXPECT_FALSE(grants.FindList("myext"))
+      << "kAllowOnce must not write a durable grant";
+
+  // ...but must grant for the rest of the session, so a re-evaluation resolves
+  // to Allow via session_grants without needing another dialog.
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluateWithExt(&adapter, "mytool", "myext"),
+            MahoAgentPermissionDecision_Allow);
 }
 
 TEST(MahoAuthUtilsTest, HasValidRelaySession) {

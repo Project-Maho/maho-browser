@@ -25,7 +25,13 @@ class VoiceSearchManager(private val context: Context) {
     var resultText by mutableStateOf("")
         private set
 
+    var finalResultText by mutableStateOf("")
+        private set
+
     var errorMessage by mutableStateOf("")
+        private set
+
+    var audioLevel by mutableStateOf(0f)
         private set
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -34,16 +40,20 @@ class VoiceSearchManager(private val context: Context) {
         get() = SpeechRecognizer.isRecognitionAvailable(context)
 
     fun startListening() {
-        if (state == VoiceSearchState.Listening) return
+        if (state == VoiceSearchState.Listening || state == VoiceSearchState.Processing) return
 
         if (!isAvailable) {
             state = VoiceSearchState.Error
             errorMessage = "Speech recognition not available"
+            resetAudioLevel()
             return
         }
 
+        cleanup()
         resultText = ""
+        finalResultText = ""
         errorMessage = ""
+        resetAudioLevel()
 
         val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
         speechRecognizer = recognizer
@@ -55,15 +65,19 @@ class VoiceSearchManager(private val context: Context) {
 
             override fun onBeginningOfSpeech() {}
 
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onRmsChanged(rmsdB: Float) {
+                updateAudioLevel(rmsdB)
+            }
 
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {
+                resetAudioLevel()
                 state = VoiceSearchState.Processing
             }
 
             override fun onError(error: Int) {
+                resetAudioLevel()
                 state = VoiceSearchState.Error
                 errorMessage = mapErrorCode(error)
                 cleanup()
@@ -76,6 +90,7 @@ class VoiceSearchManager(private val context: Context) {
 
                 if (text.isNotEmpty()) {
                     resultText = text
+                    finalResultText = text
                 }
                 state = VoiceSearchState.Idle
                 cleanup()
@@ -109,6 +124,7 @@ class VoiceSearchManager(private val context: Context) {
 
     fun stopListening() {
         speechRecognizer?.stopListening()
+        resetAudioLevel()
         if (state == VoiceSearchState.Listening) {
             state = VoiceSearchState.Processing
         }
@@ -118,12 +134,25 @@ class VoiceSearchManager(private val context: Context) {
         cleanup()
         state = VoiceSearchState.Idle
         resultText = ""
+        finalResultText = ""
         errorMessage = ""
+        resetAudioLevel()
     }
 
     private fun cleanup() {
         speechRecognizer?.destroy()
         speechRecognizer = null
+        resetAudioLevel()
+    }
+
+    private fun updateAudioLevel(rmsdB: Float) {
+        if (rmsdB.isNaN() || rmsdB.isInfinite()) return
+        val normalized = ((rmsdB - MinRmsDb) / RmsDbRange).coerceIn(0f, 1f)
+        audioLevel = (audioLevel + (normalized - audioLevel) * AudioLevelSmoothing).coerceIn(0f, 1f)
+    }
+
+    private fun resetAudioLevel() {
+        audioLevel = 0f
     }
 
     private fun mapErrorCode(error: Int): String = when (error) {
@@ -137,5 +166,11 @@ class VoiceSearchManager(private val context: Context) {
         SpeechRecognizer.ERROR_SERVER -> "Server error"
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
         else -> "Recognition failed"
+    }
+
+    private companion object {
+        const val MinRmsDb = -2f
+        const val RmsDbRange = 12f
+        const val AudioLevelSmoothing = 0.35f
     }
 }

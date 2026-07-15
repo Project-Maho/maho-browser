@@ -14,6 +14,7 @@ fn dispatch_create_tab(core: &mut MahoCore, space_id: &SpaceId, url: &str) -> Op
         parent_id: None,
         tab_id: None,
         window_id: None,
+        is_private: false,
     });
     for u in updates {
         if let CoreUpdate::TabCreated { tab } = u {

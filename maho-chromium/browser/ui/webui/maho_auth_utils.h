@@ -58,7 +58,7 @@ void ClearRelayTokens(PrefService* prefs);
 bool HasValidRelaySession(PrefService* prefs);
 
 // Returns the relay base URL (MAHO_RELAY_URL env var override, otherwise
-// default "https://relay.maho.co").
+// default "https://relay.mahobrowser.com").
 std::string GetRelayBaseUrl();
 
 // POSTs /auth/refresh with the supplied (already-decrypted) refresh token.
@@ -79,6 +79,26 @@ void RefreshAccessToken(
     const std::string& current_refresh_token,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     RefreshCallback callback);
+
+using LoginResultCallback =
+    base::OnceCallback<void(bool ok, const std::string& error_message)>;
+void MahoRelayLogin(
+    PrefService* prefs,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor& encryptor,
+    const std::string& email,
+    const std::string& password,
+    LoginResultCallback callback);
+
+using SignupResultCallback = LoginResultCallback;
+void MahoRelaySignup(
+    PrefService* prefs,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor& encryptor,
+    const std::string& email,
+    const std::string& password,
+    const std::string& display_name,
+    SignupResultCallback callback);
 
 }  // namespace maho::auth
 

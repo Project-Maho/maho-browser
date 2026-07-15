@@ -37,9 +37,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import dev.maho.browser.bridge.BridgeSync
+import dev.maho.browser.bridge.BridgeTabs
+import dev.maho.browser.models.ConnectedDevice
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TabCard(
     tab: TabViewModel,
@@ -118,6 +130,10 @@ fun TabCard(
         if (tab.isFavorite) add("Saved")
     }
 
+    var showMenu by remember { mutableStateOf(false) }
+    var showDevicePicker by remember { mutableStateOf(false) }
+    var devicePickerDevices by remember { mutableStateOf<List<ConnectedDevice>>(emptyList()) }
+
     Card(
         shape = RoundedCornerShape(metrics.cardCorner),
         border = borderStroke,
@@ -131,147 +147,202 @@ fun TabCard(
             .semantics {
                 stateDescription = buildTabStateDescription(tab = tab, isActive = isActive, isIncognito = isIncognito)
             }
-            .clickable(onClick = onTap),
+            .combinedClickable(
+                onClick = onTap,
+                onLongClick = { showMenu = true }
+            ),
     ) {
-        Column(modifier = Modifier.padding(11.dp)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(144.dp)
-                    .clip(RoundedCornerShape(metrics.cardCorner))
-                    .background(previewBrush)
-                    .border(1.dp, previewFrameColor, RoundedCornerShape(metrics.cardCorner))
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
+        Box {
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        repeat(3) { dotIndex ->
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        when (dotIndex) {
-                                            0 -> accentColor.copy(alpha = 0.88f)
-                                            1 -> shellColors.textSecondary.copy(alpha = 0.28f)
-                                            else -> shellColors.textSecondary.copy(alpha = 0.14f)
-                                        },
-                                    ),
-                            )
+                DropdownMenuItem(
+                    text = { Text("Duplicate") },
+                    onClick = {
+                        showMenu = false
+                        BridgeTabs.duplicateTab(tab.id)
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(if (tab.isPinned) "Unpin" else "Pin") },
+                    onClick = {
+                        showMenu = false
+                        if (tab.isPinned) {
+                            BridgeTabs.unpinTab(tab.id)
+                        } else {
+                            BridgeTabs.pinTab(tab.id)
                         }
                     }
-
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = statusSurfaceColor,
-                    ) {
-                        Text(
-                            text = statusLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (tab.isLoading || isActive) accentColor else shellColors.textSecondary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                        )
+                )
+                DropdownMenuItem(
+                    text = { Text(if (tab.isFavorite) "Remove from Favorites" else "Add to Favorites") },
+                    onClick = {
+                        showMenu = false
+                        BridgeTabs.favoriteTab(tab.id)
                     }
-                }
-
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = hostChipColor,
-                    ) {
-                        Text(
-                            text = host.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = shellColors.textSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                        )
+                )
+                DropdownMenuItem(
+                    text = { Text("Send to Device") },
+                    onClick = {
+                        val currentDeviceId = BridgeSync.getCurrentDeviceId()
+                        devicePickerDevices = BridgeSync.getConnectedDevices()
+                            .filterNot { device -> device.id == currentDeviceId }
+                        showMenu = false
+                        showDevicePicker = true
                     }
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = shellColors.textPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                )
+                DropdownMenuItem(
+                    text = { Text(if (tab.isMuted) "Unmute" else "Mute") },
+                    onClick = {
+                        showMenu = false
+                        if (tab.isMuted) {
+                            BridgeTabs.unmuteTab(tab.id)
+                        } else {
+                            BridgeTabs.muteTab(tab.id)
+                        }
+                    }
+                )
+                androidx.compose.material3.HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Close") },
+                    onClick = {
+                        showMenu = false
+                        onClose()
+                    }
+                )
+            }
+
+            DropdownMenu(
+                expanded = showDevicePicker,
+                onDismissRequest = { showDevicePicker = false }
+            ) {
+                if (devicePickerDevices.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("No devices") },
+                        enabled = false,
+                        onClick = {},
                     )
-                }
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (tab.isLoading) {
-                        CircularProgressIndicator(
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(14.dp),
-                            color = accentColor,
-                            trackColor = accentColor.copy(alpha = 0.18f),
+                } else {
+                    devicePickerDevices.forEach { device ->
+                        DropdownMenuItem(
+                            text = { Text(sendDeviceLabel(device)) },
+                            onClick = {
+                                showDevicePicker = false
+                                BridgeSync.sendTabToDevice(
+                                    url = tab.url,
+                                    title = tab.title,
+                                    deviceId = device.id,
+                                )
+                            },
                         )
                     }
-                    tabCardLabels(tab = tab)
-                        .take(2)
-                        .forEach { label ->
-                            TabCardChip(
-                                label = label,
-                                containerColor = metaChipColor,
-                                contentColor = shellColors.textPrimary,
-                            )
-                        }
                 }
             }
 
-            Spacer(modifier = Modifier.height(11.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            Column(modifier = Modifier.padding(11.dp)) {
                 Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(144.dp)
+                        .clip(RoundedCornerShape(metrics.cardCorner))
+                        .background(previewBrush)
+                        .border(1.dp, previewFrameColor, RoundedCornerShape(metrics.cardCorner))
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(
-                        text = host,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = shellColors.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (details.isNotEmpty()) {
-                        Text(
-                            text = details.joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = shellColors.textSecondary.copy(alpha = 0.88f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TabCardChip(
+                                label = statusLabel,
+                                containerColor = statusSurfaceColor,
+                                contentColor = accentColor,
+                            )
+                            if (tab.children.isNotEmpty()) {
+                                TabCardChip(
+                                    label = "${tab.children.size} linked",
+                                    containerColor = hostChipColor,
+                                    contentColor = shellColors.textSecondary,
+                                )
+                            }
+                        }
+
+                        if (tab.isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 1.6.dp,
+                                color = accentColor,
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        tabCardLabels(tab = tab)
+                            .take(2)
+                            .forEach { label ->
+                                TabCardChip(
+                                    label = label,
+                                    containerColor = metaChipColor,
+                                    contentColor = shellColors.textPrimary,
+                                )
+                            }
                     }
                 }
 
-                Surface(
-                    shape = CircleShape,
-                    color = shellColors.windowBackground.copy(alpha = 0.12f),
+                Spacer(modifier = Modifier.height(11.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    IconButton(
-                        onClick = onClose,
-                        modifier = Modifier.size(28.dp),
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Icon(
-                            painter = painterResource(id = MahoIcon.Close.drawableRes),
-                            contentDescription = "Close tab",
-                            modifier = Modifier.size(14.dp),
-                            tint = shellColors.textSecondary,
+                        Text(
+                            text = host,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        if (details.isNotEmpty()) {
+                            Text(
+                                text = details.joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = shellColors.textSecondary.copy(alpha = 0.88f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = CircleShape,
+                        color = shellColors.windowBackground.copy(alpha = 0.12f),
+                    ) {
+                        IconButton(
+                            onClick = onClose,
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                painter = painterResource(id = MahoIcon.Close.drawableRes),
+                                contentDescription = "Close tab",
+                                modifier = Modifier.size(14.dp),
+                                tint = shellColors.textSecondary,
+                            )
+                        }
                     }
                 }
             }
@@ -304,6 +375,11 @@ private fun tabCardLabels(
     if (tab.isPinned) add("Pinned")
     if (tab.isPlayingAudio) add("Audio")
     if (tab.isMuted) add("Muted")
+}
+
+private fun sendDeviceLabel(device: ConnectedDevice): String {
+    val offlineSuffix = if (device.isOnline == false) " (offline)" else ""
+    return "${device.name}$offlineSuffix"
 }
 
 private fun buildTabStateDescription(

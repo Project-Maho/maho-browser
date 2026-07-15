@@ -72,6 +72,9 @@
       "lucide-react": [
         "../../../../../website/node_modules/lucide-react/dist/lucide-react.d.ts"
       ],
+      "marked": [
+        "../../../../../website/node_modules/marked/lib/marked.d.ts"
+      ],
       "tailwind-merge": [
         "../../../../../website/node_modules/tailwind-merge/dist/types.d.ts"
       ],

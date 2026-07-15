@@ -14,6 +14,10 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
+class BrowserWindowInterface;
+
+#include "maho/browser/maho_private_context_policy.h"
+
 namespace content {
 class WebContents;
 }
@@ -28,7 +32,9 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
       mojo::PendingReceiver<maho_boost::mojom::PageHandler> receiver,
       mojo::PendingRemote<maho_boost::mojom::PageObserver> page,
       const std::string& domain,
-      base::WeakPtr<maho::MahoBoostWindowController> controller);
+      base::WeakPtr<maho::MahoBoostWindowController> controller,
+      BrowserWindowInterface* browser_window,
+      content::WebContents* web_contents);
   MahoBoostPageHandler(const MahoBoostPageHandler&) = delete;
   MahoBoostPageHandler& operator=(const MahoBoostPageHandler&) = delete;
   ~MahoBoostPageHandler() override;
@@ -113,6 +119,7 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
                           base::ListValue fonts);
 
   void OnEnterZapModeDone(EnterZapModeCallback callback,
+                           base::WeakPtr<content::WebContents> captured_wc,
                            std::vector<std::string> zap_selectors);
 
   void OnContentScriptEvent(const std::string& type,
@@ -128,6 +135,9 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
 
   std::string current_zap_boost_id_;
   std::string current_picker_boost_id_;
+
+  MahoPrivateContextToken context_token_;
+  base::WeakPtr<content::WebContents> host_web_contents_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

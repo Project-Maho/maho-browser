@@ -172,7 +172,9 @@ source_set("maho_sidebar_core") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//net",
     "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",
+    "//maho/browser/ui/views/split_view:maho_split_view",
     "//skia",
+
     "//ui/base",
     "//ui/color",
     "//ui/gfx",
@@ -212,9 +214,16 @@ source_set("unit_tests") {
 
 source_set("browser_tests") {
   testonly = true
-  sources = [ "maho_sidebar_dnd_browser_test.cc" ]
+  sources = [
+    "maho_sidebar_dnd_browser_test.cc",
+    "maho_incognito_privacy_browser_test.cc",
+  ]
 
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  # Owned R-14 fixture extension consumed by the (R-16-deferred)
+  # task-14-extension-download cases at runtime.
+  data = [ "//maho/browser/extensions/test_data/incognito_test_extension/" ]
 
   deps = [
     "//base",

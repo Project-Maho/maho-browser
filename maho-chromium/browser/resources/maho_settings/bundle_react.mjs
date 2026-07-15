@@ -1,11 +1,20 @@
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {execSync} from 'node:child_process';
 
 import {build} from '../../../../website/node_modules/esbuild/lib/main.js';
 import {nodeModulesGuardPlugin} from '../maho_common/react/bundle_guard.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Run the drift check first to ensure mojom and d.ts are aligned
+try {
+  execSync(`bun ${path.join(__dirname, 'drift_check.js')}`, { stdio: 'inherit' });
+} catch (e) {
+  process.exit(1);
+}
+
 const websiteNodeModules = path.resolve(__dirname, '../../../../website/node_modules');
 const [sourceDirArg, outputFileArg] = process.argv.slice(2);
 

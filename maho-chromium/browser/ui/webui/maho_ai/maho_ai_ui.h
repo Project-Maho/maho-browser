@@ -18,6 +18,7 @@ class MahoAIPageHandler;
 
 namespace content {
 class WebUI;
+class BrowserContext;
 }
 
 class MahoAIUI;
@@ -26,6 +27,7 @@ class MahoAIUIConfig : public DefaultTopChromeWebUIConfig<MahoAIUI> {
  public:
   MahoAIUIConfig();
   bool ShouldAutoResizeHost() override;
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 class MahoAIUI : public TopChromeWebUIController,

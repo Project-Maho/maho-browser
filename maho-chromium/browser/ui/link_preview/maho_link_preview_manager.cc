@@ -13,6 +13,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/browser_finder.h"  // nogncheck
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -73,6 +75,10 @@ MahoLinkPreviewManager::MahoLinkPreviewManager(
 
 MahoLinkPreviewManager::~MahoLinkPreviewManager() {
   CloseBubble();
+}
+
+bool MahoLinkPreviewManager::IsAiAllowed() {
+  return token_ && token_->Revalidate(MahoPrivateCapability::kAI);
 }
 
 void MahoLinkPreviewManager::DidFinishNavigation(
@@ -147,6 +153,16 @@ void MahoLinkPreviewManager::HandleLinkHover(const std::string& url,
                                               const gfx::Rect& rect) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  // R-9: build a fresh kAI token from the observed WebContents and its exact
+  // owning browser. Any non-regular (OTR/Guest/system/DevTools) context is
+  // denied here before any bubble, MahoCore dispatch, or network request.
+  token_ = std::make_unique<MahoPrivateContextToken>(
+      chrome::FindBrowserWithTab(web_contents()), web_contents());
+  if (!IsAiAllowed()) {
+    CloseBubble();
+    return;
+  }
+
   generation_++;
   pending_generation_ = generation_;
   pending_anchor_rect_ = rect;
@@ -204,6 +220,11 @@ void MahoLinkPreviewManager::OnRustEventResponse(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (generation != pending_generation_) {
+    return;
+  }
+
+  if (!IsAiAllowed()) {
+    CloseBubble();
     return;
   }
 
@@ -267,6 +288,11 @@ void MahoLinkPreviewManager::MakeLlmRequest(uint64_t generation,
                                               const std::string& api_key) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!IsAiAllowed()) {
+    CloseBubble();
+    return;
+  }
+
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = GURL(kOpenAIEndpoint);
   resource_request->method = "POST";
@@ -293,6 +319,11 @@ void MahoLinkPreviewManager::OnLlmResponse(
   url_loader_.reset();
 
   if (generation != pending_generation_) {
+    return;
+  }
+
+  if (!IsAiAllowed()) {
+    CloseBubble();
     return;
   }
 
@@ -338,6 +369,10 @@ void MahoLinkPreviewManager::OnLlmResponse(
 void MahoLinkPreviewManager::ShowBubble(const std::u16string& text,
                                          const gfx::Rect& anchor_rect) {
   CloseBubble();
+
+  if (!IsAiAllowed()) {
+    return;
+  }
 
   // Guard against teardown: if the WebContents is gone or being destroyed,
   // or its native view is not available, skip bubble creation entirely.

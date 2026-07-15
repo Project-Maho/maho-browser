@@ -217,6 +217,7 @@ std::string BuildThemeJsonForSelection(
     base::DictValue theme_dict;
     theme_dict.Set("type", "solid");
     theme_dict.Set("color", std::move(color_dict));
+    theme_dict.Set("opacity", selection.opacity);
 
     std::string theme_json;
     base::JSONWriter::Write(theme_dict, &theme_json);
@@ -1286,7 +1287,8 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
       return;
     }
     bridge->RegisterSpace(new_space_id, *profile_path);
-    bridge->SwitchToSpace(browser_, new_space_id);
+    MahoSidebarView::ActivateSpaceAndTab(browser_, new_space_id);
+
     views::View* ancestor = parent();
     MahoSidebarView* sidebar_view = nullptr;
     while (ancestor) {

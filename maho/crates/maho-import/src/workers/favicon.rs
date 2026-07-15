@@ -23,36 +23,44 @@ impl ImportWorker for FaviconWorker {
         cancelled: &Arc<AtomicBool>,
         progress: &Sender<ImportProgress>,
     ) -> ImportResult<u32> {
-        // Only Chromium-based browsers supported (Firefox favicon parser not yet ported).
-        match browser.browser_type {
-            BrowserType::Chrome
-            | BrowserType::Arc
-            | BrowserType::Brave
-            | BrowserType::Edge
-            | BrowserType::Vivaldi
-            | BrowserType::Opera => {}
-            _ => return Ok(0),
-        }
-
         let profile_dir = browser
             .profile_path
             .parent()
             .unwrap_or(&browser.profile_path);
 
-        let favicons = parsers::chromium::favicons::parse_chromium_favicons(profile_dir)?;
+        let favicons: Vec<(Vec<String>, Vec<u8>)> = match browser.browser_type {
+            BrowserType::Chrome
+            | BrowserType::Arc
+            | BrowserType::Brave
+            | BrowserType::Edge
+            | BrowserType::Vivaldi
+            | BrowserType::Opera => parsers::chromium::favicons::parse_chromium_favicons(profile_dir)?
+                .into_iter()
+                .map(|e| (e.page_urls, e.image_data))
+                .collect(),
+            BrowserType::Safari => parsers::safari::favicon::parse_safari_favicons(profile_dir)?
+                .into_iter()
+                .map(|e| (e.page_urls, e.image_data))
+                .collect(),
+            BrowserType::Firefox | BrowserType::Zen => {
+                parsers::firefox::favicon::parse_firefox_favicons(profile_dir)?
+                    .into_iter()
+                    .map(|e| (e.page_urls, e.image_data))
+                    .collect()
+            }
+        };
 
         if favicons.is_empty() {
             return Ok(0);
         }
 
         let mut count = 0u32;
-        for entry in &favicons {
+        for (page_urls, image_data) in &favicons {
             if is_cancelled(cancelled) {
                 break;
             }
-            // Write favicon for each associated page URL.
-            for page_url in &entry.page_urls {
-                destination.add_favicon(page_url, &entry.image_data);
+            for page_url in page_urls {
+                destination.add_favicon(page_url, image_data);
             }
             count += 1;
             if count % 100 == 0 {
@@ -76,23 +84,21 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
-    fn test_favicon_worker_skips_safari() {
+    fn test_favicon_worker_nonexistent_safari() {
         let dest = Arc::new(MockDestination::new());
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::channel();
 
         let browser = DetectedBrowser {
             browser_type: BrowserType::Safari,
             display_name: "Safari".to_string(),
-            profile_path: std::path::PathBuf::from("/nonexistent/profile"),
+            profile_path: std::path::PathBuf::from("/nonexistent/Library/Safari/Bookmarks.plist"),
             services_supported: 0xFF,
             requires_full_disk_access: false,
         };
 
         let result = FaviconWorker.run(&browser, &*dest, &cancelled, &tx);
-        assert_eq!(result.unwrap(), 0);
-        let msgs: Vec<_> = rx.try_iter().collect();
-        assert!(msgs.is_empty());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -124,5 +130,59 @@ mod tests {
 
         let result = FaviconWorker.run(&browser, &*dest, &cancelled, &tx);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_favicon_worker_imports_firefox() {
+        use rusqlite::Connection;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path();
+        let conn = Connection::open(profile.join("favicons.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE moz_icons (id INTEGER PRIMARY KEY, icon_url TEXT NOT NULL, data BLOB);
+             CREATE TABLE moz_pages_w_icons (id INTEGER PRIMARY KEY, page_url TEXT NOT NULL);
+             CREATE TABLE moz_icons_to_pages (page_id INTEGER NOT NULL, icon_id INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let png: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE,
+        ];
+        conn.execute(
+            "INSERT INTO moz_icons (id, icon_url, data) VALUES (1, 'https://ff.com/fav', ?1)",
+            [&png],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO moz_pages_w_icons (id, page_url) VALUES (1, 'https://ff.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO moz_icons_to_pages (page_id, icon_id) VALUES (1, 1)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let dest = Arc::new(MockDestination::new());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (tx, _rx) = mpsc::channel();
+
+        let browser = DetectedBrowser {
+            browser_type: BrowserType::Firefox,
+            display_name: "Firefox".to_string(),
+            profile_path: profile.join("prefs.js"),
+            services_supported: 0xFF,
+            requires_full_disk_access: false,
+        };
+
+        let count = FaviconWorker.run(&browser, &*dest, &cancelled, &tx).unwrap();
+        assert_eq!(count, 1);
+        let favicons = dest.favicons.lock().unwrap();
+        assert_eq!(favicons.len(), 1);
+        assert_eq!(favicons[0].url, "https://ff.com");
     }
 }

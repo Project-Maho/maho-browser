@@ -1,5 +1,7 @@
 #include "maho/browser/ui/webui/maho_space_config/maho_space_config_page_handler.h"
 
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
+
 #include <optional>
 #include <utility>
 #include <vector>
@@ -184,7 +186,14 @@ MahoSpaceConfigPageHandler::MahoSpaceConfigPageHandler(
       browser_(browser),
       web_contents_(web_contents),
       space_id_(space_id),
-      initial_focus_(initial_focus) {}
+      initial_focus_(initial_focus) {
+  // R-4 fail-closed: forged Mojo receiver bypasses config-level denial. Do not remove.
+  if (web_contents &&
+      !MahoIsWebUIEnabled(web_contents->GetBrowserContext())) {
+    receiver_.reset();
+    page_.reset();
+  }
+}
 
 MahoSpaceConfigPageHandler::~MahoSpaceConfigPageHandler() = default;
 

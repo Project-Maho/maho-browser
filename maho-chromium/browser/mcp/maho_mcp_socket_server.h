@@ -5,6 +5,7 @@
 #ifndef MAHO_BROWSER_MCP_MAHO_MCP_SOCKET_SERVER_H_
 #define MAHO_BROWSER_MCP_MAHO_MCP_SOCKET_SERVER_H_
 
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -69,6 +70,10 @@ class MahoMcpSocketServer {
     std::unique_ptr<MahoMcpSession> session;
     scoped_refptr<net::IOBufferWithSize> read_buf;
     uint64_t connection_id = 0;
+
+    std::deque<std::string> write_queue;
+    scoped_refptr<net::DrainableIOBuffer> current_write;
+    bool write_in_flight = false;
   };
 
   static bool AuthenticateClient(
@@ -81,6 +86,9 @@ class MahoMcpSocketServer {
   void OnResponsesReady(uint64_t connection_id,
                         std::vector<std::string> responses);
   void OnDeferredResponse(uint64_t connection_id, std::string response);
+  void EnqueueWrite(uint64_t connection_id, std::string response);
+  void PumpWriteQueue(uint64_t connection_id);
+  void OnWriteComplete(uint64_t connection_id, int result);
   void ReadFromConnection(uint64_t connection_id);
   void RemoveConnection(uint64_t connection_id);
   void CleanupStaleSocket();

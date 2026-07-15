@@ -84,4 +84,25 @@ object BridgeTabs {
 
     fun unmuteTab(tabId: TabId): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.UnmuteTab(tabId = tabId))
+
+    fun favoriteTab(tabId: TabId): List<CoreUpdate> =
+        MahoBridge.sendEvent(ShellEvent.FavoriteTab(tabId = tabId))
+
+    fun getFavoriteTabs(spaceId: SpaceId): List<TabViewModel> {
+        val json = MahoBridge.getFavoriteTabs(MahoJson.instance.encodeToString(String.serializer(), spaceId))
+            ?: return emptyList()
+        return try {
+            MahoJson.instance.decodeFromString<List<TabViewModel>>(json)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun getPinnedTabs(spaceId: SpaceId): List<TabViewModel> {
+        return getTabViewModels().filter { it.spaceId == spaceId && it.isPinned && !it.isFavorite }
+    }
+
+    fun getTodayTabs(spaceId: SpaceId): List<TabViewModel> {
+        return getTabViewModels().filter { it.spaceId == spaceId && !it.isPinned && !it.isFavorite }
+    }
 }

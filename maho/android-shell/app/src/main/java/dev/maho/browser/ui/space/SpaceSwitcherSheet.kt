@@ -4,12 +4,15 @@ package dev.maho.browser.ui.space
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -36,6 +39,8 @@ fun SpaceSwitcherSheet(
 
     var spaces by remember { mutableStateOf<List<SpaceViewModel>>(emptyList()) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var newSpaceName by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         spaces = BridgeSpaces.getSpaceViewModels()
@@ -53,14 +58,8 @@ fun SpaceSwitcherSheet(
             },
             floatingActionButton = {
                 FloatingActionButton(onClick = {
-                    val defaultColor = SpaceColor(hue = 210.0, saturation = 0.7, brightness = 0.8)
-                    val activeProfileId = ""
-                    BridgeSpaces.createSpace(
-                        name = "New Space",
-                        color = defaultColor,
-                        profileId = activeProfileId,
-                    )
-                    spaces = BridgeSpaces.getSpaceViewModels()
+                    newSpaceName = ""
+                    showCreateDialog = true
                 }) {
                     Icon(painter = painterResource(id = MahoIcon.Add.drawableRes), contentDescription = "New Space")
                 }
@@ -100,5 +99,41 @@ fun SpaceSwitcherSheet(
                 }
             }
         }
+    }
+
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("Create Space") },
+            text = {
+                OutlinedTextField(
+                    value = newSpaceName,
+                    onValueChange = { newSpaceName = it },
+                    label = { Text("Space Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCreateDialog = false
+                    val defaultColor = SpaceColor(hue = 210.0, saturation = 0.7, brightness = 0.8)
+                    val activeProfileId = ""
+                    BridgeSpaces.createSpace(
+                        name = newSpaceName.takeIf { it.isNotBlank() } ?: "New Space",
+                        color = defaultColor,
+                        profileId = activeProfileId,
+                    )
+                    spaces = BridgeSpaces.getSpaceViewModels()
+                }) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

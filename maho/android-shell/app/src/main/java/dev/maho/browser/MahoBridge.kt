@@ -1067,8 +1067,9 @@ object MahoBridge {
 
     // --- Tab Clustering ---
     fun clusterTabs(threshold: Float): String? {
-        val p = ptr ?: return null
-        return nativeClusterTabs(p, threshold.toDouble())
+        val ptr = corePtr
+        if (ptr == 0L) return null
+        return nativeClusterTabs(ptr, threshold.toDouble())
     }
 
     // --- Offline Model ---

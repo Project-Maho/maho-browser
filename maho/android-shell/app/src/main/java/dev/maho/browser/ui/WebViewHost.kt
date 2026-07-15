@@ -36,6 +36,7 @@ fun WebViewHost(
     onWebViewReady: (WebView) -> Unit,
     onScrollChanged: (scrollY: Int, oldScrollY: Int) -> Unit = { _, _ -> },
     onSingleTap: () -> Unit = {},
+    onPinchSummarize: () -> Unit = {},
     isIncognito: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -52,6 +53,18 @@ fun WebViewHost(
                     return false
                 }
             },
+        )
+    }
+    val scaleGestureDetector = remember(context, onPinchSummarize) {
+        android.view.ScaleGestureDetector(
+            context,
+            object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScaleEnd(detector: android.view.ScaleGestureDetector) {
+                    if (detector.scaleFactor < 0.78f) {
+                        onPinchSummarize()
+                    }
+                }
+            }
         )
     }
 
@@ -93,6 +106,7 @@ fun WebViewHost(
             }
 
             setOnTouchListener { _, event ->
+                scaleGestureDetector.onTouchEvent(event)
                 gestureDetector.onTouchEvent(event)
                 false
             }
@@ -103,8 +117,9 @@ fun WebViewHost(
         }
     }
 
-    DisposableEffect(webView, gestureDetector) {
+    DisposableEffect(webView, gestureDetector, scaleGestureDetector) {
         webView.setOnTouchListener { _, event ->
+            scaleGestureDetector.onTouchEvent(event)
             gestureDetector.onTouchEvent(event)
             false
         }

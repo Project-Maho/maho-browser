@@ -9,6 +9,8 @@ source_set("maho_settings") {
   sources = [
     "maho_settings_page_handler.cc",
     "maho_settings_page_handler.h",
+    "maho_settings_password_helpers.cc",
+    "maho_settings_password_helpers.h",
     "maho_settings_ui.cc",
     "maho_settings_ui.h",
     "../../../ai/maho_managed_connection_test.cc",

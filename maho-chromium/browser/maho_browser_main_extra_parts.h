@@ -12,12 +12,15 @@
 #include "maho/browser/maho_routines_scheduler.h"
 
 class Profile;
+class BrowserWindowInterface;
 struct MahoCore;
 
 namespace maho {
 class MahoMcpSocketServer;
 class MahoMcpPipeServer;
 class MahoMcpSessionToken;
+class MahoSyncRelayClient;
+class MahoExtensionSidePanelCoordinator;
 }  // namespace maho
 
 class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
@@ -27,18 +30,26 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
    MahoBrowserMainExtraParts& operator=(const MahoBrowserMainExtraParts&) = delete;
    ~MahoBrowserMainExtraParts() override;
 
+   static MahoBrowserMainExtraParts* GetInstance();
+   void MaybeInitializeForBrowser(BrowserWindowInterface* browser);
+
    MahoCore* GetCore() const { return core_; }
 
   private:
    void PostEarlyInitialization() override;
    void PostProfileInit(Profile* profile, bool is_initial_profile) override;
    void PostMainMessageLoopRun() override;
+   void InitializeRegularServicesOnce(Profile* profile);
 
    base::FilePath storage_path_;
    RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
+   RAW_PTR_EXCLUSION Profile* regular_profile_ = nullptr;
 
    std::unique_ptr<maho::MahoExtensionStateBridge> extension_state_bridge_;
+   RAW_PTR_EXCLUSION maho::MahoExtensionSidePanelCoordinator*
+       extension_side_panel_coordinator_ = nullptr;
    std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
+   std::unique_ptr<maho::MahoSyncRelayClient> sync_relay_client_;
 
  #if BUILDFLAG(IS_WIN)
    std::unique_ptr<maho::MahoMcpSessionToken> mcp_session_token_;

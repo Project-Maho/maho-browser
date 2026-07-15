@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -38,7 +39,10 @@ import dev.maho.browser.models.SpaceId
 import dev.maho.browser.models.SpaceViewModel
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
+import dev.maho.browser.support.FeatureFlags
 import dev.maho.browser.ui.space.SpaceChipRow
+import dev.maho.browser.ui.space.SpaceSwitcherSheet
+import dev.maho.browser.ui.tab.TabGroupSuggestion
 import dev.maho.browser.ui.tab.TabGrid
 import dev.maho.browser.ui.tab.TabGridToolbar
 import dev.maho.browser.ui.theme.BrowserShellTheme
@@ -59,6 +63,7 @@ fun TabGridScreen(
     var tabs by remember { mutableStateOf<List<TabViewModel>>(emptyList()) }
     var spaces by remember { mutableStateOf<List<SpaceViewModel>>(emptyList()) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
+    var showClustering by remember { mutableStateOf(false) }
 
     fun refresh() {
         tabs = BridgeTabs.getTabViewModels()
@@ -174,33 +179,54 @@ fun TabGridScreen(
                             }
                         }
 
-                        if (isIncognito) {
-                            Surface(
-                                modifier = Modifier.testTag("tabSwitcherStateChip"),
-                                shape = RoundedCornerShape(999.dp),
-                                color = elevatedSurfaceColor,
-                                contentColor = shellColors.textPrimary,
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (FeatureFlags.clusterTabsEnabled) {
+                                IconButton(
+                                    onClick = { showClustering = true },
+                                    modifier = Modifier.testTag("tabClusteringButton"),
                                 ) {
                                     Icon(
-                                        painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes),
-                                        contentDescription = null,
+                                        painter = painterResource(id = MahoIcon.SparklesAi.drawableRes),
+                                        contentDescription = "Suggest tab groups",
                                         tint = accentColor,
-                                        modifier = Modifier.size(14.dp),
+                                        modifier = Modifier.size(18.dp),
                                     )
-                                    Text(
-                                        text = "Private",
-                                        style = MaterialTheme.typography.labelMedium,
-                                    )
+                                }
+                            }
+
+                            if (isIncognito) {
+                                Surface(
+                                    modifier = Modifier.testTag("tabSwitcherStateChip"),
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = elevatedSurfaceColor,
+                                    contentColor = shellColors.textPrimary,
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes),
+                                            contentDescription = null,
+                                            tint = accentColor,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                        Text(
+                                            text = "Private",
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                var showSpaceSwitcher by remember { mutableStateOf(false) }
 
                 SpaceChipRow(
                     spaces = spaces,
@@ -209,13 +235,36 @@ fun TabGridScreen(
                         BridgeSpaces.activateSpace(spaceId)
                         refresh()
                     },
+                    onOverflowClick = { showSpaceSwitcher = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 2.dp),
                 )
 
+                if (showSpaceSwitcher) {
+                    SpaceSwitcherSheet(
+                        onDismiss = { showSpaceSwitcher = false },
+                        onSpaceSelected = { spaceId ->
+                            refresh()
+                        }
+                    )
+                }
+
+                if (FeatureFlags.clusterTabsEnabled && showClustering) {
+                    activeSpaceId?.let { spaceId ->
+                        TabGroupSuggestion(
+                            spaceId = spaceId,
+                            activeSpaceName = activeSpaceName,
+                            tabs = visibleTabs,
+                            onDismiss = { showClustering = false },
+                            onFoldersCreated = { refresh() },
+                        )
+                    }
+                }
+
                 TabGrid(
                     tabs = visibleTabs,
+                    spaceId = activeSpaceId,
                     activeTabId = activeTabId,
                     isIncognito = isIncognito,
                     onTabSelected = { tabId ->
