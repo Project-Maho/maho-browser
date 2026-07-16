@@ -223,10 +223,10 @@ TEST_F(MahoUpdateManagerTest, UrlOverride_EnvVarBeatsPref) {
 
   std::unique_ptr<base::Environment> env = base::Environment::Create();
   env->SetVar(updates::kMahoUpdateServerOverrideEnvVar,
-              "http://envhost:9999/");
+              "https://envhost:9999/");
 
   EXPECT_EQ(updates::ResolveUpdateServerBaseUrl(&profile),
-            "http://envhost:9999");
+            "https://envhost:9999");
 
   env->UnSetVar(updates::kMahoUpdateServerOverrideEnvVar);
 }
@@ -236,13 +236,13 @@ TEST_F(MahoUpdateManagerTest, UrlOverride_PrefBeatsDefault) {
   if (!profile.GetPrefs()->FindPreference(prefs::kMahoUpdateServerUrl)) {
     updates::RegisterProfilePrefs(profile.GetTestingPrefService()->registry());
   }
-  profile.GetPrefs()->SetString(prefs::kMahoUpdateServerUrl, "http://prefhost:8888/");
+  profile.GetPrefs()->SetString(prefs::kMahoUpdateServerUrl, "https://prefhost:8888/");
 
   std::unique_ptr<base::Environment> env = base::Environment::Create();
   env->UnSetVar(updates::kMahoUpdateServerOverrideEnvVar);
 
   EXPECT_EQ(updates::ResolveUpdateServerBaseUrl(&profile),
-            "http://prefhost:8888");
+            "https://prefhost:8888");
 }
 
 TEST_F(MahoUpdateManagerTest, UrlOverride_DefaultWhenNothingSet) {
@@ -278,10 +278,10 @@ TEST_F(MahoUpdateManagerTest, SetChannel_ReResolvesBaseUrl) {
             std::string(updates::kMahoUpdateServerDefaultUrl));
 
   profile.GetPrefs()->SetString(prefs::kMahoUpdateServerUrl,
-                                 "http://newhost:7777/");
+                                 "https://newhost:7777/");
   manager->SetChannel(UpdateChannel::kBeta);
 
-  EXPECT_EQ(manager->GetServerBaseUrl(), "http://newhost:7777");
+  EXPECT_EQ(manager->GetServerBaseUrl(), "https://newhost:7777");
 }
 
 TEST_F(MahoUpdateManagerTest, AutoCheckTimer_FiresAfterInitialDelay) {
