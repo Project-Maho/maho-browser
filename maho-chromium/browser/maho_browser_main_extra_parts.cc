@@ -14,6 +14,7 @@
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/values.h"
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/sequenced_task_runner.h"
@@ -2029,7 +2030,14 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(Profile* profile) 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, stage=profile_init_begin";
 
   PrefService* prefs = profile->GetPrefs();
-  const bool needs_login_gate = !maho::auth::HasValidRelaySession(prefs);
+  // Tests that rely on the standard InProcessBrowserTest startup browser pass
+  // --maho-disable-login-gate so the onboarding gate does not suppress the
+  // initial browser window (which would leave InProcessBrowserTest::browser()
+  // null). Default behavior is unchanged when the switch is absent.
+  const bool needs_login_gate =
+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
+          "maho-disable-login-gate") &&
+      !maho::auth::HasValidRelaySession(prefs);
   prefs->SetBoolean(maho::welcome::kLoginGateActive, needs_login_gate);
   if (needs_login_gate) {
     maho::MahoWelcomeWindow::Show(profile);

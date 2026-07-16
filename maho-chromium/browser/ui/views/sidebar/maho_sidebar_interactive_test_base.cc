@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
 #include "base/json/string_escape.h"
+#include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
@@ -47,6 +48,15 @@ bool RecordingShellEventObserver::HasEvent(const std::string& kind) const {
 
 MahoSidebarInteractiveTestBase::MahoSidebarInteractiveTestBase() = default;
 MahoSidebarInteractiveTestBase::~MahoSidebarInteractiveTestBase() = default;
+
+void MahoSidebarInteractiveTestBase::SetUpCommandLine(
+    base::CommandLine* command_line) {
+  InteractiveBrowserTest::SetUpCommandLine(command_line);
+  // Maho suppresses the startup browser while its onboarding login-gate is
+  // active (no relay session in tests), which would leave browser() null and
+  // crash ResolveViews(). Disable the gate so the standard window exists.
+  command_line->AppendSwitch("maho-disable-login-gate");
+}
 
 void MahoSidebarInteractiveTestBase::SetUpOnMainThread() {
   InteractiveBrowserTest::SetUpOnMainThread();

@@ -13,6 +13,7 @@
 //                            GetRenderedResultCountForTesting}
 
 #include "base/strings/utf_string_conversions.h"
+#include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
@@ -43,6 +44,14 @@ class MahoCommandIncognitoInteractiveUiTest : public InProcessBrowserTest {
   MahoCommandIncognitoInteractiveUiTest& operator=(
       const MahoCommandIncognitoInteractiveUiTest&) = delete;
   ~MahoCommandIncognitoInteractiveUiTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    // Maho suppresses the startup browser while its onboarding login-gate is
+    // active (no relay session in tests), which would leave browser() null.
+    // Disable the gate so the standard InProcessBrowserTest window exists.
+    command_line->AppendSwitch("maho-disable-login-gate");
+  }
 
   void SetUpOnMainThread() override {
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");

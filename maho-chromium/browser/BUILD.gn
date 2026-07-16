@@ -421,6 +421,30 @@ if (is_linux) {
   }
 }
 
+if (is_mac) {
+  # The macOS share picker owns the MahoSharePickerDelegate ObjC class. It is
+  # split into its own component() so the class has a single link identity
+  # (its own dylib in component builds). If it stayed a plain source_set,
+  # GN would fold its objects into every terminal linkable that reaches it
+  # (the views component dylib AND the interactive_ui_tests executable),
+  # producing duplicate ObjC class registration and a runtime segfault.
+  component("maho_notification_share_mac") {
+    sources = [
+      "ui/notifications/maho_notification_share_mac.h",
+      "ui/notifications/maho_notification_share_mac.mm",
+    ]
+    frameworks = [ "AppKit.framework" ]
+    deps = [
+      "//base",
+      "//net",
+      "//ui/gfx",
+      "//ui/gfx/geometry",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
 source_set("maho_theme_support") {
   sources = [
     "ui/theme/maho_color_mixer.cc",
@@ -448,11 +472,7 @@ source_set("maho_theme_support") {
     "ui/tab_preview/maho_tab_preview_controller.h",
   ]
   if (is_mac) {
-    sources += [
-      "ui/notifications/maho_notification_share_mac.h",
-      "ui/notifications/maho_notification_share_mac.mm",
-      "ui/notifications/maho_toast_vibrancy_mac.mm",
-    ]
+    sources += [ "ui/notifications/maho_toast_vibrancy_mac.mm" ]
     frameworks = [ "AppKit.framework" ]
   } else {
     sources += [ "ui/notifications/maho_toast_vibrancy_stub.cc" ]
@@ -471,6 +491,9 @@ source_set("maho_theme_support") {
     "//ui/views",
     "//url",
   ]
+  if (is_mac) {
+    deps += [ ":maho_notification_share_mac" ]
+  }
 }
 
 source_set("maho_ui_stubs") {

@@ -11,6 +11,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/updates/maho_update_pref_names.h"

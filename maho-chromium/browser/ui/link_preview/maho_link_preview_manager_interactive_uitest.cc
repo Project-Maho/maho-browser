@@ -3,6 +3,7 @@
 #include "maho/browser/ui/link_preview/maho_link_preview_manager.h"
 
 #include "base/run_loop.h"
+#include "base/command_line.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -42,6 +43,13 @@ class MahoLinkPreviewManagerInteractiveUiTest : public InProcessBrowserTest {
  public:
   MahoLinkPreviewManagerInteractiveUiTest() = default;
   ~MahoLinkPreviewManagerInteractiveUiTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    // Disable Maho's onboarding login-gate so the standard startup browser
+    // is created (otherwise browser() is null).
+    command_line->AppendSwitch("maho-disable-login-gate");
+  }
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();

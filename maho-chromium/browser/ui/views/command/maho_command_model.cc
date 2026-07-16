@@ -1510,6 +1510,16 @@ void MahoCommandModel::OnBrowserCreated(BrowserWindowInterface* browser) {
 void MahoCommandModel::OnBrowserClosed(BrowserWindowInterface* browser) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
+    // Our exact-primary-Incognito window is going away. Cancel any pending
+    // debounced search and drop the browser pointer so a late-firing
+    // FireSearchPrivate() cannot query a KeyedService (e.g. TemplateURLService)
+    // on the shutting-down OTR profile after KeyedService::Shutdown() has run.
+    if (browser_ && browser && browser->GetTabStripModel() &&
+        browser->GetTabStripModel() == browser_->tab_strip_model()) {
+      debounce_timer_.Stop();
+      browser_->tab_strip_model()->RemoveObserver(this);
+      browser_ = nullptr;
+    }
     return;
   }
   if (browser && browser->GetTabStripModel()) {

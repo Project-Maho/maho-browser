@@ -14,6 +14,10 @@
 #include "ui/gfx/geometry/point.h"
 #include "url/gurl.h"
 
+namespace base {
+class CommandLine;
+}
+
 namespace views {
 class View;
 }
@@ -54,6 +58,7 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   MahoSidebarInteractiveTestBase();
   ~MahoSidebarInteractiveTestBase() override;
 
+  void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
 
