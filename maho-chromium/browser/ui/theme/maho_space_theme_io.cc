@@ -114,7 +114,7 @@ bool ValidateThemeValue(const base::Value& theme_value) {
   }
 
   const auto* gradient_colors = dict.FindList("gradientColors");
-  if (!gradient_colors) {
+  if (!gradient_colors || gradient_colors->empty()) {
     return false;
   }
 
