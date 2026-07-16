@@ -5,6 +5,8 @@
 
 #include <string>
 
+#include "base/component_export.h"
+
 class Profile;
 
 namespace maho {
@@ -15,10 +17,13 @@ inline constexpr char kMahoUpdateServerDefaultUrl[] = "https://update.maho.dev";
 inline constexpr char kMahoUpdateServerOverrideEnvVar[] =
     "MAHO_UPDATE_SERVER_OVERRIDE";
 
+COMPONENT_EXPORT(MAHO_UPDATES)
 std::string ResolveUpdateServerBaseUrl(const Profile* profile);
 
+COMPONENT_EXPORT(MAHO_UPDATES)
 bool IsAcceptableUpdateServerUrl(const std::string& url);
 
+COMPONENT_EXPORT(MAHO_UPDATES)
 std::string StripTrailingSlash(std::string url);
 
 }  // namespace updates

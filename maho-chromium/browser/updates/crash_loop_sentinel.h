@@ -5,12 +5,14 @@
 
 #include <string>
 
+#include "base/component_export.h"
+
 class PrefService;
 
 namespace maho {
 namespace updates {
 
-class CrashLoopSentinel {
+class COMPONENT_EXPORT(MAHO_UPDATES) CrashLoopSentinel {
  public:
   // Checks if the current version has crashed 3 or more times consecutively on startup.
   // Also increments the crash count and updates the sentinel in local_state.
