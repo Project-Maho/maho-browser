@@ -7,10 +7,6 @@
 #import <Sparkle/Sparkle.h>
 
 #include "base/logging.h"
-#include "chrome/browser/browser_process.h"
-#include "components/prefs/pref_service.h"
-#include "maho/browser/updates/maho_update_pref_names.h"
-#include "maho/browser/updates/rollout_bucket.h"
 
 // macOS Sparkle 2 integration.
 //
@@ -114,14 +110,7 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
     return [self.testFeedURL absoluteString];
   }
 
-  std::string install_id;
-  PrefService* local_state =
-      g_browser_process ? g_browser_process->local_state() : nullptr;
-  if (local_state) {
-    install_id = local_state->GetString(maho::prefs::kMahoUpdateInstallId);
-  }
-
-  int bucket = maho::updates::RolloutBucket::Compute(install_id);
+  int bucket = maho::MahoUpdateManager::GetInstance()->GetRolloutBucket();
   NSString* channel =
       self.channelName.length > 0 ? self.channelName : @"stable";
   const std::string& base_url =

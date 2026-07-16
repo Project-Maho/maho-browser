@@ -17,6 +17,7 @@
 #include "base/component_export.h"
 
 class Profile;
+class PrefService;
 
 namespace maho {
 
@@ -66,7 +67,10 @@ class COMPONENT_EXPORT(MAHO_UPDATES) MahoUpdateManager {
   static MahoUpdateManager* GetInstance();
 
   // Idempotent. Safe to call from PostProfileInit on every profile init.
-  void Initialize(::Profile* profile = nullptr);
+  // |local_state| is the browser-process local state (owned by the caller,
+  // i.e. g_browser_process->local_state()); passed in so this component does
+  // not reference the framework-level g_browser_process global directly.
+  void Initialize(::Profile* profile, PrefService* local_state);
 
   // |manual_check| surfaces user-visible UI on "no updates"; background
   // checks stay silent on that path.
@@ -90,6 +94,11 @@ class COMPONENT_EXPORT(MAHO_UPDATES) MahoUpdateManager {
   // Returns the resolved update server base URL with no trailing slash.
   // Cached during Initialize from env var > pref > compile-time default.
   const std::string& GetServerBaseUrl() const;
+
+  // Rollout bucket [0,100) derived from the install id during Initialize.
+  // Platform delegates read this instead of the framework local state so the
+  // updates component does not reference g_browser_process directly.
+  int GetRolloutBucket() const;
 
   // Internal state transition helpers. Called by delegates.
   void TransitionToState(UpdateState new_state);
@@ -126,6 +135,7 @@ class COMPONENT_EXPORT(MAHO_UPDATES) MahoUpdateManager {
   SEQUENCE_CHECKER(sequence_checker_);
   bool initialized_ = false;
   bool is_crash_loop_tripped_ = false;
+  int rollout_bucket_ = 0;
   bool is_disabled_ = false;
   bool simulate_mode_ = false;
   UpdateState state_ = UpdateState::kIdle;

@@ -2061,7 +2061,8 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(Profile* profile) 
 
   maho::MahoTabIdSessionHelper::GetForProfile(profile);
 
-  maho::MahoUpdateManager::GetInstance()->Initialize(profile);
+  maho::MahoUpdateManager::GetInstance()->Initialize(
+      profile, g_browser_process ? g_browser_process->local_state() : nullptr);
   maho::updates::MahoConfigManager::GetInstance()->Initialize(profile);
 
   MaybeLaunchMailHelper(profile);

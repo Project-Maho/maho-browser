@@ -93,9 +93,9 @@ TEST_F(MahoUpdateManagerTest, InitializeIsIdempotent_DelegateInitsExactlyOnce) {
   // SetDelegateForTesting itself runs Initialize() + SetChannel() once.
   EXPECT_EQ(delegate_ptr->init_count, 1);
 
-  manager->Initialize(nullptr);
-  manager->Initialize(nullptr);
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
+  manager->Initialize(nullptr, nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   // No further delegate Initialize() calls (manager early-returns; existing
   // delegate is preserved, no platform delegate is created).
@@ -108,7 +108,7 @@ TEST_F(MahoUpdateManagerTest, KillSwitchPrevents_Initialize) {
   local_state->SetBoolean(prefs::kMahoUpdateEnabled, false);
 
   auto* manager = MahoUpdateManager::GetInstance();
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, local_state);
 
   // Disabled: CheckForUpdates is a no-op, no delegate exists.
   manager->CheckForUpdates(true);
@@ -272,7 +272,7 @@ TEST_F(MahoUpdateManagerTest, SetChannel_ReResolvesBaseUrl) {
 
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(&profile);
+  manager->Initialize(&profile, nullptr);
 
   EXPECT_EQ(manager->GetServerBaseUrl(),
             std::string(updates::kMahoUpdateServerDefaultUrl));
@@ -291,7 +291,7 @@ TEST_F(MahoUpdateManagerTest, AutoCheckTimer_FiresAfterInitialDelay) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   EXPECT_EQ(delegate_ptr->check_count, 0);
   task_environment_.FastForwardBy(base::Milliseconds(15));
@@ -312,7 +312,7 @@ TEST_F(MahoUpdateManagerTest, AutoCheckTimer_StoppedWhenDisabled) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   task_environment_.FastForwardBy(base::Seconds(60));
   EXPECT_EQ(delegate_ptr->check_count, 0);
@@ -334,7 +334,7 @@ TEST_F(MahoUpdateManagerTest, AutoCheckTimer_StoppedOnCrashLoop) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   // Crash-loop tripped during Initialize → state == kError(kCrashLoop), and
   // the timer must NOT have started.
@@ -353,7 +353,7 @@ TEST_F(MahoUpdateManagerTest, SimulateSwitch_ForcesReadyToInstall) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   EXPECT_TRUE(manager->is_simulating_for_testing());
   EXPECT_EQ(manager->GetState(), UpdateState::kReadyToInstall);
@@ -375,7 +375,7 @@ TEST_F(MahoUpdateManagerTest, SimulateSwitch_ForcesErrorCrashLoop) {
   auto* manager = MahoUpdateManager::GetInstance();
   manager->SetDelegateForTesting(
       std::make_unique<MockPlatformUpdaterDelegate>());
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   EXPECT_TRUE(manager->is_simulating_for_testing());
   EXPECT_EQ(manager->GetState(), UpdateState::kError);
@@ -394,7 +394,7 @@ TEST_F(MahoUpdateManagerTest, SimulateSwitch_UnknownValueIsIgnored) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, nullptr);
 
   EXPECT_FALSE(manager->is_simulating_for_testing());
   EXPECT_EQ(manager->GetState(), UpdateState::kIdle);

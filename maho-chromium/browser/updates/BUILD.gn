@@ -79,7 +79,6 @@ component("maho_updates_lib") {
     ":maho_updates_prefs",
     ":maho_update_crypto_util",
     "//base",
-    "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
     "//components/prefs",
     "//components/version_info",

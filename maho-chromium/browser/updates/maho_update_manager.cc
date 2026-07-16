@@ -8,7 +8,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/uuid.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
@@ -124,7 +123,7 @@ MahoUpdateManager::~MahoUpdateManager() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-void MahoUpdateManager::Initialize(Profile* profile) {
+void MahoUpdateManager::Initialize(Profile* profile, PrefService* local_state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (initialized_) {
     return;
@@ -132,7 +131,6 @@ void MahoUpdateManager::Initialize(Profile* profile) {
   initialized_ = true;
   profile_ = profile;
 
-  PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
   std::string current_version(version_info::GetVersionNumber());
 
   // Kill-switch: when maho.update.enabled is false (default), the entire
@@ -159,6 +157,7 @@ void MahoUpdateManager::Initialize(Profile* profile) {
       local_state->SetString(prefs::kMahoUpdateInstallId, install_id);
     }
     int bucket = updates::RolloutBucket::Compute(install_id);
+    rollout_bucket_ = bucket;
     base::UmaHistogramExactLinear("Maho.Update.RolloutBucket", bucket, 101);
   }
 
@@ -175,9 +174,9 @@ void MahoUpdateManager::Initialize(Profile* profile) {
     // SAFETY: This task is posted to the current sequence (UI thread) via
     // GetCurrentDefault(), and Initialize() is guarded by
     // DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_) above. |local_state|
-    // is g_browser_process->local_state(), a BrowserProcess-lifetime singleton
-    // that is guaranteed to outlive any 60-second delayed task posted here at
-    // browser startup. No cross-thread hazard; same-sequence access only.
+    // is the caller-provided BrowserProcess-lifetime local state, guaranteed
+    // to outlive any 60-second delayed task posted here at browser startup.
+    // No cross-thread hazard; same-sequence access only.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&updates::CrashLoopSentinel::MarkStable,
@@ -320,6 +319,11 @@ UpdateError MahoUpdateManager::GetLastError() const {
 const std::string& MahoUpdateManager::GetServerBaseUrl() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return server_base_url_;
+}
+
+int MahoUpdateManager::GetRolloutBucket() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return rollout_bucket_;
 }
 
 void MahoUpdateManager::TransitionToState(UpdateState new_state) {
