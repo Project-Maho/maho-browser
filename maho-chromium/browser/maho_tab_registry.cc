@@ -70,13 +70,25 @@ bool IsRegistryEligibleBrowser(BrowserWindowInterface* browser) {
 // churn around the boundary) cannot repeatedly re-trigger it.
 constexpr int kManyTabsThreshold = 20;
 
-void MaybeFireManyTabsEvent(int tab_count) {
-  static bool armed = true;
+namespace {
+
+std::map<TabStripModel*, bool>& GetArmedMap() {
+  static base::NoDestructor<std::map<TabStripModel*, bool>> armed_map;
+  return *armed_map;
+}
+
+} // namespace
+
+void MaybeFireManyTabsEvent(TabStripModel* model, int tab_count) {
+  auto& armed_map = GetArmedMap();
+  auto it = armed_map.find(model);
+  bool armed = (it == armed_map.end()) ? true : it->second;
+
   if (tab_count >= kManyTabsThreshold) {
     if (!armed) {
       return;
     }
-    armed = false;
+    armed_map[model] = false;
     if (MahoCore* core = maho::GetCore()) {
       maho_routines_fire_event(
           core, base::StringPrintf("{\"kind\":\"on_many_tabs\",\"count\":%d}",
@@ -84,8 +96,12 @@ void MaybeFireManyTabsEvent(int tab_count) {
                     .c_str());
     }
   } else {
-    armed = true;
+    armed_map[model] = true;
   }
+}
+
+void CleanUpManyTabsEventState(TabStripModel* model) {
+  GetArmedMap().erase(model);
 }
 
 void DispatchShellEventLocal(const std::string& kind, base::DictValue event) {
@@ -388,6 +404,7 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
   ~StripObserver() override {
     if (model_) {
       model_->RemoveObserver(this);
+      CleanUpManyTabsEventState(model_);
     }
     nav_observers_.clear();
   }
@@ -415,7 +432,7 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         DispatchCreateTabForContents(browser_, inserted.contents);
         AttachNavObserver(inserted.contents);
       }
-      MaybeFireManyTabsEvent(tab_strip_model->count());
+      MaybeFireManyTabsEvent(tab_strip_model, tab_strip_model->count());
     } else if (change.type() == TabStripModelChange::kRemoved) {
       // During app shutdown, Chromium destroys every WebContents which fires
       // kRemoved for every tab. We must NOT dispatch close_tab in that path —
@@ -459,7 +476,7 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         }
         DispatchCloseTabForContents(removed.contents);
       }
-      MaybeFireManyTabsEvent(tab_strip_model->count());
+      MaybeFireManyTabsEvent(tab_strip_model, tab_strip_model->count());
     } else if (change.type() == TabStripModelChange::kReplaced) {
       const auto* replace = change.GetReplace();
       if (!replace) {

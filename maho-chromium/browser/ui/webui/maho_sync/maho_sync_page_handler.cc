@@ -175,13 +175,29 @@ maho_sync::mojom::SyncStatusPtr MahoSyncPageHandler::ConfigureSyncEncryptionOnPo
   if (!core) {
     auto status = maho_sync::mojom::SyncStatus::New();
     status->is_syncing = false;
-    status->status_label = "idle";
+    status->status_label = "error";
+    status->error_message = "Core not available";
     return status;
   }
   char* result = maho_core_configure_sync_encryption(
       core, relay_url.c_str(), recovery_phrase.c_str());
   if (result) {
+    std::string json(result);
     maho_string_free(result);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+    if (parsed && parsed->is_dict()) {
+      const auto& dict = parsed->GetDict();
+      std::optional<bool> success = dict.FindBool("success");
+      if (success && !*success) {
+        auto status = maho_sync::mojom::SyncStatus::New();
+        status->is_syncing = false;
+        status->status_label = "error";
+        const std::string* error = dict.FindString("error");
+        status->error_message = error ? *error : "Unknown sync configuration error";
+        return status;
+      }
+    }
   }
   return BuildSyncStatusOnPool();
 }
@@ -194,13 +210,30 @@ maho_sync::mojom::SyncStatusPtr MahoSyncPageHandler::JoinSyncOnPool(
   if (!core) {
     auto status = maho_sync::mojom::SyncStatus::New();
     status->is_syncing = false;
-    status->status_label = "idle";
+    status->status_label = "error";
+    status->error_message = "Core not available";
     status->room_id = room_id;
     return status;
   }
   char* result = maho_core_join_sync(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
   if (result) {
+    std::string json(result);
     maho_string_free(result);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+    if (parsed && parsed->is_dict()) {
+      const auto& dict = parsed->GetDict();
+      std::optional<bool> success = dict.FindBool("success");
+      if (success && !*success) {
+        auto status = maho_sync::mojom::SyncStatus::New();
+        status->is_syncing = false;
+        status->status_label = "error";
+        const std::string* error = dict.FindString("error");
+        status->error_message = error ? *error : "Unknown sync join error";
+        status->room_id = room_id;
+        return status;
+      }
+    }
   }
   auto status = BuildSyncStatusOnPool();
   if (status && status->room_id.empty()) {

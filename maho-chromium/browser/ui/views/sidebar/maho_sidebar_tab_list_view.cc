@@ -574,6 +574,16 @@ class SidebarSeparatorRow : public views::View {
   ~SidebarSeparatorRow() override = default;
 };
 
+}  // namespace
+
+namespace maho {
+
+// Defined in namespace maho (not the anonymous namespace) so it is the same
+// type as the `friend class SidebarSectionDropTarget;` declaration in
+// MahoSidebarTabListView. Under clang-cl's MSVC compatibility mode that friend
+// declaration is visible to ordinary name lookup, so an anonymous-namespace
+// definition would leave the maho:: name incomplete at the static_cast sites
+// below and fail to compile on Windows.
 class SidebarSectionDropTarget : public views::View {
  public:
   explicit SidebarSectionDropTarget(
@@ -699,6 +709,10 @@ class SidebarSectionDropTarget : public views::View {
   bool populated_ = false;
   base::RepeatingCallback<void(const std::string&)> on_favorites_drop_accepted_;
 };
+
+}  // namespace maho
+
+namespace {
 
 bool IsSidebarEligibleUrl(const GURL& url) {
   if (!url.is_valid() || url.is_empty()) {

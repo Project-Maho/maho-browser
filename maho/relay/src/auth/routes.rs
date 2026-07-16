@@ -25,6 +25,9 @@ const LOGIN_LOCK_SECS: i64 = 15 * 60;
 /// an early length-mismatch is acceptable.
 fn service_token_matches(provided: &str, expected: &str) -> bool {
     use subtle::ConstantTimeEq;
+    if expected.trim().is_empty() || provided.trim().is_empty() {
+        return false;
+    }
     provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1
 }
 
@@ -811,6 +814,23 @@ impl From<Session> for PublicSession {
 #[cfg(test)]
 mod tests {
     use super::should_expose_dev_token;
+    use super::service_token_matches;
+
+    #[test]
+    fn service_token_matches_validation() {
+        // Mismatches and empty/whitespace checks
+        assert!(!service_token_matches("provided", ""));
+        assert!(!service_token_matches("provided", "   "));
+        assert!(!service_token_matches("", "expected"));
+        assert!(!service_token_matches("   ", "expected"));
+        assert!(!service_token_matches("", ""));
+        assert!(!service_token_matches("   ", "   "));
+
+        // Match case
+        assert!(service_token_matches("token123", "token123"));
+        // Mismatch case
+        assert!(!service_token_matches("token123", "token456"));
+    }
 
     #[test]
     fn dev_token_hidden_when_env_unset() {

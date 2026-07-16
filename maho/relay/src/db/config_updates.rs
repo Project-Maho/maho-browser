@@ -22,13 +22,14 @@ pub async fn find_latest_config_update(
     let stmt = db.prepare(
         "SELECT version, payload, signature, rollout_threshold, channel \
          FROM config_updates \
-         WHERE channel = ?1 \
-         ORDER BY version DESC",
+         WHERE channel = ?1 AND ?2 < rollout_threshold \
+         ORDER BY version DESC \
+         LIMIT 1",
     );
-    let stmt = stmt.bind(&[js(&channel)?])?;
+    let stmt = stmt.bind(&[js(&channel)?, js(&bucket)?])?;
     let rows = stmt.all().await?;
-    let candidates: Vec<ConfigUpdate> = rows.results()?;
-    Ok(select_latest_config_update(&candidates, channel, bucket).cloned())
+    let mut results: Vec<ConfigUpdate> = rows.results()?;
+    Ok(results.pop())
 }
 
 pub async fn insert_config_update(db: &D1Database, update: &ConfigUpdate) -> Result<()> {
@@ -48,6 +49,7 @@ pub async fn insert_config_update(db: &D1Database, update: &ConfigUpdate) -> Res
     Ok(())
 }
 
+#[cfg(test)]
 fn select_latest_config_update<'a>(
     candidates: &'a [ConfigUpdate],
     channel: &str,
@@ -115,5 +117,16 @@ mod tests {
         let selected = super::select_latest_config_update(&candidates, "stable", 5);
 
         assert_eq!(selected.map(|config| config.version), Some(1));
+    }
+
+    #[test]
+    fn select_latest_config_update_fails_closed_for_sentinel_bucket() {
+        let candidates = vec![
+            update(1, 100, "stable"), // threshold is 100, but sentinel 100 is not < 100
+            update(2, 50, "stable"),
+        ];
+
+        let selected = super::select_latest_config_update(&candidates, "stable", 100);
+        assert!(selected.is_none());
     }
 }

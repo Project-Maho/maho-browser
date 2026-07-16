@@ -46,8 +46,11 @@ extension MahoBridge {
 
     func joinSync(recoveryPhrase: String) -> String? {
         withCore { ptr in
-            recoveryPhrase.withCString { cPhrase in
-                FFIString.consume(maho_core_join_sync(ptr, cPhrase))
+            let serverUrl = RelayAPIClient.currentBaseURLString()
+            return serverUrl.withCString { cUrl in
+                recoveryPhrase.withCString { cPhrase in
+                    FFIString.consume(maho_core_join_sync(ptr, cUrl, cPhrase))
+                }
             }
         } ?? nil
     }

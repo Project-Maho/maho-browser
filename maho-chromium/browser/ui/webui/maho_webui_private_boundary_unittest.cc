@@ -52,10 +52,14 @@ TEST_F(MahoWebUiPrivateBoundaryTest, RegisteredSurfaceInventoryMatchesBuildFlag)
     }
   }
 
+  // Counted trusted surfaces: maho-ai, maho-live-folders, maho-mail,
+  // maho-routines, maho-settings, maho-space-config, maho-space-create,
+  // maho-sync, maho-welcome (9), plus maho-test when the test WebUI build
+  // flag is set, plus the chrome-untrusted maho-boost dummy added in SetUp.
 #if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)
-  EXPECT_EQ(maho_count, 12);
-#else
   EXPECT_EQ(maho_count, 11);
+#else
+  EXPECT_EQ(maho_count, 10);
 #endif
 }
 

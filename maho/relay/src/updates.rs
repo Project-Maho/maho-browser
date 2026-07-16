@@ -8,6 +8,22 @@ const CONFIG_UPDATE_ADMIN_TOKEN_HEADER: &str = "X-Config-Update-Admin-Token";
 const CONFIG_UPDATE_ADMIN_TOKEN_SECRET: &str = "CONFIG_UPDATE_ADMIN_TOKEN";
 const CONFIG_UPDATE_PUBLIC_KEY_VAR: &str = "CONFIG_UPDATE_PUBLIC_KEY";
 
+/// Fail-closed rollout bucket sentinel: strictly greater than any valid
+/// `rollout_threshold` (a 0..=100 percentage), so it never satisfies
+/// `bucket < rollout_threshold`. Clients compute buckets in `0..=99` (see
+/// `maho-chromium/browser/updates/rollout_bucket.h`).
+const ROLLOUT_BUCKET_SENTINEL: i32 = 100;
+
+/// Fails closed to [`ROLLOUT_BUCKET_SENTINEL`] for any `b` outside `0..=99`
+/// (missing, unparseable, negative, or `>= 100`), preventing a crafted
+/// request such as `b=-1` from always receiving the canary configuration.
+fn parse_rollout_bucket(raw: Option<&str>) -> i32 {
+    match raw.and_then(|s| s.parse::<i32>().ok()) {
+        Some(bucket) if (0..ROLLOUT_BUCKET_SENTINEL).contains(&bucket) => bucket,
+        _ => ROLLOUT_BUCKET_SENTINEL,
+    }
+}
+
 pub async fn get_config(req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let url = req.url()?;
@@ -17,10 +33,7 @@ pub async fn get_config(req: Request, env: Env) -> Result<Response> {
         .get("channel")
         .cloned()
         .unwrap_or_else(|| "stable".to_string());
-    let bucket: i32 = query
-        .get("b")
-        .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(0);
+    let bucket = parse_rollout_bucket(query.get("b").map(String::as_str));
 
     match db::find_latest_config_update(&db, &channel, bucket).await? {
         Some(config) => Ok(Response::from_json(&config)?),
@@ -149,5 +162,22 @@ mod tests {
             result,
             Err(AppError::BadRequest(message)) if message == "bad signature"
         ));
+    }
+
+    #[test]
+    fn parse_rollout_bucket_accepts_valid_range() {
+        assert_eq!(parse_rollout_bucket(Some("0")), 0);
+        assert_eq!(parse_rollout_bucket(Some("50")), 50);
+        assert_eq!(parse_rollout_bucket(Some("99")), 99);
+    }
+
+    #[test]
+    fn parse_rollout_bucket_fails_closed_for_invalid_input() {
+        assert_eq!(parse_rollout_bucket(None), ROLLOUT_BUCKET_SENTINEL);
+        assert_eq!(parse_rollout_bucket(Some("")), ROLLOUT_BUCKET_SENTINEL);
+        assert_eq!(parse_rollout_bucket(Some("abc")), ROLLOUT_BUCKET_SENTINEL);
+        assert_eq!(parse_rollout_bucket(Some("-1")), ROLLOUT_BUCKET_SENTINEL);
+        assert_eq!(parse_rollout_bucket(Some("100")), ROLLOUT_BUCKET_SENTINEL);
+        assert_eq!(parse_rollout_bucket(Some("9999")), ROLLOUT_BUCKET_SENTINEL);
     }
 }
