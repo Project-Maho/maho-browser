@@ -51,6 +51,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/focus/focus_manager.h"
@@ -182,8 +183,11 @@ void MahoSidebarView::UpdateSidebarBorderForOverlay() {
   if (IsInLibraryMode()) {
     SetBorder(nullptr);
   } else {
-    SetBorder(views::CreateRoundedRectBorder(
-        1, sidebar_layout::kRailCornerRadiusDp, ui::kColorSysSurfaceVariant));
+    // Left corners rounded, right edge square so the sidebar sits flush against
+    // the content pane with no seam gap. CreateRoundedRectBorder only supports a
+    // uniform radius, so drop the visible outline (keep the 1dp inset to
+    // preserve layout) and let the per-corner background define the shape.
+    SetBorder(views::CreateEmptyBorder(1));
   }
 }
 
@@ -195,7 +199,9 @@ void MahoSidebarView::OnThemeChanged() {
   const float texture = theme_data ? theme_data->texture : 0.0f;
 
   SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorSidebarBackground, sidebar_layout::kRailCornerRadiusDp));
+      kMahoColorSidebarBackground,
+      gfx::RoundedCornersF(sidebar_layout::kRailCornerRadiusDp, 0, 0,
+                           sidebar_layout::kRailCornerRadiusDp)));
   UpdateSidebarBorderForOverlay();
   if (library_divider_) {
     library_divider_->SetBackground(
@@ -927,6 +933,7 @@ void MahoSidebarView::RefreshPrivateSidebar() {
 }
 
 void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
+  LOG(INFO) << "OnBackgroundStateReady start";
   auto model = state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result));
   ApplyViewState(model);
 
@@ -1499,7 +1506,9 @@ void MahoSidebarView::SetPrivateAppearance(
   // R-11: Presentation-only. No profile/pref reads.
   // Sets private-window background and stores identity icon for top-bar.
   SetBackground(views::CreateRoundedRectBackground(
-      surface_color_id, sidebar_layout::kRailCornerRadiusDp));
+      surface_color_id,
+      gfx::RoundedCornersF(sidebar_layout::kRailCornerRadiusDp, 0, 0,
+                           sidebar_layout::kRailCornerRadiusDp)));
   if (top_bar_view_) {
     top_bar_view_->SetPrivateIdentityIcon(identity_icon, text_color_id);
   }

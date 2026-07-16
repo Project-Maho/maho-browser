@@ -26,6 +26,8 @@
 
 namespace {
 
+constexpr SkColor kWindowBackgroundDark = SkColorSetARGB(255, 16, 15, 21);
+constexpr SkColor kWindowBackgroundLight = SkColorSetARGB(255, 240, 240, 245);
 constexpr SkColor kTitlebarGlassDark = SkColorSetARGB(209, 34, 31, 50);
 constexpr SkColor kTitlebarGlassLight = SkColorSetARGB(235, 237, 238, 247);
 constexpr SkColor kSidebarBackgroundDark = SkColorSetARGB(255, 39, 35, 54);
@@ -44,8 +46,8 @@ constexpr SkColor kContentGradientBottomLight = SkColorSetARGB(255, 237, 239, 24
 
 void AddWindowAndSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorWindowBackground] = {dark_mode
-      ? SkColorSetARGB(255, 16, 15, 21)
-      : SkColorSetARGB(255, 240, 240, 245)};
+      ? kWindowBackgroundDark
+      : kWindowBackgroundLight};
   // Translucent by default (no active Space theme) so the kGlassFrame vibrancy
   // shows through. The tint mixer below raises alpha per the opacity slider
   // when a theme is active.
@@ -572,6 +574,8 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
                                                 : kContentGradientTopLight;
     const SkColor base_gradient_bottom = dark_mode ? kContentGradientBottomDark
                                                    : kContentGradientBottomLight;
+    const SkColor base_window = dark_mode ? kWindowBackgroundDark
+                                          : kWindowBackgroundLight;
 
     const float opacity_bias = 0.65f + theme_data->opacity * 0.35f;
     const float texture_bias = 0.04f + theme_data->texture * 0.08f;
@@ -594,6 +598,14 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
     tint_mixer[kMahoColorTitlebarGlass] = {maho_theme::BlendColors(
         base_titlebar, primary_tint,
         GetTitlebarBlendForKind(theme_data->kind) * opacity_bias)};
+    // Frame background: the opaque backdrop that shows through the rounded
+    // gaps/corners around the sidebar and content. Tinted with the same
+    // primary hue (content blend weight) so those gaps match the theme instead
+    // of Chromium's default gray frame. Stays fully opaque; the kGlassFrame
+    // paint path applies its own reduced alpha over the desktop blur.
+    tint_mixer[kMahoColorWindowBackground] = {maho_theme::BlendColors(
+        base_window, primary_tint,
+        GetContentBlendForKind(theme_data->kind) * opacity_bias)};
     const SkColor sidebar_blended = maho_theme::BlendColors(
         base_sidebar, primary_tint,
         GetSidebarBlendForKind(theme_data->kind) * opacity_bias);

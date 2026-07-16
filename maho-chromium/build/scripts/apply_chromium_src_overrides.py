@@ -3123,26 +3123,74 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/browser_frame_view_mac.mm": [
         Replacement(
+            old="#include \"maho/browser/ui/views/sidebar/maho_sidebar_container_view.h\"\n",
+            new=(
+                "#include \"maho/browser/ui/theme/maho_color_id.h\"\n"
+                "#include \"maho/browser/ui/views/sidebar/maho_sidebar_container_view.h\"\n"
+            ),
+            description=(
+                "Maho: include maho_color_id.h so OnPaint can read the "
+                "Space-tinted kMahoColorWindowBackground"
+            ),
+            guard="maho/browser/ui/theme/maho_color_id.h",
+        ),
+        Replacement(
+            old="#include \"ui/base/ui_base_features.h\"\n",
+            new=(
+                "#include \"ui/base/ui_base_features.h\"\n"
+                "#include \"ui/color/color_provider.h\"\n"
+            ),
+            description=(
+                "Maho: include color_provider.h so OnPaint can resolve "
+                "kMahoColorWindowBackground via the ColorProvider"
+            ),
+            guard="ui/color/color_provider.h",
+        ),
+        Replacement(
             old=(
+                "  SkColor frame_color = GetFrameColor(BrowserFrameActiveState::kUseCurrent);\n"
                 "  if (features::IsGlassFrameEnabled()) {\n"
                 "    const SkAlpha frame_alpha = color_utils::IsDark(frame_color)\n"
                 "                                    ? kBrowserFrameAlphaDark\n"
                 "                                    : kBrowserFrameAlphaLight;\n"
                 "    canvas->DrawColor(SkColorSetA(frame_color, frame_alpha));\n"
                 "  } else {\n"
+                "    canvas->DrawColor(frame_color);\n"
             ),
             new=(
+                "  SkColor frame_color = GetFrameColor(BrowserFrameActiveState::kUseCurrent);\n"
+                "  const ui::ColorProvider* const color_provider = GetColorProvider();\n"
                 "  if (features::IsGlassFrameEnabled()) {\n"
-                "    // Maho: paint no frame wash under kGlassFrame so the whole\n"
-                "    // window (incl. the sidebar) reveals the NSVisualEffectView\n"
-                "    // desktop blur. The upstream ~71%-opaque wash would hide it.\n"
+                "    // Maho: under kGlassFrame the window is translucent and the\n"
+                "    // NSVisualEffectView desktop blur shows through. Paint only a light\n"
+                "    // Space-tinted wash (kMahoColorWindowBackground already carries the\n"
+                "    // active theme hue) so the frame gaps around the sidebar/content\n"
+                "    // pick up the theme color while the blur stays visible. A fully\n"
+                "    // opaque fill (the upstream ~71% wash) would hide it.\n"
+                "    if (color_provider) {\n"
+                "      // Subtle alpha mirrors the sidebar's translucent glass base\n"
+                "      // (kSidebarMinAlpha) so the frame gaps and the sidebar read as one\n"
+                "      // continuous tinted-glass surface at zero theme opacity.\n"
+                "      constexpr SkAlpha kGlassFrameTintAlpha = 24;\n"
+                "      const SkColor window_bg =\n"
+                "          color_provider->GetColor(kMahoColorWindowBackground);\n"
+                "      canvas->DrawColor(SkColorSetA(window_bg, kGlassFrameTintAlpha));\n"
+                "    }\n"
                 "  } else {\n"
+                "    // Maho: fill the frame with the Space-tinted window background so\n"
+                "    // the rounded-corner gaps around the sidebar/content match the\n"
+                "    // active theme instead of Chromium's default gray\n"
+                "    // (kColorFrameActive).\n"
+                "    if (color_provider) {\n"
+                "      frame_color = color_provider->GetColor(kMahoColorWindowBackground);\n"
+                "    }\n"
+                "    canvas->DrawColor(frame_color);\n"
             ),
             description=(
-                "Maho: drop the kGlassFrame frame wash entirely so the whole "
-                "window reveals the NSVisualEffectView desktop blur"
+                "Maho: tint the window frame background with the active Space "
+                "theme in both glass and non-glass modes, replacing the gray wash"
             ),
-            guard="paint no frame wash under kGlassFrame",
+            guard="kGlassFrameTintAlpha",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": [
