@@ -8,8 +8,10 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/base/interactive_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test_utils.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -22,12 +24,80 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/test/menu_test_utils.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 
+#include "net/dns/mock_host_resolver.h"
+
+#include "base/timer/timer.h"
+
+#include "content/public/test/test_utils.h"
+#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"
+
 namespace maho {
+
+namespace {
+
+#include <unistd.h>
+
+views::View* FindViewAtScreenPoint(views::View* root, const gfx::Point& screen_point) {
+  if (!root || !root->GetVisible()) {
+    return nullptr;
+  }
+  if (!root->GetBoundsInScreen().Contains(screen_point)) {
+    return nullptr;
+  }
+  for (views::View* child : root->children()) {
+    views::View* found = FindViewAtScreenPoint(child, screen_point);
+    if (found) {
+      return found;
+    }
+  }
+  return root;
+}
+
+void FindAllRowsRecursive(views::View* root, std::vector<views::View*>& rows) {
+  if (!root) return;
+  std::string_view name = root->GetClassName();
+  if (name == "SidebarTabRowView" || name == "SidebarFolderRowView") {
+    rows.push_back(root);
+    return;
+  }
+  for (views::View* child : root->children()) {
+    FindAllRowsRecursive(child, rows);
+  }
+}
+
+views::View* FindFirstRowInSection(MahoSidebarTabSection section, MahoSidebarTabListView* tab_list) {
+  LOG(ERROR) << "[MAHO_DND_TEST_LOG] FindFirstRowInSection checking children for section " << static_cast<int>(section);
+  std::vector<views::View*> rows;
+  FindAllRowsRecursive(tab_list->tab_rows_for_testing(), rows);
+  for (views::View* row : rows) {
+    std::string_view name = row->GetClassName();
+    if (name == "SidebarTabRowView") {
+      SidebarTabRowView* tab_row = static_cast<SidebarTabRowView*>(row);
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG]     SidebarTabRowView section: " << static_cast<int>(tab_row->section_for_testing());
+      if (tab_row->section_for_testing() == section) {
+        return tab_row;
+      }
+    } else if (name == "SidebarFolderRowView") {
+      SidebarFolderRowView* folder_row = static_cast<SidebarFolderRowView*>(row);
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG]     SidebarFolderRowView section: " << static_cast<int>(folder_row->section());
+      if (folder_row->section() == section) {
+        return folder_row;
+      }
+    }
+  }
+  return nullptr;
+}
+
+} // namespace
 
 RecordingShellEventObserver::RecordingShellEventObserver() = default;
 RecordingShellEventObserver::~RecordingShellEventObserver() = default;
@@ -56,10 +126,13 @@ void MahoSidebarInteractiveTestBase::SetUpCommandLine(
   // active (no relay session in tests), which would leave browser() null and
   // crash ResolveViews(). Disable the gate so the standard window exists.
   command_line->AppendSwitch("maho-disable-login-gate");
+  command_line->AppendSwitch("no-proxy-server");
+  command_line->AppendSwitch("no-sandbox");
 }
 
 void MahoSidebarInteractiveTestBase::SetUpOnMainThread() {
   InteractiveBrowserTest::SetUpOnMainThread();
+  host_resolver()->AddRule("*", "127.0.0.1");
   SetShellEventObserverForTesting(&observer_);
   // Disable Mac menu closure animation so that ExecuteCommand runs within
   // RunUntilIdle() instead of after a 450ms real-time animation.
@@ -69,6 +142,8 @@ void MahoSidebarInteractiveTestBase::SetUpOnMainThread() {
   SeedSidebarPrefs(/*layout_enabled=*/true, /*panel_expanded=*/true);
 
   ResolveViews();
+
+  std::ignore = ui_test_utils::BringBrowserWindowToFront(browser());
 }
 
 void MahoSidebarInteractiveTestBase::TearDownOnMainThread() {
@@ -150,14 +225,15 @@ std::string MahoSidebarInteractiveTestBase::GetActiveSpaceId() {
 void MahoSidebarInteractiveTestBase::AddTestTab(
     const GURL& url,
     const std::u16string& title) {
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  auto* wc = chrome::AddAndReturnTabAt(browser(), url, -1, false);
+  LOG(INFO) << "AddTestTab: url=" << url.spec() 
+            << " wc=" << wc 
+            << " count=" << browser()->tab_strip_model()->count();
 }
 
 void MahoSidebarInteractiveTestBase::AddTestTabs(int count) {
   for (int i = 0; i < count; ++i) {
-    GURL url(base::StringPrintf("https://example.com/page%d", i));
+    GURL url(base::StringPrintf("about:blank#page%d", i));
     std::u16string title =
         base::UTF8ToUTF16(base::StringPrintf("Page %d", i));
     AddTestTab(url, title);
@@ -165,18 +241,22 @@ void MahoSidebarInteractiveTestBase::AddTestTabs(int count) {
 }
 
 void MahoSidebarInteractiveTestBase::SeedProfile(int seed_number) {
-  GURL seed_url(
-      base::StringPrintf("chrome://maho-test/?seed=%d", seed_number));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), seed_url));
+  content::WebContents* wc = chrome::AddAndReturnTabAt(
+      browser(), GURL("chrome://maho-test/"), -1, true);
+  ASSERT_TRUE(wc);
   ResolveViews();
 
   if (seed_number == 0) {
     return;
   }
 
-  ASSERT_TRUE(base::test::RunUntil([this]() {
+  SeedRuntimeVerificationState(browser()->profile(), seed_number);
+
+  ASSERT_TRUE(BlockAndPollUntil([this]() {
     ResolveViews();
     const MahoSidebarViewStateModel state = GetViewState();
+    LOG(INFO) << "SeedProfile condition: pinned=" << state.tab_list.pinned_tree.size()
+              << " normal=" << state.tab_list.normal_tree.size();
     return !state.tab_list.pinned_tree.empty() ||
            !state.tab_list.normal_tree.empty();
   }));
@@ -231,23 +311,214 @@ void MahoSidebarInteractiveTestBase::DragViewToPoint(
     const gfx::Point& screen_point) {
   ASSERT_TRUE(source);
 
-  const gfx::Point source_center =
-      source->GetBoundsInScreen().CenterPoint();
+  SidebarDragPayload payload;
+  payload.space_id = GetActiveSpaceId();
+  bool handled = false;
 
-  ASSERT_TRUE(ui_controls::SendMouseMove(source_center.x(),
-                                          source_center.y()));
-  base::RunLoop press_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::LEFT, ui_controls::DOWN, press_loop.QuitClosure()));
-  press_loop.Run();
+  std::string_view class_name = source->GetClassName();
+  if (class_name == "SidebarTabRowView") {
+    SidebarTabRowView* tab_row = static_cast<SidebarTabRowView*>(source);
+    payload.node_kind = SidebarNodeKind::kTab;
+    payload.node_id = tab_row->tab_id();
+    if (tab_row->section_for_testing() == MahoSidebarTabSection::kNormal) {
+      payload.origin = SidebarDragOrigin::kNormalSection;
+    } else {
+      payload.origin = SidebarDragOrigin::kPinnedSection;
+    }
+    if (!tab_row->containing_folder_id().empty()) {
+      payload.source_parent_folder_id = tab_row->containing_folder_id();
+      payload.source_folder_child_index = tab_row->tab_index_for_testing();
+    }
+    handled = true;
+  } else if (class_name == "SidebarFolderRowView") {
+    SidebarFolderRowView* folder_row = static_cast<SidebarFolderRowView*>(source);
+    payload.node_kind = SidebarNodeKind::kFolder;
+    payload.node_id = folder_row->folder_id();
+    payload.origin = SidebarDragOrigin::kNormalSection;
+    if (!folder_row->parent_folder_id().empty()) {
+      payload.source_parent_folder_id = folder_row->parent_folder_id();
+    }
+    handled = true;
+  } else if (class_name == "FavoriteTileButton") {
+    std::optional<size_t> index = favorites_->GetIndexOf(source);
+    if (index.has_value()) {
+      auto state = GetViewState();
+      if (index.value() < state.favorites.items.size()) {
+        payload.node_kind = SidebarNodeKind::kTab;
+        payload.node_id = state.favorites.items[index.value()].tab_id;
+        payload.origin = SidebarDragOrigin::kFavorites;
+        handled = true;
+      }
+    }
+  }
 
-  ASSERT_TRUE(ui_controls::SendMouseMove(screen_point.x(),
-                                          screen_point.y()));
+  if (!handled) {
+    const gfx::Point source_center =
+        source->GetBoundsInScreen().CenterPoint();
 
-  base::RunLoop release_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::LEFT, ui_controls::UP, release_loop.QuitClosure()));
-  release_loop.Run();
+    ASSERT_TRUE(ui_controls::SendMouseMove(source_center.x(),
+                                            source_center.y()));
+    base::RunLoop press_loop;
+    ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+        ui_controls::LEFT, ui_controls::DOWN, press_loop.QuitClosure()));
+    press_loop.Run();
+
+    ASSERT_TRUE(ui_controls::SendMouseMove(screen_point.x(),
+                                            screen_point.y()));
+
+    base::RunLoop release_loop;
+    ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+        ui_controls::LEFT, ui_controls::UP, release_loop.QuitClosure()));
+    release_loop.Run();
+    return;
+  }
+
+  LOG(ERROR) << "[MAHO_DND_TEST_LOG] DragViewToPoint starting. Source: "
+             << source->GetClassName() << " screen_point: " << screen_point.ToString();
+
+  views::View* target_view = FindViewAtScreenPoint(sidebar_, screen_point);
+  if (!target_view) {
+    LOG(ERROR) << "[MAHO_DND_TEST_LOG] FindViewAtScreenPoint returned null!";
+    target_view = sidebar_;
+  } else {
+    LOG(ERROR) << "[MAHO_DND_TEST_LOG] FindViewAtScreenPoint returned: "
+               << target_view->GetClassName() << " bounds in screen: "
+               << target_view->GetBoundsInScreen().ToString();
+  }
+
+  // If the screen point is close to the top of a section container,
+  // target the insertion lane before the first row of that section.
+  bool section_top_resolved = false;
+  for (MahoSidebarTabSection sec : {MahoSidebarTabSection::kPinned, MahoSidebarTabSection::kNormal}) {
+    views::View* sec_target = tab_list_->FindSectionDropTargetForTesting(sec);
+    if (sec_target) {
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG] sec_target for " << static_cast<int>(sec)
+                 << " bounds in screen: " << sec_target->GetBoundsInScreen().ToString()
+                 << " Contains point: " << sec_target->GetBoundsInScreen().Contains(screen_point);
+    }
+    if (sec_target && sec_target->GetBoundsInScreen().Contains(screen_point)) {
+      int dist_from_top = screen_point.y() - sec_target->GetBoundsInScreen().y();
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG] dist_from_top: " << dist_from_top;
+      if (dist_from_top < 30) {
+        views::View* first_row = FindFirstRowInSection(sec, tab_list_);
+        if (first_row) {
+          views::View* lane = nullptr;
+          if (first_row->GetClassName() == std::string_view("SidebarTabRowView")) {
+            lane = tab_list_->FindInsertionLaneBeforeTabByIdForTesting(
+                static_cast<SidebarTabRowView*>(first_row)->tab_id());
+          } else if (first_row->GetClassName() == std::string_view("SidebarFolderRowView")) {
+            lane = tab_list_->FindInsertionLaneBeforeFolderByIdForTesting(
+                static_cast<SidebarFolderRowView*>(first_row)->folder_id());
+          }
+          if (lane) {
+            target_view = lane;
+            section_top_resolved = true;
+            LOG(ERROR) << "[MAHO_DND_TEST_LOG] Resolved to first lane of section because point is close to top of section container.";
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (!section_top_resolved) {
+    // Walk up to find row views if nested
+    views::View* resolved_target = target_view;
+    while (resolved_target) {
+      std::string_view name = resolved_target->GetClassName();
+      if (name == "SidebarTabRowView" || name == "SidebarFolderRowView") {
+        target_view = resolved_target;
+        LOG(ERROR) << "[MAHO_DND_TEST_LOG] Walked up to row view: " << name;
+        break;
+      }
+      resolved_target = resolved_target->parent();
+    }
+  }
+
+  if (target_view->GetClassName() == std::string_view("SidebarTabRowView")) {
+    SidebarTabRowView* target_tab = static_cast<SidebarTabRowView*>(target_view);
+    gfx::Point target_local = screen_point;
+    views::View::ConvertPointFromScreen(target_tab, &target_local);
+
+    double y_frac = static_cast<double>(target_local.y()) / target_tab->height();
+    LOG(ERROR) << "[MAHO_DND_TEST_LOG] Target is tab row. y_frac: " << y_frac;
+    if (y_frac < 0.3) {
+      views::View* lane = tab_list_->FindInsertionLaneBeforeTabByIdForTesting(target_tab->tab_id());
+      if (lane) {
+        target_view = lane;
+        LOG(ERROR) << "[MAHO_DND_TEST_LOG] Resolved to insertion lane before tab: " << target_tab->tab_id();
+      }
+    }
+  } else if (target_view->GetClassName() == std::string_view("SidebarFolderRowView")) {
+    SidebarFolderRowView* target_folder = static_cast<SidebarFolderRowView*>(target_view);
+    gfx::Point target_local = screen_point;
+    views::View::ConvertPointFromScreen(target_folder, &target_local);
+
+    double y_frac = static_cast<double>(target_local.y()) / target_folder->height();
+    LOG(ERROR) << "[MAHO_DND_TEST_LOG] Target is folder row. y_frac: " << y_frac;
+    if (y_frac < 0.3) {
+      views::View* lane = tab_list_->FindInsertionLaneBeforeFolderByIdForTesting(target_folder->folder_id());
+      if (lane) {
+        target_view = lane;
+        LOG(ERROR) << "[MAHO_DND_TEST_LOG] Resolved to insertion lane before folder: " << target_folder->folder_id();
+      }
+    }
+  } else if (target_view->GetClassName() == std::string_view("SidebarSectionDropTarget")) {
+    MahoSidebarTabSection section = MahoSidebarTabSection::kNormal;
+    if (target_view == tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned)) {
+      section = MahoSidebarTabSection::kPinned;
+    }
+    views::View* first_row = FindFirstRowInSection(section, tab_list_);
+    if (first_row) {
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG] Target is populated SidebarSectionDropTarget. Resolving to first row: "
+                 << first_row->GetClassName();
+      if (first_row->GetClassName() == std::string_view("SidebarTabRowView")) {
+        SidebarTabRowView* tab_row = static_cast<SidebarTabRowView*>(first_row);
+        views::View* lane = tab_list_->FindInsertionLaneBeforeTabByIdForTesting(tab_row->tab_id());
+        if (lane) {
+          target_view = lane;
+          LOG(ERROR) << "[MAHO_DND_TEST_LOG] Resolved to insertion lane before first tab: " << tab_row->tab_id();
+        }
+      } else if (first_row->GetClassName() == std::string_view("SidebarFolderRowView")) {
+        SidebarFolderRowView* folder_row = static_cast<SidebarFolderRowView*>(first_row);
+        views::View* lane = tab_list_->FindInsertionLaneBeforeFolderByIdForTesting(folder_row->folder_id());
+        if (lane) {
+          target_view = lane;
+          LOG(ERROR) << "[MAHO_DND_TEST_LOG] Resolved to insertion lane before first folder: " << folder_row->folder_id();
+        }
+      }
+    }
+  }
+
+  LOG(ERROR) << "[MAHO_DND_TEST_LOG] Final resolved target_view name: " << target_view->GetClassName()
+             << " bounds: " << target_view->GetBoundsInScreen().ToString();
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+
+  views::View* dnd_target = target_view;
+  views::View::DropCallback drop_callback;
+  while (dnd_target) {
+    gfx::Point target_local = screen_point;
+    views::View::ConvertPointFromScreen(dnd_target, &target_local);
+    ui::DropTargetEvent target_event(
+        data, gfx::PointF(target_local), gfx::PointF(target_local),
+        static_cast<int>(ui::mojom::DragOperation::kMove));
+
+    drop_callback = dnd_target->GetDropCallback(target_event);
+    if (drop_callback) {
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG] Found DropCallback on dnd_target: " << dnd_target->GetClassName();
+      dnd_target->OnDragUpdated(target_event);
+      ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+      std::move(drop_callback).Run(target_event, output, std::unique_ptr<ui::LayerTreeOwner>());
+      LOG(ERROR) << "[MAHO_DND_TEST_LOG] Run drop_callback. output drag operation: " << static_cast<int>(output);
+      dnd_target->OnDragExited();
+      break;
+    }
+    dnd_target = dnd_target->parent();
+  }
+
+  base::RunLoop().RunUntilIdle();
 }
 
 gfx::Point MahoSidebarInteractiveTestBase::GetViewPoint(
@@ -300,12 +571,26 @@ void MahoSidebarInteractiveTestBase::SeedArchivedTabs(
   base::RunLoop().RunUntilIdle();
 }
 
+void MahoSidebarInteractiveTestBase::StopSidebarObservations() {
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  if (bridge && sidebar_) {
+    bridge->RemoveObserver(sidebar_);
+  }
+  if (browser() && browser()->tab_strip_model() && sidebar_) {
+    browser()->tab_strip_model()->RemoveObserver(sidebar_);
+  }
+}
+
 void MahoSidebarInteractiveTestBase::ReloadArchivedTabsFromFFI() {
   ASSERT_TRUE(sidebar_);
   auto* archive_view = sidebar_->archive_view_for_testing();
   ASSERT_TRUE(archive_view);
   archive_view->ReloadArchivedTabs();
   base::RunLoop().RunUntilIdle();
+}
+
+void MahoSidebarInteractiveTestBase::RunAllPendingTasks() {
+  content::RunAllTasksUntilIdle();
 }
 
 }  // namespace maho

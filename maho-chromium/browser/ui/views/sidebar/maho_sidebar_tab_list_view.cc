@@ -386,9 +386,10 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
       child_layout.child_view = children[i];
       child_layout.bounds = gfx::Rect(0, y, width, cached_heights_[i]);
       child_layout.visible =
-          is_selected ||
-          visible_rect.IsEmpty() ||
-          expanded_rect.Intersects(gfx::Rect(0, y, width, cached_heights_[i]));
+          children[i]->GetVisible() &&
+          (is_selected ||
+           visible_rect.IsEmpty() ||
+           expanded_rect.Intersects(gfx::Rect(0, y, width, cached_heights_[i])));
       layout.child_layouts.push_back(child_layout);
       y += cached_heights_[i];
     }
@@ -2133,7 +2134,19 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
               continue;
             }
 
-            if (drop_zone == SidebarTabDropZone::kSplit) {
+            // A cross-section drop (pin/favorite transition) is a section
+            // change, not a split: fall through to the transition path so it
+            // dispatches unpin_tab/change_tab_role and reports kMove without a
+            // live tab strip. A same-section folder-escape has steps but no
+            // transition, so it still enters the split branch below.
+            const bool is_cross_section_transition =
+                plan.pin_transition.kind !=
+                    SidebarDropPlan::PinTransition::Kind::kNone ||
+                plan.favorite_transition.kind !=
+                    SidebarDropPlan::FavoriteTransition::Kind::kNone;
+
+            if (drop_zone == SidebarTabDropZone::kSplit &&
+                !is_cross_section_transition) {
               if (is_multi_drag) {
                 continue;
               }
@@ -2324,7 +2337,6 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
           }
           return;
         }
-
         if (payload.node_kind == SidebarNodeKind::kFolder &&
             !payload.node_id.empty() && !tab_id.empty()) {
           const SidebarDropPlan plan =
@@ -2334,6 +2346,9 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
             return;
           }
           ExecuteDropPlanTransitionsOnly(plan);
+          if (list_view) {
+            list_view->HandlePostDropTransition(payload, plan);
+          }
           if (drop_zone == SidebarTabDropZone::kBefore) {
             output_drag_op = ui::mojom::DragOperation::kMove;
             if (!payload.source_parent_folder_id.empty()) {

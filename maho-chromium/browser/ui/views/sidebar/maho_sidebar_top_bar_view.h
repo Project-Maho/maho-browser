@@ -62,6 +62,7 @@ class MahoSidebarTopBarView : public views::View {
   views::ImageButton* forward_button_for_testing() { return forward_button_; }
   views::ImageButton* reload_button_for_testing() { return reload_button_; }
   views::ImageButton* ai_button_for_testing() { return ai_button_; }
+  views::ImageButton* mail_button_for_testing() { return mail_button_; }
 
   // Returns true if `point` (in this view's coordinates) is not over any
   // interactive control and should be treated as window-draggable caption area.
@@ -85,6 +86,7 @@ class MahoSidebarTopBarView : public views::View {
   void OnForwardPressed(const ui::Event& event);
   void OnReloadPressed(const ui::Event& event);
   void OnAiPressed(const ui::Event& event);
+  void OnMailPressed(const ui::Event& event);
   void OnToggleSidebarPressed(const ui::Event& event);
 #if BUILDFLAG(IS_WIN)
   void OnMenuPressed(const ui::Event& event);
@@ -103,6 +105,7 @@ class MahoSidebarTopBarView : public views::View {
   raw_ptr<views::ImageButton> forward_button_ = nullptr;
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
+  raw_ptr<views::ImageButton> mail_button_ = nullptr;
 #if BUILDFLAG(IS_WIN)
   raw_ptr<views::ImageButton> ellipsis_button_ = nullptr;
   std::unique_ptr<AppMenuModel> app_menu_model_;

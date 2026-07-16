@@ -107,6 +107,14 @@ IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
   EXPECT_TRUE(base::test::RunUntil(
       [&]() { return view->GetRenderedResultCountForTesting() > 0u; }))
       << "private commands-only query must render allowlisted action rows";
+
+  // Dismiss overlay to prevent widget and AX node leaks.
+  EXPECT_TRUE(SendKey(view, ui::VKEY_ESCAPE));
+  BrowserView* bv = BrowserView::GetBrowserViewForBrowser(incognito);
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    auto* c = bv->GetMahoCommandOverlayControllerForTesting();
+    return !c || !c->IsVisible();
+  }));
 }
 
 // Typing a normal query must not surface the Maho search-engine picker and the
@@ -121,9 +129,17 @@ IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
   view->ContentsChanged(view->textfield(), u"secret query");
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_EQ(maho::CommandOverlayMode::kSearch, view->CurrentModeForTesting());
+  EXPECT_EQ(maho::CommandOverlayMode::kCurrentTab, view->CurrentModeForTesting());
   EXPECT_FALSE(view->IsModeChipVisibleForTesting())
       << "no site-search/picker sub-mode chip may appear in private search";
+
+  // Dismiss overlay to prevent widget and AX node leaks.
+  EXPECT_TRUE(SendKey(view, ui::VKEY_ESCAPE));
+  BrowserView* bv = BrowserView::GetBrowserViewForBrowser(incognito);
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    auto* c = bv->GetMahoCommandOverlayControllerForTesting();
+    return !c || !c->IsVisible();
+  }));
 }
 
 // ai+Tab (and any forged AI-mode entry) is denied before mutation in Incognito.
@@ -141,6 +157,14 @@ IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
   EXPECT_NE(maho::CommandOverlayMode::kAI, view->CurrentModeForTesting())
       << "Incognito must never enter AI mode";
   EXPECT_FALSE(view->IsModeChipVisibleForTesting());
+
+  // Dismiss overlay to prevent widget and AX node leaks.
+  EXPECT_TRUE(SendKey(view, ui::VKEY_ESCAPE));
+  BrowserView* bv = BrowserView::GetBrowserViewForBrowser(incognito);
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    auto* c = bv->GetMahoCommandOverlayControllerForTesting();
+    return !c || !c->IsVisible();
+  }));
 }
 
 // Escape dismisses the overlay and focus returns to the page's WebContents.

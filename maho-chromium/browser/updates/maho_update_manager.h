@@ -14,6 +14,8 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 
+#include "base/component_export.h"
+
 class Profile;
 
 namespace maho {
@@ -59,7 +61,7 @@ class MahoUpdateObserver : public base::CheckedObserver {
 
 class PlatformUpdaterDelegate;
 
-class MahoUpdateManager {
+class COMPONENT_EXPORT(MAHO_UPDATES) MahoUpdateManager {
  public:
   static MahoUpdateManager* GetInstance();
 

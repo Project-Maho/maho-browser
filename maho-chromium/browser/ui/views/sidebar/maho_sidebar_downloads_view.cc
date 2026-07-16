@@ -463,7 +463,9 @@ std::string DownloadBadgeToken(const DownloadItem& item) {
   }
 
   if (!source_path.empty()) {
-    token = base::FilePath::FromUTF8Unsafe(source_path).Extension();
+    token = base::FilePath(
+                base::FilePath::FromUTF8Unsafe(source_path).Extension())
+                .AsUTF8Unsafe();
     if (!token.empty() && token.front() == '.') {
       token.erase(0, 1);
     }
@@ -1053,7 +1055,7 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
     const base::FilePath path =
         base::FilePath::FromUTF8Unsafe(*it->file_path);
     if (download_file_action_callback_for_testing_) {
-      download_file_action_callback_for_testing_.Run(path.value(), action);
+      download_file_action_callback_for_testing_.Run(path.AsUTF8Unsafe(), action);
       return;
     }
 

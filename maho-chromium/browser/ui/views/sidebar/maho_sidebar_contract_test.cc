@@ -40,6 +40,17 @@ namespace maho {
 namespace {
 
 bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
+  if (!view) return false;
+  if (view->GetClassName() == std::string("BoxLayoutView") ||
+      view->GetClassName() == std::string("View")) {
+    for (views::View* child : view->children()) {
+      if (auto* button = views::AsViewClass<views::LabelButton>(child)) {
+        if (button->GetText() == expected_text) {
+          return true;
+        }
+      }
+    }
+  }
   auto* button = views::AsViewClass<views::LabelButton>(view);
   return button && button->GetText() == expected_text;
 }
@@ -177,17 +188,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, TabReorderContract) {
   }
   ASSERT_EQ(2u, root_tab_ids.size());
 
-  auto* first = tab_list_->FindTabRowByIdForTesting(root_tab_ids[0]);
-  auto* second = tab_list_->FindTabRowByIdForTesting(root_tab_ids[1]);
-  ASSERT_TRUE(first);
-  ASSERT_TRUE(second);
-
-  base::RunLoop().RunUntilIdle();
-  ResolveViews();
-  first = tab_list_->FindTabRowByIdForTesting(root_tab_ids[0]);
-  second = tab_list_->FindTabRowByIdForTesting(root_tab_ids[1]);
-  ASSERT_TRUE(first);
-  ASSERT_TRUE(second);
+  SidebarTabRowView* first = nullptr;
+  SidebarTabRowView* second = nullptr;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    ResolveViews();
+    first = tab_list_->FindTabRowByIdForTesting(root_tab_ids[0]);
+    second = tab_list_->FindTabRowByIdForTesting(root_tab_ids[1]);
+    return first != nullptr && second != nullptr;
+  }));
 
   DragViewToPoint(first, GetViewPoint(second, 0.5, 0.15));
 
@@ -270,8 +278,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FolderCollapseExpandToggle) {
   ASSERT_FALSE(folder_id.empty());
   ASSERT_GT(children_count, 0);
 
-  auto* folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
-  ASSERT_TRUE(folder_row);
+  SidebarFolderRowView* folder_row = nullptr;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    ResolveViews();
+    folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
+    return folder_row != nullptr;
+  }));
 
   const gfx::Point center = folder_row->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
@@ -335,29 +347,29 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   }
   ASSERT_FALSE(child_tab_id.empty());
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(child_tab_id);
-  ASSERT_TRUE(tab_row);
-
-  views::View* normal_target =
-      tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
-  ASSERT_TRUE(normal_target);
+  SidebarTabRowView* tab_row = nullptr;
+  views::View* normal_target = nullptr;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    ResolveViews();
+    tab_row = tab_list_->FindTabRowByIdForTesting(child_tab_id);
+    normal_target =
+        tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+    return tab_row != nullptr && normal_target != nullptr;
+  }));
 
   DragViewToPoint(tab_row, GetViewPoint(normal_target, 0.5, 0.05));
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return observer_.HasEvent("move_tab_to_root");
   }));
-  ResolveViews();
-
-  auto state_after = GetViewState();
-  bool folder_still_exists = false;
-  for (const auto& node : state_after.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kFolder && node.folder_id == folder_id) {
-      folder_still_exists = true;
-      break;
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto state_after = GetViewState();
+    for (const auto& node : state_after.tab_list.normal_tree) {
+      if (node.kind == SidebarNodeKind::kFolder && node.folder_id == folder_id) {
+        return false;
+      }
     }
-  }
-  EXPECT_FALSE(folder_still_exists)
-      << "Empty folder should be pruned after last child is moved out";
+    return true;
+  })) << "Empty folder should be pruned after last child is moved out";
 }
 
 namespace {
@@ -378,13 +390,14 @@ int CountTabsInTree(const std::vector<SidebarTreeNode>& nodes) {
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
+  const int initial_strip_count = browser()->tab_strip_model()->count();
   constexpr int kAddedTabs = 20;
   AddTestTabs(kAddedTabs);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     ResolveViews();
     TabStripModel* strip = browser()->tab_strip_model();
-    return strip && strip->count() >= kAddedTabs + 1;
+    return strip && strip->count() >= initial_strip_count + kAddedTabs;
   })) << "Browser tab strip should eventually include the added tabs";
 
   ResolveViews();
@@ -405,6 +418,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                         SidebarRowOrderTreeLayoutKeepsEmptyPinnedSectionContainer) {
   SeedProfile(2);
+  RunAllPendingTasks();
+  StopSidebarObservations();
 
   auto state = GetViewState();
   ASSERT_FALSE(state.tab_list.active_space_id.empty())
@@ -419,6 +434,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                         SidebarRowOrderNoTabsWithBrowserContextKeepsFullScaffold) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
   MahoSidebarTabListModel empty_model;
   tab_list_->Update(empty_model, browser());
 
@@ -466,12 +483,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                           CountTabsInTree(state_before.tab_list.pinned_tree);
   ASSERT_GT(tabs_before, 0) << "Seed 2 must have at least one tab";
 
+  const int initial_strip_count = browser()->tab_strip_model()->count();
   AddTestTabs(5);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     ResolveViews();
     TabStripModel* strip = browser()->tab_strip_model();
-    return strip && strip->count() >= tabs_before + 5;
+    return strip && strip->count() >= initial_strip_count + 5;
   })) << "Tab strip should reflect the 5 added tabs";
 
   ResolveViews();
@@ -1250,8 +1268,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                         LastPinnedTabCloseKeepsFullScaffold) {
   SeedProfile(2);
-  base::RunLoop().RunUntilIdle();
-  ResolveViews();
+  RunAllPendingTasks();
+  StopSidebarObservations();
 
   auto state = GetViewState();
   ASSERT_FALSE(state.tab_list.normal_tree.empty())
@@ -1271,8 +1289,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                         EmptyDisplayTreeWithLiveTabsKeepsFullScaffold) {
   SeedProfile(2);
-  base::RunLoop().RunUntilIdle();
-  ResolveViews();
+  RunAllPendingTasks();
+  StopSidebarObservations();
 
   TabStripModel* strip = browser()->tab_strip_model();
   ASSERT_TRUE(strip);

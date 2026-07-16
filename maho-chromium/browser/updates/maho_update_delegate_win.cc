@@ -249,7 +249,7 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
   // re-serialization of the parsed dict. This sidesteps JSON canonicalization
   // (key ordering, whitespace, number formatting) — the bytes the server
   // signs are exactly the bytes the client receives via FindString.
-  void OnManifestFetched(std::unique_ptr<std::string> body) {
+  void OnManifestFetched(std::optional<std::string> body) {
     std::unique_ptr<network::SimpleURLLoader> loader = std::move(manifest_loader_);
     if (!body || loader->NetError() != net::OK) {
       MahoUpdateManager::GetInstance()->TransitionToError(
@@ -257,13 +257,13 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
       return;
     }
 
-    auto envelope = base::JSONReader::Read(*body);
+    auto envelope = base::JSONReader::Read(*body, base::JSON_PARSE_RFC);
     if (!envelope || !envelope->is_dict()) {
       MahoUpdateManager::GetInstance()->TransitionToError(
           UpdateError::kManifestUnsigned);
       return;
     }
-    const base::Value::Dict& env_dict = envelope->GetDict();
+    const base::DictValue& env_dict = envelope->GetDict();
     const std::string* sig_hex = env_dict.FindString("signature");
     const std::string* payload_str = env_dict.FindString("payload");
     if (!sig_hex || !payload_str) {
@@ -286,13 +286,13 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
       return;
     }
 
-    auto payload = base::JSONReader::Read(*payload_str);
+    auto payload = base::JSONReader::Read(*payload_str, base::JSON_PARSE_RFC);
     if (!payload || !payload->is_dict()) {
       MahoUpdateManager::GetInstance()->TransitionToError(
           UpdateError::kUnknown);
       return;
     }
-    const base::Value::Dict& m = payload->GetDict();
+    const base::DictValue& m = payload->GetDict();
 
     const std::string* version = m.FindString("version");
     const std::string* installer_url = m.FindString("installer_url");

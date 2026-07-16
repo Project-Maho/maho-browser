@@ -36,6 +36,7 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/test/run_until.h"
+#include "net/dns/mock_host_resolver.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -43,7 +44,30 @@
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
+
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/render_frame_host.h"
+
+namespace {
+
+class ConsoleObserver : public content::WebContentsObserver {
+ public:
+  explicit ConsoleObserver(content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents) {}
+  void OnDidAddMessageToConsole(
+      content::RenderFrameHost* source_frame,
+      blink::mojom::ConsoleMessageLevel log_level,
+      const std::u16string& message,
+      int32_t line_no,
+      const std::u16string& source_id,
+      const std::optional<std::u16string>& untrusted_stack_trace) override {
+    LOG(INFO) << "AI_CONSOLE: " << message;
+  }
+};
+
+}  // namespace
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/storage_partition.h"
@@ -56,6 +80,11 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
+#include "ui/views/controls/webview/webview.h"
 
 namespace {
 
@@ -82,6 +111,7 @@ class MahoAiSidePanelLifecycleTest : public InProcessBrowserTest {
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
 
     SidePanelUI* ui = GetSidePanelUI();
     ASSERT_TRUE(ui);
@@ -132,6 +162,25 @@ class MahoAiSidePanelLifecycleTest : public InProcessBrowserTest {
     if (!ui) {
       return nullptr;
     }
+    SidePanelRegistry* registry = SidePanelRegistry::From(browser());
+    SidePanelEntry* entry = registry ? registry->GetEntryForKey(SidePanelEntryKey(kMahoAiEntryId)) : nullptr;
+    LOG(INFO) << "GetHostWebContents: entry=" << entry
+              << " cached_view=" << (entry ? entry->CachedView().get() : nullptr);
+    if (entry && entry->CachedView()) {
+      views::View* cached_view = entry->CachedView().get();
+      views::View* webview = cached_view->GetViewByID(SidePanelWebUIView::kSidePanelWebViewId);
+      auto* webui_view = static_cast<SidePanelWebUIViewT<MahoAIUI>*>(webview);
+      auto* wrapper = webui_view ? webui_view->contents_wrapper() : nullptr;
+      content::WebContents* wrapper_wc = wrapper ? wrapper->web_contents() : nullptr;
+      LOG(INFO) << "GetHostWebContents debug: cached_view=" << cached_view
+                << " webview=" << webview
+                << " wrapper=" << wrapper
+                << " wrapper_wc=" << wrapper_wc
+                << " webview_wc=" << (webview ? (static_cast<views::WebView*>(webview))->web_contents() : nullptr);
+      if (wrapper_wc) {
+        return wrapper_wc;
+      }
+    }
     return ui->GetWebContentsForTest(kMahoAiEntryId);
   }
 };
@@ -141,9 +190,14 @@ class MahoAiSidePanelLifecycleTest : public InProcessBrowserTest {
 // 1. Show() makes kMahoAiPanel the active entry.
 IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
                        ShowPanel_EntryIsShowing) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
+  chrome::AddTabAt(browser(), GURL("about:blank"), -1, /*foreground=*/true);
   base::RunLoop().RunUntilIdle();
+
+  SidePanelRegistry* registry = SidePanelRegistry::From(browser());
+  SidePanelEntry* entry = registry ? registry->GetEntryForKey(SidePanelEntryKey(kMahoAiEntryId)) : nullptr;
+  LOG(INFO) << "ShowPanel_EntryIsShowing debug: registry=" << registry
+            << " entry=" << entry
+            << " browser=" << browser();
 
   ASSERT_FALSE(IsMahoAiPanelShowing())
       << "Precondition: panel must not be showing before Show()";
@@ -155,6 +209,14 @@ IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
   })) << "IsSidePanelEntryShowing(kMahoAiPanel) must return true after "
          "Show(SidePanelEntryKey(kMahoAiPanel)); RegisterMahoAiSidePanel() "
          "registration or SidePanelUI routing is broken.";
+
+  content::WebContents* host_wc = GetHostWebContents();
+  LOG(INFO) << "ShowPanel_EntryIsShowing: host_wc=" << host_wc
+            << " visible_url=" << (host_wc ? host_wc->GetVisibleURL().spec() : "null")
+            << " committed_url=" << (host_wc ? host_wc->GetLastCommittedURL().spec() : "null");
+
+  std::unique_ptr<ConsoleObserver> console_obs =
+      std::make_unique<ConsoleObserver>(host_wc);
 
   EXPECT_TRUE(IsMahoAiPanelShowing());
 
@@ -168,8 +230,7 @@ IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
 // 2. Close() dismisses the entry; neither the entry nor the panel is showing.
 IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
                        ClosePanel_EntryIsNoLongerShowing) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
+  chrome::AddTabAt(browser(), GURL("about:blank"), -1, /*foreground=*/true);
   base::RunLoop().RunUntilIdle();
 
   ShowMahoAiPanel();
@@ -196,8 +257,7 @@ IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
 //    that accessor may materialize the entry view for a registered panel.
 IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
                        ClosePanel_CanShowHostAgainAfterClose) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
+  chrome::AddTabAt(browser(), GURL("about:blank"), -1, /*foreground=*/true);
   base::RunLoop().RunUntilIdle();
 
   ShowMahoAiPanel();
@@ -243,8 +303,7 @@ IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
 //    GetWebContentsForTest() as a post-close leak oracle.
 IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
                        RepeatedShowHide_NoOrphanedHost) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
+  chrome::AddTabAt(browser(), GURL("about:blank"), -1, /*foreground=*/true);
   base::RunLoop().RunUntilIdle();
   constexpr int kCycles = 3;
   for (int i = 0; i < kCycles; ++i) {

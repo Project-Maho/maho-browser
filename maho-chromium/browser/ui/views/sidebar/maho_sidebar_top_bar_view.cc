@@ -16,6 +16,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
@@ -33,6 +35,7 @@
 #include "content/public/common/referrer.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
@@ -51,6 +54,7 @@
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "url/gurl.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/utf_string_conversions.h"
@@ -197,12 +201,10 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   sidebar_toggle_button_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSidebarToggleLeftMarginDp, 0, 0));
-
   // Flexible spacer pushes the nav cluster to the trailing edge.
   flex_spacer_ = AddChildView(std::make_unique<views::View>());
   layout->SetFlexForView(flex_spacer_, 1);
 
-  // Nav cluster: back, forward, reload, AI (trailing, right-aligned).
   nav_cluster_ = AddChildView(std::make_unique<views::View>());
   auto* nav_layout =
       nav_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -228,6 +230,11 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       base::BindRepeating(&MahoSidebarTopBarView::OnReloadPressed,
                           weak_factory_.GetWeakPtr()),
       maho_lucide_icons::kRotateCwIcon, u"Reload");
+  mail_button_ = AddControlButton(
+      nav_cluster_,
+      base::BindRepeating(&MahoSidebarTopBarView::OnMailPressed,
+                          weak_factory_.GetWeakPtr()),
+      maho_lucide_icons::kInboxIcon, u"Mail");
   ai_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
@@ -302,7 +309,8 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
 #endif
   for (const views::ImageButton* button :
        {sidebar_toggle_button_.get(), back_button_.get(),
-        forward_button_.get(), reload_button_.get(), ai_button_.get()}) {
+         forward_button_.get(), reload_button_.get(), ai_button_.get(),
+         mail_button_.get()}) {
     if (button && button->GetVisible()) {
       gfx::Point point_in_button = point;
       views::View::ConvertPointToTarget(this, button, &point_in_button);
@@ -365,6 +373,8 @@ void MahoSidebarTopBarView::UpdateButtonImages() {
                     model_.is_loading ? u"Stop" : u"Reload");
   UpdateButtonState(ai_button_, true,
                     maho_lucide_icons::kMessageSquareIcon, u"AI Panel");
+  UpdateButtonState(mail_button_, true, maho_lucide_icons::kInboxIcon,
+                    u"Mail");
 }
 
 void MahoSidebarTopBarView::UpdateButtonState(
@@ -420,6 +430,17 @@ void MahoSidebarTopBarView::OnAiPressed(const ui::Event& event) {
 
   side_panel_ui->Show(SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
                       SidePanelOpenTrigger::kToolbarButton);
+}
+
+void MahoSidebarTopBarView::OnMailPressed(const ui::Event& event) {
+  if (!browser_) {
+    return;
+  }
+
+  NavigateParams params(browser_, GURL(maho::kMahoMailURL),
+                        ui::PAGE_TRANSITION_GENERATED);
+  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Navigate(&params);
 }
 
 void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {

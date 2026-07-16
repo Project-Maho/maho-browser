@@ -589,6 +589,7 @@ source_set("maho_browser_main_extra_parts") {
     "//maho/browser/importer",
     "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser/mcp:maho_mcp",
+    "//maho/browser/updates:maho_config_manager",
     "//maho/browser/updates:maho_updates_lib",
     "//maho/third_party/maho:maho_bridge",
     "//skia",

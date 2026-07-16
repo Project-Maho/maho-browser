@@ -8,11 +8,15 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "base/timer/timer.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/gfx/geometry/point.h"
 #include "url/gurl.h"
+#include "base/run_loop.h"
+#include "base/time/time.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace base {
 class CommandLine;
@@ -82,6 +86,8 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   // Seed helpers (navigates to chrome://maho-test?seed=N).
   void SeedProfile(int seed_number);
   void SeedSidebarPrefs(bool layout_enabled, bool panel_expanded);
+  void StopSidebarObservations();
+  void RunAllPendingTasks();
 
   // Archive state helpers — explicit provenance distinction.
   //
@@ -124,6 +130,21 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   raw_ptr<MahoSidebarTabListView> tab_list_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_ = nullptr;
 };
+
+template <typename C>
+bool BlockAndPollUntil(C condition, base::TimeDelta timeout = base::Seconds(10)) {
+  base::TimeTicks deadline = base::TimeTicks::Now() + timeout;
+  while (base::TimeTicks::Now() < deadline) {
+    if (condition()) {
+      return true;
+    }
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(10));
+    run_loop.Run();
+  }
+  return condition();
+}
 
 }  // namespace maho
 

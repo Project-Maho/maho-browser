@@ -9,21 +9,51 @@ source_set("maho_updates_prefs") {
   deps = [ "//components/prefs" ]
 }
 
-source_set("maho_updates_lib") {
+source_set("maho_update_crypto_util") {
+  sources = [
+    "maho_update_signature.cc",
+    "maho_update_signature.h",
+    "rollout_bucket.cc",
+    "rollout_bucket.h",
+    "manifest_pubkey.h",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("maho_config_manager") {
+  sources = [
+    "maho_config_manager.cc",
+    "maho_config_manager.h",
+  ]
+  deps = [
+    ":maho_updates_prefs",
+    ":maho_update_crypto_util",
+    "//base",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//net",
+    "//services/network/public/cpp",
+  ]
+}
+
+component("maho_updates_lib") {
+  defines = [ "IS_MAHO_UPDATES_IMPL" ]
   sources = [
     "crash_loop_sentinel.cc",
     "crash_loop_sentinel.h",
-    "maho_config_manager.cc",
-    "maho_config_manager.h",
     "maho_update_manager.cc",
     "maho_update_manager.h",
     "maho_update_server_url.cc",
     "maho_update_server_url.h",
-    "maho_update_signature.cc",
-    "maho_update_signature.h",
     "platform_updater_delegate.h",
-    "rollout_bucket.cc",
-    "rollout_bucket.h",
   ]
   if (is_mac) {
     sources += [ "maho_update_delegate_mac.mm" ]
@@ -47,10 +77,8 @@ source_set("maho_updates_lib") {
   }
   deps = [
     ":maho_updates_prefs",
+    ":maho_update_crypto_util",
     "//base",
-    "//maho/browser:maho_core_holder",
-    "//maho/third_party/maho:maho_core_prebuilt",
-    "//maho/third_party/maho:maho_ffi_headers",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
     "//components/prefs",
@@ -71,8 +99,10 @@ source_set("maho_updates_unittests") {
     "maho_update_signature_unittest.cc",
   ]
   deps = [
+    ":maho_config_manager",
     ":maho_updates_lib",
     ":maho_updates_prefs",
+    ":maho_update_crypto_util",
     "//base",
     "//base/test:test_support",
     "//chrome/test:test_support",

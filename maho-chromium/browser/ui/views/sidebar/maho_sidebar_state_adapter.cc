@@ -1095,11 +1095,18 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
 
   if (tree_requested) {
     auto parsed_tree = std::move(v2_tree_);
+    LOG(INFO) << "BuildTabListModel: tree_requested=true, parsed_tree exists=" << (parsed_tree.has_value())
+              << " is_list=" << (parsed_tree ? parsed_tree->is_list() : false)
+              << " size=" << (parsed_tree && parsed_tree->is_list() ? parsed_tree->GetList().size() : 0);
     if (parsed_tree && parsed_tree->is_list()) {
       for (const auto& root_val : parsed_tree->GetList()) {
         auto parsed_node = ParseTreeNode(root_val, tab_strip_model, stable_id_map, active_stable_id, 0, v2_favicon_map_);
+        LOG(INFO) << "BuildTabListModel: parsed_node has_value=" << parsed_node.has_value();
         if (parsed_node.has_value()) {
           SidebarTreeNode node = std::move(parsed_node.value());
+          LOG(INFO) << "BuildTabListModel: parsed node kind=" << (int)node.kind
+                    << " tab_id=" << node.tab_id << " is_pinned=" << node.is_pinned
+                    << " folder_is_pinned=" << node.folder_is_pinned;
           if ((node.kind == SidebarNodeKind::kTab && node.is_pinned) ||
               (node.kind == SidebarNodeKind::kFolder && node.folder_is_pinned)) {
             model.pinned_tree.push_back(std::move(node));
@@ -1245,7 +1252,8 @@ MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
     base::ElapsedTimer v2_t;
     std::string v2_json = FetchSidebarStateV2(core, space_id_json);
     LOG(INFO) << "[MAHO_PERF]     FetchSidebarStateV2="
-              << v2_t.Elapsed().InMillisecondsF() << "ms bytes=" << v2_json.size();
+              << v2_t.Elapsed().InMillisecondsF() << "ms bytes=" << v2_json.size()
+              << " json=" << v2_json;
     if (!v2_json.empty()) {
       std::optional<base::Value> v2_parsed =
           base::JSONReader::Read(v2_json, base::JSON_PARSE_RFC);
@@ -1301,6 +1309,7 @@ MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
 SidebarStateBackgroundResult MahoSidebarStateAdapter::BuildStateOnBackground(
     std::string space_id_json,
     bool safe_mode) {
+  LOG(INFO) << "BuildStateOnBackground start";
   SidebarStateBackgroundResult result;
 
   // Phase 0: footer space state (FFI, 1.5-7ms).
@@ -1348,6 +1357,7 @@ SidebarStateBackgroundResult MahoSidebarStateAdapter::BuildStateOnBackground(
   result.favorites_model =
       MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(space_id_json);
 
+  LOG(INFO) << "BuildStateOnBackground end";
   return result;
 }
 
