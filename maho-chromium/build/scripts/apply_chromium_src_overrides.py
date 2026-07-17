@@ -2237,9 +2237,74 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 '#include "chrome/browser/ui/browser.h"\n'
-                '#include "maho/browser/maho_browser_main_extra_parts.h"'
+                '#include "maho/browser/maho_browser_main_extra_parts.h"\n'
+                '#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+                '#include "maho/browser/maho_space_profile_bridge.h"\n'
+                '#include "components/prefs/pref_service.h"'
             ),
-            description="Include Maho extra parts in browser.cc",
+            description="Include Maho headers in browser.cc",
+        ),
+        Replacement(
+            old=(
+                "  if (is_type_devtools()) {\n"
+                "    DevToolsWindow* window = DevToolsWindow::AsDevToolsWindow(source);\n"
+                "    DCHECK(window);\n"
+                "    return window->OpenURLFromTab(source, params,\n"
+                "                                  std::move(navigation_handle_callback));\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (is_type_devtools()) {\n"
+                "    DevToolsWindow* window = DevToolsWindow::AsDevToolsWindow(source);\n"
+                "    DCHECK(window);\n"
+                "    return window->OpenURLFromTab(source, params,\n"
+                "                                  std::move(navigation_handle_callback));\n"
+                "  }\n"
+                "\n"
+                "#if BUILDFLAG(IS_MAC)\n"
+                "  if (params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&\n"
+                "      !params.started_from_context_menu &&\n"
+                "      ui::PageTransitionCoreTypeIs(params.transition, ui::PAGE_TRANSITION_LINK)) {\n"
+                "    bool override_enabled = profile()->GetPrefs()->GetBoolean(\n"
+                "        maho::sidebar_prefs::kLittleArcClickOverrideEnabled);\n"
+                "    if (override_enabled) {\n"
+                "      maho::DecideLinkDestination(\n"
+                "          params.url,\n"
+                "          /*is_external=*/false,\n"
+                "          base::BindOnce(\n"
+                "              [](base::WeakPtr<Profile> profile_weak, GURL url, maho::LinkDestinationResult result) {\n"
+                "                Profile* profile = profile_weak.get();\n"
+                "                if (!profile) return;\n"
+                "                if (result.type == maho::LinkDestinationType::kSpace) {\n"
+                "                  BrowserWindowInterface* active_interface = chrome::FindLastActive();\n"
+                "                  Browser* browser = active_interface ? active_interface->GetBrowserForMigrationOnly() : nullptr;\n"
+                "                  if (!browser || browser->profile() != profile) {\n"
+                "                    BrowserWindowInterface* browser_interface =\n"
+                "                        ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();\n"
+                "                    if (browser_interface) {\n"
+                "                      browser = browser_interface->GetBrowserForMigrationOnly();\n"
+                "                    }\n"
+                "                  }\n"
+                "                  if (!browser) {\n"
+                "                    browser = Browser::Create(Browser::CreateParams(profile, true));\n"
+                "                    browser->window()->Show();\n"
+                "                  }\n"
+                "                  maho::MahoSpaceProfileBridge::GetInstance()->SwitchToSpace(browser, result.space_id);\n"
+                "                  chrome::AddSelectedTabWithURL(browser, url, ui::PAGE_TRANSITION_LINK);\n"
+                "                } else {\n"
+                "                  // Fallback: If DecideLinkDestination says Normal or LittleArc, open in Little Arc (since the user option-cmd clicked)\n"
+                "                  maho::LaunchLittleArc(profile, maho::LittleArcRequest{url});\n"
+                "                }\n"
+                "              },\n"
+                "              profile()->GetWeakPtr(), params.url));\n"
+                "      return nullptr;\n"
+                "    }\n"
+                "  }\n"
+                "#endif\n"
+            ),
+            description="Intercept NEW_SPLIT_VIEW (Option+Command link click on macOS) in OpenURLFromTab and route via DecideLinkDestination",
+            guard="DecideLinkDestination",
         ),
         Replacement(
             old=(
