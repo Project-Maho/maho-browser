@@ -505,6 +505,25 @@ class SidebarDropForwardingLabelButton : public views::LabelButton {
   raw_ptr<views::View> drop_target_ = nullptr;
 };
 
+// A focusable button must expose either a non-empty accessible name or be
+// explicitly marked empty (ui/views RunAccessibilityPaintChecks DCHECK). A tab
+// row's title button derives its name from its label text, which is
+// transiently empty while a row is being torn down (e.g. the last child leaves
+// an empty folder). Mark those transient states explicitly-empty so a paint
+// during the transition does not trip the check.
+void SyncButtonAccessibleName(views::LabelButton* button,
+                              const std::u16string& text) {
+  if (!button) {
+    return;
+  }
+  if (text.empty()) {
+    button->GetViewAccessibility().SetName(
+        std::u16string(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
+  } else {
+    button->GetViewAccessibility().SetName(text);
+  }
+}
+
 class SidebarDropForwardingView : public views::View {
  public:
   explicit SidebarDropForwardingView(raw_ptr<views::View> drop_target)
@@ -1601,7 +1620,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
           std::make_unique<SidebarDropForwardingLabelButton>(
               base::BindRepeating(&SidebarTabRowView::ActivateTabFromEvent,
                                   base::Unretained(this)),
-              std::move(display_text), this)
+              display_text, this)
               .release())));
   title_button_->SetBorder(nullptr);
   title_button_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -1622,6 +1641,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   title_button_->SetTextSubpixelRenderingEnabled(false);
   title_button_->SetLabelStyle(views::style::STYLE_BODY_2);
   layout->SetFlexForView(title_button_, 1);
+  SyncButtonAccessibleName(title_button_, display_text);
 
   auto title_field = std::make_unique<views::Textfield>();
   title_field->SetVisible(false);
@@ -2447,6 +2467,7 @@ void SidebarTabRowView::EndTitleEditing(bool commit) {
 void SidebarTabRowView::ApplyDisplayedTitle(const std::u16string& title) {
   if (title_button_) {
     title_button_->SetText(title);
+    SyncButtonAccessibleName(title_button_, title);
   }
 }
 
