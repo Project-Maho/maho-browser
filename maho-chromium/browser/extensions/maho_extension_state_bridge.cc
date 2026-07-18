@@ -273,6 +273,11 @@ void MahoExtensionStateBridge::HandleIncomingSync(const std::string& extension_i
   }
 
   if (deleted) {
+    // Policy gate: RequestUninstall only checks policy (does not uninstall);
+    // skipping it here would let sync delete a force-installed extension.
+    if (!RequestUninstall(extension_id)) {
+      return;
+    }
     auto* registrar = extensions::ExtensionRegistrar::Get(profile_);
     if (registrar) {
       registrar->UninstallExtension(

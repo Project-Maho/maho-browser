@@ -11,7 +11,6 @@ export type {
   AutofillPayment,
   ContentBlockerStats,
   FilterListInfo,
-  InstalledExtension,
   PasswordProviderStatus,
   PasswordProviderOption,
   ProfileInfo,

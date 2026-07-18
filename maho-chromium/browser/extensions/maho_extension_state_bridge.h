@@ -46,6 +46,12 @@ class MahoExtensionStateBridge : public extensions::ExtensionRegistryObserver {
   // invoked by the settings page handler after the user confirms the dialog.
   bool RequestUninstall(const std::string& extension_id);
 
+  void HandleIncomingSyncForTesting(const std::string& extension_id,
+                                    bool enabled,
+                                    bool deleted) {
+    HandleIncomingSync(extension_id, enabled, deleted);
+  }
+
   // extensions::ExtensionRegistryObserver implementation:
   void OnExtensionLoaded(content::BrowserContext* browser_context,
                          const extensions::Extension* extension) override;

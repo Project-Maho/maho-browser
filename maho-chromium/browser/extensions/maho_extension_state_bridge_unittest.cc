@@ -7,14 +7,17 @@
 
 #include "base/json/json_reader.h"
 #include "base/values.h"
+#include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/management_policy.h"
 #include "extensions/common/extension_builder.h"
+#include "chrome/browser/extensions/test_extension_system.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -22,6 +25,47 @@
 
 namespace maho {
 namespace {
+
+class TestManagementPolicyProvider : public extensions::ManagementPolicy::Provider {
+ public:
+  TestManagementPolicyProvider() = default;
+  ~TestManagementPolicyProvider() override = default;
+
+  std::string GetDebugPolicyProviderName() const override {
+    return "TestManagementPolicyProvider";
+  }
+
+  bool UserMayModifySettings(const extensions::Extension* extension,
+                             std::u16string* error) const override {
+    return user_may_modify_;
+  }
+
+  bool MustRemainInstalled(const extensions::Extension* extension,
+                           std::u16string* error) const override {
+    return must_remain_installed_;
+  }
+
+  bool MustRemainDisabled(const extensions::Extension* extension,
+                          extensions::disable_reason::DisableReason* reason) const override {
+    return must_remain_disabled_;
+  }
+
+  bool MustRemainEnabled(const extensions::Extension* extension,
+                         std::u16string* error) const override {
+    return must_remain_enabled_;
+  }
+
+  void SetUserMayModify(bool value) { user_may_modify_ = value; }
+  void SetMustRemainInstalled(bool value) { must_remain_installed_ = value; }
+  void SetMustRemainDisabled(bool value) { must_remain_disabled_ = value; }
+  void SetMustRemainEnabled(bool value) { must_remain_enabled_ = value; }
+
+ private:
+  bool user_may_modify_ = true;
+  bool must_remain_installed_ = false;
+  bool must_remain_disabled_ = false;
+  bool must_remain_enabled_ = false;
+};
 
 class ScopedCoreOverride {
  public:
@@ -142,6 +186,7 @@ TEST_F(MahoExtensionStateBridgeTest,
   EXPECT_GT(observer.call_count, 0);
 
   bridge->RemoveObserver(&observer);
+  bridge.reset();
   maho_core_free(core);
 }
 
@@ -198,6 +243,7 @@ TEST_F(MahoExtensionStateBridgeTest,
   EXPECT_FALSE(component_found)
       << "Component extension 'component_ext_id' must be excluded from snapshot";
 
+  bridge.reset();
   maho_core_free(core);
 }
 
@@ -240,6 +286,138 @@ TEST_F(MahoExtensionStateBridgeTest,
 
   EXPECT_TRUE(bridge->RequestUninstall("uninstall_ext_id"));
 
+  bridge.reset();
+  maho_core_free(core);
+}
+
+TEST_F(MahoExtensionStateBridgeTest,
+       HandleIncomingSyncDeleteSkipsPolicyForcedExtension) {
+  MahoCore* core = maho_core_new();
+  ASSERT_NE(core, nullptr);
+  ScopedCoreOverride scoped_core(core);
+
+  TestingProfile profile;
+  extensions::TestExtensionSystem* extension_system =
+      static_cast<extensions::TestExtensionSystem*>(
+          extensions::ExtensionSystem::Get(&profile));
+  extension_system->CreateExtensionService(
+      base::CommandLine::ForCurrentProcess(),
+      base::FilePath(), false);
+
+  auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
+  auto* registry = extensions::ExtensionRegistry::Get(&profile);
+
+  auto ext = extensions::ExtensionBuilder("ForcedExt")
+                 .SetID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                 .Build();
+  extensions::ExtensionRegistrar::Get(&profile)->AddExtension(ext);
+
+  TestManagementPolicyProvider policy_provider;
+  policy_provider.SetMustRemainInstalled(true);
+  extension_system->management_policy()->RegisterProvider(&policy_provider);
+
+  bridge->HandleIncomingSyncForTesting("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", /*enabled=*/false, /*deleted=*/true);
+
+  EXPECT_TRUE(registry->enabled_extensions().Contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+
+  extension_system->management_policy()->UnregisterProvider(&policy_provider);
+  bridge.reset();
+  maho_core_free(core);
+}
+
+TEST_F(MahoExtensionStateBridgeTest,
+       HandleIncomingSyncDeleteUninstallsNormalExtension) {
+  MahoCore* core = maho_core_new();
+  ASSERT_NE(core, nullptr);
+  ScopedCoreOverride scoped_core(core);
+
+  TestingProfile profile;
+  extensions::TestExtensionSystem* extension_system =
+      static_cast<extensions::TestExtensionSystem*>(
+          extensions::ExtensionSystem::Get(&profile));
+  extension_system->CreateExtensionService(
+      base::CommandLine::ForCurrentProcess(),
+      base::FilePath(), false);
+
+  auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
+  auto* registry = extensions::ExtensionRegistry::Get(&profile);
+
+  auto ext = extensions::ExtensionBuilder("NormalExt")
+                 .SetID("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                 .Build();
+  extensions::ExtensionRegistrar::Get(&profile)->AddExtension(ext);
+
+  bridge->HandleIncomingSyncForTesting("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", /*enabled=*/false, /*deleted=*/true);
+
+  EXPECT_FALSE(registry->GetExtensionById("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", extensions::ExtensionRegistry::EVERYTHING));
+
+  bridge.reset();
+  maho_core_free(core);
+}
+
+TEST_F(MahoExtensionStateBridgeTest,
+       RequestEnableReturnsFalseForPolicyForcedExtension) {
+  MahoCore* core = maho_core_new();
+  ASSERT_NE(core, nullptr);
+  ScopedCoreOverride scoped_core(core);
+
+  TestingProfile profile;
+  extensions::TestExtensionSystem* extension_system =
+      static_cast<extensions::TestExtensionSystem*>(
+          extensions::ExtensionSystem::Get(&profile));
+  extension_system->CreateExtensionService(
+      base::CommandLine::ForCurrentProcess(),
+      base::FilePath(), false);
+
+  auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
+
+  auto ext = extensions::ExtensionBuilder("ForcedDisabledExt")
+                 .SetID("cccccccccccccccccccccccccccccccc")
+                 .Build();
+  auto* registrar = extensions::ExtensionRegistrar::Get(&profile);
+  registrar->AddExtension(ext);
+  registrar->DisableExtension("cccccccccccccccccccccccccccccccc", {extensions::disable_reason::DISABLE_USER_ACTION});
+
+  TestManagementPolicyProvider policy_provider;
+  policy_provider.SetUserMayModify(false);
+  extension_system->management_policy()->RegisterProvider(&policy_provider);
+
+  EXPECT_FALSE(bridge->RequestEnable("cccccccccccccccccccccccccccccccc"));
+
+  extension_system->management_policy()->UnregisterProvider(&policy_provider);
+  bridge.reset();
+  maho_core_free(core);
+}
+
+TEST_F(MahoExtensionStateBridgeTest,
+       RequestDisableReturnsFalseForPolicyForcedExtension) {
+  MahoCore* core = maho_core_new();
+  ASSERT_NE(core, nullptr);
+  ScopedCoreOverride scoped_core(core);
+
+  TestingProfile profile;
+  extensions::TestExtensionSystem* extension_system =
+      static_cast<extensions::TestExtensionSystem*>(
+          extensions::ExtensionSystem::Get(&profile));
+  extension_system->CreateExtensionService(
+      base::CommandLine::ForCurrentProcess(),
+      base::FilePath(), false);
+
+  auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
+
+  auto ext = extensions::ExtensionBuilder("ForcedEnabledExt")
+                 .SetID("dddddddddddddddddddddddddddddddd")
+                 .Build();
+  extensions::ExtensionRegistrar::Get(&profile)->AddExtension(ext);
+
+  TestManagementPolicyProvider policy_provider;
+  policy_provider.SetMustRemainEnabled(true);
+  extension_system->management_policy()->RegisterProvider(&policy_provider);
+
+  EXPECT_FALSE(bridge->RequestDisable("dddddddddddddddddddddddddddddddd"));
+
+  extension_system->management_policy()->UnregisterProvider(&policy_provider);
+  bridge.reset();
   maho_core_free(core);
 }
 
