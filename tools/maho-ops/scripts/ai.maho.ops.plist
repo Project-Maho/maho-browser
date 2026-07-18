@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.maho.ops</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/indo/code/project/maho-workspace/tools/maho-ops/.venv/bin/python</string>
+        <string>/Users/indo/code/project/maho-workspace/tools/maho-ops/bot.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/indo/code/project/maho-workspace/tools/maho-ops</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/indo/code/project/maho-workspace/tools/maho-ops/logs/launchd.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/indo/code/project/maho-workspace/tools/maho-ops/logs/launchd.err.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

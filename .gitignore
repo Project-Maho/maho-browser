@@ -28,6 +28,16 @@ maho/${TMPDIR:-/tmp}/
 
 # JS/TS dependencies and build output
 node_modules/
+
+# maho-ops (community ops bot): local secrets and state
+tools/maho-ops/.env
+tools/maho-ops/mapping.db
+tools/maho-ops/mapping.db-journal
+tools/maho-ops/mapping.db-shm
+tools/maho-ops/mapping.db-wal
+tools/maho-ops/logs/
+tools/maho-ops/.venv/
+tools/maho-ops/__pycache__/
 dist/
 .astro/
 .next/
