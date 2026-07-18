@@ -17,12 +17,11 @@ class Widget;
 
 namespace maho {
 
-class MahoLocationBarUtilityIconView : public views::ToggleImageButton,
-                                       public views::WidgetObserver {
+class MahoLocationBarUtilityIconView : public views::ToggleImageButton {
   METADATA_HEADER(MahoLocationBarUtilityIconView, views::ToggleImageButton)
 
  public:
-  using ShowPanelCallback = base::RepeatingCallback<views::Widget*()>;
+  using ShowPanelCallback = base::RepeatingClosure;
 
   explicit MahoLocationBarUtilityIconView(ShowPanelCallback show_panel_callback);
   MahoLocationBarUtilityIconView(const MahoLocationBarUtilityIconView&) = delete;
@@ -34,14 +33,11 @@ class MahoLocationBarUtilityIconView : public views::ToggleImageButton,
   void SetAffordanceVisible(bool affordance_visible);
   // Show the icon because the user is hovering the pill region.
   void SetHoverVisible(bool hover_visible);
-  void SetPanelWidget(views::Widget* panel_widget);
+  void SetPanelIsShowing(bool showing);
 
-  bool IsPanelOpenForTesting() const { return panel_widget_ != nullptr; }
+  bool IsPanelOpenForTesting() const { return panel_is_showing_; }
   bool IsHoverVisibleForTesting() const { return hover_visible_; }
   bool IsAffordanceVisibleForTesting() const { return affordance_visible_; }
-
-  // views::WidgetObserver:
-  void OnWidgetDestroyed(views::Widget* widget) override;
 
   // views::Button:
   void StateChanged(ButtonState old_state) override;
@@ -55,9 +51,7 @@ class MahoLocationBarUtilityIconView : public views::ToggleImageButton,
   void UpdateVisibilityState();
 
   ShowPanelCallback show_panel_callback_;
-  raw_ptr<views::Widget> panel_widget_ = nullptr;
-  base::ScopedObservation<views::Widget, views::WidgetObserver>
-      panel_widget_observation_{this};
+  bool panel_is_showing_ = false;
   bool affordance_visible_ = false;
   bool hover_visible_ = false;
 };

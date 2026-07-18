@@ -165,19 +165,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_TRUE(share.close_after_activate);
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ShieldsActionIsUnavailableWithNullBrowser) {
-  MahoLocationBarUtilityPanelAction shields =
-      internal::BuildShieldsAction(nullptr);
-  EXPECT_EQ(shields.title, u"Shields");
-  EXPECT_EQ(shields.subtitle, u"Current page unavailable");
-  EXPECT_EQ(shields.icon, &maho_lucide_icons::kShieldHalfIcon);
-  EXPECT_EQ(shields.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_FALSE(shields.enabled);
-  EXPECT_FALSE(shields.callback);
-  EXPECT_TRUE(shields.close_after_activate);
-}
+
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      AutoPipSettingsRowNullContextIsUnavailable) {
@@ -300,32 +288,22 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ExtensionsZoneEmptyRegistryProducesNoExtensionsChipPlusAddChip) {
+     ExtensionsZoneEmptyRegistryProducesNoExtensionsChip) {
   MahoUtilityPanelZone zone = internal::BuildExtensionsZone(nullptr);
-  ASSERT_EQ(zone.items.size(), 2u);
+  ASSERT_EQ(zone.items.size(), 1u);
   EXPECT_EQ(zone.items.front().title, u"No extensions");
   EXPECT_TRUE(zone.items.front().subtitle.empty());
   EXPECT_FALSE(zone.items.front().enabled);
   EXPECT_FALSE(zone.items.front().callback);
-  EXPECT_EQ(zone.items.back().title, u"+");
-  EXPECT_FALSE(zone.items.back().enabled);
-  EXPECT_FALSE(zone.items.back().callback);
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ExtensionsZoneAlwaysAppendsAddChipLast) {
-  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(nullptr);
-  ASSERT_GE(zone.items.size(), 1u);
-  EXPECT_EQ(zone.items.back().title, u"+");
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     SettingsZoneHeaderLabelIsSettings) {
+     SiteControlsZoneHeaderLabelIsSiteControls) {
   ScopedCoreOverride scoped_core(nullptr);
   MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
   EXPECT_EQ(zone.id, MahoUtilityPanelZoneId::kSettings);
   EXPECT_EQ(zone.style, MahoUtilityPanelZoneStyle::kSettingsList);
-  EXPECT_EQ(zone.header_label, u"Settings");
+  EXPECT_EQ(zone.header_label, u"Site controls");
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
@@ -334,9 +312,9 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
   ASSERT_EQ(zone.items.size(), 3u);
   EXPECT_EQ(TitlesFrom(zone.items),
-            (std::vector<std::u16string>{u"Developer mode",
-                                         u"Block Ads & Trackers",
-                                         u"Automatic Picture-In-Picture"}));
+            (std::vector<std::u16string>{u"Block Ads & Trackers",
+                                         u"Automatic Picture-In-Picture",
+                                         u"Site settings"}));
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
@@ -396,13 +374,15 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
     ScopedCoreOverride scoped_core(core);
     const std::string origin = "https://example.com";
 
+    bool out_on = false;
+    std::u16string out_sub;
     internal::SetBlockAdsAndTrackersEnabledForOrigin(
-        origin, /*blocking_enabled=*/false);
+        origin, /*blocking_enabled=*/false, out_on, out_sub);
     EXPECT_EQ(maho::core::GetSiteExceptions(core),
               std::string("[\"") + origin + "\"]");
 
     internal::SetBlockAdsAndTrackersEnabledForOrigin(
-        origin, /*blocking_enabled=*/true);
+        origin, /*blocking_enabled=*/true, out_on, out_sub);
     EXPECT_EQ(maho::core::GetSiteExceptions(core), "[]");
   }
 
@@ -413,7 +393,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      SettingsAutoPipRowDelegatesToBuildAutoPipSettingsRow) {
   ScopedCoreOverride scoped_core(nullptr);
   MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
-  ASSERT_EQ(zone.items.size(), 2u);
+  ASSERT_EQ(zone.items.size(), 3u);
   ExpectActionsEquivalent(zone.items[1],
                            internal::BuildAutoPipSettingsRow(nullptr, nullptr));
 }
@@ -448,16 +428,14 @@ TEST(MahoLocationBarUtilityPanelProviderTest,
 
   EXPECT_TRUE(toolbar_zone->header_label.empty());
   EXPECT_EQ(extensions_zone->header_label, u"Extensions");
-  EXPECT_EQ(settings_zone->header_label, u"Settings");
+  EXPECT_EQ(settings_zone->header_label, u"Site controls");
 
-  ASSERT_EQ(extensions_zone->items.size(), 2u);
+  ASSERT_EQ(extensions_zone->items.size(), 1u);
   EXPECT_EQ(extensions_zone->items[0].title, u"No extensions");
   EXPECT_TRUE(extensions_zone->items[0].subtitle.empty());
   EXPECT_FALSE(extensions_zone->items[0].enabled);
-  EXPECT_EQ(extensions_zone->items[1].title, u"+");
-  EXPECT_FALSE(extensions_zone->items[1].enabled);
 
-  ASSERT_EQ(settings_zone->items.size(), 2u);
+  ASSERT_EQ(settings_zone->items.size(), 3u);
   EXPECT_EQ(settings_zone->items[0].subtitle, u"Current page unavailable");
   EXPECT_EQ(settings_zone->items[1].subtitle, u"No active page available");
 }
@@ -475,117 +453,7 @@ TEST(MahoLocationBarUtilityPanelProviderTest,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ZoomInActionForStateEnabledWhenActiveAndNotAtMax) {
-  MahoLocationBarUtilityPanelAction mid =
-      internal::BuildZoomInActionForState(/*has_active_page=*/true,
-                                          /*at_max_zoom=*/false);
-  EXPECT_EQ(mid.title, u"Zoom In");
-  EXPECT_EQ(mid.icon, &maho_lucide_icons::kZoomInIcon);
-  EXPECT_EQ(mid.data_state, MahoLocationBarUtilityPanelDataState::kLive);
-  EXPECT_TRUE(mid.enabled);
-  EXPECT_FALSE(mid.close_after_activate);
-  EXPECT_TRUE(mid.subtitle.empty());
-  EXPECT_EQ(mid.accessible_name, u"Zoom In");
 
-  MahoLocationBarUtilityPanelAction at_max =
-      internal::BuildZoomInActionForState(/*has_active_page=*/true,
-                                          /*at_max_zoom=*/true);
-  EXPECT_FALSE(at_max.enabled);
-
-  MahoLocationBarUtilityPanelAction no_page =
-      internal::BuildZoomInActionForState(/*has_active_page=*/false,
-                                          /*at_max_zoom=*/false);
-  EXPECT_FALSE(no_page.enabled);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ZoomOutActionForStateEnabledWhenActiveAndNotAtMin) {
-  MahoLocationBarUtilityPanelAction mid =
-      internal::BuildZoomOutActionForState(/*has_active_page=*/true,
-                                           /*at_min_zoom=*/false);
-  EXPECT_EQ(mid.title, u"Zoom Out");
-  EXPECT_EQ(mid.icon, &maho_lucide_icons::kZoomOutIcon);
-  EXPECT_EQ(mid.data_state, MahoLocationBarUtilityPanelDataState::kLive);
-  EXPECT_TRUE(mid.enabled);
-  EXPECT_FALSE(mid.close_after_activate);
-  EXPECT_TRUE(mid.subtitle.empty());
-  EXPECT_EQ(mid.accessible_name, u"Zoom Out");
-
-  MahoLocationBarUtilityPanelAction at_min =
-      internal::BuildZoomOutActionForState(/*has_active_page=*/true,
-                                           /*at_min_zoom=*/true);
-  EXPECT_FALSE(at_min.enabled);
-
-  MahoLocationBarUtilityPanelAction no_page =
-      internal::BuildZoomOutActionForState(/*has_active_page=*/false,
-                                           /*at_min_zoom=*/false);
-  EXPECT_FALSE(no_page.enabled);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ZoomResetActionForStateSubtitleAndEnabledBehavior) {
-  MahoLocationBarUtilityPanelAction no_controller =
-      internal::BuildZoomResetActionForState(/*has_active_page=*/false,
-                                             /*at_default_zoom=*/true,
-                                             /*zoom_percent=*/std::nullopt);
-  EXPECT_EQ(no_controller.title, u"Reset Zoom");
-  EXPECT_TRUE(no_controller.subtitle.empty());
-  EXPECT_EQ(no_controller.accessible_name, u"Reset Zoom");
-  EXPECT_FALSE(no_controller.enabled);
-  EXPECT_EQ(no_controller.icon, &maho_lucide_icons::kSearchIcon);
-  EXPECT_FALSE(no_controller.close_after_activate);
-
-  MahoLocationBarUtilityPanelAction at_default =
-      internal::BuildZoomResetActionForState(/*has_active_page=*/true,
-                                             /*at_default_zoom=*/true,
-                                             /*zoom_percent=*/100);
-  EXPECT_EQ(at_default.subtitle, u"100%");
-  EXPECT_EQ(at_default.accessible_name, u"Reset Zoom — 100%");
-  EXPECT_FALSE(at_default.enabled);
-
-  MahoLocationBarUtilityPanelAction not_at_default =
-      internal::BuildZoomResetActionForState(/*has_active_page=*/true,
-                                             /*at_default_zoom=*/false,
-                                             /*zoom_percent=*/150);
-  EXPECT_EQ(not_at_default.subtitle, u"150%");
-  EXPECT_EQ(not_at_default.accessible_name, u"Reset Zoom — 150%");
-  EXPECT_TRUE(not_at_default.enabled);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     IsAtMaxZoomAndIsAtMinZoomReturnTrueForNullController) {
-  EXPECT_TRUE(internal::IsAtMaxZoom(nullptr));
-  EXPECT_TRUE(internal::IsAtMinZoom(nullptr));
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ZoomInAtMaxProducesDisabledActionWithNoCallback) {
-  MahoLocationBarUtilityPanelAction at_max =
-      internal::BuildZoomInActionForState(/*has_active_page=*/true,
-                                          /*at_max_zoom=*/true);
-  EXPECT_FALSE(at_max.enabled);
-  EXPECT_FALSE(at_max.callback);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ZoomOutAtMinProducesDisabledActionWithNoCallback) {
-  MahoLocationBarUtilityPanelAction at_min =
-      internal::BuildZoomOutActionForState(/*has_active_page=*/true,
-                                           /*at_min_zoom=*/true);
-  EXPECT_FALSE(at_min.enabled);
-  EXPECT_FALSE(at_min.callback);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ZoomResetAtDefaultProducesDisabledActionWithNoCallback) {
-  MahoLocationBarUtilityPanelAction at_default =
-      internal::BuildZoomResetActionForState(/*has_active_page=*/true,
-                                             /*at_default_zoom=*/true,
-                                             /*zoom_percent=*/100);
-  EXPECT_FALSE(at_default.enabled);
-  EXPECT_FALSE(at_default.callback);
-}
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      BuildFooterFromWebContentsNullIsUnavailableWithPageSecuritySubtitle) {
@@ -597,8 +465,6 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_EQ(footer.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_EQ(footer.security_level, static_cast<int>(security_state::NONE));
-  EXPECT_EQ(footer.primary_action_label, u"Close");
-  EXPECT_TRUE(footer.close_after_primary_action);
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
@@ -611,56 +477,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       R"(["https://other.com"])", "https://example.com"));
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BuildFooterFromModelNullIsUnavailableWithPageSecuritySubtitle) {
-  MahoLocationBarUtilityPanelFooter footer =
-      internal::BuildFooterFromModel(nullptr);
-  EXPECT_EQ(footer.title, u"Security state unavailable");
-  EXPECT_EQ(footer.subtitle, u"Page security");
-  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldQuestionIcon);
-  EXPECT_EQ(footer.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_EQ(footer.security_level, static_cast<int>(security_state::NONE));
-  EXPECT_EQ(footer.primary_action_label, u"Close");
-  EXPECT_TRUE(footer.close_after_primary_action);
-}
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BuildFooterFromModelLivePathSetsSubtitleFromPageHost) {
-  FakeLocationBarModel model(GURL("https://example.com/path?q=1"),
-                             security_state::SECURE);
-  MahoLocationBarUtilityPanelFooter footer =
-      internal::BuildFooterFromModel(&model);
-  EXPECT_EQ(footer.subtitle, u"example.com");
-  EXPECT_EQ(footer.title, u"Secure");
-  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldCheckIcon);
-  EXPECT_EQ(footer.data_state, MahoLocationBarUtilityPanelDataState::kLive);
-  EXPECT_EQ(footer.security_level,
-            static_cast<int>(security_state::SECURE));
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BuildFooterFromModelEmptyHostFallsBackToPageSecuritySubtitle) {
-  FakeLocationBarModel model(GURL("about:blank"), security_state::NONE);
-  MahoLocationBarUtilityPanelFooter footer =
-      internal::BuildFooterFromModel(&model);
-  EXPECT_EQ(footer.subtitle, u"Page security");
-  EXPECT_EQ(footer.data_state, MahoLocationBarUtilityPanelDataState::kLive);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BuildFooterFromModelDangerousPageReflectsHostAndSecurityLevel) {
-  FakeLocationBarModel model(GURL("http://evil.example.org/"),
-                             security_state::DANGEROUS);
-  MahoLocationBarUtilityPanelFooter footer =
-      internal::BuildFooterFromModel(&model);
-  EXPECT_EQ(footer.subtitle, u"evil.example.org");
-  EXPECT_EQ(footer.title, u"Dangerous");
-  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldXIcon);
-  EXPECT_EQ(footer.data_state, MahoLocationBarUtilityPanelDataState::kLive);
-  EXPECT_EQ(footer.security_level,
-            static_cast<int>(security_state::DANGEROUS));
-}
 
 class MahoLocationBarUtilityPanelProviderRegistryTest : public testing::Test {
  protected:
@@ -691,7 +508,7 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
 
   MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
   
-  ASSERT_EQ(zone.items.size(), 3u);
+  ASSERT_EQ(zone.items.size(), 2u);
   EXPECT_EQ(zone.items[0].title, u"Alpha");
   EXPECT_EQ(zone.items[0].accessible_name, u"Alpha");
   EXPECT_EQ(zone.items[0].extension_id, "alpha_id");
@@ -707,8 +524,6 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   EXPECT_FALSE(zone.items[1].callback);
   EXPECT_TRUE(zone.items[1].context_menu_callback);
   EXPECT_TRUE(zone.items[1].context_menu_enabled);
-
-  EXPECT_EQ(zone.items[2].title, u"+");
 
   // Verify context menu callbacks can be executed without crash (null/dummy anchor checks)
   zone.items[0].context_menu_callback.Run(nullptr);
@@ -733,9 +548,8 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   registry->AddEnabled(ext);
 
   MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
-  ASSERT_EQ(zone.items.size(), 2u);
+  ASSERT_EQ(zone.items.size(), 1u);
   EXPECT_EQ(zone.items[0].title, u"No extensions");
-  EXPECT_EQ(zone.items[1].title, u"+");
 }
 
 TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
@@ -787,7 +601,10 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
   TestingProfile profile;
   const GURL url("https://example.com/");
 
-  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true);
+  bool out_on = false;
+  std::u16string out_sub;
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true, out_on,
+                                       out_sub);
   EXPECT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ALLOW);
 }
 
@@ -796,10 +613,14 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
   TestingProfile profile;
   const GURL url("https://example.com/");
 
-  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true);
+  bool out_on = false;
+  std::u16string out_sub;
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true, out_on,
+                                       out_sub);
   ASSERT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ALLOW);
 
-  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/false);
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/false, out_on,
+                                       out_sub);
   EXPECT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ASK);
 }
 
@@ -809,7 +630,10 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
   const GURL url_a("https://a.example.com/");
   const GURL url_b("https://b.example.com/");
 
-  internal::SetAutoPipEnabledForOrigin(url_a, &profile, /*enabled=*/true);
+  bool out_on = false;
+  std::u16string out_sub;
+  internal::SetAutoPipEnabledForOrigin(url_a, &profile, /*enabled=*/true, out_on,
+                                       out_sub);
   EXPECT_EQ(GetAutoPipSetting(&profile, url_a), CONTENT_SETTING_ALLOW);
   EXPECT_EQ(GetAutoPipSetting(&profile, url_b), CONTENT_SETTING_ASK);
 }
@@ -817,14 +641,20 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
 TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
        SetAutoPipEnabledForOriginNullProfileIsNoOp) {
   const GURL url("https://example.com/");
-  internal::SetAutoPipEnabledForOrigin(url, nullptr, /*enabled=*/true);
+  bool out_on = false;
+  std::u16string out_sub;
+  internal::SetAutoPipEnabledForOrigin(url, nullptr, /*enabled=*/true, out_on,
+                                       out_sub);
 }
 
 TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
        SetAutoPipEnabledForOriginInvalidUrlIsNoOp) {
   TestingProfile profile;
   const GURL empty;
-  internal::SetAutoPipEnabledForOrigin(empty, &profile, /*enabled=*/true);
+  bool out_on = false;
+  std::u16string out_sub;
+  internal::SetAutoPipEnabledForOrigin(empty, &profile, /*enabled=*/true, out_on,
+                                       out_sub);
 }
 
 TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
@@ -843,7 +673,10 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
   ASSERT_TRUE(auto_blocker->IsEmbargoed(
       url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE));
 
-  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true);
+  bool out_on = false;
+  std::u16string out_sub;
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true, out_on,
+                                       out_sub);
 
   EXPECT_FALSE(auto_blocker->IsEmbargoed(
       url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE));

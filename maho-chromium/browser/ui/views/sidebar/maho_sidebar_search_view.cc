@@ -34,6 +34,7 @@
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
+#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
@@ -193,6 +194,13 @@ END_METADATA
 
 MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
     : browser_(browser) {
+  utility_bubble_coordinator_ = std::make_unique<MahoLocationBarUtilityBubbleCoordinator>();
+  utility_bubble_coordinator_->AttachToBrowser(browser_);
+  utility_panel_close_subscription_ =
+      utility_bubble_coordinator_->RegisterOnCloseCallback(base::BindRepeating(
+          &MahoSidebarSearchView::OnUtilityPanelClosed,
+          weak_factory_.GetWeakPtr()));
+
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
       gfx::Insets::TLBR(kSearchShellInsetTopDp, 0, kSearchShellInsetBottomDp, 0),
@@ -321,9 +329,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
 
   utility_icon_ = utility_icon_slot_->AddChildView(
       std::make_unique<MahoLocationBarUtilityIconView>(base::BindRepeating(
-          [](base::WeakPtr<MahoSidebarSearchView> view) -> views::Widget* {
-            return view ? view->ShowUtilityPanel() : nullptr;
-          },
+          &MahoSidebarSearchView::ToggleUtilityPanel,
           weak_factory_.GetWeakPtr())));
   utility_icon_->SetPreferredSize(gfx::Size(kSearchPillActionShellWidthDp,
                                             kSearchPillActionShellHeightDp));
@@ -446,15 +452,7 @@ bool MahoSidebarSearchView::HandleKeyEvent(views::Textfield* sender,
   }
 }
 
-void MahoSidebarSearchView::OnWidgetDestroyed(views::Widget* widget) {
-  if (widget != utility_panel_widget_) {
-    return;
-  }
 
-  utility_panel_widget_observation_.Reset();
-  utility_panel_widget_ = nullptr;
-  UpdateUtilityAffordanceVisibility();
-}
 
 void MahoSidebarSearchView::OnSearchPressed(const ui::Event& event) {
   FocusCommandSurface();
@@ -665,49 +663,41 @@ void MahoSidebarSearchView::OnCopyUrlPressed(const ui::Event& event) {
 }
 
 void MahoSidebarSearchView::ToggleUtilityPanel() {
-  if (utility_panel_widget_) {
+  if (utility_bubble_coordinator_ && utility_bubble_coordinator_->IsShowing()) {
     CloseUtilityPanel();
     return;
   }
-
   ShowUtilityPanel();
 }
 
 views::Widget* MahoSidebarSearchView::ShowUtilityPanel() {
-  if (!browser_ || !utility_icon_) {
+  if (!browser_ || !utility_icon_ || !utility_bubble_coordinator_) {
     return nullptr;
   }
 
   MahoLocationBarUtilityPanelModel model =
       BuildMahoLocationBarUtilityPanelModelForBrowser(browser_);
-  views::Widget* widget =
-      MahoLocationBarUtilityPanelView::Show(utility_icon_, std::move(model));
-  utility_icon_->SetPanelWidget(widget);
-  SetUtilityPanelWidget(widget);
-  return widget;
-}
-
-void MahoSidebarSearchView::SetUtilityPanelWidget(views::Widget* widget) {
-  if (utility_panel_widget_ == widget) {
-    UpdateUtilityAffordanceVisibility();
-    return;
-  }
-
-  if (utility_panel_widget_) {
-    utility_panel_widget_observation_.Reset();
-  }
-
-  utility_panel_widget_ = widget;
-  if (utility_panel_widget_) {
-    utility_panel_widget_observation_.Observe(utility_panel_widget_);
+  utility_bubble_coordinator_->ShowBubble(utility_icon_, std::move(model));
+  if (utility_icon_) {
+    utility_icon_->SetPanelIsShowing(true);
   }
   UpdateUtilityAffordanceVisibility();
+  return utility_bubble_coordinator_->GetBubble()
+             ? utility_bubble_coordinator_->GetBubble()->GetWidget()
+             : nullptr;
 }
 
 void MahoSidebarSearchView::CloseUtilityPanel() {
-  if (utility_panel_widget_) {
-    utility_panel_widget_->Close();
+  if (utility_bubble_coordinator_) {
+    utility_bubble_coordinator_->Hide();
   }
+}
+
+void MahoSidebarSearchView::OnUtilityPanelClosed() {
+  if (utility_icon_) {
+    utility_icon_->SetPanelIsShowing(false);
+  }
+  UpdateUtilityAffordanceVisibility();
 }
 
 bool MahoSidebarSearchView::CanShowUtilityAffordance() const {

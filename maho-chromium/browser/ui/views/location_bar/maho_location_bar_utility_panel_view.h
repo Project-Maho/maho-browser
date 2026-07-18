@@ -67,7 +67,6 @@ class MahoLocationBarUtilityPanelView : public views::BubbleDialogDelegate,
       views::View* view);
   void OnManageButtonClicked(MahoLocationBarUtilityPanelAction action);
   void OnSecuritySummaryClicked();
-  void OnEllipsisMenuClicked();
 
   MahoLocationBarUtilityPanelModel model_;
   std::map<std::u16string, raw_ptr<views::View>> action_views_for_testing_;

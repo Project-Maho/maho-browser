@@ -73,6 +73,7 @@ void MahoLocationBarUtilityBubbleCoordinator::ShowBubble(
   }
 
   widget_observation_.Observe(widget);
+  CHECK(widget->widget_delegate());
   bubble_ = static_cast<MahoLocationBarUtilityPanelView*>(
       widget->widget_delegate());
 }

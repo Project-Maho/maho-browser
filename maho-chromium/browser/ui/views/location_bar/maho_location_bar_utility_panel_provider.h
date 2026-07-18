@@ -14,7 +14,6 @@
 
 class Browser;
 class LocationBar;
-class LocationBarModel;
 class Profile;
 class GURL;
 
@@ -57,7 +56,7 @@ struct MahoLocationBarUtilityPanelAction {
   bool toggle_is_on = false;
   std::u16string toggle_on_subtitle;
   std::u16string toggle_off_subtitle;
-  base::RepeatingCallback<void(bool)> toggle_callback;
+  base::RepeatingCallback<void(bool, bool&, std::u16string&)> toggle_callback;
   bool close_after_activate = false;
 
   // Extension Icon Grid Phase 3 updates
@@ -75,14 +74,10 @@ struct MahoLocationBarUtilityPanelFooter {
 
   std::u16string title;
   std::u16string subtitle;
-  std::u16string primary_action_label;
   raw_ptr<const gfx::VectorIcon> icon = nullptr;
-  bool primary_action_enabled = true;
-  bool close_after_primary_action = false;
   MahoLocationBarUtilityPanelDataState data_state =
       MahoLocationBarUtilityPanelDataState::kLive;
   int security_level = 0;
-  base::RepeatingClosure primary_action;
 };
 
 enum class MahoUtilityPanelZoneId {
@@ -124,16 +119,11 @@ struct MahoLocationBarUtilityPanelModel {
 
 namespace internal {
 
-bool IsAtMaxZoom(zoom::ZoomController* zoom_controller);
-bool IsAtMinZoom(zoom::ZoomController* zoom_controller);
-
 MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildViewfinderAction(Browser* browser);
-
-MahoLocationBarUtilityPanelAction BuildShieldsAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser);
 
@@ -141,11 +131,15 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
     bool blocking_enabled);
 
 void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
-                                            bool blocking_enabled);
+                                            bool blocking_enabled,
+                                            bool& out_toggle_is_on,
+                                            std::u16string& out_subtitle);
 
 void SetAutoPipEnabledForOrigin(const GURL& url,
                                 Profile* profile,
-                                bool enabled);
+                                bool enabled,
+                                bool& out_toggle_is_on,
+                                std::u16string& out_subtitle);
 std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
     Browser* browser);
 
@@ -167,8 +161,6 @@ const gfx::VectorIcon& GetSecurityIconForLevel(int security_level);
 MahoLocationBarUtilityPanelFooter BuildFooterFromWebContents(
     content::WebContents* web_contents);
 
-MahoLocationBarUtilityPanelFooter BuildFooterFromModel(
-    LocationBarModel* model);
 
 MahoLocationBarUtilityPanelFooter BuildFooter(LocationBar* location_bar);
 
@@ -177,18 +169,7 @@ MahoLocationBarUtilityPanelFooter BuildFooter(Browser* browser);
 bool IsOriginExceptedInSiteExceptions(const std::string& exceptions_json,
                                       const std::string& origin);
 
-MahoLocationBarUtilityPanelAction BuildZoomInActionForState(
-    bool has_active_page,
-    bool at_max_zoom);
 
-MahoLocationBarUtilityPanelAction BuildZoomOutActionForState(
-    bool has_active_page,
-    bool at_min_zoom);
-
-MahoLocationBarUtilityPanelAction BuildZoomResetActionForState(
-    bool has_active_page,
-    bool at_default_zoom,
-    std::optional<int> zoom_percent);
 
 }  // namespace internal
 

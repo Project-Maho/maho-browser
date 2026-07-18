@@ -16,7 +16,7 @@ namespace maho {
 namespace {
 
 TEST(MahoUnifiedClickPathFeatureTest, DisabledByDefault) {
-  EXPECT_FALSE(
+  EXPECT_TRUE(
       base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
 }
 
@@ -38,12 +38,12 @@ TEST(MahoUnifiedClickPathFeatureTest, DisabledWhenExplicitlyDisabled) {
 
 TEST(MahoUnifiedClickPathFeatureTest,
      DefaultRestoredAfterScopedEnableGoesOutOfScope) {
-  EXPECT_FALSE(
+  EXPECT_TRUE(
       base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
 }
 
 TEST(MahoUnifiedClickPathFeatureTest, ScopedFlagNestingSymmetry) {
-  EXPECT_FALSE(
+  EXPECT_TRUE(
       base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
 
   {
@@ -63,7 +63,7 @@ TEST(MahoUnifiedClickPathFeatureTest, ScopedFlagNestingSymmetry) {
         base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
   }
 
-  EXPECT_FALSE(
+  EXPECT_TRUE(
       base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
 }
 

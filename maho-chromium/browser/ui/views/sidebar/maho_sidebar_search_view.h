@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -36,13 +37,13 @@ class Event;
 
 namespace maho {
 
+class MahoLocationBarUtilityBubbleCoordinator;
 class MahoLocationBarUtilityIconView;
 
 class MahoSidebarSearchView : public views::View,
                               public views::ContextMenuController,
                               public views::TextfieldController,
-                              public ui::SimpleMenuModel::Delegate,
-                              public views::WidgetObserver {
+                              public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(MahoSidebarSearchView, views::View)
 
  public:
@@ -79,9 +80,6 @@ class MahoSidebarSearchView : public views::View,
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override;
 
-  // views::WidgetObserver:
-  void OnWidgetDestroyed(views::Widget* widget) override;
-
  private:
   void OnSearchPressed(const ui::Event& event);
   void BeginEditing();
@@ -100,8 +98,8 @@ class MahoSidebarSearchView : public views::View,
   void OnCopyUrlPressed(const ui::Event& event);
   void ToggleUtilityPanel();
   views::Widget* ShowUtilityPanel();
-  void SetUtilityPanelWidget(views::Widget* widget);
   void CloseUtilityPanel();
+  void OnUtilityPanelClosed();
   bool CanShowUtilityAffordance() const;
   void UpdateUtilityAffordanceVisibility();
   std::u16string BuildPrimaryText() const;
@@ -116,9 +114,8 @@ class MahoSidebarSearchView : public views::View,
   raw_ptr<MahoLocationBarUtilityIconView> utility_icon_ = nullptr;
   raw_ptr<views::ImageButton> copy_url_button_ = nullptr;
   raw_ptr<views::Textfield> textfield_ = nullptr;
-  raw_ptr<views::Widget> utility_panel_widget_ = nullptr;
-  base::ScopedObservation<views::Widget, views::WidgetObserver>
-      utility_panel_widget_observation_{this};
+  std::unique_ptr<MahoLocationBarUtilityBubbleCoordinator> utility_bubble_coordinator_;
+  base::CallbackListSubscription utility_panel_close_subscription_;
   MahoSidebarSearchModel model_;
   bool is_editing_ = false;
   base::WeakPtrFactory<MahoSidebarSearchView> weak_factory_{this};

@@ -13,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/single_thread_task_runner.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "build/build_config.h"
 #include "chrome/browser/certificate_viewer.h"
@@ -21,8 +20,6 @@
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/bubble_anchor_util.h"
-#include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "content/public/browser/navigation_entry.h"
@@ -60,6 +57,7 @@
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/button/toggle_button.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
@@ -164,6 +162,9 @@ class MahoLocationBarUtilityPanelActionView
     const bool show_settings_subtitle = is_settings && !action_.subtitle.empty();
     SetFocusBehavior(action_.enabled && !has_inline_toggle ? FocusBehavior::ALWAYS
                                                            : FocusBehavior::NEVER);
+    if (GetFocusBehavior() == FocusBehavior::ALWAYS) {
+      views::FocusRing::Install(this);
+    }
     SetLayoutManager(std::make_unique<views::FillLayout>());
     if (is_toolbar) {
       SetPreferredSize(gfx::Size(kToolbarRowHeight, kToolbarRowHeight));
@@ -180,7 +181,7 @@ class MahoLocationBarUtilityPanelActionView
                               : is_settings ? kSettingsRowCornerRadius
                               : 0;
     SetBackground(views::CreateRoundedRectBackground(
-        is_settings ? ui::kColorSysSurface1 : ui::kColorSysSurface1,
+        ui::kColorSysSurface1,
         corner_radius));
 
     if (IsDisabledAction(action_)) {
@@ -298,6 +299,7 @@ class MahoLocationBarUtilityPanelActionView
           base::BindRepeating(
               &MahoLocationBarUtilityPanelActionView::OnInlineTogglePressed,
               base::Unretained(this))));
+      toggle_button_->SetFocusBehavior(FocusBehavior::ALWAYS);
       toggle_button_->SetAccessibleName(BuildAccessibleName(action_));
       toggle_button_->SetIsOn(action_.toggle_is_on);
     }
@@ -341,6 +343,20 @@ class MahoLocationBarUtilityPanelActionView
       return;
     }
     SetHighlighted(false);
+  }
+
+  void OnFocus() override {
+    views::View::OnFocus();
+    if (action_.enabled) {
+      SetHighlighted(true);
+    }
+  }
+
+  void OnBlur() override {
+    views::View::OnBlur();
+    if (action_.enabled) {
+      SetHighlighted(false);
+    }
   }
 
   bool OnMousePressed(const ui::MouseEvent& event) override {
@@ -404,12 +420,15 @@ class MahoLocationBarUtilityPanelActionView
                                 : action_.toggle_off_subtitle;
   }
 
-  void UpdateInlineTogglePresentation() {
+  void UpdateInlineTogglePresentation(
+      const std::u16string& effective_subtitle = std::u16string()) {
     if (!HasInlineToggle()) {
       return;
     }
 
-    action_.subtitle = GetSubtitleForCurrentToggleState();
+    action_.subtitle = effective_subtitle.empty()
+                           ? GetSubtitleForCurrentToggleState()
+                           : effective_subtitle;
     action_.accessible_name =
         ComposeAccessibleName(action_.title, action_.subtitle);
     if (subtitle_label_) {
@@ -428,11 +447,20 @@ class MahoLocationBarUtilityPanelActionView
       return;
     }
 
-    action_.toggle_is_on = toggle_button_->GetIsOn();
-    UpdateInlineTogglePresentation();
+    const bool requested_on = toggle_button_->GetIsOn();
+    action_.toggle_is_on = requested_on;
+    std::u16string effective_subtitle;
     if (!action_.toggle_callback.is_null()) {
-      action_.toggle_callback.Run(action_.toggle_is_on);
+      // The callback performs the write and reports the *effective* state back
+      // via out-params (e.g. Auto-PiP can remain blocked under embargo), so the
+      // row reflects the real resulting setting rather than the optimistic
+      // request.
+      bool effective_on = requested_on;
+      action_.toggle_callback.Run(requested_on, effective_on,
+                                  effective_subtitle);
+      action_.toggle_is_on = effective_on;
     }
+    UpdateInlineTogglePresentation(effective_subtitle);
   }
 
   void UpdateIconImage() {
@@ -506,7 +534,7 @@ class PanelChipButton : public views::LabelButton {
                   const std::u16string& accessible_name)
       : views::LabelButton(std::move(callback), text) {
     SetTextSubpixelRenderingEnabled(false);
-    SetInstallFocusRingOnFocus(false);
+    SetInstallFocusRingOnFocus(true);
     views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
     SetHorizontalAlignment(text.empty() ? gfx::ALIGN_CENTER : gfx::ALIGN_LEFT);
     SetBorder(views::CreateEmptyBorder(
@@ -726,7 +754,7 @@ void MahoLocationBarUtilityPanelView::AddZoneHeader(
         trailing_action->title,
         /*icon=*/nullptr,
         /*icon_size=*/0,
-        /*text_uses_accent=*/true,
+        /*text_uses_accent=*/false,
         /*accessible_name=*/std::u16string()));
     RegisterActionViewForTesting(*trailing_action, trailing_button);
   } else {
@@ -884,6 +912,16 @@ void MahoLocationBarUtilityPanelView::AddFooterSummary() {
   footer_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
+  bool has_cert = false;
+  if (model_.owning_browser) {
+    if (auto* web_contents =
+            model_.owning_browser->tab_strip_model()->GetActiveWebContents()) {
+      if (auto* entry = web_contents->GetController().GetVisibleEntry()) {
+        has_cert = entry->GetSSL().certificate != nullptr;
+      }
+    }
+  }
+
   footer->AddChildView(std::make_unique<PanelChipButton>(
       base::BindRepeating(
           &MahoLocationBarUtilityPanelView::OnSecuritySummaryClicked,
@@ -897,20 +935,8 @@ void MahoLocationBarUtilityPanelView::AddFooterSummary() {
           model_.footer.data_state ==
               MahoLocationBarUtilityPanelDataState::kLive &&
           model_.footer.security_level !=
-              static_cast<int>(security_state::NONE));
-
-  auto* spacer = footer->AddChildView(std::make_unique<views::View>());
-  footer_layout->SetFlexForView(spacer, 1);
-
-  footer->AddChildView(std::make_unique<PanelChipButton>(
-      base::BindRepeating(
-          &MahoLocationBarUtilityPanelView::OnEllipsisMenuClicked,
-          weak_factory_.GetWeakPtr()),
-      std::u16string(),
-      &maho_lucide_icons::kEllipsisIcon,
-      kPanelChipButtonDefaultIconSize,
-      /*text_uses_accent=*/false,
-      /*accessible_name=*/u"More"));
+              static_cast<int>(security_state::NONE) &&
+          has_cert);
 }
 
 void MahoLocationBarUtilityPanelView::RegisterActionViewForTesting(
@@ -958,31 +984,6 @@ void MahoLocationBarUtilityPanelView::OnSecuritySummaryClicked() {
   }
 #endif
   ShowCertificateViewer(web_contents, parent, cert.get());
-}
-
-void MahoLocationBarUtilityPanelView::OnEllipsisMenuClicked() {
-  if (!model_.owning_browser) {
-    return;
-  }
-  auto* web_contents =
-      model_.owning_browser->tab_strip_model()->GetActiveWebContents();
-  if (!web_contents) {
-    return;
-  }
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::WeakPtr<content::WebContents> wc) {
-            if (!wc) {
-              return;
-            }
-            ShowPageInfoDialog(wc.get(), PageInfoClosingCallback(),
-                               bubble_anchor_util::Anchor::kLocationBar);
-          },
-          web_contents->GetWeakPtr()));
-  if (views::Widget* widget = GetWidget(); widget && !widget->IsClosed()) {
-    widget->Close();
-  }
 }
 
 void MahoLocationBarUtilityPanelView::OnManageButtonClicked(

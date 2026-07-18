@@ -69,18 +69,13 @@ MahoLocationBarUtilityIconView::MahoLocationBarUtilityIconView(
   SetPreferredSize(gfx::Size(kUtilityButtonWidth, kUtilityButtonHeight));
   SetImageHorizontalAlignment(ALIGN_CENTER);
   SetImageVerticalAlignment(ALIGN_MIDDLE);
-  SetInstallFocusRingOnFocus(false);
+  SetInstallFocusRingOnFocus(true);
   views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
   UpdateUtilityButtonImages(this);
   UpdateButtonChrome();
 }
 
-MahoLocationBarUtilityIconView::~MahoLocationBarUtilityIconView() {
-  if (panel_widget_) {
-    panel_widget_observation_.Reset();
-    panel_widget_ = nullptr;
-  }
-}
+MahoLocationBarUtilityIconView::~MahoLocationBarUtilityIconView() = default;
 
 void MahoLocationBarUtilityIconView::StateChanged(ButtonState old_state) {
   views::ToggleImageButton::StateChanged(old_state);
@@ -104,44 +99,19 @@ void MahoLocationBarUtilityIconView::SetHoverVisible(bool hover_visible) {
   UpdateVisibilityState();
 }
 
-void MahoLocationBarUtilityIconView::SetPanelWidget(views::Widget* panel_widget) {
-  if (panel_widget_ == panel_widget) {
-    UpdateVisibilityState();
+void MahoLocationBarUtilityIconView::SetPanelIsShowing(bool showing) {
+  if (panel_is_showing_ == showing) {
     return;
   }
-
-  if (panel_widget_) {
-    panel_widget_observation_.Reset();
-  }
-  panel_widget_ = panel_widget;
-  if (panel_widget_) {
-    panel_widget_observation_.Observe(panel_widget_);
-  }
-  UpdateVisibilityState();
-}
-
-void MahoLocationBarUtilityIconView::OnWidgetDestroyed(views::Widget* widget) {
-  if (widget != panel_widget_) {
-    return;
-  }
-
-  panel_widget_observation_.Reset();
-  panel_widget_ = nullptr;
+  panel_is_showing_ = showing;
   UpdateVisibilityState();
 }
 
 void MahoLocationBarUtilityIconView::TogglePanel() {
-  if (panel_widget_) {
-    panel_widget_->Close();
-    return;
-  }
-
   if (!show_panel_callback_) {
     return;
   }
-
-  views::Widget* panel_widget = show_panel_callback_.Run();
-  SetPanelWidget(panel_widget);
+  show_panel_callback_.Run();
 }
 
 void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
@@ -155,9 +125,9 @@ void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
 }
 
 void MahoLocationBarUtilityIconView::UpdateVisibilityState() {
-  const bool should_show = affordance_visible_ || hover_visible_ || panel_widget_;
+  const bool should_show = affordance_visible_ || hover_visible_ || panel_is_showing_;
   SetVisible(should_show);
-  SetToggled(panel_widget_ != nullptr);
+  SetToggled(panel_is_showing_);
   UpdateButtonChrome();
 }
 
