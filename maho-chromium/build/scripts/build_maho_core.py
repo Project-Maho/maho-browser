@@ -2,11 +2,13 @@
 """Build maho-core Rust static library and copy to prebuilt directory."""
 
 import argparse
+import glob
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import importlib.util
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -83,6 +85,8 @@ def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
+    if 'windows' in rust_target:
+        privatize_windows_lib(src_lib, os.path.dirname(src_lib), 'mahostt')
     shutil.copy2(src_lib, dst_lib)
     if sys.platform == 'darwin':
         subprocess.run(['ranlib', '-c', dst_lib], check=True)
@@ -114,6 +118,8 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
+    if 'windows' in rust_target:
+        privatize_windows_lib(src_lib, os.path.dirname(src_lib), 'mahomail')
     shutil.copy2(src_lib, dst_lib)
     if sys.platform == 'darwin':
         subprocess.run(['ranlib', '-c', dst_lib], check=True)
@@ -128,16 +134,128 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
         print(f'Copied {src_header} -> {dst_header}')
 
 
+def _find_llvm_tools():
+    """Locate llvm-nm/llvm-ar/llvm-objcopy from the active rustup toolchain
+    (the llvm-tools component ships them under the toolchain sysroot)."""
+    exe = '.exe' if sys.platform == 'win32' else ''
+    try:
+        sysroot = subprocess.run(['rustc', '--print', 'sysroot'],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+    except Exception:
+        sysroot = None
+    bases = glob.glob(os.path.join(sysroot, 'lib', 'rustlib', '*', 'bin')) if sysroot else []
+    for base in bases:
+        nm = os.path.join(base, 'llvm-nm' + exe)
+        ar = os.path.join(base, 'llvm-ar' + exe)
+        objcopy = os.path.join(base, 'llvm-objcopy' + exe)
+        if all(os.path.exists(p) for p in (nm, ar, objcopy)):
+            return nm, ar, objcopy
+    sys.exit('Windows symbol privatization needs llvm-nm/llvm-ar/llvm-objcopy; '
+             'install the rustup llvm-tools component: rustup component add llvm-tools')
+
+
+def _defined_extern_symbols(nm, libs):
+    syms = set()
+    for lib in libs:
+        if not os.path.exists(lib):
+            continue
+        out = subprocess.run([nm, '--defined-only', '--extern-only', lib],
+                             capture_output=True, text=True, errors='replace').stdout
+        for line in out.splitlines():
+            line = line.rstrip()
+            if not line or line.endswith(':'):
+                continue
+            syms.add(line.split()[-1])
+    return syms
+
+
+def privatize_windows_lib(lib_path, release_dir, prefix):
+    """Rename this Rust staticlib's bundled vendored-OpenSSL symbols and its
+    Rust runtime symbols to a per-lib private prefix.
+
+    A Rust staticlib bundles the native static libs it links (here SQLCipher's
+    vendored OpenSSL) plus a full copy of the Rust runtime. When several such
+    libs are linked into chrome.dll alongside Chromium's BoringSSL and its own
+    Rust std, the shared symbol names (EVP_*/SHA*/HMAC*/AES_*/bn_*/vpaes_* and
+    rust_eh_personality / the ___rustc allocator+panic namespace) collide
+    (LNK2005). objcopy --redefine-syms renames both definitions and references
+    consistently within each object, so the crypto/runtime stays self-contained
+    while no longer clashing at the final link. Undefined allocator entry points
+    (___rust_alloc etc.) are left alone so they still resolve to Chromium's
+    shared PartitionAlloc shim.
+    """
+    nm, ar, objcopy = _find_llvm_tools()
+    ossl_libs = (
+        glob.glob(os.path.join(release_dir, 'build', 'openssl-sys-*', 'out',
+                               '**', 'libcrypto.lib'), recursive=True)
+        + glob.glob(os.path.join(release_dir, 'build', 'openssl-sys-*', 'out',
+                                 '**', 'libssl.lib'), recursive=True))
+    rename = {s: f'{prefix}_{s}' for s in _defined_extern_symbols(nm, ossl_libs)}
+    for s in _defined_extern_symbols(nm, [lib_path]):
+        if s == 'rust_eh_personality' or '___rustc' in s:
+            rename[s] = f'{prefix}_{s}'
+    if not rename:
+        return
+    print(f'  privatizing {len(rename)} symbols in {os.path.basename(lib_path)} '
+          f'(prefix {prefix}_)')
+    workdir = tempfile.mkdtemp(prefix='maho-priv-')
+    try:
+        map_path = os.path.join(workdir, 'redefine.txt')
+        with open(map_path, 'w') as f:
+            f.write('\n'.join(f'{k} {v}' for k, v in rename.items()))
+        extdir = os.path.join(workdir, 'ext')
+        os.makedirs(extdir)
+        subprocess.run([ar, 'x', lib_path], cwd=extdir, check=True)
+        # Only real object members (unique names) are rewritten and spliced
+        # back; system import stubs (*.dll, duplicate-named) are left untouched
+        # in lib_path.
+        objs = [os.path.join(extdir, n) for n in os.listdir(extdir)
+                if not n.lower().endswith('.dll')]
+        done = []
+        for o in objs:
+            r = subprocess.run([objcopy, f'--redefine-syms={map_path}', o],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                done.append(o)
+        for i in range(0, len(done), 200):
+            subprocess.run([ar, 'r', lib_path] + done[i:i + 200],
+                           check=True, capture_output=True)
+        print(f'  spliced {len(done)} rewritten members back into '
+              f'{os.path.basename(lib_path)}')
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def build_rust_prebuilt(target=None):
     rust_target, cpu_dir, lib_name = get_target_triple(target)
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     print(f'Building maho-core for {rust_target}...')
+    cargo_env = os.environ.copy()
+    if 'windows' in rust_target:
+        win32_syms = [
+            'sqlite3_win32_is_nt', 'sqlite3_win32_sleep',
+            'sqlite3_win32_write_debug', 'sqlite3_win32_utf8_to_unicode',
+            'sqlite3_win32_unicode_to_utf8', 'sqlite3_win32_mbcs_to_utf8',
+            'sqlite3_win32_mbcs_to_utf8_v2', 'sqlite3_win32_utf8_to_mbcs',
+            'sqlite3_win32_utf8_to_mbcs_v2',
+        ]
+        rename_flags = ' '.join(f'-D{sym}=maho_{sym}' for sym in win32_syms)
+        existing = cargo_env.get('LIBSQLITE3_FLAGS', '')
+        cargo_env['LIBSQLITE3_FLAGS'] = f'{existing} {rename_flags}'.strip()
+        rustflags = cargo_env.get('RUSTFLAGS', '')
+        cargo_env['RUSTFLAGS'] = f'{rustflags} -C target-feature=+crt-static'.strip()
+        for _tool in ('perl', 'nasm'):
+            if shutil.which(_tool) is None:
+                print(f'WARNING: {_tool} not found on PATH; the vendored OpenSSL '
+                      'build (bundled-sqlcipher-vendored-openssl) will fail. '
+                      'Install it (e.g. Strawberry Perl / NASM).')
     subprocess.run(
         ['cargo', 'build', '--release', '--target', rust_target, '-p', 'maho-ffi'],
         cwd=MAHO_ROOT,
         check=True,
+        env=cargo_env,
     )
 
     src_lib = os.path.join(MAHO_ROOT, 'target', rust_target, 'release', lib_name)
@@ -145,6 +263,9 @@ def build_rust_prebuilt(target=None):
 
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
+
+    if 'windows' in rust_target:
+        privatize_windows_lib(src_lib, os.path.dirname(src_lib), 'mahoffi')
 
     shutil.copy2(src_lib, dst_lib)
     if sys.platform == 'darwin':

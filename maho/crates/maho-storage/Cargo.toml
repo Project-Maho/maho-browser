@@ -30,8 +30,8 @@ rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"]
 # so key derivation memcpy's past its buffer and corrupts the heap at every
 # startup (open_with_key -> get_all_passwords -> PKCS5_PBKDF2_HMAC). Vendor
 # OpenSSL so SQLCipher binds its own matching crypto. The Windows build
-# (build_maho_core.py) then privatizes the vendored OpenSSL symbols to a
-# `mahossl_*` prefix so they no longer collide with BoringSSL at the chrome.dll
-# link.
+# (build_maho_core.py) then privatizes the vendored OpenSSL + Rust runtime
+# symbols to a per-lib private prefix so they no longer collide with BoringSSL
+# (or Chromium's Rust std) at the chrome.dll link.
 [target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }
