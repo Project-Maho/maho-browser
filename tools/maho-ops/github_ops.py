@@ -60,10 +60,13 @@ def recent_closed_issues(since_iso: str) -> list[dict]:
 
 
 def latest_release(repo: str = "Project-Maho/release") -> Optional[dict]:
-    """Latest published release from the release-only repo."""
-    out = _gh(
-        "release", "view",
-        "--repo", repo,
-        "--json", "tagName,publishedAt,name,body",
-    )
+    """Latest published release from the release-only repo. None if no release yet."""
+    try:
+        out = _gh(
+            "release", "view",
+            "--repo", repo,
+            "--json", "tagName,publishedAt,name,body",
+        )
+    except subprocess.CalledProcessError:
+        return None  # no release published yet
     return out if isinstance(out, dict) else None
