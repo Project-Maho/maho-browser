@@ -51,6 +51,7 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": frozenset({"win"}),
+    "chrome/browser/ui/views/frame/browser_frame_view_win.cc": frozenset({"win"}),
 }
 
 
@@ -99,6 +100,34 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc": [],
+    # ── settings_ui.cc: allow chrome://settings to be framed by the Maho
+    #    settings "Chromium settings" embed pane ────────────────────────────
+    "chrome/browser/ui/webui/settings/settings_ui.cc": [
+        Replacement(
+            old=(
+                "          chrome::kChromeUISettingsHost);\n"
+                "  html_source->OverrideContentSecurityPolicy(\n"
+                "      network::mojom::CSPDirectiveName::WorkerSrc,\n"
+            ),
+            new=(
+                "          chrome::kChromeUISettingsHost);\n"
+                "  html_source->DisableDenyXFrameOptions();\n"
+                '  html_source->AddFrameAncestor(GURL("chrome://maho-settings/"));\n'
+                "  html_source->OverrideContentSecurityPolicy(\n"
+                "      network::mojom::CSPDirectiveName::WorkerSrc,\n"
+            ),
+            description=(
+                "Allow chrome://settings to be embedded in an <iframe> by the "
+                "chrome://maho-settings 'Chromium settings' pane: disable the "
+                "default X-Frame-Options: DENY and add chrome://maho-settings/ as "
+                "a permitted frame-ancestor. Without this the embed renders blank "
+                "because WebUI data sources default to frame-ancestors 'none'. "
+                "GURL and the CSP header are already included upstream, so no "
+                "extra include is required."
+            ),
+            guard='html_source->AddFrameAncestor(GURL("chrome://maho-settings/"));',
+        ),
+    ],
     # ── Maho extension APIs (chrome.maho.splitView / chrome.maho.sidePanel) ─────
     "chrome/common/extensions/api/api_sources.gni": [
         Replacement(
@@ -308,17 +337,27 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/views/location_bar/location_bar_view.cc": [
         Replacement(
             old=(
+                "  // Maho: construct coordinator and icon for the address-bar utility panel.\n"
+                "  if (!is_popup_mode_) {\n"
                 "    utility_bubble_coordinator_ =\n"
                 "        std::make_unique<maho::MahoLocationBarUtilityBubbleCoordinator>();\n"
                 "    utility_icon_view_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoLocationBarUtilityIconView>(\n"
+                "            base::BindRepeating(\n"
+                "                &LocationBarView::ShowUtilityPanel,\n"
+                "                base::Unretained(this))));\n"
+                "  }\n"
             ),
             new=(
-                "    utility_bubble_coordinator_ =\n"
-                "        std::make_unique<maho::MahoLocationBarUtilityBubbleCoordinator>();\n"
-                "    utility_bubble_coordinator_->AttachToBrowser(browser_);\n"
-                "    utility_icon_view_ = AddChildView(\n"
+                "  // Maho: the address-bar utility panel is sidebar-only; the standard-layout\n"
+                "  // location-bar icon injection is intentionally disabled.\n"
             ),
-            description="Call AttachToBrowser(browser_) after coordinator construction to activate tab-switch dismissal",
+            description=(
+                "Disable the standard-layout location-bar utility icon injection; "
+                "the panel is sidebar-only (MahoSidebarSearchView owns the coordinator)"
+            ),
+            guard="location-bar icon injection is intentionally disabled",
+            idempotent=True,
         ),
     ],
     # ── tab_helpers.cc ────────────────────────────────────────────────────────
@@ -724,6 +763,104 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/app_controller_mac.mm": [
         Replacement(
             old=(
+                "// Open the urls in the last used browser from a regular profile.\n"
+                "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
+                "                                  Profile* profile);"
+            ),
+            new=(
+                "}  // namespace\n"
+                "\n"
+                "// Open the urls in the last used browser from a regular profile.\n"
+                "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
+                "                                  Profile* profile);\n"
+                "\n"
+                "namespace {"
+            ),
+            description="Declare OpenUrlsInBrowserWithProfile in global namespace to allow linkage from tests",
+            guard="}  // namespace\n\n// Open the urls in the last used browser from a regular profile.\nvoid OpenUrlsInBrowserWithProfile",
+        ),
+        Replacement(
+            old=(
+                '#import "chrome/browser/app_controller_mac.h"\n'
+            ),
+            new=(
+                '#import "chrome/browser/app_controller_mac.h"\n'
+                '#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+                '#include "components/prefs/pref_service.h"\n'
+                '#include "chrome/browser/ui/browser_finder.h"\n'
+                '#include "chrome/browser/ui/browser_tabstrip.h"\n'
+                '#include "maho/browser/maho_space_profile_bridge.h"\n'
+            ),
+            description="Include Little Arc and Space headers in app_controller_mac.mm",
+            guard='#include "maho/browser/maho_space_profile_bridge.h"',
+        ),
+        Replacement(
+            old=(
+                "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
+                "                                  Profile* profile) {\n"
+                "  if (!profile)\n"
+                "    return;  // No suitable profile to open the URLs, do nothing."
+            ),
+            new=(
+                "void OpenUrlsInBrowserWithProfileNormal(const std::vector<GURL>& urls,\n"
+                "                                        Profile* profile);\n"
+                "\n"
+                "}  // namespace\n"
+                "\n"
+                "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
+                "                                  Profile* profile) {\n"
+                "  if (!profile)\n"
+                "    return;  // No suitable profile to open the URLs, do nothing.\n"
+                "\n"
+                "  if (urls.size() == 1) {\n"
+                "    GURL url = urls[0];\n"
+                "    base::WeakPtr<Profile> weak_profile = profile->GetWeakPtr();\n"
+                "    maho::DecideLinkDestination(\n"
+                "        url, /*is_external=*/true,\n"
+                "        base::BindOnce(\n"
+                "            [](base::WeakPtr<Profile> profile, GURL url, maho::LinkDestinationResult result) {\n"
+                "              if (!profile) return;\n"
+                "              if (result.type == maho::LinkDestinationType::kSpace && !result.space_id.empty()) {\n"
+                "                Browser* browser = chrome::FindTabbedBrowser(profile.get(), false);\n"
+                "                if (!browser) {\n"
+                "                  browser = Browser::Create(Browser::CreateParams(profile.get(), true));\n"
+                "                  if (browser && browser->window()) {\n"
+                "                    browser->window()->Show();\n"
+                "                  }\n"
+                "                }\n"
+                "                if (browser) {\n"
+                "                  maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
+                "                  if (bridge) {\n"
+                "                    bridge->SwitchToSpace(browser, result.space_id);\n"
+                "                  }\n"
+                "                  chrome::AddSelectedTabWithURL(browser, url, ui::PAGE_TRANSITION_LINK);\n"
+                "                }\n"
+                "              } else if (result.type == maho::LinkDestinationType::kLittleArc) {\n"
+                "                maho::LaunchLittleArc(profile.get(), maho::LittleArcRequest{url});\n"
+                "              } else {\n"
+                "                std::vector<GURL> urls_fallback = {url};\n"
+                "                OpenUrlsInBrowserWithProfileNormal(urls_fallback, profile.get());\n"
+                "              }\n"
+                "            },\n"
+                "            weak_profile, url));\n"
+                "    return;\n"
+                "  }\n"
+                "  OpenUrlsInBrowserWithProfileNormal(urls, profile);\n"
+                "}\n"
+                "\n"
+                "namespace {\n"
+                "\n"
+                "void OpenUrlsInBrowserWithProfileNormal(const std::vector<GURL>& urls,\n"
+                "                                        Profile* profile) {\n"
+                "  if (!profile)\n"
+                "    return;  // No suitable profile to open the URLs, do nothing."
+            ),
+            description="Route external single URL links to ATC Space or Little Arc if configured, with global linkage",
+            guard="DecideLinkDestination(url, /*is_external=*/true",
+        ),
+        Replacement(
+            old=(
                 "    case IDC_NEW_TAB:\n"
                 "      // Create a new tab in an existing browser window (which we activate) if\n"
                 "      // possible.\n"
@@ -1102,6 +1239,25 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/browser/ui/BUILD.gn": [
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.cc",\n'
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.h",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.cc",\n'
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.h",\n'
+                '      "//maho/browser/net/maho_atc_navigation_throttle.cc",\n'
+                '      "//maho/browser/net/maho_atc_navigation_throttle.h",\n'
+            ),
+            description=(
+                "Compile the MahoAtcNavigationThrottle into the "
+                "chrome/browser/ui:ui target, co-located with the Little Arc / "
+                "space-routing code it links against (DecideLinkDestination, "
+                "MahoSpaceProfileBridge, FindBrowserWithTab, AddSelectedTabWithURL)"
+            ),
+            guard='"//maho/browser/net/maho_atc_navigation_throttle.cc"',
+        ),
         Replacement(
             old=(
                 '      "//maho/browser/ui/views/split_view/maho_split_view_controller.cc",\n'
@@ -2240,8 +2396,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '#include "maho/browser/maho_browser_main_extra_parts.h"\n'
                 '#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"\n'
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
-                '#include "maho/browser/maho_space_profile_bridge.h"\n'
-                '#include "components/prefs/pref_service.h"'
+                '#include "components/prefs/pref_service.h"\n'
+                '#include "maho/browser/maho_space_profile_bridge.h"'
             ),
             description="Include Maho headers in browser.cc",
         ),
@@ -2269,42 +2425,85 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    bool override_enabled = profile()->GetPrefs()->GetBoolean(\n"
                 "        maho::sidebar_prefs::kLittleArcClickOverrideEnabled);\n"
                 "    if (override_enabled) {\n"
+                "      maho::LaunchLittleArc(profile(), maho::LittleArcRequest{params.url});\n"
+                "      return nullptr;\n"
+                "    } else {\n"
+                "      content::OpenURLParams demoted_params = params;\n"
+                "      demoted_params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;\n"
+                "      return OpenURLFromTab(source, demoted_params, std::move(navigation_handle_callback));\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  struct AtcBypassState {\n"
+                "    static bool ShouldBypass(Browser* browser) {\n"
+                "      static std::set<Browser*>* bypassed_browsers = new std::set<Browser*>();\n"
+                "      return bypassed_browsers->count(browser) > 0;\n"
+                "    }\n"
+                "    static void SetBypass(Browser* browser, bool bypass) {\n"
+                "      static std::set<Browser*>* bypassed_browsers = new std::set<Browser*>();\n"
+                "      if (bypass) {\n"
+                "        bypassed_browsers->insert(browser);\n"
+                "      } else {\n"
+                "        bypassed_browsers->erase(browser);\n"
+                "      }\n"
+                "    }\n"
+                "  };\n"
+                "\n"
+                "  if (!AtcBypassState::ShouldBypass(this) && maho::MahoAtcState::HasEnabledRules()) {\n"
+                "    bool is_top_level = ui::PageTransitionIsMainFrame(params.transition) &&\n"
+                "                        !ui::PageTransitionIsRedirect(params.transition);\n"
+                "    bool is_user_initiated = !params.is_renderer_initiated || params.user_gesture;\n"
+                "    bool is_little_arc_gesture = (params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&\n"
+                "                                  !params.started_from_context_menu &&\n"
+                "                                  ui::PageTransitionCoreTypeIs(params.transition, ui::PAGE_TRANSITION_LINK));\n"
+                "    if (is_top_level && is_user_initiated && !is_little_arc_gesture) {\n"
+                "      std::string current_space_id;\n"
+                "      maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
+                "      if (bridge) {\n"
+                "        current_space_id = bridge->GetActiveSpaceId(this);\n"
+                "      }\n"
+                "      base::WeakPtr<Browser> weak_browser = AsWeakPtr();\n"
+                "      Profile* prof = profile();\n"
+                "      base::WeakPtr<Profile> weak_profile = prof ? prof->GetWeakPtr() : nullptr;\n"
+                "      base::WeakPtr<content::WebContents> weak_source = source ? source->GetWeakPtr() : nullptr;\n"
+                "      \n"
                 "      maho::DecideLinkDestination(\n"
-                "          params.url,\n"
-                "          /*is_external=*/false,\n"
+                "          params.url, /*is_external=*/false,\n"
                 "          base::BindOnce(\n"
-                "              [](base::WeakPtr<Profile> profile_weak, GURL url, maho::LinkDestinationResult result) {\n"
-                "                Profile* profile = profile_weak.get();\n"
-                "                if (!profile) return;\n"
-                "                if (result.type == maho::LinkDestinationType::kSpace) {\n"
-                "                  BrowserWindowInterface* active_interface = chrome::FindLastActive();\n"
-                "                  Browser* browser = active_interface ? active_interface->GetBrowserForMigrationOnly() : nullptr;\n"
-                "                  if (!browser || browser->profile() != profile) {\n"
-                "                    BrowserWindowInterface* browser_interface =\n"
-                "                        ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();\n"
-                "                    if (browser_interface) {\n"
-                "                      browser = browser_interface->GetBrowserForMigrationOnly();\n"
-                "                    }\n"
+                "              [](base::WeakPtr<Browser> browser,\n"
+                "                 base::WeakPtr<Profile> profile,\n"
+                "                 base::WeakPtr<content::WebContents> source,\n"
+                "                 std::string current_space_id,\n"
+                "                 content::OpenURLParams params,\n"
+                "                 base::OnceCallback<void(content::NavigationHandle&)> navigation_handle_callback,\n"
+                "                 maho::LinkDestinationResult result) {\n"
+                "                if (!browser || !profile) return;\n"
+                "                \n"
+                "                if (result.type == maho::LinkDestinationType::kSpace &&\n"
+                "                    !result.space_id.empty() &&\n"
+                "                    result.space_id != current_space_id) {\n"
+                "                  maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
+                "                  if (bridge) {\n"
+                "                    bridge->SwitchToSpace(browser.get(), result.space_id);\n"
+                "                    // R-9: AddSelectedTabWithURL creates a new tab in the target space.\n"
+                "                    // The callback is intentionally not propagated across space boundaries as a new tab is created.\n"
+                "                    chrome::AddSelectedTabWithURL(browser.get(), params.url, params.transition);\n"
                 "                  }\n"
-                "                  if (!browser) {\n"
-                "                    browser = Browser::Create(Browser::CreateParams(profile, true));\n"
-                "                    browser->window()->Show();\n"
-                "                  }\n"
-                "                  maho::MahoSpaceProfileBridge::GetInstance()->SwitchToSpace(browser, result.space_id);\n"
-                "                  chrome::AddSelectedTabWithURL(browser, url, ui::PAGE_TRANSITION_LINK);\n"
                 "                } else {\n"
-                "                  // Fallback: If DecideLinkDestination says Normal or LittleArc, open in Little Arc (since the user option-cmd clicked)\n"
-                "                  maho::LaunchLittleArc(profile, maho::LittleArcRequest{url});\n"
+                "                  AtcBypassState::SetBypass(browser.get(), true);\n"
+                "                  browser->OpenURL(params, std::move(navigation_handle_callback));\n"
+                "                  AtcBypassState::SetBypass(browser.get(), false);\n"
                 "                }\n"
                 "              },\n"
-                "              profile()->GetWeakPtr(), params.url));\n"
+                "              weak_browser, weak_profile, weak_source, current_space_id, params,\n"
+                "              std::move(navigation_handle_callback)));\n"
                 "      return nullptr;\n"
                 "    }\n"
                 "  }\n"
                 "#endif\n"
             ),
-            description="Intercept NEW_SPLIT_VIEW (Option+Command link click on macOS) in OpenURLFromTab and route via DecideLinkDestination",
-            guard="DecideLinkDestination",
+            description="Intercept in-browser top-level user-initiated navigations and route to space if ATC matches",
+            guard="AtcBypassState::ShouldBypass",
         ),
         Replacement(
             old=(
@@ -2879,6 +3078,52 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="maho::GetCore()",
         ),
+        # ── ATC space-routing NavigationThrottle ───────────────────────────────
+        Replacement(
+            old=(
+                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
+                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+            ),
+            description=(
+                "Insert MahoAtcNavigationThrottle and MahoAtcState includes into "
+                "chrome_content_browser_client.cc"
+            ),
+            guard='#include "maho/browser/net/maho_atc_navigation_throttle.h"',
+        ),
+        Replacement(
+            old=(
+                "void ChromeContentBrowserClient::CreateThrottlesForNavigation(\n"
+                "    content::NavigationThrottleRegistry& registry) {\n"
+                "  CreateAndAddChromeThrottlesForNavigation(registry);\n"
+                "}\n"
+            ),
+            new=(
+                "void ChromeContentBrowserClient::CreateThrottlesForNavigation(\n"
+                "    content::NavigationThrottleRegistry& registry) {\n"
+                "  CreateAndAddChromeThrottlesForNavigation(registry);\n"
+                "\n"
+                "#if BUILDFLAG(IS_MAC)\n"
+                "  // Maho ATC: route top-level user-initiated navigations that bypass\n"
+                "  // Browser::OpenURLFromTab (omnibox typed navigations and plain same-tab\n"
+                "  // link clicks) into their target space. Gated on HasEnabledRules() so\n"
+                "  // there is zero overhead (no throttle created) when no rules exist.\n"
+                "  if (maho::MahoAtcState::HasEnabledRules()) {\n"
+                "    registry.AddThrottle(\n"
+                "        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));\n"
+                "  }\n"
+                "#endif\n"
+                "}\n"
+            ),
+            description=(
+                "Register MahoAtcNavigationThrottle in CreateThrottlesForNavigation "
+                "(mac-only, gated on MahoAtcState::HasEnabledRules)"
+            ),
+            guard="maho::MahoAtcNavigationThrottle",
+        ),
     ],
     "chrome/test/BUILD.gn": [
         Replacement(
@@ -3346,6 +3591,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  bool IsMahoArcCaptionKeepAlivePoint(const gfx::Point& screen_point) const;\n"
                 "  int GetMahoArcCaptionPreferredWidth() const;\n"
                 "  void RevealMahoArcCaptionButtons();\n"
+                "  void PollMahoArcCaptionHide();\n"
+                "  void MaybeRevealMahoArcCaption();\n"
                 "  void ScheduleHideMahoArcCaptionButtons();\n"
                 "  void HideMahoArcCaptionButtons();\n"
                 "  void ApplyMahoArcCaptionButtonVisibility();\n"
@@ -3375,6 +3622,52 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": [
         Replacement(
+            old=(
+                "void BrowserCaptionButtonContainer::OnWindowControlsOverlayEnabledChanged() {\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {\n"
+            ),
+            new=(
+                "void BrowserCaptionButtonContainer::OnWindowControlsOverlayEnabledChanged() {\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() ||\n"
+                "      frame_view_->GetBrowserView()->IsMahoArcLayoutActive()) {\n"
+            ),
+            description=(
+                "Maho(win): layer-back the caption container in Arc mode (WCO flag is "
+                "not enabled for the main window) so revealed buttons paint over the "
+                "edge-to-edge client area"
+            ),
+            guard=(
+                "OnWindowControlsOverlayEnabledChanged() {\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() ||"
+            ),
+        ),
+        Replacement(
+            old=(
+                "  UpdateButtons();\n"
+                "\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {\n"
+                "    SetBackground(\n"
+            ),
+            new=(
+                "  UpdateButtons();\n"
+                "\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() ||\n"
+                "      frame_view_->GetBrowserView()->IsMahoArcLayoutActive()) {\n"
+                "    SetBackground(\n"
+            ),
+            description=(
+                "Maho(win): layer-back the caption container from AddedToWidget in Arc "
+                "mode so the hover-revealed buttons composite above the client area"
+            ),
+            guard=(
+                "  UpdateButtons();\n"
+                "\n"
+                "  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() ||\n"
+                "      frame_view_->GetBrowserView()->IsMahoArcLayoutActive()) {\n"
+                "    SetBackground(\n"
+            ),
+        ),
+        Replacement(
             old="#include <memory>\n",
             new=(
                 "#include <algorithm>\n"
@@ -3393,6 +3686,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "#include \"ui/events/event.h\"\n"
                 "#include \"ui/gfx/scoped_animation_duration_scale_mode.h\"\n"
                 "#include \"ui/views/event_monitor.h\"\n"
+                "#include \"ui/display/screen.h\"\n"
+                "#include \"ui/display/display.h\"\n"
             ),
             description="Maho(win): include event/timer APIs for Arc caption reveal",
             guard="#include \"ui/views/event_monitor.h\"",
@@ -3547,16 +3842,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }\n"
                 "  const gfx::Point screen_point =\n"
                 "      maho_arc_caption_event_monitor_->GetLastMouseLocation();\n"
+                "  if (maho_arc_caption_revealed_) {\n"
+                "    return;\n"
+                "  }\n"
                 "  if (IsMahoArcCaptionTriggerPoint(screen_point)) {\n"
-                "    RevealMahoArcCaptionButtons();\n"
-                "    return;\n"
-                "  }\n"
-                "  if (maho_arc_caption_revealed_ &&\n"
-                "      IsMahoArcCaptionKeepAlivePoint(screen_point)) {\n"
+                "    if (!maho_arc_caption_hide_timer_.IsRunning()) {\n"
+                "      maho_arc_caption_hide_timer_.Start(\n"
+                "          FROM_HERE, base::Milliseconds(250), this,\n"
+                "          &BrowserCaptionButtonContainer::MaybeRevealMahoArcCaption);\n"
+                "    }\n"
+                "  } else {\n"
                 "    maho_arc_caption_hide_timer_.Stop();\n"
-                "    return;\n"
                 "  }\n"
-                "  ScheduleHideMahoArcCaptionButtons();\n"
                 "}\n"
             ),
             description="Maho(win): implement Arc caption event/state lifecycle",
@@ -3621,18 +3918,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  if (!widget || widget->IsFullscreen()) {\n"
                 "    return false;\n"
                 "  }\n"
-                "  gfx::Rect trigger_bounds = GetBoundsInScreen();\n"
-                "  if (trigger_bounds.IsEmpty()) {\n"
-                "    trigger_bounds = widget->GetWindowBoundsInScreen();\n"
-                "  }\n"
-                "  const int trigger_width =\n"
-                "      std::min(kMahoArcCaptionRevealTriggerWidth,\n"
-                "               trigger_bounds.width());\n"
-                "  if (trigger_width <= 0 || trigger_bounds.height() <= 0) {\n"
+                "  // Maho: reveal when the pointer touches the full-width strip along\n"
+                "  // the very top edge of the window (the hidden handle bar hotzone).\n"
+                "  // Clamp to the display work area so the hotzone stays reachable when\n"
+                "  // maximized (a maximized window's top border overhangs off-screen).\n"
+                "  gfx::Rect trigger_bounds = widget->GetWindowBoundsInScreen();\n"
+                "  trigger_bounds.Intersect(\n"
+                "      display::Screen::Get()\n"
+                "          ->GetDisplayNearestWindow(widget->GetNativeWindow())\n"
+                "          .work_area());\n"
+                "  if (trigger_bounds.width() <= 0 || trigger_bounds.height() <= 0) {\n"
                 "    return false;\n"
                 "  }\n"
-                "  trigger_bounds.set_x(trigger_bounds.right() - trigger_width);\n"
-                "  trigger_bounds.set_width(trigger_width);\n"
                 "  trigger_bounds.set_height(std::min(kMahoArcCaptionRevealTriggerHeight,\n"
                 "                                      trigger_bounds.height()));\n"
                 "  return trigger_bounds.Contains(screen_point);\n"
@@ -3660,12 +3957,27 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  return std::max(width, kMahoArcCaptionRevealTriggerWidth);\n"
                 "}\n"
                 "\n"
+                "void BrowserCaptionButtonContainer::MaybeRevealMahoArcCaption() {\n"
+                "  if (maho_arc_caption_revealed_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  const gfx::Point cursor =\n"
+                "      display::Screen::Get()->GetCursorScreenPoint();\n"
+                "  if (IsMahoArcCaptionTriggerPoint(cursor)) {\n"
+                "    RevealMahoArcCaptionButtons();\n"
+                "  }\n"
+                "}\n"
+                "\n"
                 "void BrowserCaptionButtonContainer::RevealMahoArcCaptionButtons() {\n"
                 "  if (!IsMahoArcCaptionMode() ||\n"
                 "      frame_view_->browser_widget()->IsFullscreen()) {\n"
                 "    return;\n"
                 "  }\n"
-                "  maho_arc_caption_hide_timer_.Stop();\n"
+                "  if (!maho_arc_caption_hide_timer_.IsRunning()) {\n"
+                "    maho_arc_caption_hide_timer_.Start(\n"
+                "        FROM_HERE, base::Milliseconds(250), this,\n"
+                "        &BrowserCaptionButtonContainer::PollMahoArcCaptionHide);\n"
+                "  }\n"
                 "  if (maho_arc_caption_revealed_) {\n"
                 "    return;\n"
                 "  }\n"
@@ -3673,6 +3985,22 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  UpdateButtons();\n"
                 "  frame_view_->InvalidateLayout();\n"
                 "  frame_view_->DeprecatedLayoutImmediately();\n"
+                "}\n"
+                "\n"
+                "void BrowserCaptionButtonContainer::PollMahoArcCaptionHide() {\n"
+                "  if (!maho_arc_caption_revealed_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  const gfx::Point cursor =\n"
+                "      display::Screen::Get()->GetCursorScreenPoint();\n"
+                "  if (!frame_view_->browser_widget()->IsFullscreen() &&\n"
+                "      IsMahoArcCaptionKeepAlivePoint(cursor)) {\n"
+                "    maho_arc_caption_hide_timer_.Start(\n"
+                "        FROM_HERE, base::Milliseconds(250), this,\n"
+                "        &BrowserCaptionButtonContainer::PollMahoArcCaptionHide);\n"
+                "    return;\n"
+                "  }\n"
+                "  HideMahoArcCaptionButtons();\n"
                 "}\n"
                 "\n"
                 "void BrowserCaptionButtonContainer::ScheduleHideMahoArcCaptionButtons() {\n"
@@ -3718,7 +4046,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  SetCanProcessEventsWithinSubtree(revealed);\n"
                 "  SetPreferredSize(gfx::Size(\n"
                 "      revealed ? GetMahoArcCaptionPreferredWidth()\n"
-                "               : kMahoArcCaptionRevealTriggerWidth,\n"
+                "               : 0,\n"
                 "      0));\n"
                 "}\n"
                 "\n"
@@ -3741,6 +4069,52 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho(win): add Arc caption reveal helpers before WCO tooltip updater",
             guard="void BrowserCaptionButtonContainer::RevealMahoArcCaptionButtons()",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_frame_view_win.cc": [
+        Replacement(
+            old=(
+                "int BrowserFrameViewWin::GetTopInset(bool restored) const {\n"
+                "  if (GetBrowserView()->GetTabStripVisible()) {\n"
+            ),
+            new=(
+                "int BrowserFrameViewWin::GetTopInset(bool restored) const {\n"
+                "  // Maho(win): the Arc edge-to-edge layout reserves no titlebar strip;\n"
+                "  // the sidebar + contents fill to the very top of the window and the\n"
+                "  // caption handle bar is revealed on hover as a layer-backed overlay.\n"
+                "  if (GetBrowserView()->IsMahoArcLayoutActive()) {\n"
+                "    return 0;\n"
+                "  }\n"
+                "  if (GetBrowserView()->GetTabStripVisible()) {\n"
+            ),
+            description=(
+                "Maho(win): zero the top inset in Arc mode so content fills to the "
+                "window top and no persistent handle bar strip is reserved"
+            ),
+            guard="if (GetBrowserView()->IsMahoArcLayoutActive()) {\n    return 0;",
+        ),
+        Replacement(
+            old=(
+                "void BrowserFrameViewWin::PaintTitlebar(gfx::Canvas* canvas) const {\n"
+                "  TRACE_EVENT0(\"views.frame\", \"BrowserFrameViewWin::PaintTitlebar\");\n"
+            ),
+            new=(
+                "void BrowserFrameViewWin::PaintTitlebar(gfx::Canvas* canvas) const {\n"
+                "  TRACE_EVENT0(\"views.frame\", \"BrowserFrameViewWin::PaintTitlebar\");\n"
+                "  // Maho(win): do not paint the titlebar strip in the Arc edge-to-edge\n"
+                "  // layout. The handle bar is hidden by default and revealed on hover\n"
+                "  // purely through the layer-backed caption button container.\n"
+                "  if (GetBrowserView()->IsMahoArcLayoutActive()) {\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho(win): suppress the always-visible titlebar/handle-bar strip in "
+                "Arc mode; reveal-on-hover is handled by the caption container"
+            ),
+            guard=(
+                "// Maho(win): do not paint the titlebar strip in the Arc edge-to-edge"
+            ),
         ),
     ],
     "chrome/app/chrome_main_delegate.cc": [
@@ -3892,6 +4266,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
     ],
+    "chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc": [
+        Replacement(
+            old='#include "chrome/browser/webdata_services/web_data_service_factory.h"\n',
+            new=(
+                '#include "chrome/browser/webdata_services/web_data_service_factory.h"\n'
+                '#include "maho/browser/mail_helper/maho_mail_service_factory.h"\n'
+                '#include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"\n'
+            ),
+            description="Include Maho service factories in profiles.cc",
+        ),
+        Replacement(
+            old='  WebDataServiceFactory::GetInstance();\n',
+            new=(
+                '  WebDataServiceFactory::GetInstance();\n'
+                '  maho::MahoMailServiceFactory::GetInstance();\n'
+                '  maho::MahoDownloadBridgeServiceFactory::GetInstance();\n'
+            ),
+            description="Initialize Maho service factories in profiles.cc",
+        ),
+    ],
     "chrome/browser/ui/views/frame/contents_container_outline.h": [
         Replacement(
             old="  static constexpr int kThickness = 1;\n",
@@ -3902,6 +4296,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "already transparent via the color mixer)"
             ),
             guard="static constexpr int kThickness = 0;",
+        ),
+    ],
+    "ui/base/ui_base_features.cc": [
+        Replacement(
+            old="BASE_FEATURE(kSplitViewLinkOpen, base::FEATURE_DISABLED_BY_DEFAULT);",
+            new="BASE_FEATURE(kSplitViewLinkOpen, base::FEATURE_ENABLED_BY_DEFAULT);",
+            description="Maho: Enable split view link open by default",
+        ),
+    ],
+    "chrome/browser/renderer_context_menu/render_view_context_menu.cc": [
+        Replacement(
+            old='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_LITTLE_ARC, u"Open in Little Arc");',
+            new='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_LITTLE_ARC, u"Open in Maho Mini");',
+            description="Maho: Rename context menu item to Open in Maho Mini",
         ),
     ],
 }

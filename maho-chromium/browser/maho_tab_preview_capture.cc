@@ -324,9 +324,17 @@ void MahoTabWakeHelper::DidFinishLoad(content::RenderFrameHost* render_frame_hos
                          "elapsed_ms", elapsed_ms);
     LOG(INFO) << "[MAHO_PERF] WakeTab.DidFinishLoad tab_id=" << tab_id_
               << " elapsed=" << elapsed_ms << "ms";
-    wc->GetPrimaryMainFrame()->ExecuteJavaScriptInIsolatedWorld(
-        base::UTF8ToUTF16(base::StringPrintf("window.scrollTo(%f, %f)", scroll_x_, scroll_y_)),
-        base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
+    // Only inject JS when the frame is live and active. DidFinishLoad can race
+    // with a concurrent navigation so the primary main frame may already be in
+    // a non-JS-executable lifecycle state (kSpeculative/kPendingCommit), which
+    // CHECK-crashes the browser inside ExecuteJavaScriptInIsolatedWorld via
+    // AssertFrameWasCommitted().
+    if (render_frame_host->IsRenderFrameLive() &&
+        render_frame_host->IsActive()) {
+      render_frame_host->ExecuteJavaScriptInIsolatedWorld(
+          base::UTF8ToUTF16(base::StringPrintf("window.scrollTo(%f, %f)", scroll_x_, scroll_y_)),
+          base::NullCallback(), content::ISOLATED_WORLD_ID_CONTENT_END);
+    }
     RemoveOverlay();
   }
 }
