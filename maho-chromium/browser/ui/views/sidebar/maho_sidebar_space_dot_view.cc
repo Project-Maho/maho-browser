@@ -3,13 +3,20 @@
 #include "maho_sidebar_space_dot_view.h"
 
 #include <cmath>
+#include <utility>
+#include <vector>
 
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_flags.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer_tree_owner.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
@@ -24,6 +31,54 @@
 #include "ui/views/layout/fill_layout.h"
 
 namespace maho {
+
+namespace {
+
+void PerformMoveToSpace(const std::string& target_space_id,
+                        const ui::DropTargetEvent& event,
+                        ui::mojom::DragOperation& output_drag_op,
+                        std::unique_ptr<ui::LayerTreeOwner> layer) {
+  SidebarDragPayload payload;
+  if (target_space_id.empty() || !ReadMahoDragData(event.data(), payload) ||
+      payload.space_id == target_space_id) {
+    output_drag_op = ui::mojom::DragOperation::kNone;
+    return;
+  }
+
+  if (payload.node_kind == SidebarNodeKind::kTab) {
+    std::vector<std::string> ids = payload.selected_tab_ids.empty()
+                                       ? std::vector<std::string>{payload.node_id}
+                                       : payload.selected_tab_ids;
+    bool moved = false;
+    for (const std::string& id : ids) {
+      if (id.empty()) {
+        continue;
+      }
+      maho::DispatchShellEvent("move_tab_to_space",
+                               {{"target_space_id", target_space_id},
+                                {"tab_id", id},
+                                {"section", "normal"}});
+      moved = true;
+    }
+    output_drag_op = moved ? ui::mojom::DragOperation::kMove
+                           : ui::mojom::DragOperation::kNone;
+    return;
+  }
+
+  if (payload.node_kind == SidebarNodeKind::kFolder && !payload.node_id.empty() &&
+      !payload.space_id.empty()) {
+    maho::DispatchShellEvent("move_folder_to_space",
+                             {{"source_space_id", payload.space_id},
+                              {"folder_id", payload.node_id},
+                              {"target_space_id", target_space_id}});
+    output_drag_op = ui::mojom::DragOperation::kMove;
+    return;
+  }
+
+  output_drag_op = ui::mojom::DragOperation::kNone;
+}
+
+}  // namespace
 
 BEGIN_METADATA(MahoSidebarSpaceDotView)
 END_METADATA
@@ -234,6 +289,55 @@ void MahoSidebarSpaceDotView::OnMouseCaptureLost() {
       delegate_->OnSpaceDotDragEnded(this, /*cancelled=*/true);
     }
   }
+}
+
+bool MahoSidebarSpaceDotView::GetDropFormats(
+    int* formats,
+    std::set<ui::ClipboardFormatType>* format_types) {
+  format_types->insert(GetMahoDragFormatType());
+  return true;
+}
+
+bool MahoSidebarSpaceDotView::CanDrop(const ui::OSExchangeData& data) {
+  SidebarDragPayload payload;
+  return !space_id_.empty() && ReadMahoDragData(data, payload) &&
+         payload.space_id != space_id_;
+}
+
+int MahoSidebarSpaceDotView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  SidebarDragPayload payload;
+  if (space_id_.empty() || !ReadMahoDragData(event.data(), payload) ||
+      payload.space_id == space_id_) {
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+  if (!drag_over_) {
+    drag_over_ = true;
+    hover_animation_.Show();
+    UpdateAppearance();
+  }
+  return static_cast<int>(ui::mojom::DragOperation::kMove);
+}
+
+void MahoSidebarSpaceDotView::OnDragExited() {
+  if (drag_over_) {
+    drag_over_ = false;
+    if (!is_hovered_) {
+      hover_animation_.Hide();
+    }
+    UpdateAppearance();
+  }
+}
+
+views::View::DropCallback MahoSidebarSpaceDotView::GetDropCallback(
+    const ui::DropTargetEvent& event) {
+  if (drag_over_) {
+    drag_over_ = false;
+    if (!is_hovered_) {
+      hover_animation_.Hide();
+    }
+    UpdateAppearance();
+  }
+  return base::BindOnce(&PerformMoveToSpace, space_id_);
 }
 
 float MahoSidebarSpaceDotView::GetCurrentDotSize() const {

@@ -3,10 +3,14 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_SPACE_DOT_VIEW_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_SPACE_DOT_VIEW_H_
 
+#include <set>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -88,6 +92,15 @@ class MahoSidebarSpaceDotView : public views::View,
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnMouseCaptureLost() override;
 
+  // views::View drop target: a tab/folder/split dragged from the sidebar can be
+  // dropped onto a space dot to move it into that space.
+  bool GetDropFormats(int* formats,
+                      std::set<ui::ClipboardFormatType>* format_types) override;
+  bool CanDrop(const ui::OSExchangeData& data) override;
+  int OnDragUpdated(const ui::DropTargetEvent& event) override;
+  void OnDragExited() override;
+  DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
+
   // gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
 
@@ -114,6 +127,7 @@ class MahoSidebarSpaceDotView : public views::View,
   bool is_selected_ = false;
   bool is_hovered_ = false;
   bool has_icon_ = false;
+  bool drag_over_ = false;
 
   float dot_opacity_ = 1.0f;
 

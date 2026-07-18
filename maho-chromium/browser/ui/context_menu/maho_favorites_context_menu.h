@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "ui/menus/simple_menu_model.h"
@@ -30,10 +31,18 @@ class MahoFavoritesContextMenu : public ui::SimpleMenuModel::Delegate {
   bool IsCommandIdChecked(int command_id) const override;
 
  private:
+  struct SpaceEntry {
+    std::string id;
+    std::string name;
+    std::string icon;
+  };
+
   raw_ptr<Browser> browser_;
   GURL url_;
   std::u16string title_;
   std::string tab_id_;
+  std::unique_ptr<ui::SimpleMenuModel> move_to_space_submenu_;
+  std::vector<SpaceEntry> space_entries_;
 };
 
 #endif  // MAHO_CHROMIUM_BROWSER_UI_CONTEXT_MENU_MAHO_FAVORITES_CONTEXT_MENU_H_

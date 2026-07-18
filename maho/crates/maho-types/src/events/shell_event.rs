@@ -268,6 +268,11 @@ pub enum ShellEvent {
         space_id: SpaceId,
         folder_id: FolderId,
     },
+    MoveFolderToSpace {
+        source_space_id: SpaceId,
+        folder_id: FolderId,
+        target_space_id: SpaceId,
+    },
     MoveFolderIntoFolder {
         space_id: SpaceId,
         folder_id: FolderId,
@@ -782,6 +787,7 @@ impl ShellEvent {
                 | Self::RenameFolder { .. }
                 | Self::DeleteFolder { .. }
                 | Self::ConvertFolderToSpace { .. }
+                | Self::MoveFolderToSpace { .. }
                 | Self::MoveFolderIntoFolder { .. }
                 | Self::MoveFolderToRoot { .. }
                 | Self::ReorderFolder { .. }

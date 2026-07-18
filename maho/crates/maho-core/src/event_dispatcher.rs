@@ -988,6 +988,102 @@ impl EventDispatcher {
                     vec![]
                 }
             }
+            ShellEvent::MoveFolderToSpace {
+                source_space_id,
+                folder_id,
+                target_space_id,
+            } => {
+                let top_tab_ids = if source_space_id == target_space_id {
+                    None
+                } else {
+                    space_mgr.get_space(&source_space_id).and_then(|sp| {
+                        sp.folders
+                            .iter()
+                            .find(|f| f.id == folder_id)
+                            .map(|f| f.tab_ids.clone())
+                    })
+                };
+
+                if let Some(top_tab_ids) = top_tab_ids {
+                    let mut descendants_with_tabs: Vec<(FolderId, Vec<TabId>)> = Vec::new();
+                    let mut to_visit = vec![folder_id.clone()];
+                    while let Some(parent) = to_visit.pop() {
+                        if let Some(sp) = space_mgr.get_space(&source_space_id) {
+                            for f in &sp.folders {
+                                if f.parent_folder_id == Some(parent.clone()) {
+                                    descendants_with_tabs
+                                        .push((f.id.clone(), f.tab_ids.clone()));
+                                    to_visit.push(f.id.clone());
+                                }
+                            }
+                        }
+                    }
+                    let descendant_ids: Vec<FolderId> = descendants_with_tabs
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect();
+
+                    // Detach only the top folder to root so move_folder_to_space
+                    // re-homes it into the target's root_order; descendants keep
+                    // their parent pointers, which stay valid because the whole
+                    // subtree moves to the same target space.
+                    let _ = space_mgr.move_folder_in_space(&source_space_id, &folder_id, None);
+
+                    let mut updates = Vec::new();
+
+                    space_mgr.move_folder_to_space(&folder_id, &source_space_id, &target_space_id);
+                    updates.push(CoreUpdate::FolderUpdated {
+                        folder_id: folder_id.clone(),
+                        changes: FolderUpdate {
+                            name: None,
+                            is_expanded: None,
+                            is_pinned: None,
+                        },
+                    });
+                    for desc_id in &descendant_ids {
+                        space_mgr.move_folder_to_space(
+                            desc_id,
+                            &source_space_id,
+                            &target_space_id,
+                        );
+                        updates.push(CoreUpdate::FolderUpdated {
+                            folder_id: desc_id.clone(),
+                            changes: FolderUpdate {
+                                name: None,
+                                is_expanded: None,
+                                is_pinned: None,
+                            },
+                        });
+                    }
+
+                    for tab_id in top_tab_ids.iter().chain(
+                        descendants_with_tabs
+                            .iter()
+                            .flat_map(|(_, tabs)| tabs.iter()),
+                    ) {
+                        let is_favorite = tab_mgr
+                            .get_tab(tab_id)
+                            .map(|t| t.role.is_favorite())
+                            .unwrap_or(false); // L3-EXEMPT: local query
+                        tab_mgr.move_tab(tab_id, target_space_id.clone(), 0);
+                        space_mgr.remove_tab_from_space(&source_space_id, tab_id);
+                        space_mgr.add_tab_to_space(&target_space_id, tab_id.clone(), None);
+                        space_mgr.apply_tab_residency(&target_space_id, tab_id, is_favorite, true); // L3-EXEMPT: local parameter
+                    }
+
+                    updates.push(CoreUpdate::TabOrderChanged {
+                        space_id: source_space_id,
+                        order: vec![],
+                    });
+                    updates.push(CoreUpdate::TabOrderChanged {
+                        space_id: target_space_id,
+                        order: vec![],
+                    });
+                    updates
+                } else {
+                    vec![]
+                }
+            }
             ShellEvent::MoveFolderIntoFolder {
                 space_id,
                 folder_id,

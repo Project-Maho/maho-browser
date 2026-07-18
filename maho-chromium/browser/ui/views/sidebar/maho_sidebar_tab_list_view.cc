@@ -5027,6 +5027,50 @@ void MahoSidebarTabListView::ActivateTabById(const std::string& tab_id) {
   }
 }
 
+bool MahoSidebarTabListView::ActivateAdjacentTabInVisualOrder(bool forward) {
+  std::vector<SidebarTabRowView*> rows = GetTabRowsInVisualOrder();
+
+  // A collapsed folder surfaces its active descendant as a duplicate "sticky"
+  // row; dedupe by tab_id so each tab is visited exactly once while preserving
+  // visual order.
+  std::vector<SidebarTabRowView*> ordered;
+  ordered.reserve(rows.size());
+  std::unordered_set<std::string> seen;
+  for (SidebarTabRowView* row : rows) {
+    if (row && seen.insert(row->tab_id()).second) {
+      ordered.push_back(row);
+    }
+  }
+  if (ordered.empty()) {
+    return false;
+  }
+
+  std::string active_tab_id;
+  if (browser_ && browser_->tab_strip_model()) {
+    active_tab_id = FindCoreTabIdByWebContents(
+        browser_->tab_strip_model()->GetActiveWebContents());
+  }
+
+  int current = -1;
+  for (size_t i = 0; i < ordered.size(); ++i) {
+    if (ordered[i]->tab_id() == active_tab_id) {
+      current = static_cast<int>(i);
+      break;
+    }
+  }
+
+  const int count = static_cast<int>(ordered.size());
+  int target = 0;
+  if (current < 0) {
+    target = forward ? 0 : count - 1;
+  } else {
+    target = (current + (forward ? 1 : -1) + count) % count;
+  }
+
+  ActivateTabById(ordered[target]->tab_id());
+  return true;
+}
+
 content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
     const std::string& tab_id) {
   TRACE_EVENT1("browser", "WakeSuspendedTab", "tab_id", tab_id);

@@ -24,6 +24,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/views/view_utils.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
@@ -401,10 +402,29 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     chrome::NewWindow(browser);
   } else if (action_id == "close_window") {
     chrome::CloseWindow(browser);
-  } else if (action_id == "next_tab") {
-    chrome::SelectNextTab(browser);
-  } else if (action_id == "prev_tab") {
-    chrome::SelectPreviousTab(browser);
+  } else if (action_id == "next_tab" || action_id == "prev_tab") {
+    const bool forward = (action_id == "next_tab");
+    bool handled = false;
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    auto* container = browser_view
+        ? static_cast<MahoSidebarContainerView*>(
+              browser_view->maho_sidebar_container())
+        : nullptr;
+    if (container) {
+      auto* sidebar =
+          views::AsViewClass<maho::MahoSidebarView>(container->sidebar_view());
+      if (sidebar && sidebar->tab_list_view()) {
+        handled =
+            sidebar->tab_list_view()->ActivateAdjacentTabInVisualOrder(forward);
+      }
+    }
+    if (!handled) {
+      if (forward) {
+        chrome::SelectNextTab(browser);
+      } else {
+        chrome::SelectPreviousTab(browser);
+      }
+    }
   } else if (action_id == "js_console") {
     auto* web_contents = browser->tab_strip_model()->GetActiveWebContents();
     if (web_contents) {

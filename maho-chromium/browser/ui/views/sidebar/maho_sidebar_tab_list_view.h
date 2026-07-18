@@ -136,6 +136,13 @@ class MahoSidebarTabListView : public views::View,
   void OnScrollChanged();
   bool OnKeyPressed(const ui::KeyEvent& event) override;
   void ActivateTabById(const std::string& tab_id);
+  // Arc-style tab navigation in the sidebar's visual order (the DFS render
+  // order from GetTabRowsInVisualOrder(): pinned/normal sections, folder
+  // nesting, splits). Implicitly Space-scoped since the tab list model is
+  // Space-filtered. Wraps at the ends. Returns false when no navigable tab
+  // rows exist, letting the caller fall back to positional next/prev.
+  // |forward| = next/down, !forward = previous/up.
+  bool ActivateAdjacentTabInVisualOrder(bool forward);
   // Materializes a Maho core-only "suspended" tab into the TabStripModel via a
   // foreground navigation and returns the new WebContents (nullptr on failure).
   // Public so the sidebar drop path can wake tabs before splitting them.
