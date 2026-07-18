@@ -135,21 +135,32 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
 
 
 def _find_llvm_tools():
-    """Locate llvm-nm/llvm-ar/llvm-objcopy from the active rustup toolchain
-    (the llvm-tools component ships them under the toolchain sysroot)."""
+    """Locate llvm-nm/llvm-ar/llvm-objcopy from an installed rustup toolchain
+    (the llvm-tools component ships them under a toolchain's sysroot).
+
+    The active toolchain's sysroot is tried first, then every installed
+    toolchain under RUSTUP_HOME is scanned as a fallback. This fallback is
+    required because a pinned rust-toolchain.toml may select a minimal-profile
+    toolchain that omits llvm-tools, and in detached build environments
+    (e.g. a scheduled task) `rustc --print sysroot` may not resolve at all."""
     exe = '.exe' if sys.platform == 'win32' else ''
+    names = ('llvm-nm', 'llvm-ar', 'llvm-objcopy')
+    bases = []
     try:
         sysroot = subprocess.run(['rustc', '--print', 'sysroot'],
                                  capture_output=True, text=True, check=True).stdout.strip()
+        if sysroot:
+            bases += glob.glob(os.path.join(sysroot, 'lib', 'rustlib', '*', 'bin'))
     except Exception:
-        sysroot = None
-    bases = glob.glob(os.path.join(sysroot, 'lib', 'rustlib', '*', 'bin')) if sysroot else []
+        pass
+    rustup_home = os.environ.get('RUSTUP_HOME') or os.path.join(
+        os.path.expanduser('~'), '.rustup')
+    bases += glob.glob(os.path.join(rustup_home, 'toolchains', '*',
+                                    'lib', 'rustlib', '*', 'bin'))
     for base in bases:
-        nm = os.path.join(base, 'llvm-nm' + exe)
-        ar = os.path.join(base, 'llvm-ar' + exe)
-        objcopy = os.path.join(base, 'llvm-objcopy' + exe)
-        if all(os.path.exists(p) for p in (nm, ar, objcopy)):
-            return nm, ar, objcopy
+        tools = [os.path.join(base, n + exe) for n in names]
+        if all(os.path.exists(p) for p in tools):
+            return tuple(tools)
     sys.exit('Windows symbol privatization needs llvm-nm/llvm-ar/llvm-objcopy; '
              'install the rustup llvm-tools component: rustup component add llvm-tools')
 
