@@ -19,6 +19,8 @@ source_set("net") {
     "maho_boost_injection_handler.h",
     "maho_cosmetic_filters_handler.cc",
     "maho_cosmetic_filters_handler.h",
+    "maho_webstore_rebrand_handler.cc",
+    "maho_webstore_rebrand_handler.h",
     "maho_webstore_ua_throttle.cc",
     "maho_webstore_ua_throttle.h",
   ]

@@ -52,10 +52,57 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_frame_view_win.cc": frozenset({"win"}),
+    "chrome/browser/device_reauth/chrome_device_authenticator_factory.cc": frozenset({"linux"}),
+    "chrome/browser/device_reauth/BUILD.gn": frozenset({"linux"}),
 }
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/device_reauth/chrome_device_authenticator_factory.cc": [
+        Replacement(
+            old=(
+                "#else\n"
+                "  static_assert(false);\n"
+                "#endif"
+            ),
+            new=(
+                "#elif BUILDFLAG(IS_LINUX)\n"
+                "  // Maho Linux: upstream Chromium ships no Linux-desktop DeviceAuthenticator.\n"
+                "  // Return null so reauth-gated operations fail closed; every caller in\n"
+                "  // maho_settings_page_handler.cc checks for null and declines gracefully.\n"
+                "  std::unique_ptr<DeviceAuthenticator> device_authenticator = nullptr;\n"
+                "#else\n"
+                "  static_assert(false);\n"
+                "#endif"
+            ),
+            description="Maho Linux: fail-closed DeviceAuthenticator for Linux desktop",
+            guard="std::unique_ptr<DeviceAuthenticator> device_authenticator = nullptr;",
+        ),
+    ],
+    "chrome/browser/device_reauth/BUILD.gn": [
+        Replacement(
+            old=(
+                "  if (is_android || is_mac || is_win || is_chromeos) {\n"
+                "    public += [ \"chrome_device_authenticator_factory.h\" ]"
+            ),
+            new=(
+                "  if (is_android || is_mac || is_win || is_chromeos || is_linux) {\n"
+                "    public += [ \"chrome_device_authenticator_factory.h\" ]"
+            ),
+            description="Maho Linux: expose device authenticator factory header on Linux",
+        ),
+        Replacement(
+            old=(
+                "  if (is_android || is_mac || is_win || is_chromeos) {\n"
+                "    sources += [ \"chrome_device_authenticator_factory.cc\" ]"
+            ),
+            new=(
+                "  if (is_android || is_mac || is_win || is_chromeos || is_linux) {\n"
+                "    sources += [ \"chrome_device_authenticator_factory.cc\" ]"
+            ),
+            description="Maho Linux: compile device authenticator factory source on Linux",
+        ),
+    ],
     "chrome/browser/ui/views/frame/contents_web_view.cc": [
         Replacement(
             old='#include "chrome/browser/ui/color/chrome_color_id.h"\n',
@@ -385,6 +432,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  MahoTabIdHelper::CreateForWebContents(web_contents);\n"
             ),
             description="Attach MahoTabIdHelper in TabHelpers::AttachTabHelpers()",
+        ),
+        Replacement(
+            old='#include "maho/browser/maho_tab_id_helper.h"\n',
+            new=(
+                '#include "maho/browser/maho_tab_id_helper.h"\n'
+                '#include "maho/browser/net/maho_webstore_rebrand_handler.h"\n'
+            ),
+            description="Add MahoWebStoreRebrandHandler include to tab_helpers.cc",
+            guard='#include "maho/browser/net/maho_webstore_rebrand_handler.h"',
+        ),
+        Replacement(
+            old="  MahoTabIdHelper::CreateForWebContents(web_contents);\n",
+            new=(
+                "  MahoTabIdHelper::CreateForWebContents(web_contents);\n"
+                "  MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);\n"
+            ),
+            description=(
+                "Attach MahoWebStoreRebrandHandler in TabHelpers::AttachTabHelpers()"
+            ),
+            guard="MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);",
         ),
     ],
     # ── browser_live_tab_context.cc ───────────────────────────────────────────
@@ -1247,16 +1314,16 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.cc",\n'
                 '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.h",\n'
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc",\n'
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h",\n'
                 '      "//maho/browser/net/maho_atc_navigation_throttle.cc",\n'
                 '      "//maho/browser/net/maho_atc_navigation_throttle.h",\n'
             ),
             description=(
-                "Compile the MahoAtcNavigationThrottle into the "
-                "chrome/browser/ui:ui target, co-located with the Little Arc / "
-                "space-routing code it links against (DecideLinkDestination, "
-                "MahoSpaceProfileBridge, FindBrowserWithTab, AddSelectedTabWithURL)"
+                "Compile the MahoAtcNavigationThrottle and MahoLittleArcTopBarView into the "
+                "chrome/browser/ui:ui target"
             ),
-            guard='"//maho/browser/net/maho_atc_navigation_throttle.cc"',
+            guard='"//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc"',
         ),
         Replacement(
             old=(
@@ -4310,6 +4377,311 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             old='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_LITTLE_ARC, u"Open in Little Arc");',
             new='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_LITTLE_ARC, u"Open in Maho Mini");',
             description="Maho: Rename context menu item to Open in Maho Mini",
+        ),
+    ],
+    "chrome/browser/ui/browser.h": [
+        Replacement(
+            old=(
+                "    // Document Picture in Picture options, specific to TYPE_PICTURE_IN_PICTURE.\n"
+                "    std::optional<blink::mojom::PictureInPictureWindowOptions> pip_options;\n"
+            ),
+            new=(
+                "    // Document Picture in Picture options, specific to TYPE_PICTURE_IN_PICTURE.\n"
+                "    std::optional<blink::mojom::PictureInPictureWindowOptions> pip_options;\n"
+                "\n"
+                "    bool is_little_arc = false;\n"
+            ),
+            description="Maho: Add is_little_arc to CreateParams",
+            guard="bool is_little_arc = false;",
+        ),
+        Replacement(
+            old=(
+                "  ~Browser() override;\n"
+            ),
+            new=(
+                "  ~Browser() override;\n"
+                "\n"
+                "  bool is_little_arc() const { return is_little_arc_; }\n"
+            ),
+            description="Maho: Add is_little_arc getter to Browser",
+            guard="is_little_arc() const",
+        ),
+        Replacement(
+            old=(
+                "  // This Browser's type.\n"
+                "  const Type type_;\n"
+            ),
+            new=(
+                "  // This Browser's type.\n"
+                "  const Type type_;\n"
+                "\n"
+                "  const bool is_little_arc_;\n"
+            ),
+            description="Maho: Add is_little_arc_ member to Browser",
+            guard="const bool is_little_arc_;",
+        ),
+    ],
+    "chrome/browser/ui/browser.cc": [
+        Replacement(
+            old=(
+                "Browser::Browser(const CreateParams& params)\n"
+                "    : create_params_(params),\n"
+                "      type_(params.type),\n"
+                "      profile_(params.profile),\n"
+            ),
+            new=(
+                "Browser::Browser(const CreateParams& params)\n"
+                "    : create_params_(params),\n"
+                "      type_(params.type),\n"
+                "      is_little_arc_(params.is_little_arc),\n"
+                "      profile_(params.profile),\n"
+            ),
+            description="Maho: Initialize is_little_arc_ in Browser constructor",
+            guard="is_little_arc_(params.is_little_arc)",
+        ),
+        Replacement(
+            old=(
+                "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
+                "                                        bool check_can_support) const {\n"
+                "  switch (type_) {\n"
+            ),
+            new=(
+                "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
+                "                                        bool check_can_support) const {\n"
+                "  if (is_little_arc()) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  switch (type_) {\n"
+            ),
+            description="Maho: Disable window features for Little Arc windows",
+            guard="if (is_little_arc()) {",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_native_widget_mac.mm": [
+        Replacement(
+            old=(
+                "  } else if (browser_view_->GetIsNormalType() ||\n"
+                "             browser_view_->GetIsWebAppType()) {\n"
+                "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
+                "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
+                "\n"
+                "    // Ensure tabstrip/profile button are visible.\n"
+                "    params->titlebar_appears_transparent = true;\n"
+                "\n"
+                "    // Hosted apps draw their own window title.\n"
+                "    if (browser_view_->GetIsWebAppType()) {\n"
+                "      params->window_title_hidden = true;\n"
+                "    }\n"
+                "  } else {\n"
+            ),
+            new=(
+                "  } else if (browser_view_->GetIsNormalType() ||\n"
+                "             browser_view_->GetIsWebAppType() ||\n"
+                "             browser_view_->browser()->is_little_arc()) {\n"
+                "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
+                "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
+                "\n"
+                "    // Ensure tabstrip/profile button are visible.\n"
+                "    params->titlebar_appears_transparent = true;\n"
+                "\n"
+                "    if (browser_view_->browser()->is_little_arc()) {\n"
+                "      params->window_title_hidden = true;\n"
+                "    } else if (browser_view_->GetIsWebAppType()) {\n"
+                "      params->window_title_hidden = true;\n"
+                "    }\n"
+                "  } else {\n"
+            ),
+            description="Maho: Style Little Arc window with transparent titlebar and full size content",
+            guard="browser_view_->browser()->is_little_arc()",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_frame_view_mac.mm": [
+        Replacement(
+            old=(
+                "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
+                "  // of the client area.\n"
+                "  if (GetBrowserView()->browser()->is_type_popup() ||\n"
+                "      GetBrowserView()->browser()->is_type_devtools()) {\n"
+                "    return result;\n"
+                "  }\n"
+            ),
+            new=(
+                "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
+                "  // of the client area.\n"
+                "  if ((GetBrowserView()->browser()->is_type_popup() && !GetBrowserView()->browser()->is_little_arc()) ||\n"
+                "      GetBrowserView()->browser()->is_type_devtools()) {\n"
+                "    return result;\n"
+                "  }\n"
+            ),
+            description="Maho: Allow caption button bounds for Little Arc popups",
+            guard="!GetBrowserView()->browser()->is_little_arc()",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_view.h": [
+        Replacement(
+            old=(
+                "  // Maho: left sidebar host container.\n"
+                "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
+            ),
+            new=(
+                "  // Maho: left sidebar host container.\n"
+                "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
+                "\n"
+                "  raw_ptr<views::View> maho_little_arc_top_bar_ = nullptr;\n"
+            ),
+            description="Maho: Add maho_little_arc_top_bar_ to BrowserView",
+            guard="maho_little_arc_top_bar_",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_view.cc": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h"\n'
+            ),
+            description="Maho: Include maho_little_arc_top_bar_view.h in browser_view.cc",
+            guard="maho_little_arc_top_bar_view.h",
+        ),
+        Replacement(
+            old=(
+                "  contents_container_ = AddChildView(std::move(contents_container));\n"
+                "  set_contents_view(contents_container_);\n"
+            ),
+            new=(
+                "  contents_container_ = AddChildView(std::move(contents_container));\n"
+                "  set_contents_view(contents_container_);\n"
+                "\n"
+                "  if (browser_->is_little_arc()) {\n"
+                "    maho_little_arc_top_bar_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoLittleArcTopBarView>(browser_.get(), this));\n"
+                "  }\n"
+            ),
+            description="Maho: Initialize maho_little_arc_top_bar_ in BrowserView::InitViews",
+            guard="maho_little_arc_top_bar_ = AddChildView",
+        ),
+        Replacement(
+            old=(
+                "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
+                "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            new=(
+                "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
+                "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
+                "  layout_views.maho_little_arc_top_bar = maho_little_arc_top_bar_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            description="Maho: Populate maho_little_arc_top_bar in layout_views",
+            guard="layout_views.maho_little_arc_top_bar =",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/layout/browser_view_layout.h": [
+        Replacement(
+            old=(
+                "  // Maho: BrowserView-owned sidebar host container.\n"
+                "  raw_ptr<views::View> maho_sidebar_container = nullptr;\n"
+                "\n"
+                "  raw_ptr<views::View> maho_create_space_blank_view = nullptr;\n"
+            ),
+            new=(
+                "  // Maho: BrowserView-owned sidebar host container.\n"
+                "  raw_ptr<views::View> maho_sidebar_container = nullptr;\n"
+                "\n"
+                "  raw_ptr<views::View> maho_create_space_blank_view = nullptr;\n"
+                "\n"
+                "  raw_ptr<views::View> maho_little_arc_top_bar = nullptr;\n"
+            ),
+            description="Maho: Add maho_little_arc_top_bar to BrowserViewLayoutViews",
+            guard="maho_little_arc_top_bar = nullptr;",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"\n'
+                "\n"
+                '#include "chrome/browser/ui/browser.h"\n'
+            ),
+            description="Maho: Include Browser for is_little_arc() calls in popup layout",
+            guard='#include "chrome/browser/ui/browser.h"',
+        ),
+        Replacement(
+            old=(
+                "  BrowserLayoutParams params = browser_params;\n"
+                "\n"
+                "  // Lay out the top container if it's in the browser (even if it's empty).\n"
+            ),
+            new=(
+                "  BrowserLayoutParams params = browser_params;\n"
+                "\n"
+                "  if (views().maho_little_arc_top_bar && views().maho_little_arc_top_bar->GetVisible()) {\n"
+                "    gfx::Rect top_bar_bounds = params.visual_client_area;\n"
+                "    top_bar_bounds.set_height(38);\n"
+                "    layout.AddChild(views().maho_little_arc_top_bar, top_bar_bounds);\n"
+                "    params.SetTop(top_bar_bounds.bottom());\n"
+                "  }\n"
+                "\n"
+                "  // Lay out the top container if it's in the browser (even if it's empty).\n"
+            ),
+            description="Maho: Lay out maho_little_arc_top_bar in CalculateProposedLayout",
+            guard="views().maho_little_arc_top_bar &&",
+        ),
+        Replacement(
+            old=(
+                "gfx::Rect BrowserViewPopupLayoutImpl::CalculateTopContainerLayout(\n"
+                "    ProposedLayout& layout,\n"
+                "    BrowserLayoutParams params,\n"
+                "    bool needs_exclusion) const {\n"
+                "  const int original_top = params.visual_client_area.y();\n"
+                "\n"
+                "  // Layout starts beneath the caption buttons because title is laid out by the\n"
+            ),
+            new=(
+                "gfx::Rect BrowserViewPopupLayoutImpl::CalculateTopContainerLayout(\n"
+                "    ProposedLayout& layout,\n"
+                "    BrowserLayoutParams params,\n"
+                "    bool needs_exclusion) const {\n"
+                "  const int original_top = params.visual_client_area.y();\n"
+                "\n"
+                "  if (browser()->is_little_arc()) {\n"
+                "    return gfx::Rect(params.visual_client_area.x(), original_top,\n"
+                "                     params.visual_client_area.width(), 0);\n"
+                "  }\n"
+                "\n"
+                "  // Layout starts beneath the caption buttons because title is laid out by the\n"
+            ),
+            description="Maho: Zero top container height for Little Arc in CalculateTopContainerLayout",
+            guard="if (browser()->is_little_arc()) {",
+        ),
+        Replacement(
+            old=(
+                "  constexpr gfx::Size kMinContentsSize(1, 1);\n"
+                "\n"
+                "  return gfx::Size(std::max({kMinContentsSize.width(), caption_size.width(),\n"
+                "                             toolbar_size.width()}),\n"
+                "                   kMinContentsSize.height() + caption_size.height() +\n"
+                "                       toolbar_size.height() + separator_height);\n"
+            ),
+            new=(
+                "  if (browser()->is_little_arc()) {\n"
+                "    return gfx::Size(400, 38 + 1);\n"
+                "  }\n"
+                "\n"
+                "  constexpr gfx::Size kMinContentsSize(1, 1);\n"
+                "\n"
+                "  return gfx::Size(std::max({kMinContentsSize.width(), caption_size.width(),\n"
+                "                             toolbar_size.width()}),\n"
+                "                   kMinContentsSize.height() + caption_size.height() +\n"
+                "                       toolbar_size.height() + separator_height);\n"
+            ),
+            description="Maho: Add custom minimum size for Little Arc windows",
+            guard="if (browser()->is_little_arc()) {\n    return gfx::Size(400",
         ),
     ],
 }
