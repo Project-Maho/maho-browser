@@ -44,6 +44,10 @@ pub trait TabManagerInterface {
     fn unpin_tab(&mut self, tab_id: &TabId);
     fn favorite_tab(&mut self, tab_id: &TabId);
     fn transition_tab_role(&mut self, tab_id: &TabId, new_role: TabRole) -> bool;
+    fn count_favorite_tabs_in_spaces(
+        &self,
+        space_ids: &std::collections::HashSet<SpaceId>,
+    ) -> usize;
     fn reorder_favorite(
         &mut self,
         tab_id: &TabId,
@@ -538,7 +542,24 @@ impl EventDispatcher {
                 section: _,
             } => {
                 if let Some(source_space) = tab_mgr.get_tab(&tab_id).map(|t| t.space_id.clone()) {
-                    let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
+                    let mut is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
+                    // Cross-profile favorite reconciliation: the favorite cap is
+                    // per-profile, so a favorite entering a different profile that
+                    // is already at MAX_FAVORITES is downgraded to Normal rather
+                    // than overflowing the target profile's cap.
+                    let source_profile = space_mgr.get_space(&source_space).map(|s| s.profile_id.clone());
+                    let target_profile = space_mgr.get_space(&target_space_id).map(|s| s.profile_id.clone());
+                    if is_favorite && source_profile != target_profile {
+                        if let Some(tp) = &target_profile {
+                            let target_space_ids = space_mgr.get_space_ids_for_profile(tp);
+                            if tab_mgr.count_favorite_tabs_in_spaces(&target_space_ids)
+                                >= crate::tab_lifecycle::MAX_FAVORITES
+                            {
+                                tab_mgr.transition_tab_role(&tab_id, TabRole::Normal);
+                                is_favorite = false;
+                            }
+                        }
+                    }
                     tab_mgr.move_tab(&tab_id, target_space_id.clone(), 0);
                     space_mgr.remove_tab_from_space(&source_space, &tab_id);
                     space_mgr.add_tab_to_space(&target_space_id, tab_id.clone(), None);
@@ -1056,15 +1077,35 @@ impl EventDispatcher {
                         });
                     }
 
+                    let source_profile =
+                        space_mgr.get_space(&source_space_id).map(|s| s.profile_id.clone());
+                    let target_profile =
+                        space_mgr.get_space(&target_space_id).map(|s| s.profile_id.clone());
+                    let cross_profile = source_profile != target_profile;
+
                     for tab_id in top_tab_ids.iter().chain(
                         descendants_with_tabs
                             .iter()
                             .flat_map(|(_, tabs)| tabs.iter()),
                     ) {
-                        let is_favorite = tab_mgr
+                        let mut is_favorite = tab_mgr
                             .get_tab(tab_id)
                             .map(|t| t.role.is_favorite())
                             .unwrap_or(false); // L3-EXEMPT: local query
+                        // Downgrade favorites that would overflow a different
+                        // target profile's per-profile favorite cap (checked in
+                        // sequence, so the count grows as earlier tabs land).
+                        if is_favorite && cross_profile {
+                            if let Some(tp) = &target_profile {
+                                let ids = space_mgr.get_space_ids_for_profile(tp);
+                                if tab_mgr.count_favorite_tabs_in_spaces(&ids)
+                                    >= crate::tab_lifecycle::MAX_FAVORITES
+                                {
+                                    tab_mgr.transition_tab_role(tab_id, TabRole::Normal);
+                                    is_favorite = false;
+                                }
+                            }
+                        }
                         tab_mgr.move_tab(tab_id, target_space_id.clone(), 0);
                         space_mgr.remove_tab_from_space(&source_space_id, tab_id);
                         space_mgr.add_tab_to_space(&target_space_id, tab_id.clone(), None);

@@ -10430,6 +10430,13 @@ impl TabManagerInterface for TabLifecycleManager {
         self.transition_tab_role(tab_id, new_role)
     }
 
+    fn count_favorite_tabs_in_spaces(
+        &self,
+        space_ids: &std::collections::HashSet<SpaceId>,
+    ) -> usize {
+        self.count_favorite_tabs_in_spaces(space_ids)
+    }
+
     fn reorder_favorite(
         &mut self,
         tab_id: &TabId,

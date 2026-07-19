@@ -4,8 +4,10 @@
 
 #include "base/check.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkRect.h"
+#include "third_party/skia/include/core/SkSamplingOptions.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/canvas_painter.h"
 #include "ui/compositor/paint_recorder.h"
@@ -90,8 +92,18 @@ gfx::ImageSkia CreateSidebarDragImageWithBackground(views::View* view,
     sk_canvas.drawRoundRect(rect, corner_radius_dp, corner_radius_dp, paint);
     paint.setColor(overlay_color);
     sk_canvas.drawRoundRect(rect, corner_radius_dp, corner_radius_dp, paint);
+    // |inner| is backed by a pixel-resolution bitmap (DIP size * scale_factor).
+    // Because sk_canvas is already scaled by scale_factor, drawing the raw
+    // bitmap at its natural pixel size would scale it a second time (favicon and
+    // title rendered ~2x oversized on HiDPI). Map the full pixel source into the
+    // DIP-sized destination rect so it lands 1:1 in device pixels.
     const SkBitmap inner_bitmap = *inner.bitmap();
-    sk_canvas.drawImage(inner_bitmap.asImage(), 0, 0);
+    const sk_sp<SkImage> inner_image = inner_bitmap.asImage();
+    sk_canvas.drawImageRect(
+        inner_image.get(),
+        SkRect::MakeIWH(inner_bitmap.width(), inner_bitmap.height()),
+        SkRect::MakeIWH(size.width(), size.height()), SkSamplingOptions(),
+        /*paint=*/nullptr, SkCanvas::kStrict_SrcRectConstraint);
   }
   return gfx::ImageSkia::CreateFromBitmap(bitmap, scale_factor);
 }
