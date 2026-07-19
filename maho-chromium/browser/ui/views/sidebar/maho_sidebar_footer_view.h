@@ -108,6 +108,8 @@ class MahoSidebarFooterView : public views::View,
                            const gfx::Point& screen_point) override;
   void OnSpaceDotDragEnded(MahoSidebarSpaceDotView* dot,
                            bool cancelled) override;
+  void OnSpaceDotSpringLoad(MahoSidebarSpaceDotView* dot) override;
+  void OnSpaceDotDropCompleted() override;
 
   int GetDropTargetIndex(const gfx::Point& point_in_dot_container) const;
   void ShowDropIndicator(int target_index);

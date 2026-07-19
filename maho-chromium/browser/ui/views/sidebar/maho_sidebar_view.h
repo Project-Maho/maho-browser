@@ -12,6 +12,7 @@
 #include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "base/functional/callback_forward.h"
@@ -106,6 +107,8 @@ class MahoSidebarView
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
   void ExitLibraryToTabs();
+  void RestoreArchivedTabAndActivate(const std::string& tab_id,
+                                     const std::string& space_id);
 
   // Inline native create-space surface. ShowCreateSpace replaces the entire
   // sidebar UI with the create-space form; HideCreateSpace restores the prior
@@ -120,10 +123,15 @@ class MahoSidebarView
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
   void ScheduleRefreshAll();
+  // Synchronous, inline variant of RefreshAll for latency-sensitive callers
+  // (e.g. a drag drop): rebuilds now instead of posting to base::ThreadPool.
+  void RefreshAllSynchronously();
   // T5: Coalesced cosmetic refresh — debounces title/URL/favicon updates so
   // rapid-fire cosmetic events collapse into a single UpdateTabList() pass.
   // Structural changes (create/close/reorder) cancel any pending cosmetic
   // refresh and go through the full ScheduleRefreshAll() path.
+  // B2: While the ScrollView is actively scrolling, cosmetic refreshes are
+  // held (pending) and applied only after a short scroll-idle interval.
   void ScheduleCosmeticRefresh();
   // Test-only accessors for live browser tests. Keep minimal.
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
@@ -167,8 +175,42 @@ class MahoSidebarView
   MahoSpacesOverlayBoardView* spaces_view_for_testing() {
     return spaces_view_;
   }
+  // B2 test-only: observe scroll-idle deferral state.
+  bool is_scrolling_for_testing() const { return IsTabListScrolling(); }
+  bool cosmetic_refresh_pending_for_testing() const {
+    return cosmetic_refresh_pending_;
+  }
+  int cosmetic_apply_count_for_testing() const {
+    return cosmetic_apply_count_for_testing_;
+  }
+  // B2 test-only: fire the scroll-idle transition immediately (bypasses the
+  // real timer so tests remain deterministic without wall-clock sleeps).
+  void SimulateScrollIdleForTesting() {
+    scroll_idle_timer_.Stop();
+    last_tab_list_scroll_time_ = base::TimeTicks();
+    OnScrollIdle();
+  }
+  // B2 test-only: stop and immediately fire the pending cosmetic debounce
+  // timer. RunUntilIdle() does not advance OneShotTimers, so tests that need
+  // to verify apply-count without sleeping must call this after idle.
+  void FireCosmeticDebounceForTesting() {
+    if (cosmetic_refresh_timer_.IsRunning()) {
+      cosmetic_refresh_timer_.Stop();
+      ApplyCosmeticRefresh();
+    }
+  }
   MahoSidebarLibraryRailView::Category active_library_category_for_testing()
       const;
+  using OnBackgroundStateReadyCallbackForTesting =
+      base::RepeatingCallback<bool(MahoSidebarView*,
+                                   SidebarStateBackgroundResult&)>;
+  void SetOnBackgroundStateReadyCallbackForTesting(
+      OnBackgroundStateReadyCallbackForTesting callback) {
+    background_state_ready_callback_for_testing_ = std::move(callback);
+  }
+  void OnBackgroundStateReadyForTesting(SidebarStateBackgroundResult result) {
+    OnBackgroundStateReady(std::move(result));
+  }
 
   void ActivateTabById(const std::string& tab_id);
   static bool ActivateSpaceAndTab(Browser* browser, const std::string& space_id);
@@ -215,6 +257,11 @@ class MahoSidebarView
   // fires. Structural changes cancel the timer before this runs, preventing
   // stale partial updates after a tab strip structural change.
   void ApplyCosmeticRefresh();
+  // B2: Called when |scroll_idle_timer_| fires (or by test hook). Schedules
+  // the cosmetic debounce if work is pending.
+  void OnScrollIdle();
+  // B2: Returns true if a tab-list scroll event arrived within |kScrollIdleDelay|.
+  bool IsTabListScrolling() const;
   void ApplyViewState(const MahoSidebarViewStateModel& model);
   void UpdateTopBar(const MahoSidebarTopBarModel& model);
   void UpdateSearch(const MahoSidebarSearchModel& model);
@@ -301,6 +348,17 @@ class MahoSidebarView
   RefreshState refresh_state_ = RefreshState::kIdle;
   bool refresh_dirty_ = false;
   base::OneShotTimer cosmetic_refresh_timer_;
+  // B2: Scroll-idle deferral state. |scroll_idle_timer_| is lazily armed only
+  // when cosmetic work is pending; IsTabListScrolling() gates cosmetic work via
+  // |last_tab_list_scroll_time_|; |cosmetic_refresh_pending_| tracks held work;
+  // |cosmetic_apply_count_for_testing_| is a monotonic counter for test
+  // assertions.
+  base::OneShotTimer scroll_idle_timer_;
+  // B2: Timestamp of last OnTabListScrolled() call. IsTabListScrolling()
+  // returns true when this is within kScrollIdleDelay of now.
+  base::TimeTicks last_tab_list_scroll_time_;
+  bool cosmetic_refresh_pending_ = false;
+  int cosmetic_apply_count_for_testing_ = 0;
   std::set<content::WebContents*> recently_registered_contents_;
   base::ScopedObservation<translate::ContentTranslateDriver,
                          translate::ContentTranslateDriver::TranslationObserver>
@@ -311,6 +369,8 @@ class MahoSidebarView
   bool last_over_favorites_ = false;
   bool applying_pin_ = false;
   std::vector<base::WeakPtr<content::WebContents>> pending_pin_retries_;
+  OnBackgroundStateReadyCallbackForTesting
+      background_state_ready_callback_for_testing_;
 
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };

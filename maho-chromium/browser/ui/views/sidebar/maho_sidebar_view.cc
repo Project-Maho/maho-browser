@@ -246,6 +246,20 @@ void MahoSidebarView::OnTabListScrolled() {
   if (tab_list_view_) {
     tab_list_view_->OnScrollChanged();
   }
+  if (cosmetic_refresh_timer_.IsRunning()) {
+    cosmetic_refresh_timer_.Stop();
+    cosmetic_refresh_pending_ = true;
+  }
+  constexpr base::TimeDelta kScrollIdleDelay = base::Milliseconds(120);
+  last_tab_list_scroll_time_ = base::TimeTicks::Now();
+  // Lazy arming: only pay the timer cost when cosmetic work is actually
+  // pending. The hot path (no cosmetic work armed) exits here with zero timer
+  // churn.
+  if (cosmetic_refresh_pending_ && !scroll_idle_timer_.IsRunning()) {
+    scroll_idle_timer_.Start(FROM_HERE, kScrollIdleDelay,
+                             base::BindOnce(&MahoSidebarView::OnScrollIdle,
+                                            weak_factory_.GetWeakPtr()));
+  }
 }
 
 bool MahoSidebarView::IsPositionInWindowCaption(
@@ -479,6 +493,9 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
       if (container->IsSpacesOverlayVisible()) {
         container->DismissSpacesOverlay();
       }
+      if (container->IsLibraryOverlayVisible()) {
+        container->DismissLibraryOverlay();
+      }
     }
     // Hide whichever library pane was active.
     views::View* active_pane = ActiveLibraryPane();
@@ -546,6 +563,9 @@ void MahoSidebarView::HandleLibraryCategorySelected(
 
   if (category == MahoSidebarLibraryRailView::Category::kSpaces && use_overlay) {
     // D-11: Hide embedded library content instead of destroying views to avoid dangling pointers
+    if (container && container->IsLibraryOverlayVisible()) {
+      container->DismissLibraryOverlay();
+    }
     library_content_host_->SetVisible(false);
     if (library_divider_) {
       library_divider_->SetVisible(false);
@@ -559,10 +579,34 @@ void MahoSidebarView::HandleLibraryCategorySelected(
     return;
   }
 
-  // Non-Spaces category (or Spaces with flag=false): if overlay is showing,
-  // dismiss it before switching the embedded library pane.
+  if (category == MahoSidebarLibraryRailView::Category::kDownloads ||
+      category == MahoSidebarLibraryRailView::Category::kArchivedTabs) {
+    if (container && container->IsSpacesOverlayVisible()) {
+      container->DismissSpacesOverlay();
+    }
+    library_content_host_->SetVisible(false);
+    if (library_divider_) {
+      library_divider_->SetVisible(false);
+    }
+    active_library_category_ = category;
+    if (library_rail_view_) {
+      library_rail_view_->SetSelectedCategory(category);
+    }
+    UpdateSidebarBorderForOverlay();
+    if (container) {
+      container->ApplyPreferredWidthFromPrefs();
+      container->ToggleLibraryOverlay(category);
+    }
+    return;
+  }
+
+  // Non-overlay category (kMedia, or kSpaces with flag=false): if an overlay is
+  // showing, dismiss it before switching the embedded library pane.
   if (container && container->IsSpacesOverlayVisible()) {
     container->DismissSpacesOverlay();
+  }
+  if (container && container->IsLibraryOverlayVisible()) {
+    container->DismissLibraryOverlay();
   }
   ShowLibraryPane(category);
 }
@@ -633,13 +677,7 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
             std::make_unique<MahoSidebarArchiveView>(browser_));
         archive_view_->SetVisible(false);
         archive_view_->SetRestoreCallback(base::BindRepeating(
-            [](base::WeakPtr<MahoSidebarView> sidebar_view,
-               const std::string& tab_id) {
-              DispatchShellEvent("restore_archived_tab", {{"tab_id", tab_id}});
-              if (sidebar_view && sidebar_view->archive_view_) {
-                sidebar_view->archive_view_->ReloadArchivedTabs();
-              }
-            },
+            &MahoSidebarView::RestoreArchivedTabAndActivate,
             weak_factory_.GetWeakPtr()));
         archive_view_->SetDeleteCallback(base::BindRepeating(
             [](base::WeakPtr<MahoSidebarView> sidebar_view,
@@ -657,7 +695,7 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
     case MahoSidebarLibraryRailView::Category::kDownloads: {
       if (!downloads_view_) {
         downloads_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarDownloadsView>());
+            std::make_unique<MahoSidebarDownloadsView>(browser_));
         downloads_view_->SetVisible(false);
       }
       pane = downloads_view_;
@@ -860,6 +898,31 @@ void MahoSidebarView::ExitLibraryToTabs() {
   }
 }
 
+void MahoSidebarView::RestoreArchivedTabAndActivate(const std::string& tab_id,
+                                                   const std::string& space_id) {
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  if (bridge) {
+    std::string active_space_id = bridge->GetActiveSpaceId(browser_);
+    if (!space_id.empty() && space_id != active_space_id) {
+      if (!bridge->SwitchToSpace(browser_, space_id)) {
+        DLOG(WARNING) << "Failed to switch to space: " << space_id << " for restored tab: " << tab_id;
+        return;
+      }
+    }
+  }
+
+  DispatchShellEvent("restore_archived_tab", {{"tab_id", tab_id}});
+
+  if (tab_list_view_) {
+    tab_list_view_->ActivateTabById(tab_id);
+  }
+
+  if (archive_view_) {
+    archive_view_->ReloadArchivedTabs();
+  }
+  ExitLibraryToTabs();
+}
+
 void MahoSidebarView::ToggleArchiveMode() {
   if (current_body_mode_ == MahoSidebarBodyMode::kLibrary) {
     SetBodyMode(MahoSidebarBodyMode::kTabs);
@@ -887,6 +950,7 @@ void MahoSidebarView::ScheduleRefreshAll() {
   // Any full-rebuild request supersedes a pending cosmetic patch: the full
   // rebuild will already emit fresh titles/URLs/favicons.
   cosmetic_refresh_timer_.Stop();
+  cosmetic_refresh_pending_ = false;
   if (refresh_state_ == RefreshState::kInFlight) {
     refresh_dirty_ = true;
     return;
@@ -922,6 +986,27 @@ void MahoSidebarView::RefreshAll() {
                      weak_factory_.GetWeakPtr()));
 }
 
+void MahoSidebarView::RefreshAllSynchronously() {
+  if (is_otr_) {
+    RefreshPrivateSidebar();
+    return;
+  }
+  std::string space_id_json;
+  if (auto* bridge = MahoSpaceProfileBridge::GetInstance()) {
+    space_id_json =
+        base::GetQuotedJSONString(bridge->GetActiveSpaceId(browser_));
+  }
+  const bool safe_mode = IsSidebarSafeMode();
+  // The state build is a synchronous FFI fetch + parse (~3-21ms), cheap enough
+  // to run inline. Doing so on a drop avoids RefreshAll()'s base::ThreadPool
+  // round-trip, whose USER_VISIBLE scheduling latency (worst under load) is what
+  // makes a dropped tab take hundreds of ms to settle into its final position.
+  auto result = MahoSidebarStateAdapter::BuildStateOnBackground(space_id_json,
+                                                                safe_mode);
+  ApplyViewState(
+      state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result)));
+}
+
 void MahoSidebarView::RefreshPrivateSidebar() {
   // R-11: Window-local, MahoCore/Space-free rebuild. BuildTabListModel reads
   // only browser_->tab_strip_model() when no v2 FFI tree is cached (which the
@@ -934,6 +1019,18 @@ void MahoSidebarView::RefreshPrivateSidebar() {
 
 void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
   LOG(INFO) << "OnBackgroundStateReady start";
+  if (background_state_ready_callback_for_testing_) {
+    if (!background_state_ready_callback_for_testing_.Run(this, result)) {
+      return;
+    }
+  }
+  if (refresh_dirty_) {
+    refresh_dirty_ = false;
+    refresh_state_ = RefreshState::kIdle;
+    ScheduleRefreshAll();
+    return;
+  }
+
   auto model = state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result));
   ApplyViewState(model);
 
@@ -945,10 +1042,6 @@ void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result
   }
 
   refresh_state_ = RefreshState::kIdle;
-  if (refresh_dirty_) {
-    refresh_dirty_ = false;
-    ScheduleRefreshAll();
-  }
 }
 
 void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
@@ -1170,6 +1263,40 @@ void MahoSidebarView::OnTabStripModelChanged(
     }
   }
 
+  // Suspending a close-protected (pinned/favorite) tab arrives as kRemoved:
+  // the tab stays in the model, so only the row (minus->X) and the active
+  // highlight need updating — a full RebuildRows over hundreds of rows (the
+  // ~1.5s freeze) is avoidable. TrySuspendFastPath returns false for real
+  // closes / structural changes, falling through to ScheduleRefreshAll below.
+  if (change.type() == TabStripModelChange::kRemoved && tab_list_view_) {
+    const TabStripModelChange::Remove* remove = change.GetRemove();
+    if (remove && remove->contents.size() == 1) {
+      const std::string removed_tab_id =
+          tab_list_view_->FindCoreTabIdByWebContents(
+              remove->contents[0].contents);
+      bool active_race = false;
+      std::string new_active_tab_id;
+      if (selection.active_tab_changed()) {
+        new_active_tab_id = get_new_active_tab_id();
+        // Active changed but the successor id isn't resolvable yet (no
+        // contents / stable id unassigned): fall through to the full refresh.
+        active_race = new_active_tab_id.empty();
+      }
+      if (!active_race &&
+          tab_list_view_->TrySuspendFastPath(removed_tab_id,
+                                             new_active_tab_id)) {
+        if (favorites_view_) {
+          UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+        }
+        refresh_active_tab_chrome();
+        LOG(INFO)
+            << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_suspend) "
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+        return;
+      }
+    }
+  }
+
   LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged -> ScheduleRefreshAll";
   ScheduleRefreshAll();
   LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(slow) "
@@ -1320,6 +1447,7 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged() {
   // Structural change preempts any pending cosmetic refresh so we don't apply
   // stale title/URL patches on top of a freshly-rebuilt tab list.
   cosmetic_refresh_timer_.Stop();
+  cosmetic_refresh_pending_ = false;
   UpdateSpacesPaneActions();
   // Grain is a cached overlay value (not a live ColorProvider token like the
   // sidebar color/opacity), so it must be refreshed per-space here; otherwise
@@ -1332,17 +1460,51 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged() {
   ScheduleRefreshAll();
 }
 
+bool MahoSidebarView::IsTabListScrolling() const {
+  constexpr base::TimeDelta kScrollIdleDelay = base::Milliseconds(120);
+  return !last_tab_list_scroll_time_.is_null() &&
+         (base::TimeTicks::Now() - last_tab_list_scroll_time_) <
+             kScrollIdleDelay;
+}
+
 void MahoSidebarView::ScheduleCosmeticRefresh() {
   // 16ms debounce: coalesces bursts of title/URL/favicon updates from rapid
   // navigation into a single UpdateTabList() pass at frame boundary.
   constexpr base::TimeDelta kCosmeticDebounce = base::Milliseconds(16);
+  if (IsTabListScrolling()) {
+    cosmetic_refresh_pending_ = true;
+    // Arm the idle timer now that cosmetic work is pending — lazy arming
+    // ensures we only pay the timer cost when there is actual work to defer.
+    if (!scroll_idle_timer_.IsRunning()) {
+      constexpr base::TimeDelta kScrollIdleDelay = base::Milliseconds(120);
+      const base::TimeDelta elapsed =
+          base::TimeTicks::Now() - last_tab_list_scroll_time_;
+      const base::TimeDelta remaining =
+          (kScrollIdleDelay - elapsed).is_negative()
+              ? base::TimeDelta()
+              : kScrollIdleDelay - elapsed;
+      scroll_idle_timer_.Start(FROM_HERE, remaining,
+                               base::BindOnce(&MahoSidebarView::OnScrollIdle,
+                                              weak_factory_.GetWeakPtr()));
+    }
+    return;
+  }
+  cosmetic_refresh_pending_ = false;
   cosmetic_refresh_timer_.Start(
       FROM_HERE, kCosmeticDebounce,
       base::BindOnce(&MahoSidebarView::ApplyCosmeticRefresh,
                      weak_factory_.GetWeakPtr()));
 }
 
+void MahoSidebarView::OnScrollIdle() {
+  if (cosmetic_refresh_pending_) {
+    ScheduleCosmeticRefresh();
+  }
+}
+
 void MahoSidebarView::ApplyCosmeticRefresh() {
+  cosmetic_refresh_pending_ = false;
+  ++cosmetic_apply_count_for_testing_;
   if (tab_list_view_) {
     tab_list_view_->ApplyCosmeticRefresh();
   }

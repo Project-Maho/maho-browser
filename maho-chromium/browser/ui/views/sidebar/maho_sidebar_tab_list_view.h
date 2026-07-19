@@ -143,6 +143,19 @@ class MahoSidebarTabListView : public views::View,
   // rows exist, letting the caller fall back to positional next/prev.
   // |forward| = next/down, !forward = previous/up.
   bool ActivateAdjacentTabInVisualOrder(bool forward);
+
+  // Spring-load drag support. On macOS a drag runs a nested run loop on the
+  // drag-source row's own stack frame, so freeing that row mid-drag (as a Space
+  // switch's RebuildRows would) is a use-after-free. SetDragSourceTabId records
+  // the row that started the drag; while set, RebuildRows detaches and preserves
+  // that row instead of destroying it. OnDragSourceFinished clears the record
+  // and frees the preserved row after the drag stack has fully unwound.
+  void SetDragSourceTabId(const std::string& tab_id);
+  void OnDragSourceFinished();
+  // Flushes any Space-switch rebuild that was deferred because a drag holds
+  // capture, so a spring-loaded Space switch becomes visible during the drag.
+  void FlushSpringLoadedSpaceSwitch();
+
   // Materializes a Maho core-only "suspended" tab into the TabStripModel via a
   // foreground navigation and returns the new WebContents (nullptr on failure).
   // Public so the sidebar drop path can wake tabs before splitting them.
@@ -166,6 +179,10 @@ class MahoSidebarTabListView : public views::View,
   views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
   views::View* tab_rows_for_testing() { return tab_rows_; }
   views::View* pinned_separator_for_testing() { return pinned_separator_; }
+  int scroll_layout_invalidation_count_for_testing() const {
+    return scroll_layout_invalidation_count_for_testing_;
+  }
+  void ResetScrollLayoutInvalidationStateForTesting();
 
   void ToggleFolderExpandedForTesting(const std::string& folder_id);
   bool IsTabPreviewShowingForTesting() const;
@@ -195,9 +212,22 @@ class MahoSidebarTabListView : public views::View,
 
   void UpdateActiveTabHighlightOnly(const std::string& new_active_tab_id);
 
+  // Suspends a close-protected (pinned/favorite) tab that arrives as a
+  // kRemoved but stays in the model: flips its row minus->X + last_model_ node,
+  // moves the highlight to |new_active_tab_id| (empty = no active change), and
+  // arms the one-shot suppress fingerprint so the async core push is deduped
+  // instead of forcing a full RebuildRows. Returns false (caller then
+  // ScheduleRefreshAll) when any precondition fails.
+  bool TrySuspendFastPath(const std::string& suspended_tab_id,
+                          const std::string& new_active_tab_id);
+
   void SetFavoritesSyncCallback(base::RepeatingClosure callback);
 
   bool HasTabInLastModel(const std::string& tab_id) const;
+
+  int rebuild_rows_count_for_testing() const {
+    return rebuild_rows_count_for_testing_;
+  }
 
   void ApplyCosmeticRefresh();
 
@@ -345,6 +375,9 @@ class MahoSidebarTabListView : public views::View,
 
   class SidebarAutoScroller;
   std::unique_ptr<SidebarAutoScroller> auto_scroller_;
+  raw_ptr<views::ScrollView> scroll_view_ = nullptr;
+  int last_visible_row_ = -1;
+  int scroll_layout_invalidation_count_for_testing_ = 0;
 
   std::unique_ptr<SidebarVisibilityManager> visibility_manager_;
 
@@ -364,6 +397,8 @@ class MahoSidebarTabListView : public views::View,
   std::string last_model_fingerprint_;
   std::string last_active_tab_id_;
   base::RepeatingClosure favorites_sync_callback_;
+
+  int rebuild_rows_count_for_testing_ = 0;
 
   std::map<std::string, raw_ptr<SidebarFolderRowView>> folder_rows_by_id_;
 
@@ -405,6 +440,9 @@ class MahoSidebarTabListView : public views::View,
   bool batch_rebuild_needed_ = false;
 
   std::vector<SidebarTabRowView*> GetTabRowsInVisualOrder();
+
+  std::string drag_source_tab_id_;
+  raw_ptr<views::View> drag_preserve_holder_ = nullptr;
 
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };

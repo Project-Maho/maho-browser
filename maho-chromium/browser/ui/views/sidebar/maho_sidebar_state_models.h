@@ -323,6 +323,10 @@ struct SidebarDragPayload {
   std::string source_parent_folder_id;
   int source_folder_child_index = -1;
   std::vector<std::string> selected_tab_ids;
+  // When the dragged tab belongs to a split group, this holds every member
+  // tab_id of that split. Only the space-dot drop target reads it (to move the
+  // whole split to another Space); all other drop targets ignore it.
+  std::vector<std::string> split_member_tab_ids;
 };
 
 struct MahoSidebarFooterUpdatePillModel {

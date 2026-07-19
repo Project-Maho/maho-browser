@@ -46,9 +46,14 @@ void PerformMoveToSpace(const std::string& target_space_id,
   }
 
   if (payload.node_kind == SidebarNodeKind::kTab) {
-    std::vector<std::string> ids = payload.selected_tab_ids.empty()
-                                       ? std::vector<std::string>{payload.node_id}
-                                       : payload.selected_tab_ids;
+    std::vector<std::string> ids;
+    if (!payload.split_member_tab_ids.empty()) {
+      ids = payload.split_member_tab_ids;
+    } else if (!payload.selected_tab_ids.empty()) {
+      ids = payload.selected_tab_ids;
+    } else {
+      ids = {payload.node_id};
+    }
     bool moved = false;
     for (const std::string& id : ids) {
       if (id.empty()) {
@@ -314,11 +319,25 @@ int MahoSidebarSpaceDotView::OnDragUpdated(const ui::DropTargetEvent& event) {
     drag_over_ = true;
     hover_animation_.Show();
     UpdateAppearance();
+    // Arc-style spring-load: after a brief hover, ask the delegate to switch to
+    // this dot's Space so the drag can be dropped into that Space's list.
+    if (delegate_) {
+      spring_load_timer_.Start(
+          FROM_HERE, base::Milliseconds(400),
+          base::BindOnce(
+              [](MahoSidebarSpaceDotView* self) {
+                if (self->delegate_) {
+                  self->delegate_->OnSpaceDotSpringLoad(self);
+                }
+              },
+              base::Unretained(this)));
+    }
   }
   return static_cast<int>(ui::mojom::DragOperation::kMove);
 }
 
 void MahoSidebarSpaceDotView::OnDragExited() {
+  spring_load_timer_.Stop();
   if (drag_over_) {
     drag_over_ = false;
     if (!is_hovered_) {
@@ -330,6 +349,7 @@ void MahoSidebarSpaceDotView::OnDragExited() {
 
 views::View::DropCallback MahoSidebarSpaceDotView::GetDropCallback(
     const ui::DropTargetEvent& event) {
+  spring_load_timer_.Stop();
   if (drag_over_) {
     drag_over_ = false;
     if (!is_hovered_) {
@@ -337,7 +357,18 @@ views::View::DropCallback MahoSidebarSpaceDotView::GetDropCallback(
     }
     UpdateAppearance();
   }
-  return base::BindOnce(&PerformMoveToSpace, space_id_);
+  return base::BindOnce(
+      [](const std::string& target_space_id,
+         MahoSidebarSpaceDotDelegate* delegate, const ui::DropTargetEvent& event,
+         ui::mojom::DragOperation& output_drag_op,
+         std::unique_ptr<ui::LayerTreeOwner> layer) {
+        PerformMoveToSpace(target_space_id, event, output_drag_op,
+                           std::move(layer));
+        if (output_drag_op != ui::mojom::DragOperation::kNone && delegate) {
+          delegate->OnSpaceDotDropCompleted();
+        }
+      },
+      space_id_, delegate_.get());
 }
 
 float MahoSidebarSpaceDotView::GetCurrentDotSize() const {

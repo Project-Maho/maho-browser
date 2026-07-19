@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/timer/timer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
@@ -38,6 +39,12 @@ class MahoSidebarSpaceDotDelegate {
                                    const gfx::Point& screen_point) = 0;
   virtual void OnSpaceDotDragEnded(MahoSidebarSpaceDotView* dot,
                                    bool cancelled) = 0;
+  // Fired when a sidebar item has hovered over |dot| long enough during a drag
+  // to spring-load: the delegate should switch the sidebar to that dot's Space.
+  virtual void OnSpaceDotSpringLoad(MahoSidebarSpaceDotView* dot) {}
+  // Fired right after a successful drop onto a dot moved an item to that Space,
+  // so the delegate can refresh the sidebar synchronously (instant settle).
+  virtual void OnSpaceDotDropCompleted() {}
 };
 
 // Renders a single space. If the space has an icon, it renders the icon glyph
@@ -128,6 +135,7 @@ class MahoSidebarSpaceDotView : public views::View,
   bool is_hovered_ = false;
   bool has_icon_ = false;
   bool drag_over_ = false;
+  base::OneShotTimer spring_load_timer_;
 
   float dot_opacity_ = 1.0f;
 

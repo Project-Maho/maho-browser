@@ -14,6 +14,8 @@
 #include "maho/third_party/maho/maho_ffi.h"
 
 #include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -689,6 +691,53 @@ void MahoSidebarFooterView::OnSpaceDotActivated(
   UpdateDotSelectionState();
   if (!dot->space_id().empty()) {
     MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
+  }
+}
+
+void MahoSidebarFooterView::OnSpaceDotSpringLoad(
+    MahoSidebarSpaceDotView* dot) {
+  if (!browser_ || !dot || dot->space_id().empty()) {
+    return;
+  }
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  if (!bridge || !bridge->SwitchToSpace(browser_, dot->space_id())) {
+    return;
+  }
+  // The Space switch schedules an async sidebar refresh that a drag's capture
+  // defers; flush it (best-effort, after the refresh lands) so the switched
+  // Space becomes visible during the drag rather than only on drop.
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  auto* container =
+      browser_view ? static_cast<MahoSidebarContainerView*>(
+                         browser_view->maho_sidebar_container())
+                   : nullptr;
+  auto* sidebar =
+      container ? views::AsViewClass<MahoSidebarView>(container->sidebar_view())
+                : nullptr;
+  if (sidebar) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<MahoSidebarView> weak_sidebar) {
+                         if (weak_sidebar && weak_sidebar->tab_list_view()) {
+                           weak_sidebar->tab_list_view()
+                               ->FlushSpringLoadedSpaceSwitch();
+                         }
+                       },
+                       sidebar->GetWeakPtr()));
+  }
+}
+
+void MahoSidebarFooterView::OnSpaceDotDropCompleted() {
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  auto* container =
+      browser_view ? static_cast<MahoSidebarContainerView*>(
+                         browser_view->maho_sidebar_container())
+                   : nullptr;
+  auto* sidebar =
+      container ? views::AsViewClass<MahoSidebarView>(container->sidebar_view())
+                : nullptr;
+  if (sidebar) {
+    sidebar->RefreshAllSynchronously();
   }
 }
 
