@@ -103,6 +103,18 @@ class MahoCtrlTabSwitcherController : public views::WidgetObserver,
   void AdvanceCursor(bool forward);
   void CommitCurrent();
   void CancelWithoutCommit();
+
+  // Moves the highlighted selection to the hovered slot (keeping the keyboard
+  // cursor in sync). Wired as the overlay view's hover callback.
+  void HandleSlotHovered(size_t index);
+
+  // Commits the slot under |screen_point| if the point hits a card or the
+  // "+N more" affordance. Called from OnEvent for the application-scoped mouse
+  // monitor: on macOS the non-activatable inactive overlay window never
+  // receives mouseDown through the normal responder path, so clicks are
+  // captured process-wide and hit-tested here instead.
+  void HandleMousePressAt(const gfx::Point& screen_point);
+
   void CloseOverlay();
   void Reset();
   void InstallEventMonitor();
@@ -132,6 +144,7 @@ class MahoCtrlTabSwitcherController : public views::WidgetObserver,
   raw_ptr<MahoCtrlTabSwitcherView> overlay_view_ = nullptr;
   raw_ptr<views::Widget> observed_parent_widget_ = nullptr;
   std::unique_ptr<views::EventMonitor> event_monitor_;
+  std::unique_ptr<views::EventMonitor> mouse_event_monitor_;
 
   base::WeakPtrFactory<MahoCtrlTabSwitcherController> weak_factory_{this};
 };

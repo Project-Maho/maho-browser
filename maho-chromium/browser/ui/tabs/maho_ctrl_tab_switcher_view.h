@@ -4,14 +4,25 @@
 #define MAHO_BROWSER_UI_TABS_MAHO_CTRL_TAB_SWITCHER_VIEW_H_
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "ui/base/cursor/cursor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
 namespace content {
 class WebContents;
+}
+
+namespace gfx {
+class Point;
+}
+
+namespace ui {
+class MouseEvent;
 }
 
 namespace maho {
@@ -41,6 +52,19 @@ class MahoCtrlTabSwitcherView : public views::View {
   MahoCtrlTabSwitcherView& operator=(const MahoCtrlTabSwitcherView&) = delete;
   ~MahoCtrlTabSwitcherView() override;
 
+  // Invoked with the slot index the pointer moved over (a tab card index in
+  // [0, card_count()), or more_affordance_index()). Wired by the controller so
+  // hovering moves the highlighted selection to match the keyboard cursor.
+  using SlotCallback = base::RepeatingCallback<void(size_t index)>;
+  void SetHoverCallback(SlotCallback callback);
+
+  // Returns the selectable slot index whose card (or "+N more" affordance)
+  // contains |screen_point|, or nullopt if the point is outside every slot.
+  // Used by the controller's application-scoped mouse monitor to resolve a
+  // click into a slot (clicks are not delivered to this view directly on
+  // macOS, where the overlay is a non-activatable inactive window).
+  std::optional<size_t> SlotIndexAtScreen(const gfx::Point& screen_point) const;
+
   // Updates the highlighted card.  |index| must be within [0, card_count()).
   // Silently no-ops when out of range.
   void SetSelectedIndex(size_t index);
@@ -65,15 +89,23 @@ class MahoCtrlTabSwitcherView : public views::View {
 
   // views::View:
   void OnThemeChanged() override;
+  void OnMouseMoved(const ui::MouseEvent& event) override;
+  ui::Cursor GetCursor(const ui::MouseEvent& event) override;
 
  private:
   void UpdateThemeColors();
+
+  // Returns the selectable slot index containing |location| (in this view's
+  // coordinate space), or nullopt if the point is not over a card or the
+  // "+N more" affordance.
+  std::optional<size_t> SlotIndexAt(const gfx::Point& location) const;
 
   std::vector<content::WebContents*> tabs_;
   std::vector<raw_ptr<MahoCtrlTabSwitcherCardView>> card_views_;
   raw_ptr<views::View> more_affordance_view_ = nullptr;
   size_t selected_index_;
   bool has_more_affordance_ = false;
+  SlotCallback hover_callback_;
 };
 
 }  // namespace maho

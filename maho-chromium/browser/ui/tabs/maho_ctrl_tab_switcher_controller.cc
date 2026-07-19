@@ -3,10 +3,12 @@
 #include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -21,6 +23,7 @@
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/types/event_type.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/views/event_monitor.h"
 #include "ui/views/widget/widget.h"
 
@@ -180,6 +183,18 @@ bool MahoCtrlTabSwitcherController::IsOverlayVisibleForTesting() const {
 }
 
 void MahoCtrlTabSwitcherController::OnEvent(const ui::Event& event) {
+  if (event.type() == ui::EventType::kMousePressed) {
+    const ui::MouseEvent* mouse = event.AsMouseEvent();
+    // On macOS the overlay is shown while Ctrl is held, and Control+click is
+    // translated by the OS into a right mouse button press, so accept either
+    // primary or secondary button.
+    if (mouse_event_monitor_ &&
+        (mouse->IsOnlyLeftMouseButton() || mouse->IsOnlyRightMouseButton())) {
+      HandleMousePressAt(mouse_event_monitor_->GetLastMouseLocation());
+    }
+    return;
+  }
+
   if (!event.IsKeyEvent()) {
     return;
   }
@@ -315,6 +330,9 @@ void MahoCtrlTabSwitcherController::OpenOverlay() {
   overlay_widget_->Init(std::move(params));
 
   overlay_view_ = overlay_widget_->SetContentsView(std::move(content_view));
+  overlay_view_->SetHoverCallback(base::BindRepeating(
+      &MahoCtrlTabSwitcherController::HandleSlotHovered,
+      weak_factory_.GetWeakPtr()));
   overlay_widget_->AddObserver(this);
   ObserveParentWidget();
   UpdateOverlayBounds();
@@ -349,6 +367,37 @@ void MahoCtrlTabSwitcherController::AdvanceCursor(bool forward) {
   if (overlay_view_) {
     overlay_view_->SetSelectedIndex(cursor_);
   }
+}
+
+void MahoCtrlTabSwitcherController::HandleSlotHovered(size_t index) {
+  if (state_ == State::kIdle || !overlay_view_) {
+    return;
+  }
+  cursor_ = index;
+  overlay_view_->SetSelectedIndex(index);
+}
+
+void MahoCtrlTabSwitcherController::HandleMousePressAt(
+    const gfx::Point& screen_point) {
+  if (state_ == State::kIdle || !overlay_view_) {
+    return;
+  }
+  const std::optional<size_t> slot =
+      overlay_view_->SlotIndexAtScreen(screen_point);
+  if (!slot.has_value()) {
+    return;
+  }
+  cursor_ = *slot;
+  overlay_view_->SetSelectedIndex(*slot);
+  // The click arrives from the application-scoped mouse monitor. Committing
+  // synchronously would run CloseOverlay() -> destroy the widget (and the
+  // view) while the monitor is still dispatching on the stack. Defer to the
+  // next loop iteration; the weak ptr is invalidated by Reset() so a stale
+  // commit is dropped.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoCtrlTabSwitcherController::CommitCurrent,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void MahoCtrlTabSwitcherController::CommitCurrent() {
@@ -431,10 +480,18 @@ void MahoCtrlTabSwitcherController::InstallEventMonitor() {
   event_monitor_ = views::EventMonitor::CreateWindowMonitor(
       this, browser_view_->GetWidget()->GetNativeWindow(),
       {ui::EventType::kKeyPressed, ui::EventType::kKeyReleased});
+  // A window monitor cannot observe clicks on the overlay: the overlay is its
+  // own (child) window, so a mouseDown targets that window, not the parent.
+  // Use an application-scoped monitor so the press is seen process-wide and
+  // hit-tested against the overlay geometry in OnEvent.
+  mouse_event_monitor_ = views::EventMonitor::CreateApplicationMonitor(
+      this, browser_view_->GetWidget()->GetNativeWindow(),
+      {ui::EventType::kMousePressed});
 }
 
 void MahoCtrlTabSwitcherController::RemoveEventMonitor() {
   event_monitor_.reset();
+  mouse_event_monitor_.reset();
 }
 
 void MahoCtrlTabSwitcherController::UpdateOverlayBounds() {
