@@ -3,12 +3,17 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "base/json/json_reader.h"
 #include "base/json/string_escape.h"
+#include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/run_until.h"
+#include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -27,12 +32,20 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/base/dragdrop/drag_drop_types.h"
+#include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/compositor/layer_tree_owner.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/views/accessibility/ax_virtual_view.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/button/label_button.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
 #include "url/gurl.h"
 
@@ -84,7 +97,630 @@ void ExpectNoTabsRows(views::View* rows) {
       << "+ New Tab should be visible";
 }
 
-class MahoSidebarContractTest : public MahoSidebarInteractiveTestBase {};
+SidebarTreeNode MakeScrollPerfTab(int tab_number, bool pinned = false) {
+  SidebarTreeNode tab;
+  tab.kind = SidebarNodeKind::kTab;
+  tab.tab_id = "scroll-perf-tab-" + base::NumberToString(tab_number);
+  tab.tab_strip_index = -1;
+  tab.is_pinned = pinned;
+  tab.title = u"Synthetic performance tab";
+  return tab;
+}
+
+MahoSidebarTabListModel MakeScrollPerfModel(int tab_count) {
+  MahoSidebarTabListModel model;
+  model.active_space_id = "scroll-perf-space";
+
+  int next_tab = 0;
+  const int pinned_count = std::max(8, tab_count / 20);
+  for (; next_tab < pinned_count; ++next_tab) {
+    model.pinned_tree.push_back(MakeScrollPerfTab(next_tab, true));
+  }
+
+  int pattern_number = 0;
+  while (tab_count - next_tab >= 8) {
+    model.normal_tree.push_back(MakeScrollPerfTab(next_tab++));
+    model.normal_tree.push_back(MakeScrollPerfTab(next_tab++));
+
+    SidebarTreeNode expanded_folder;
+    expanded_folder.kind = SidebarNodeKind::kFolder;
+    expanded_folder.folder_id =
+        "scroll-perf-expanded-folder-" + base::NumberToString(pattern_number);
+    expanded_folder.folder_name = u"Expanded performance folder";
+    expanded_folder.is_expanded = true;
+    for (int child_index = 0; child_index < 2; ++child_index) {
+      SidebarTreeNode child = MakeScrollPerfTab(next_tab++);
+      child.parent_folder_id = expanded_folder.folder_id;
+      child.folder_child_index = child_index;
+      expanded_folder.children.push_back(std::move(child));
+    }
+    model.normal_tree.push_back(std::move(expanded_folder));
+
+    SidebarTreeNode collapsed_folder;
+    collapsed_folder.kind = SidebarNodeKind::kFolder;
+    collapsed_folder.folder_id =
+        "scroll-perf-collapsed-folder-" + base::NumberToString(pattern_number);
+    collapsed_folder.folder_name = u"Collapsed performance folder";
+    collapsed_folder.is_expanded = false;
+    for (int child_index = 0; child_index < 2; ++child_index) {
+      SidebarTreeNode child = MakeScrollPerfTab(next_tab++);
+      child.parent_folder_id = collapsed_folder.folder_id;
+      child.folder_child_index = child_index;
+      collapsed_folder.children.push_back(std::move(child));
+    }
+    model.normal_tree.push_back(std::move(collapsed_folder));
+
+    SidebarTreeNode split_group;
+    split_group.kind = SidebarNodeKind::kSplitGroup;
+    split_group.split_id =
+        "scroll-perf-split-" + base::NumberToString(pattern_number);
+    split_group.split_orientation =
+        pattern_number % 2 == 0 ? "vertical" : "horizontal";
+    for (int child_index = 0; child_index < 2; ++child_index) {
+      SidebarTreeNode child = MakeScrollPerfTab(next_tab++);
+      child.is_in_split = true;
+      split_group.children.push_back(std::move(child));
+    }
+    model.normal_tree.push_back(std::move(split_group));
+    ++pattern_number;
+  }
+
+  while (next_tab < tab_count) {
+    model.normal_tree.push_back(MakeScrollPerfTab(next_tab++));
+  }
+  return model;
+}
+
+SidebarTreeNode MakeProjectionTab(const std::string& tab_id,
+                                  bool active = false,
+                                  int depth = 0) {
+  SidebarTreeNode tab;
+  tab.kind = SidebarNodeKind::kTab;
+  tab.tab_id = tab_id;
+  tab.tab_strip_index = -1;
+  tab.title = u"Projection tab";
+  tab.is_active = active;
+  tab.depth = depth;
+  return tab;
+}
+
+// tabs + expanded folder + collapsed folder (active-descendant sticky) + a
+// side-by-side split, all synthetic. The split uses "vertical" orientation,
+// which RebuildSplitGroupContainer lays out side-by-side (a single 36dp row),
+// so the projection's summed heights match the eager tree exactly.
+MahoSidebarTabListModel MakeProjectionModel() {
+  MahoSidebarTabListModel model;
+  model.active_space_id = "projection-space";
+
+  model.normal_tree.push_back(MakeProjectionTab("proj-t0"));
+
+  SidebarTreeNode expanded;
+  expanded.kind = SidebarNodeKind::kFolder;
+  expanded.folder_id = "proj-f1";
+  expanded.folder_name = u"Expanded";
+  expanded.is_expanded = true;
+  {
+    SidebarTreeNode c0 = MakeProjectionTab("proj-c0", /*active=*/false, 1);
+    c0.parent_folder_id = "proj-f1";
+    c0.folder_child_index = 0;
+    SidebarTreeNode c1 = MakeProjectionTab("proj-c1", /*active=*/false, 1);
+    c1.parent_folder_id = "proj-f1";
+    c1.folder_child_index = 1;
+    expanded.children.push_back(std::move(c0));
+    expanded.children.push_back(std::move(c1));
+  }
+  model.normal_tree.push_back(std::move(expanded));
+
+  SidebarTreeNode collapsed;
+  collapsed.kind = SidebarNodeKind::kFolder;
+  collapsed.folder_id = "proj-f2";
+  collapsed.folder_name = u"Collapsed";
+  collapsed.is_expanded = false;
+  {
+    SidebarTreeNode c2 = MakeProjectionTab("proj-c2", /*active=*/true, 1);
+    c2.parent_folder_id = "proj-f2";
+    c2.folder_child_index = 0;
+    SidebarTreeNode c3 = MakeProjectionTab("proj-c3", /*active=*/false, 1);
+    c3.parent_folder_id = "proj-f2";
+    c3.folder_child_index = 1;
+    collapsed.children.push_back(std::move(c2));
+    collapsed.children.push_back(std::move(c3));
+  }
+  model.normal_tree.push_back(std::move(collapsed));
+
+  SidebarTreeNode split;
+  split.kind = SidebarNodeKind::kSplitGroup;
+  split.split_id = "proj-s1";
+  split.split_orientation = "vertical";
+  {
+    SidebarTreeNode sp0 = MakeProjectionTab("proj-sp0");
+    sp0.is_in_split = true;
+    SidebarTreeNode sp1 = MakeProjectionTab("proj-sp1");
+    sp1.is_in_split = true;
+    split.children.push_back(std::move(sp0));
+    split.children.push_back(std::move(sp1));
+  }
+  model.normal_tree.push_back(std::move(split));
+  return model;
+}
+
+// Reconstructs the full tab-row visual order the eager tree realizes: kTab and
+// sticky rows contribute their tab_id, and a split group contributes each of
+// its member tabs (which the eager tree realizes as individual rows).
+std::vector<std::string> ReconstructProjectionTabOrder(
+    const std::vector<SidebarVisualRow>& projection) {
+  std::vector<std::string> ids;
+  std::function<void(const std::vector<SidebarTreeNode>&)> collect_tabs;
+  collect_tabs = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const SidebarTreeNode& node : nodes) {
+      if (node.kind == SidebarNodeKind::kTab) {
+        ids.push_back(node.tab_id);
+      }
+      collect_tabs(node.children);
+    }
+  };
+  for (const SidebarVisualRow& row : projection) {
+    switch (row.kind) {
+      case SidebarVisualRowKind::kTab:
+      case SidebarVisualRowKind::kCollapsedStickyTab:
+        ids.push_back(row.node.tab_id);
+        break;
+      case SidebarVisualRowKind::kSplitGroup:
+        collect_tabs(row.node.children);
+        break;
+      case SidebarVisualRowKind::kInsertionLane:
+      case SidebarVisualRowKind::kFolder:
+        break;
+    }
+  }
+  return ids;
+}
+
+void CollectRealizedTabIds(views::View* parent, std::vector<std::string>* out) {
+  for (views::View* child : parent->children()) {
+    if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
+      out->push_back(row->tab_id_for_testing());
+    }
+    CollectRealizedTabIds(child, out);
+  }
+}
+
+int CountModelTabs(const std::vector<SidebarTreeNode>& nodes) {
+  int count = 0;
+  for (const SidebarTreeNode& node : nodes) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      ++count;
+    }
+    count += CountModelTabs(node.children);
+  }
+  return count;
+}
+
+bool AllModelTabsAreSynthetic(const std::vector<SidebarTreeNode>& nodes) {
+  for (const SidebarTreeNode& node : nodes) {
+    if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index != -1) {
+      return false;
+    }
+    if (!AllModelTabsAreSynthetic(node.children)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int64_t PercentileMicros(const std::vector<int64_t>& samples, int percentile) {
+  CHECK(!samples.empty());
+  CHECK_GE(percentile, 1);
+  CHECK_LE(percentile, 100);
+  std::vector<int64_t> sorted = samples;
+  std::sort(sorted.begin(), sorted.end());
+  const size_t rank =
+      (static_cast<size_t>(percentile) * sorted.size() + 99) / 100;
+  return sorted[rank - 1];
+}
+
+int CountDescendantLayers(const views::View* root) {
+  int count = 0;
+  for (const views::View* child : root->children()) {
+    if (child->layer()) {
+      ++count;
+    }
+    count += CountDescendantLayers(child);
+  }
+  return count;
+}
+
+int ExpectIntersectingTabRowsVisible(views::View* root,
+                                     MahoSidebarTabListView* tab_list,
+                                     const gfx::Rect& viewport) {
+  int visible_row_count = 0;
+  for (views::View* child : root->children()) {
+    if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
+      const gfx::Rect row_bounds = views::View::ConvertRectToTarget(
+          row, tab_list, row->GetLocalBounds());
+      if (row_bounds.Intersects(viewport)) {
+        EXPECT_TRUE(row->GetVisible())
+            << "Viewport-intersecting row was layout-hidden: "
+            << row->tab_id_for_testing() << " bounds=" << row_bounds.ToString()
+            << " viewport=" << viewport.ToString();
+        EXPECT_TRUE(row->IsDrawn())
+            << "Viewport-intersecting row was not drawn: "
+            << row->tab_id_for_testing();
+      }
+      if (row->IsDrawn()) {
+        ++visible_row_count;
+      }
+    }
+    visible_row_count +=
+        ExpectIntersectingTabRowsVisible(child, tab_list, viewport);
+  }
+  return visible_row_count;
+}
+
+class MahoSidebarContractTest : public MahoSidebarInteractiveTestBase {
+ protected:
+  void RunScrollPerformanceBenchmark(int tab_count);
+  // Loads a synthetic |tab_count| model, sweeps a few scroll offsets, and
+  // reports the maximum realized tab-row / descendant-layer counts observed
+  // plus the viewport-derived window size (viewport rows + 2*overscan).
+  void MeasureWindowedRealization(int tab_count,
+                                  int* out_max_rows,
+                                  int* out_max_layers,
+                                  int* out_window_rows);
+};
+
+void MahoSidebarContractTest::MeasureWindowedRealization(int tab_count,
+                                                         int* out_max_rows,
+                                                         int* out_max_layers,
+                                                         int* out_window_rows) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+  tab_list_->Update(MakeScrollPerfModel(tab_count), browser());
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_EQ(scroll->contents(), tab_list_);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+
+  constexpr int kRowHeightDp = 36;
+  constexpr int kBufferRows = 30;
+  // Worst-case window: viewport + the velocity-direction leading overscan (up
+  // to kMaxVelocityOverscanRows) + the base trailing overscan. Fixed — does
+  // not scale with tab_count.
+  *out_window_rows =
+      (scroll->GetVisibleRect().height() + kRowHeightDp - 1) / kRowHeightDp +
+      SidebarVisibilityManager::kMaxVelocityOverscanRows + kBufferRows;
+  *out_max_rows = 0;
+  *out_max_layers = 0;
+
+  for (const int target_y :
+       {max_scroll_y / 4, max_scroll_y / 2, max_scroll_y * 3 / 4}) {
+    scroll->ScrollToOffset(gfx::PointF(0, target_y));
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return scroll->CurrentOffset().y() == target_y; }));
+    tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+    const gfx::Rect viewport = scroll->GetVisibleRect();
+    *out_max_rows = std::max(
+        *out_max_rows,
+        ExpectIntersectingTabRowsVisible(tab_list_, tab_list_, viewport));
+    *out_max_layers =
+        std::max(*out_max_layers, CountDescendantLayers(scroll));
+  }
+}
+
+void MahoSidebarContractTest::RunScrollPerformanceBenchmark(int tab_count) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+  const int cosmetic_apply_count_start =
+      sidebar_->cosmetic_apply_count_for_testing();
+
+  MahoSidebarTabListModel model = MakeScrollPerfModel(tab_count);
+  ASSERT_EQ(tab_count, CountModelTabs(model.pinned_tree) +
+                           CountModelTabs(model.normal_tree));
+  ASSERT_TRUE(AllModelTabsAreSynthetic(model.pinned_tree));
+  ASSERT_TRUE(AllModelTabsAreSynthetic(model.normal_tree));
+  tab_list_->Update(model, browser());
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_EQ(scroll->contents(), tab_list_);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(4u, rows->children().size());
+  views::View* pinned_section = rows->children()[0];
+  views::View* separator = rows->children()[1];
+  views::View* actions_row = rows->children()[2];
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  ASSERT_TRUE(pinned_section->GetVisible());
+  ASSERT_TRUE(separator->GetVisible());
+  ASSERT_TRUE(actions_row->GetVisible());
+
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_EQ(max_scroll_y, scroll->vertical_scroll_bar()->GetMaxPosition());
+  ASSERT_GT(max_scroll_y, 0);
+
+  const std::vector<int> sweep_offsets = {
+      max_scroll_y / 4,     max_scroll_y / 2,
+      max_scroll_y * 3 / 4, max_scroll_y,
+      max_scroll_y * 3 / 4, max_scroll_y / 2,
+      max_scroll_y / 4,     0,
+  };
+  std::vector<int64_t> layout_latencies_us;
+  std::vector<int64_t> offset_settle_latencies_us;
+  int steps_over_16600_us = 0;
+  int max_visible_tab_rows = 0;
+  int max_descendant_layers = 0;
+
+  for (const int target_y : sweep_offsets) {
+    const base::TimeTicks step_start = base::TimeTicks::Now();
+    scroll->ScrollToOffset(gfx::PointF(0, target_y));
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return scroll->CurrentOffset().y() == target_y;
+    })) << "Layer-backed ScrollView did not settle at offset "
+        << target_y;
+    const int64_t offset_settle_us =
+        (base::TimeTicks::Now() - step_start).InMicroseconds();
+
+    const base::TimeTicks layout_start = base::TimeTicks::Now();
+    tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+    const int64_t layout_us =
+        (base::TimeTicks::Now() - layout_start).InMicroseconds();
+    const int64_t step_us =
+        (base::TimeTicks::Now() - step_start).InMicroseconds();
+
+    offset_settle_latencies_us.push_back(offset_settle_us);
+    layout_latencies_us.push_back(layout_us);
+    if (step_us > 16600) {
+      ++steps_over_16600_us;
+    }
+
+    const gfx::Rect viewport = scroll->GetVisibleRect();
+    EXPECT_EQ(target_y, viewport.y());
+    max_visible_tab_rows = std::max(
+        max_visible_tab_rows,
+        ExpectIntersectingTabRowsVisible(tab_list_, tab_list_, viewport));
+    max_descendant_layers =
+        std::max(max_descendant_layers, CountDescendantLayers(scroll));
+  }
+
+  // Exercise sub-row scroll deltas so future row-boundary coalescing changes
+  // are visible independently of the large coarse jumps above. Forty 4dp
+  // steps in each direction cross more than four 36dp rows while keeping the
+  // 600-tab stress case practical in CI.
+  constexpr int kFineStepDp = 4;
+  constexpr int kFineStepsPerDirection = 40;
+  const int fine_origin_y = max_scroll_y / 2;
+  ASSERT_LE(fine_origin_y + kFineStepDp * kFineStepsPerDirection, max_scroll_y);
+
+  scroll->ScrollToOffset(gfx::PointF(0, fine_origin_y));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() == fine_origin_y;
+  })) << "Layer-backed ScrollView did not reach the fine-scroll origin";
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_EQ(fine_origin_y, scroll->GetVisibleRect().y());
+  max_visible_tab_rows =
+      std::max(max_visible_tab_rows,
+               ExpectIntersectingTabRowsVisible(tab_list_, tab_list_,
+                                                scroll->GetVisibleRect()));
+  max_descendant_layers =
+      std::max(max_descendant_layers, CountDescendantLayers(scroll));
+
+  std::vector<int> fine_offsets;
+  fine_offsets.reserve(kFineStepsPerDirection * 2);
+  for (int step = 1; step <= kFineStepsPerDirection; ++step) {
+    fine_offsets.push_back(fine_origin_y + step * kFineStepDp);
+  }
+  for (int step = kFineStepsPerDirection - 1; step >= 0; --step) {
+    fine_offsets.push_back(fine_origin_y + step * kFineStepDp);
+  }
+
+  std::vector<int64_t> fine_layout_latencies_us;
+  std::vector<int64_t> fine_invalidating_layout_latencies_us;
+  std::vector<int64_t> fine_noninvalidating_layout_latencies_us;
+  int fine_steps_over_16600_us = 0;
+  int fine_invalidation_steps = 0;
+  int fine_layout_steps_over_16600_us = 0;
+  for (const int target_y : fine_offsets) {
+    const int invalidation_count_before =
+        tab_list_->scroll_layout_invalidation_count_for_testing();
+    const base::TimeTicks step_start = base::TimeTicks::Now();
+    scroll->ScrollToOffset(gfx::PointF(0, target_y));
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return scroll->CurrentOffset().y() == target_y;
+    })) << "Layer-backed ScrollView did not settle at fine offset "
+        << target_y;
+
+    const base::TimeTicks layout_start = base::TimeTicks::Now();
+    tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+    const int64_t layout_us =
+        (base::TimeTicks::Now() - layout_start).InMicroseconds();
+    const int64_t step_us =
+        (base::TimeTicks::Now() - step_start).InMicroseconds();
+
+    const bool step_invalidated =
+        tab_list_->scroll_layout_invalidation_count_for_testing() >
+        invalidation_count_before;
+
+    fine_layout_latencies_us.push_back(layout_us);
+    if (step_invalidated) {
+      ++fine_invalidation_steps;
+      fine_invalidating_layout_latencies_us.push_back(layout_us);
+    } else {
+      fine_noninvalidating_layout_latencies_us.push_back(layout_us);
+    }
+    if (step_us > 16600) {
+      ++fine_steps_over_16600_us;
+    }
+    if (layout_us > 16600) {
+      ++fine_layout_steps_over_16600_us;
+    }
+
+    const gfx::Rect viewport = scroll->GetVisibleRect();
+    EXPECT_EQ(target_y, viewport.y());
+    max_visible_tab_rows = std::max(
+        max_visible_tab_rows,
+        ExpectIntersectingTabRowsVisible(tab_list_, tab_list_, viewport));
+    max_descendant_layers =
+        std::max(max_descendant_layers, CountDescendantLayers(scroll));
+  }
+
+  scroll->ScrollToOffset(gfx::PointF(0, 0));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() == 0;
+  })) << "Layer-backed ScrollView did not return to zero after fine scroll";
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_EQ(0, scroll->CurrentOffset().y());
+  ASSERT_EQ(0, scroll->GetVisibleRect().y());
+  EXPECT_TRUE(pinned_section->GetVisible());
+  EXPECT_TRUE(separator->GetVisible());
+  EXPECT_TRUE(actions_row->GetVisible());
+
+  const int64_t layout_median_us = PercentileMicros(layout_latencies_us, 50);
+  const int64_t layout_p95_us = PercentileMicros(layout_latencies_us, 95);
+  const int64_t offset_settle_median_us =
+      PercentileMicros(offset_settle_latencies_us, 50);
+  const int64_t offset_settle_p95_us =
+      PercentileMicros(offset_settle_latencies_us, 95);
+  const int64_t fine_layout_median_us =
+      PercentileMicros(fine_layout_latencies_us, 50);
+  const int64_t fine_layout_p95_us =
+      PercentileMicros(fine_layout_latencies_us, 95);
+  const int64_t fine_invalidating_layout_p95_us =
+      fine_invalidating_layout_latencies_us.empty()
+          ? 0
+          : PercentileMicros(fine_invalidating_layout_latencies_us, 95);
+  const int64_t fine_noninvalidating_layout_p95_us =
+      fine_noninvalidating_layout_latencies_us.empty()
+          ? 0
+          : PercentileMicros(fine_noninvalidating_layout_latencies_us, 95);
+  const int cosmetic_apply_delta =
+      sidebar_->cosmetic_apply_count_for_testing() - cosmetic_apply_count_start;
+
+  RecordProperty("SIDEBAR_SCROLL_PERF_tab_count", tab_count);
+  RecordProperty("SIDEBAR_SCROLL_PERF_layout_median_us", layout_median_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_layout_p95_us", layout_p95_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_offset_settle_median_us",
+                 offset_settle_median_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_offset_settle_p95_us",
+                 offset_settle_p95_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_steps_over_16600_us",
+                 steps_over_16600_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_visible_tab_rows_max",
+                 max_visible_tab_rows);
+  RecordProperty("SIDEBAR_SCROLL_PERF_descendant_layers_max",
+                 max_descendant_layers);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_step_count", fine_offsets.size());
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_layout_median_us",
+                 fine_layout_median_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_layout_p95_us", fine_layout_p95_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_steps_over_16600_us",
+                 fine_steps_over_16600_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_invalidation_steps",
+                 fine_invalidation_steps);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_invalidating_layout_p95_us",
+                 fine_invalidating_layout_p95_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_noninvalidating_layout_p95_us",
+                 fine_noninvalidating_layout_p95_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_fine_layout_steps_over_16600_us",
+                 fine_layout_steps_over_16600_us);
+  RecordProperty("SIDEBAR_SCROLL_PERF_cosmetic_apply_delta",
+                 cosmetic_apply_delta);
+
+  LOG(INFO) << "[SIDEBAR_SCROLL_PERF] tab_count=" << tab_count
+            << " layout_median_us=" << layout_median_us
+            << " layout_p95_us=" << layout_p95_us
+            << " offset_settle_median_us=" << offset_settle_median_us
+            << " offset_settle_p95_us=" << offset_settle_p95_us
+            << " steps_over_16600_us=" << steps_over_16600_us
+            << " visible_tab_rows_max=" << max_visible_tab_rows
+            << " descendant_layers_max=" << max_descendant_layers;
+  LOG(INFO) << "[SIDEBAR_SCROLL_PERF] phase=fine tab_count=" << tab_count
+            << " fine_step_count=" << fine_offsets.size()
+            << " fine_step_dp=" << kFineStepDp
+            << " fine_layout_median_us=" << fine_layout_median_us
+            << " fine_layout_p95_us=" << fine_layout_p95_us
+            << " fine_steps_over_16600_us=" << fine_steps_over_16600_us
+            << " fine_invalidation_steps=" << fine_invalidation_steps
+            << " fine_invalidating_layout_p95_us="
+            << fine_invalidating_layout_p95_us
+            << " fine_noninvalidating_layout_p95_us="
+            << fine_noninvalidating_layout_p95_us
+            << " fine_layout_steps_over_16600_us="
+            << fine_layout_steps_over_16600_us
+            << " cosmetic_apply_delta=" << cosmetic_apply_delta;
+
+  // --- Hard, formula-derived acceptance guards (T3) ---
+  // The realized view count must be bounded by the viewport window, never by
+  // the tab count. All ceilings below are derived from the viewport height and
+  // the fixed overscan; none scale with |tab_count| (300 vs 600 share them).
+  constexpr int kRowHeightDp = 36;
+  constexpr int kBufferRows = 30;  // SidebarVisibilityManager::Config buffers.
+  const int viewport_rows =
+      (scroll->GetVisibleRect().height() + kRowHeightDp - 1) / kRowHeightDp;
+  // Worst-case window = viewport + velocity-direction leading overscan (capped
+  // at kMaxVelocityOverscanRows) + base trailing overscan. Constant regardless
+  // of tab_count (300 vs 600 share it).
+  const int kWindowRows =
+      viewport_rows + SidebarVisibilityManager::kMaxVelocityOverscanRows +
+      kBufferRows;
+
+  // Rows interleaved inside a fixed-height window can be packed denser than one
+  // per 36dp: a side-by-side split holds two tab rows in a single 36dp slot,
+  // collapsed folders contribute a sticky row, and each of the two section
+  // boundaries can straddle a couple of partial rows. kStructuralSlack is a
+  // fixed budget for that density; it does NOT scale with tab_count, which is
+  // exactly the regression this guard protects against.
+  constexpr int kStructuralSlack = 48;
+  EXPECT_LE(max_visible_tab_rows, kWindowRows + kStructuralSlack)
+      << "Realized tab rows must stay bounded by the viewport window; "
+      << "tab_count=" << tab_count << " window=" << kWindowRows
+      << " observed=" << max_visible_tab_rows;
+
+  // Layer ceiling. Each realized tab row owns 2 layers (close_button_ +
+  // audio_button_). A split container adds 1 (its awaiting-anim texture layer)
+  // plus its two member rows' layers. A conservative +1/row absorbs any
+  // transient favicon/row layer. kScaffoldAllowance covers the ScrollView, the
+  // two section containers, the separator, the actions row, and the four
+  // spacers.
+  constexpr int kLayerPerTabRow = 2;
+  constexpr int kMaxWindowSplits = 24;
+  constexpr int kScaffoldAllowance = 24;
+  const int kLayerCeiling = kWindowRows * kLayerPerTabRow +
+                            kMaxWindowSplits * (1 + 2 * kLayerPerTabRow) +
+                            kWindowRows * 1 + kScaffoldAllowance;
+  EXPECT_LE(max_descendant_layers, kLayerCeiling)
+      << "Descendant layers must stay bounded by the viewport window; "
+      << "tab_count=" << tab_count << " ceiling=" << kLayerCeiling
+      << " observed=" << max_descendant_layers;
+
+  EXPECT_LT(fine_invalidating_layout_p95_us, 16600)
+      << "Invalidating fine-scroll layout p95 must fit one 60Hz frame";
+  EXPECT_LT(fine_noninvalidating_layout_p95_us, 16600)
+      << "Non-invalidating fine-scroll layout p95 must stay negligible";
+  EXPECT_EQ(0, cosmetic_apply_delta)
+      << "Scrolling must not trigger any cosmetic refresh apply";
+}
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, SeededFavoritesMatchSnapshot) {
   SeedProfile(2);
@@ -1433,7 +2069,332 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   EXPECT_EQ(scroll->GetHorizontalScrollBarMode(),
             views::ScrollView::ScrollBarMode::kDisabled);
   EXPECT_EQ(scroll->GetVerticalScrollBarMode(),
-            views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+            views::ScrollView::ScrollBarMode::kEnabled);
+  // Arc-style overlay scrollbar: it overlays the content (reserves no layout
+  // width) rather than a classic width-reserving scrollbar.
+  ASSERT_NE(scroll->vertical_scroll_bar(), nullptr);
+  EXPECT_TRUE(scroll->vertical_scroll_bar()->OverlapsContent())
+      << "vertical scrollbar must be a thin auto-hiding overlay, not classic";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollInvalidationCoalescesAtRowBoundaries) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(80), browser());
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_EQ(scroll->contents(), tab_list_);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  ASSERT_GE(scroll->vertical_scroll_bar()->GetMaxPosition(), 180);
+  tab_list_->ResetScrollLayoutInvalidationStateForTesting();
+
+  for (const int target_y : {4, 8, 12, 16, 20, 24, 28, 32}) {
+    scroll->ScrollToOffset(gfx::PointF(0, target_y));
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return scroll->CurrentOffset().y() == target_y &&
+             scroll->GetVisibleRect().y() == target_y;
+    }));
+    EXPECT_EQ(1, tab_list_->scroll_layout_invalidation_count_for_testing())
+        << "Sub-row offset " << target_y
+        << " should stay within the first 36dp row boundary";
+  }
+
+  scroll->ScrollToOffset(gfx::PointF(0, 36));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() == 36 &&
+           scroll->GetVisibleRect().y() == 36;
+  }));
+  EXPECT_EQ(2, tab_list_->scroll_layout_invalidation_count_for_testing());
+
+  scroll->ScrollToOffset(gfx::PointF(0, 180));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() == 180 &&
+           scroll->GetVisibleRect().y() == 180;
+  }));
+  EXPECT_EQ(3, tab_list_->scroll_layout_invalidation_count_for_testing())
+      << "A multi-row jump should invalidate immediately";
+}
+
+// --- Regression: virtual-layout visibility latch on deep-scroll-then-top -----
+//
+// SidebarVirtualLayoutDelegate::CalculateProposedLayout() (maho_sidebar_tab_
+// list_view.cc) gates each direct child's layout visibility on
+//   children[i]->GetVisible() && (... intersects the expanded overscan rect)
+// The leading GetVisible() term latches: once a top scaffold child is culled
+// at a deep scroll offset (its layout visibility is set to false, which drives
+// View::SetVisible(false)), scrolling back to y=0 can never re-show it — the
+// GetVisible() precondition is already false, so the intersection test that
+// would restore it is short-circuited and never reached.
+//
+// This test drives the real ScrollView through that exact sequence. The
+// contents-scrolled callback (MahoSidebarView::OnTabListScrolled ->
+// MahoSidebarTabListView::OnScrollChanged) invalidates tab_rows_ when the
+// effective visible row boundary changes, so both large jumps below re-run the
+// virtual layout with no timers or sleeps.
+//
+// buffer_rows_above (30) * kRowHeightDp (36) = 1080dp of overscan above the
+// viewport, so the normal section is made far taller than 1080dp plus any
+// plausible browser-test viewport height, guaranteeing the top three scaffold
+// children (populated pinned section, separator, actions row) fall outside the
+// overscan window at bottom scroll and are genuinely culled.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       DeepScrollThenScrollTopRestoresTopChildrenVisibility) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  // Populated pinned section => pinned scaffold child is intended-visible.
+  MahoSidebarTabListModel model;
+  model.active_space_id = "deep-scroll-latch-space";
+  model.pinned_tree.push_back([] {
+    SidebarTreeNode n;
+    n.kind = SidebarNodeKind::kTab;
+    n.tab_id = "pinned-latch-tab";
+    n.tab_strip_index = -1;
+    n.is_pinned = true;
+    n.title = u"Pinned Latch Tab";
+    return n;
+  }());
+  // 30 overscan rows * 36dp = 1080dp; 200 normal rows (~7200dp) keeps the top
+  // three scaffold children well outside the overscan window at bottom scroll,
+  // independent of the browser-test viewport height.
+  constexpr int kNormalRows = 200;
+  for (int i = 0; i < kNormalRows; ++i) {
+    model.normal_tree.push_back([i] {
+      SidebarTreeNode n;
+      n.kind = SidebarNodeKind::kTab;
+      n.tab_id = "normal-latch-tab-" + base::NumberToString(i);
+      n.tab_strip_index = -1;
+      n.title = u"Normal Latch Tab";
+      return n;
+    }());
+  }
+
+  tab_list_->Update(model, browser());
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_EQ(scroll->contents(), tab_list_);
+
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(4u, rows->children().size())
+      << "Full scaffold must be pinned section + separator + actions row + "
+         "normal section";
+
+  views::View* pinned_section = rows->children()[0];
+  views::View* separator = rows->children()[1];
+  views::View* actions_row = rows->children()[2];
+
+  // Flush the initial layout at scroll offset 0, then wait for the compositor
+  // to present it. Layer-backed ScrollView bounds are not usable for a
+  // subsequent ScrollToOffset() until that layout reaches the content layer.
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  // Precondition: at the top, all three top scaffold children are visible.
+  ASSERT_TRUE(pinned_section->GetVisible())
+      << "Populated pinned section must start visible at scroll top";
+  ASSERT_TRUE(separator->GetVisible())
+      << "Pinned separator must start visible at scroll top";
+  ASSERT_TRUE(actions_row->GetVisible())
+      << "Actions row (+ New Tab) must start visible at scroll top";
+
+  // Scroll to the real bottom offset. Deriving it from the laid-out content
+  // and viewport makes the requested offset valid without relying on an
+  // asynchronous clamp.
+  constexpr int kVirtualLayoutOverscanDp = 30 * 36;
+  const gfx::Rect top_visible_rect = scroll->GetVisibleRect();
+  const int max_scroll_y = tab_list_->height() - top_visible_rect.height();
+  ASSERT_EQ(max_scroll_y, scroll->vertical_scroll_bar()->GetMaxPosition());
+  ASSERT_GT(max_scroll_y,
+            kVirtualLayoutOverscanDp + actions_row->bounds().bottom())
+      << "Bottom scroll must move the complete top scaffold beyond virtual "
+         "layout overscan";
+
+  scroll->ScrollToOffset(gfx::PointF(0, max_scroll_y));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() == max_scroll_y;
+  })) << "Layer-backed ScrollView did not reach the requested bottom offset";
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  const gfx::Rect deep_visible_rect = scroll->GetVisibleRect();
+  ASSERT_EQ(max_scroll_y, deep_visible_rect.y());
+  ASSERT_GT(deep_visible_rect.y(),
+            kVirtualLayoutOverscanDp + actions_row->bounds().bottom())
+      << "Deep visible rect must exclude the complete top scaffold plus "
+         "virtual-layout overscan";
+
+  // Deep-scroll culling precondition: the top three scaffold children must
+  // actually be culled (>1080dp above the viewport). Without this, the test
+  // would never exercise the latch.
+  ASSERT_FALSE(pinned_section->GetVisible())
+      << "Pinned section must be culled at deep scroll (else the normal "
+         "section is too short to exercise the latch)";
+  ASSERT_FALSE(separator->GetVisible())
+      << "Separator must be culled at deep scroll";
+  ASSERT_FALSE(actions_row->GetVisible())
+      << "Actions row must be culled at deep scroll";
+
+  // Scroll back to the top and flush layout.
+  scroll->ScrollToOffset(gfx::PointF(0, 0));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() == 0;
+  })) << "Layer-backed ScrollView did not return to scroll offset 0";
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_EQ(0, scroll->GetVisibleRect().y());
+
+  // Regression expectations: all three top scaffold children must be visible
+  // again. On the old production code the GetVisible() latch at
+  // maho_sidebar_tab_list_view.cc keeps them hidden, so these fail.
+  EXPECT_TRUE(pinned_section->GetVisible())
+      << "Pinned section must be restored to visible after scrolling back to "
+         "top; the GetVisible() latch regresses this";
+  EXPECT_TRUE(separator->GetVisible())
+      << "Separator must be restored to visible after scrolling back to top";
+  EXPECT_TRUE(actions_row->GetVisible())
+      << "Actions row must be restored to visible after scrolling back to top";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollPerformance300TabsProductionBaseline) {
+  RunScrollPerformanceBenchmark(300);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollPerformance600TabsStressBaseline) {
+  RunScrollPerformanceBenchmark(600);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, BoundedRealizedRows) {
+  int max_rows_300 = 0;
+  int max_layers_300 = 0;
+  int window_rows_300 = 0;
+  MeasureWindowedRealization(300, &max_rows_300, &max_layers_300,
+                             &window_rows_300);
+
+  int max_rows_600 = 0;
+  int max_layers_600 = 0;
+  int window_rows_600 = 0;
+  MeasureWindowedRealization(600, &max_rows_600, &max_layers_600,
+                             &window_rows_600);
+
+  constexpr int kStructuralSlack = 48;
+  EXPECT_LE(max_rows_300, window_rows_300 + kStructuralSlack)
+      << "300-tab realized rows must fit the viewport window";
+  EXPECT_LE(max_rows_600, window_rows_600 + kStructuralSlack)
+      << "600-tab realized rows must fit the viewport window";
+  // The realized count must NOT grow with the total tab count: doubling the
+  // model (300 -> 600) must not materially change how many rows are realized.
+  EXPECT_LE(max_rows_600, max_rows_300 + kStructuralSlack)
+      << "Realized rows scaled with tab count: 300=" << max_rows_300
+      << " 600=" << max_rows_600;
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LayerCeiling) {
+  int max_rows_300 = 0;
+  int max_layers_300 = 0;
+  int window_rows_300 = 0;
+  MeasureWindowedRealization(300, &max_rows_300, &max_layers_300,
+                             &window_rows_300);
+
+  int max_rows_600 = 0;
+  int max_layers_600 = 0;
+  int window_rows_600 = 0;
+  MeasureWindowedRealization(600, &max_rows_600, &max_layers_600,
+                             &window_rows_600);
+
+  auto layer_ceiling = [](int window_rows) {
+    constexpr int kLayerPerTabRow = 2;
+    constexpr int kMaxWindowSplits = 24;
+    constexpr int kScaffoldAllowance = 24;
+    return window_rows * kLayerPerTabRow +
+           kMaxWindowSplits * (1 + 2 * kLayerPerTabRow) + window_rows * 1 +
+           kScaffoldAllowance;
+  };
+  EXPECT_LE(max_layers_300, layer_ceiling(window_rows_300));
+  EXPECT_LE(max_layers_600, layer_ceiling(window_rows_600));
+  EXPECT_LE(max_layers_600, max_layers_300 + layer_ceiling(0))
+      << "Descendant layers scaled with tab count: 300=" << max_layers_300
+      << " 600=" << max_layers_600;
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       CulledSelectionBulkActionPreserved) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeScrollPerfModel(300);
+  // The first normal (non-pinned) tab: realized at the top, scrolled off later.
+  std::string target_tab_id;
+  for (const SidebarTreeNode& node : model.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      target_tab_id = node.tab_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(target_tab_id.empty());
+
+  tab_list_->Update(model, browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  // Select the tab while it is realized near the top.
+  ASSERT_NE(tab_list_->FindTabRowByIdForTesting(target_tab_id), nullptr);
+  tab_list_->ToggleTabSelected(target_tab_id);
+  EXPECT_TRUE(tab_list_->IsTabSelected(target_tab_id));
+
+  // Scroll to the bottom so the selected row leaves the window and is culled.
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+  scroll->ScrollToOffset(gfx::PointF(0, max_scroll_y));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == max_scroll_y; }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  ASSERT_EQ(tab_list_->FindTabRowByIdForTesting(target_tab_id), nullptr)
+      << "Selected tab row must be culled (never realized) at bottom scroll";
+  EXPECT_TRUE(tab_list_->IsTabSelected(target_tab_id))
+      << "Selection must survive row culling";
+
+  // A bulk action must still target the culled selection by id.
+  observer_.Clear();
+  tab_list_->PinSelected(true);
+
+  bool pinned_target = false;
+  for (const auto& event : observer_.events()) {
+    if (event.kind == "pin_tab" &&
+        event.json.find(target_tab_id) != std::string::npos) {
+      pinned_target = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(pinned_target)
+      << "PinSelected must dispatch pin_tab for the culled selected tab id";
 }
 
 // --- H1 regression: well-formed ShellEvents must never parse-error in core ---
@@ -1598,6 +2559,733 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
         << "malformed move_tab_to_space (space_id instead of target_space_id) "
            "must yield a parse-error payload; got: " << response;
   }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       SectionProjectionMirrorsRebuildTreeOrder) {
+  MahoSidebarTabListModel model = MakeProjectionModel();
+  std::vector<SidebarVisualRow> projection;
+  BuildSectionProjection(model.normal_tree, MahoSidebarTabSection::kNormal,
+                         &projection);
+
+  struct ExpectedRow {
+    SidebarVisualRowKind kind;
+    std::string stable_id;
+    int height_dp;
+    int cumulative_top_dp;
+  };
+  const std::vector<ExpectedRow> expected = {
+      {SidebarVisualRowKind::kInsertionLane, "lane:normal:before:proj-t0", 2, 0},
+      {SidebarVisualRowKind::kTab, "proj-t0", 36, 2},
+      {SidebarVisualRowKind::kInsertionLane, "lane:normal:before:proj-f1", 2, 38},
+      {SidebarVisualRowKind::kFolder, "proj-f1", 36, 40},
+      {SidebarVisualRowKind::kInsertionLane, "lane:normal:before:proj-c0", 2, 76},
+      {SidebarVisualRowKind::kTab, "proj-c0", 36, 78},
+      {SidebarVisualRowKind::kInsertionLane, "lane:normal:before:proj-c1", 2, 114},
+      {SidebarVisualRowKind::kTab, "proj-c1", 36, 116},
+      {SidebarVisualRowKind::kInsertionLane, "lane:normal:after:proj-c1", 2, 152},
+      {SidebarVisualRowKind::kInsertionLane, "lane:normal:before:proj-f2", 2, 154},
+      {SidebarVisualRowKind::kFolder, "proj-f2", 36, 156},
+      {SidebarVisualRowKind::kCollapsedStickyTab, "sticky:proj-f2:proj-c2", 36,
+       192},
+      {SidebarVisualRowKind::kSplitGroup, "proj-s1", 36, 228},
+  };
+
+  ASSERT_EQ(expected.size(), projection.size());
+  int running_top = 0;
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(expected[i].kind, projection[i].kind) << "kind at row " << i;
+    EXPECT_EQ(expected[i].stable_id, projection[i].stable_id)
+        << "stable_id at row " << i;
+    EXPECT_EQ(expected[i].height_dp, projection[i].height_dp)
+        << "height at row " << i;
+    EXPECT_EQ(expected[i].cumulative_top_dp, projection[i].cumulative_top_dp)
+        << "cumulative_top at row " << i;
+    EXPECT_EQ(running_top, projection[i].cumulative_top_dp)
+        << "prefix-sum invariant at row " << i;
+    running_top += projection[i].height_dp;
+  }
+  EXPECT_EQ(264, running_top);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       SectionProjectionMatchesRealizedEagerTree) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeProjectionModel();
+  tab_list_->Update(model, browser());
+  ASSERT_TRUE(tab_list_->GetWidget());
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  std::vector<SidebarVisualRow> expected;
+  BuildSectionProjection(model.normal_tree, MahoSidebarTabSection::kNormal,
+                         &expected);
+  const std::vector<SidebarVisualRow>& wired =
+      tab_list_->normal_projection_for_testing();
+  ASSERT_EQ(expected.size(), wired.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(expected[i].kind, wired[i].kind) << "wired kind at row " << i;
+    EXPECT_EQ(expected[i].stable_id, wired[i].stable_id)
+        << "wired stable_id at row " << i;
+    EXPECT_EQ(expected[i].cumulative_top_dp, wired[i].cumulative_top_dp)
+        << "wired cumulative_top at row " << i;
+  }
+
+  std::vector<std::string> realized;
+  CollectRealizedTabIds(tab_list_->tab_rows_for_testing(), &realized);
+  const std::vector<std::string> reconstructed =
+      ReconstructProjectionTabOrder(wired);
+  EXPECT_EQ(realized, reconstructed);
+
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_EQ(4u, rows->children().size());
+  views::View* normal_section = rows->children()[3];
+  ASSERT_FALSE(normal_section->children().empty());
+  views::View* rows_container = normal_section->children()[0];
+  // rows_container is [top_spacer, <realized rows>, bottom_spacer]. This model
+  // is short enough to fit entirely in the window, so every projection row is
+  // realized and both spacers collapse to zero.
+  ASSERT_EQ(wired.size() + 2u, rows_container->children().size());
+  EXPECT_EQ(0, rows_container->children().front()->GetPreferredSize().height());
+  EXPECT_EQ(0, rows_container->children().back()->GetPreferredSize().height());
+
+  int summed = 0;
+  for (size_t i = 0; i < wired.size(); ++i) {
+    EXPECT_EQ(wired[i].height_dp,
+              rows_container->children()[i + 1]->GetPreferredSize().height())
+        << "eager height mismatch at row " << i << " kind "
+        << static_cast<int>(wired[i].kind);
+    summed += wired[i].height_dp;
+  }
+  EXPECT_EQ(summed, rows_container->GetPreferredSize().height());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       MeasureVisualRowHeightMatchesTokens) {
+  SidebarVisualRow lane;
+  lane.kind = SidebarVisualRowKind::kInsertionLane;
+  EXPECT_EQ(2, MeasureVisualRowHeight(lane));
+
+  SidebarVisualRow tab;
+  tab.kind = SidebarVisualRowKind::kTab;
+  EXPECT_EQ(36, MeasureVisualRowHeight(tab));
+
+  SidebarVisualRow folder;
+  folder.kind = SidebarVisualRowKind::kFolder;
+  EXPECT_EQ(36, MeasureVisualRowHeight(folder));
+
+  SidebarVisualRow sticky;
+  sticky.kind = SidebarVisualRowKind::kCollapsedStickyTab;
+  EXPECT_EQ(36, MeasureVisualRowHeight(sticky));
+
+  SidebarVisualRow split_side_by_side;
+  split_side_by_side.kind = SidebarVisualRowKind::kSplitGroup;
+  split_side_by_side.node.split_orientation = "vertical";
+  split_side_by_side.node.children.push_back(MakeProjectionTab("m0"));
+  split_side_by_side.node.children.push_back(MakeProjectionTab("m1"));
+  EXPECT_EQ(36, MeasureVisualRowHeight(split_side_by_side));
+
+  SidebarVisualRow split_stacked;
+  split_stacked.kind = SidebarVisualRowKind::kSplitGroup;
+  split_stacked.node.split_orientation = "horizontal";
+  split_stacked.node.children.push_back(MakeProjectionTab("m0"));
+  split_stacked.node.children.push_back(MakeProjectionTab("m1"));
+  // A stacked split realizes before+append insertion lanes (2dp each) around
+  // each 36dp pane, plus a 1dp divider between the two panes.
+  EXPECT_EQ(2 * (36 + 2 * 2) + 1, MeasureVisualRowHeight(split_stacked));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ProjectionVisibleRangeSelectsVariableHeightRows) {
+  SidebarVisibilityManager manager(SidebarVisibilityManager::Config{
+      .row_height_dp = 36,
+      .buffer_rows_above = 0,
+      .buffer_rows_below = 0,
+      .drag_overscan_rows = 0});
+  const std::vector<int> tops = {0, 36, 72, 144, 180};
+  const int total_height = 216;
+
+  auto range = manager.ComputeVisibleRangeForProjection(
+      gfx::Rect(0, 80, 100, 40), tops, total_height);
+  EXPECT_EQ(2, range.first_visible_index);
+  EXPECT_EQ(2, range.last_visible_index);
+  EXPECT_EQ(5, range.total_rows);
+
+  auto spanning = manager.ComputeVisibleRangeForProjection(
+      gfx::Rect(0, 50, 100, 40), tops, total_height);
+  EXPECT_EQ(1, spanning.first_visible_index);
+  EXPECT_EQ(2, spanning.last_visible_index);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ProjectionVisibleRangeAppliesOverscan) {
+  SidebarVisibilityManager manager(SidebarVisibilityManager::Config{
+      .row_height_dp = 36,
+      .buffer_rows_above = 0,
+      .buffer_rows_below = 1,
+      .drag_overscan_rows = 0});
+  const std::vector<int> tops = {0, 36, 72, 144, 180};
+  const int total_height = 216;
+
+  auto range = manager.ComputeVisibleRangeForProjection(
+      gfx::Rect(0, 80, 100, 40), tops, total_height);
+  EXPECT_EQ(1, range.first_visible_index);
+  EXPECT_EQ(3, range.last_visible_index);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ProjectionVisibleRangeIncludesForcedIndex) {
+  SidebarVisibilityManager manager(SidebarVisibilityManager::Config{
+      .row_height_dp = 36,
+      .buffer_rows_above = 0,
+      .buffer_rows_below = 0,
+      .drag_overscan_rows = 0});
+  const std::vector<int> tops = {0, 36, 72, 144, 180};
+  const int total_height = 216;
+  const gfx::Rect viewport(0, 80, 100, 40);
+
+  manager.SetForcedVisibleIndex(0);
+  auto forced_low =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_EQ(0, forced_low.first_visible_index);
+  EXPECT_EQ(2, forced_low.last_visible_index);
+
+  manager.SetForcedVisibleIndex(4);
+  auto forced_high =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_EQ(2, forced_high.first_visible_index);
+  EXPECT_EQ(4, forced_high.last_visible_index);
+
+  manager.ClearForcedVisibleIndex();
+  auto cleared =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_EQ(2, cleared.first_visible_index);
+  EXPECT_EQ(2, cleared.last_visible_index);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ProjectionVisibleRangeWidensDuringDrag) {
+  SidebarVisibilityManager manager(SidebarVisibilityManager::Config{
+      .row_height_dp = 36,
+      .buffer_rows_above = 0,
+      .buffer_rows_below = 1,
+      .drag_overscan_rows = 3});
+  const std::vector<int> tops = {0, 36, 72, 144, 180};
+  const int total_height = 216;
+  const gfx::Rect viewport(0, 80, 100, 40);
+
+  auto idle =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_EQ(1, idle.first_visible_index);
+  EXPECT_EQ(3, idle.last_visible_index);
+
+  manager.SetDragActive(true);
+  auto dragged =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_EQ(0, dragged.first_visible_index);
+  EXPECT_EQ(4, dragged.last_visible_index);
+}
+
+// --- T5-T9 helpers ---
+
+std::vector<std::string> TopLevelNormalTabIds(
+    const MahoSidebarTabListModel& model) {
+  std::vector<std::string> ids;
+  for (const SidebarTreeNode& node : model.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      ids.push_back(node.tab_id);
+    }
+  }
+  return ids;
+}
+
+int CountAxTabNodes(const views::ViewAccessibility& ax) {
+  int count = 0;
+  std::function<void(const views::AXVirtualView*)> walk;
+  walk = [&](const views::AXVirtualView* node) {
+    if (node->GetData().role == ax::mojom::Role::kTab) {
+      ++count;
+    }
+    for (const auto& child : node->children()) {
+      walk(child.get());
+    }
+  };
+  for (const auto& child : ax.virtual_children()) {
+    walk(child.get());
+  }
+  return count;
+}
+
+// --- T5: off-window reveal + focus ---
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, OffWindowRevealRealizesTarget) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeScrollPerfModel(300);
+  const std::vector<std::string> root_tabs = TopLevelNormalTabIds(model);
+  ASSERT_GT(root_tabs.size(), 10u);
+  const std::string deep = root_tabs.back();
+
+  tab_list_->Update(model, browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  EXPECT_EQ(tab_list_->FindTabRowByIdForTesting(deep), nullptr)
+      << "A deep tab must start culled (off-window) at the top";
+  const int extent_before = tab_list_->height();
+
+  tab_list_->RevealTabById(deep);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  SidebarTabRowView* row = tab_list_->FindTabRowByIdForTesting(deep);
+  ASSERT_NE(row, nullptr) << "RevealTabById must realize the off-window row";
+  EXPECT_TRUE(row->IsDrawn());
+  EXPECT_EQ(extent_before, tab_list_->height())
+      << "Reveal must not change the content extent";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FocusSurvivesCullRestore) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeScrollPerfModel(300);
+  const std::vector<std::string> root_tabs = TopLevelNormalTabIds(model);
+  ASSERT_GT(root_tabs.size(), 10u);
+  const std::string deep = root_tabs.back();
+
+  tab_list_->Update(model, browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  tab_list_->RevealTabById(deep);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  SidebarTabRowView* row = tab_list_->FindTabRowByIdForTesting(deep);
+  ASSERT_NE(row, nullptr);
+  row->RequestFocus();
+
+  scroll->ScrollToOffset(gfx::PointF(0, 0));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == 0; }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_EQ(tab_list_->FindTabRowByIdForTesting(deep), nullptr)
+      << "The focused row must cull when scrolled far away";
+
+  tab_list_->RevealTabById(deep);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_NE(tab_list_->FindTabRowByIdForTesting(deep), nullptr)
+      << "Re-revealing must restore the row after a cull";
+}
+
+// --- T6: projection-based range navigation across the window boundary ---
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       RangeSelectionCrossesWindowBoundary) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  const std::vector<std::string> ids =
+      tab_list_->tab_visual_order_ids_for_testing();
+  ASSERT_GT(ids.size(), 80u);
+  const int anchor_idx = 3;
+  const int target_idx = static_cast<int>(ids.size()) - 6;
+
+  tab_list_->ToggleTabSelected(ids[anchor_idx]);
+  ASSERT_TRUE(tab_list_->IsTabSelected(ids[anchor_idx]));
+
+  tab_list_->SelectRangeTo(ids[target_idx]);
+
+  for (int i = anchor_idx; i <= target_idx; ++i) {
+    EXPECT_TRUE(tab_list_->IsTabSelected(ids[i]))
+        << "id at index " << i << " should be in the range selection";
+  }
+  EXPECT_EQ(static_cast<size_t>(target_idx - anchor_idx + 1),
+            tab_list_->selected_tab_ids().size());
+
+  tab_list_->RevealTabById(ids[target_idx]);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_NE(tab_list_->FindTabRowByIdForTesting(ids[target_idx]), nullptr)
+      << "The range target must be revealable/focusable";
+}
+
+// --- T7: folder toggle keeps realization bounded + extent exact ---
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       FolderToggleKeepsRealizationBounded) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  const int viewport_rows =
+      (scroll->GetVisibleRect().height() + 35) / 36;
+  const int bound = viewport_rows + 2 * 30 + 48;
+  const int extent_before = tab_list_->height();
+
+  tab_list_->ToggleFolderExpandedForTesting("scroll-perf-expanded-folder-0");
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_LE(ExpectIntersectingTabRowsVisible(tab_list_, tab_list_,
+                                             scroll->GetVisibleRect()),
+            bound)
+      << "Collapsing a folder must keep realization bounded";
+  EXPECT_GT(tab_list_->height(), 0);
+  EXPECT_LT(tab_list_->height(), extent_before)
+      << "Collapsing removes child rows, so the extent shrinks";
+
+  tab_list_->ToggleFolderExpandedForTesting("scroll-perf-expanded-folder-0");
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_LE(ExpectIntersectingTabRowsVisible(tab_list_, tab_list_,
+                                             scroll->GetVisibleRect()),
+            bound)
+      << "Re-expanding must keep realization bounded";
+  EXPECT_EQ(extent_before, tab_list_->height())
+      << "Re-expanding restores the original extent";
+}
+
+// --- T8: DnD drop onto a realized lane after deep scroll ---
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       DeepScrollLaneDropDispatchesReorder) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeScrollPerfModel(300);
+  const std::vector<std::string> root_tabs = TopLevelNormalTabIds(model);
+  ASSERT_GT(root_tabs.size(), 5u);
+  const std::string target = root_tabs.back();
+  const std::string source = root_tabs.front();
+  ASSERT_NE(target, source);
+
+  tab_list_->Update(model, browser());
+  ASSERT_TRUE(tab_list_->GetWidget());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  tab_list_->RevealTabById(target);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  views::View* lane =
+      tab_list_->FindInsertionLaneBeforeTabByIdForTesting(target);
+  ASSERT_NE(lane, nullptr)
+      << "The deep target's before-lane must be realized after reveal";
+
+  observer_.Clear();
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = source;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = "scroll-perf-space";
+  payload.tab_strip_index = -1;
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  const gfx::PointF loc(5, 1);
+  ui::DropTargetEvent event(data, loc, loc,
+                            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(lane->OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  auto callback = lane->GetDropCallback(event);
+  ASSERT_FALSE(callback.is_null());
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  EXPECT_TRUE(observer_.HasEvent("reorder_root_item"))
+      << "A drop on a realized deep lane must dispatch reorder by model id";
+}
+
+// --- T9: AXVirtualView enumerates the full projection regardless of scroll ---
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       AxVirtualNodesEnumerateFullProjection) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  const size_t projected =
+      tab_list_->tab_visual_order_ids_for_testing().size();
+  ASSERT_GT(projected, 60u);
+
+  const int ax_top = CountAxTabNodes(tab_list_->GetViewAccessibility());
+  EXPECT_EQ(static_cast<int>(projected), ax_top)
+      << "AX must enumerate every projected tab at top scroll";
+
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+  scroll->ScrollToOffset(gfx::PointF(0, max_scroll_y));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == max_scroll_y; }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  const int ax_deep = CountAxTabNodes(tab_list_->GetViewAccessibility());
+  EXPECT_EQ(ax_top, ax_deep)
+      << "AX tab enumeration must not regress after a deep scroll";
+
+  const int realized = ExpectIntersectingTabRowsVisible(
+      tab_list_, tab_list_, scroll->GetVisibleRect());
+  EXPECT_LT(realized, ax_deep)
+      << "Realized rows must stay far fewer than the full AX enumeration";
+}
+
+// --- T11: fast-fling blank-row fix ---
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       FastFlingViewportRowsPreRealized) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(320), browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+
+  // Scroll to a MID offset (room remains below) mimicking a fling in progress,
+  // then let deferred layout run — the model is async-layout now, no sync pass.
+  const int target_y = max_scroll_y / 2;
+  scroll->ScrollToOffset(gfx::PointF(0, target_y));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == target_y; }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  const gfx::Rect viewport = scroll->GetVisibleRect();
+  int viewport_rows = 0;
+  int max_realized_bottom = -1;
+  std::function<void(views::View*)> verify;
+  verify = [&](views::View* parent) {
+    for (views::View* child : parent->children()) {
+      if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
+        const gfx::Rect row_bounds = views::View::ConvertRectToTarget(
+            row, tab_list_, row->GetLocalBounds());
+        if (!row->size().IsEmpty()) {
+          max_realized_bottom = std::max(max_realized_bottom, row_bounds.bottom());
+        }
+        if (row_bounds.Intersects(viewport)) {
+          EXPECT_TRUE(row->IsDrawn())
+              << "viewport row not drawn: " << row->tab_id_for_testing();
+          EXPECT_FALSE(row->size().IsEmpty())
+              << "viewport row lacks laid-out bounds: "
+              << row->tab_id_for_testing();
+          ++viewport_rows;
+        }
+      }
+      verify(child);
+    }
+  };
+  verify(tab_list_);
+
+  EXPECT_GT(viewport_rows, 0) << "viewport must contain realized rows";
+  // Proactive pre-realization: rows AHEAD of the viewport (below it, in the
+  // scroll-down direction) are already realized + laid out, so they are
+  // positioned before scrolling into view. The realized leading edge extends
+  // well past the viewport bottom (base overscan alone is 30 rows).
+  EXPECT_GT(max_realized_bottom, viewport.bottom())
+      << "rows below the viewport must be pre-realized (leading overscan)";
+  EXPECT_GE(max_realized_bottom - viewport.bottom(), 5 * 36)
+       << "leading overscan must keep several off-screen rows ready ahead";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       FastFlingPresentsRowsWithoutManualLayout) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(320), browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+  tab_list_->ResetScrollLayoutInvalidationStateForTesting();
+
+  const int target_y = max_scroll_y / 2;
+  scroll->ScrollToOffset(gfx::PointF(0, target_y));
+  ASSERT_EQ(target_y, scroll->CurrentOffset().y())
+      << "ScrollToOffset must synchronously land before presentation checks";
+  ASSERT_EQ(target_y, scroll->GetVisibleRect().y())
+      << "The viewport must synchronously follow the requested offset";
+
+  EXPECT_GE(tab_list_->scroll_layout_invalidation_count_for_testing(), 1)
+      << "The fling must exercise OnScrollChanged before presentation checks";
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_NE(rows, nullptr);
+  EXPECT_FALSE(rows->needs_layout())
+      << "OnScrollChanged must lay out newly-realized rows in the same callback "
+         "instead of deferring presentation to the next frame";
+
+  const gfx::Rect viewport = scroll->GetVisibleRect();
+  int viewport_rows = 0;
+  std::function<void(views::View*)> verify;
+  verify = [&](views::View* parent) {
+    for (views::View* child : parent->children()) {
+      if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
+        const gfx::Rect row_bounds = views::View::ConvertRectToTarget(
+            row, tab_list_, row->GetLocalBounds());
+        if (row_bounds.Intersects(viewport)) {
+          EXPECT_FALSE(row->size().IsEmpty())
+              << "viewport row " << row->tab_id_for_testing()
+              << " needs laid-out bounds for same-callback presentation";
+          EXPECT_TRUE(row->IsDrawn())
+              << "viewport row " << row->tab_id_for_testing()
+              << " must be drawn for same-callback presentation";
+          ++viewport_rows;
+        }
+      }
+      verify(child);
+    }
+  };
+  verify(tab_list_);
+
+  EXPECT_GT(viewport_rows, 0)
+      << "same-callback presentation must expose at least one viewport row";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, ReconcileWindowIsReentrancySafe) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(320), browser());
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  // A re-entrant reconcile (as a synchronous scroll callback would trigger)
+  // must be a guarded no-op, leaving the realized window untouched.
+  EXPECT_TRUE(tab_list_->ReentrantReconcileIsBlockedForTesting());
+
+  // Aggressive fling sweep (large rapid jumps both directions): mutating the
+  // spacers must never re-enter reconciliation and corrupt window_/children.
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+  for (const int target_y :
+       {max_scroll_y * 3 / 4, max_scroll_y / 4, max_scroll_y, 0,
+        max_scroll_y / 2}) {
+    scroll->ScrollToOffset(gfx::PointF(0, target_y));
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return scroll->CurrentOffset().y() == target_y; }));
+    tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  }
+
+  // No crash + consistent state: four-child scaffold intact, viewport still
+  // has realized rows, extent still positive.
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_EQ(4u, rows->children().size());
+  EXPECT_GT(ExpectIntersectingTabRowsVisible(tab_list_, tab_list_,
+                                             scroll->GetVisibleRect()),
+            0);
+  EXPECT_GT(tab_list_->height(), 0);
+  EXPECT_TRUE(tab_list_->ReentrantReconcileIsBlockedForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       VelocityOverscanExpandsInScrollDirection) {
+  SidebarVisibilityManager manager(SidebarVisibilityManager::Config{
+      .row_height_dp = 36,
+      .buffer_rows_above = 30,
+      .buffer_rows_below = 30,
+      .drag_overscan_rows = 50});
+  std::vector<int> tops;
+  tops.reserve(400);
+  for (int i = 0; i < 400; ++i) {
+    tops.push_back(i * 36);
+  }
+  const int total_height = 400 * 36;
+  const gfx::Rect viewport(0, 200 * 36, 100, 10 * 36);  // mid-list, 10 rows.
+
+  manager.SetProjectionOverscanRows(30, 30);
+  auto base_range =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+
+  // Fast scroll DOWN: leading (below) overscan grows to the cap; trailing
+  // (above) edge stays at base.
+  manager.SetProjectionOverscanRows(
+      30, SidebarVisibilityManager::kMaxVelocityOverscanRows);
+  auto down_range =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_GT(down_range.last_visible_index, base_range.last_visible_index)
+      << "fast down-scroll must realize more rows ahead (below the viewport)";
+  EXPECT_EQ(down_range.first_visible_index, base_range.first_visible_index)
+      << "trailing (above) edge must stay at the base overscan";
+  const int viewport_last_row = viewport.bottom() / 36;
+  EXPECT_LE(down_range.last_visible_index,
+            viewport_last_row +
+                SidebarVisibilityManager::kMaxVelocityOverscanRows)
+      << "leading overscan must never exceed kMaxVelocityOverscanRows";
+
+  // Fast scroll UP: leading (above) grows to the cap; trailing (below) is base.
+  manager.SetProjectionOverscanRows(
+      SidebarVisibilityManager::kMaxVelocityOverscanRows, 30);
+  auto up_range =
+      manager.ComputeVisibleRangeForProjection(viewport, tops, total_height);
+  EXPECT_LT(up_range.first_visible_index, base_range.first_visible_index)
+      << "fast up-scroll must realize more rows ahead (above the viewport)";
+  EXPECT_EQ(up_range.last_visible_index, base_range.last_visible_index)
+      << "trailing (below) edge must stay at the base overscan";
 }
 
 }  // namespace

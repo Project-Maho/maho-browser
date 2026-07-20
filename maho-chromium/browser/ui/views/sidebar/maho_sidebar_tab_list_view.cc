@@ -15,6 +15,8 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/check_op.h"
+#include "base/auto_reset.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/functional/callback_helpers.h"
@@ -79,6 +81,7 @@
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/accessibility/ax_virtual_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -592,6 +595,42 @@ class SidebarSeparatorRow : public views::View {
   SidebarSeparatorRow& operator=(const SidebarSeparatorRow&) = delete;
   ~SidebarSeparatorRow() override = default;
 };
+
+// Leading/trailing window spacer that PAINTS a faint row-rhythm skeleton across
+// its region. It absorbs the culled extent (its height is set by
+// ReconcileSectionWindow) and, if a fling frame ever briefly exposes the
+// spacer region before realization catches up, shows neutral placeholder rows
+// instead of blank/torn content. Paint-only: no layer, no child views, so it
+// does not affect the realized-layer ceiling.
+class SidebarSkeletonSpacerView : public views::View {
+  METADATA_HEADER(SidebarSkeletonSpacerView, views::View)
+
+ public:
+  SidebarSkeletonSpacerView() = default;
+  SidebarSkeletonSpacerView(const SidebarSkeletonSpacerView&) = delete;
+  SidebarSkeletonSpacerView& operator=(const SidebarSkeletonSpacerView&) =
+      delete;
+  ~SidebarSkeletonSpacerView() override = default;
+
+  void OnPaint(gfx::Canvas* canvas) override {
+    views::View::OnPaint(canvas);
+    const ui::ColorProvider* color_provider = GetColorProvider();
+    const int h = height();
+    const int w = width();
+    if (!color_provider || h <= 0 || w <= 0) {
+      return;
+    }
+    // Barely-visible neutral separators on the 36dp row rhythm.
+    const SkColor line =
+        SkColorSetA(color_provider->GetColor(ui::kColorSysNeutralOutline), 0x14);
+    for (int y = kRowHeightDp; y < h; y += kRowHeightDp) {
+      canvas->FillRect(gfx::Rect(0, y, w, 1), line);
+    }
+  }
+};
+
+BEGIN_METADATA(SidebarSkeletonSpacerView)
+END_METADATA
 
 }  // namespace
 
@@ -3687,21 +3726,83 @@ void MahoSidebarTabListView::OnScrollChanged() {
   if (!scroll_view_ || !tab_rows_) {
     return;
   }
+  if (scroll_presenting_) {
+    return;
+  }
 
   const int visible_y = std::max(0, scroll_view_->GetVisibleRect().y());
   const int visible_row = visible_y / kRowHeightDp;
   if (visible_row == last_visible_row_) {
     return;
   }
+  base::AutoReset<bool> presenting(&scroll_presenting_, true);
+
+  // Velocity-aware directional overscan (bounded). The compositor scrolls the
+  // layer-backed ScrollView on its own thread; realization + presentation run
+  // here on the main thread. These are distinct pipelines, so callback/frame
+  // scheduling jitter can still briefly outrun realization. To absorb that
+  // jitter we pre-realize AHEAD of the compositor: grow the window in the
+  // scroll direction so entering rows are realized off-screen in the overscan
+  // buffer before they scroll into view. Hard-capped at kMaxVelocityOverscanRows
+  // so realization never scales with the tab count. This only expands
+  // realization; it never limits scrolling.
+  if (visibility_manager_) {
+    const int base_rows = visibility_manager_->config().buffer_rows_below;
+    int leading_rows = base_rows;
+    const base::TimeTicks now = base::TimeTicks::Now();
+    const int dy = visible_y - last_scroll_velocity_y_;
+    if (!last_scroll_velocity_time_.is_null() && dy != 0) {
+      const base::TimeDelta dt = now - last_scroll_velocity_time_;
+      if (dt.is_positive()) {
+        const int abs_dy = dy < 0 ? -dy : dy;
+        const double rows_per_sec =
+            (abs_dy / static_cast<double>(kRowHeightDp)) / dt.InSecondsF();
+        // Lead the compositor by ~0.1s of travel: at 60fps that is ~6 frames,
+        // keeping several already-realized rows ahead of the viewport to cover
+        // scheduling jitter between the compositor and main-thread realization.
+        // Capped at kMaxVelocityOverscanRows; beyond that the paint-only
+        // skeleton spacer is the residual fallback.
+        const int extra = static_cast<int>(rows_per_sec * 0.1);
+        leading_rows = std::clamp(
+            base_rows + extra, base_rows,
+            SidebarVisibilityManager::kMaxVelocityOverscanRows);
+      }
+    }
+    const bool scrolling_down = dy >= 0;
+    if (scrolling_down) {
+      visibility_manager_->SetProjectionOverscanRows(base_rows, leading_rows);
+    } else {
+      visibility_manager_->SetProjectionOverscanRows(leading_rows, base_rows);
+    }
+    velocity_leading_overscan_rows_for_testing_ = leading_rows;
+    last_scroll_velocity_y_ = visible_y;
+    last_scroll_velocity_time_ = now;
+  }
 
   last_visible_row_ = visible_row;
   ++scroll_layout_invalidation_count_for_testing_;
+  ReconcileSectionWindow(MahoSidebarTabSection::kPinned, browser_);
+  ReconcileSectionWindow(MahoSidebarTabSection::kNormal, browser_);
+  // Full-root/ScrollView layout is forbidden: it can resize/clamp and re-fire
+  // scrolling. Lay out only this existing contents subtree at current bounds;
+  // outer invalidation remains for ancestor extent/scrollbar adoption.
   tab_rows_->InvalidateLayout();
+  DeprecatedLayoutImmediately();
 }
 
 void MahoSidebarTabListView::ResetScrollLayoutInvalidationStateForTesting() {
   last_visible_row_ = -1;
   scroll_layout_invalidation_count_for_testing_ = 0;
+}
+
+bool MahoSidebarTabListView::ReentrantReconcileIsBlockedForTesting() {
+  // Simulate an outer reconcile in progress, then attempt a nested reconcile;
+  // the guard must make it a no-op, leaving the window untouched.
+  base::AutoReset<bool> outer(&reconciling_, true);
+  const RealizedWindow before = normal_window_;
+  ReconcileSectionWindow(MahoSidebarTabSection::kNormal, browser_);
+  return normal_window_.first == before.first &&
+         normal_window_.last == before.last;
 }
 
 bool MahoSidebarTabListView::OnKeyPressed(const ui::KeyEvent& event) {
@@ -3717,23 +3818,29 @@ bool MahoSidebarTabListView::OnKeyPressed(const ui::KeyEvent& event) {
         }
       }
       if (focused_row) {
-        std::vector<SidebarTabRowView*> visual_rows = GetTabRowsInVisualOrder();
-        auto it = std::find(visual_rows.begin(), visual_rows.end(), focused_row);
-        if (it != visual_rows.end()) {
-          size_t index = std::distance(visual_rows.begin(), it);
+        // Navigate in projection order (every tab), so a shift+arrow can cross
+        // the realized window boundary; reveal + focus the target row.
+        const std::vector<std::string> order = GetTabVisualOrderIds();
+        const std::string focused_id = focused_row->tab_id();
+        auto it = std::find(order.begin(), order.end(), focused_id);
+        if (it != order.end()) {
+          size_t index = std::distance(order.begin(), it);
           size_t target_index = index;
           if (event.key_code() == ui::VKEY_UP && index > 0) {
             target_index = index - 1;
-          } else if (event.key_code() == ui::VKEY_DOWN && index + 1 < visual_rows.size()) {
+          } else if (event.key_code() == ui::VKEY_DOWN &&
+                     index + 1 < order.size()) {
             target_index = index + 1;
           }
           if (target_index != index) {
-            SidebarTabRowView* target_row = visual_rows[target_index];
-            if (target_row) {
-              SelectRangeTo(target_row->tab_id());
-              target_row->RequestFocus();
-              return true;
+            const std::string target_id = order[target_index];
+            SelectRangeTo(target_id);
+            RevealTabById(target_id);
+            auto row_it = tab_id_to_row_view_.find(target_id);
+            if (row_it != tab_id_to_row_view_.end() && row_it->second) {
+              row_it->second->RequestFocus();
             }
+            return true;
           }
         }
       }
@@ -4170,6 +4277,14 @@ void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
     toggle_active(id, true);
   }
 
+  // The active tab may live outside the realized window; reveal it so its
+  // highlight is actually materialized and scrolled into view.
+  if (!new_active_tab_id.empty() &&
+      tab_id_to_row_view_.find(new_active_tab_id) ==
+          tab_id_to_row_view_.end()) {
+    RevealTabById(new_active_tab_id);
+  }
+
   last_active_tab_id_ = new_active_tab_id;
 }
 
@@ -4375,12 +4490,241 @@ void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
   }
 }
 
+namespace {
+
+std::string ProjectionSectionId(MahoSidebarTabSection section) {
+  return section == MahoSidebarTabSection::kPinned ? "pinned" : "normal";
+}
+
+const SidebarTreeNode* ProjectionActiveDescendant(
+    const std::vector<SidebarTreeNode>& nodes) {
+  for (const auto& n : nodes) {
+    if (n.kind == SidebarNodeKind::kTab && n.is_active) {
+      return &n;
+    }
+    if (!n.children.empty()) {
+      if (const SidebarTreeNode* found =
+              ProjectionActiveDescendant(n.children)) {
+        return found;
+      }
+    }
+  }
+  return nullptr;
+}
+
+int CountProjectionModelTabs(const std::vector<SidebarTreeNode>& nodes) {
+  int count = 0;
+  for (const auto& n : nodes) {
+    if (n.kind == SidebarNodeKind::kTab) {
+      ++count;
+    }
+    count += CountProjectionModelTabs(n.children);
+  }
+  return count;
+}
+
+SidebarVisualRow MakeProjectionLaneRow(MahoSidebarTabSection section,
+                                       SidebarNodeKind target_kind,
+                                       const std::string& target_id,
+                                       bool append,
+                                       const std::string& parent_folder_id,
+                                       int target_child_index) {
+  SidebarVisualRow row;
+  row.kind = SidebarVisualRowKind::kInsertionLane;
+  row.section = section;
+  row.stable_id = "lane:" + ProjectionSectionId(section) + ":" +
+                  (append ? "after:" : "before:") + target_id;
+  row.lane_target_kind = target_kind;
+  row.lane_target_id = target_id;
+  row.lane_append = append;
+  row.lane_parent_folder_id = parent_folder_id;
+  row.lane_target_child_index = target_child_index;
+  return row;
+}
+
+// Mirrors RebuildTreeNodes() exactly: before-lane, tab/folder row, expanded
+// children flattened as siblings, collapsed sticky row, append-lane, split
+// group. Splits are emitted as a single kSplitGroup row (their internal panes
+// live inside one container view in the eager tree, so they occupy one slot in
+// the parent's child order).
+void AppendProjectionRows(const std::vector<SidebarTreeNode>& nodes,
+                          MahoSidebarTabSection section,
+                          const std::string& parent_folder_id,
+                          std::vector<SidebarVisualRow>* out) {
+  std::unordered_map<std::string, std::string> sibling_last_seen_folder_id;
+  std::vector<std::string> next_sibling_folder_ids(nodes.size());
+  for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
+    const auto& n = nodes[i];
+    if (n.kind == SidebarNodeKind::kFolder) {
+      const std::string& parent_id = n.parent_of_folder_id;
+      next_sibling_folder_ids[i] = sibling_last_seen_folder_id[parent_id];
+      if (!n.folder_id.empty()) {
+        sibling_last_seen_folder_id[parent_id] = n.folder_id;
+      }
+    }
+  }
+
+  for (size_t index = 0; index < nodes.size(); ++index) {
+    const auto& node = nodes[index];
+    const bool is_last = (index + 1 == nodes.size());
+    if (node.kind == SidebarNodeKind::kFolder) {
+      const std::string sibling_parent_folder_id = node.parent_of_folder_id;
+      out->push_back(MakeProjectionLaneRow(section, SidebarNodeKind::kFolder,
+                                           node.folder_id, /*append=*/false,
+                                           sibling_parent_folder_id,
+                                           /*target_child_index=*/-1));
+
+      SidebarVisualRow folder_row;
+      folder_row.kind = SidebarVisualRowKind::kFolder;
+      folder_row.section = section;
+      folder_row.stable_id = node.folder_id;
+      folder_row.indent_depth = node.depth;
+      folder_row.node = node;
+      folder_row.parent_folder_id = parent_folder_id;
+      folder_row.folder_next_sibling_id = next_sibling_folder_ids[index];
+      out->push_back(std::move(folder_row));
+
+      if (node.is_expanded && !node.children.empty()) {
+        AppendProjectionRows(node.children, section, node.folder_id, out);
+      } else if (!node.children.empty()) {
+        if (const SidebarTreeNode* active =
+                ProjectionActiveDescendant(node.children)) {
+          SidebarVisualRow sticky;
+          sticky.kind = SidebarVisualRowKind::kCollapsedStickyTab;
+          sticky.section = section;
+          sticky.stable_id = "sticky:" + node.folder_id + ":" + active->tab_id;
+          sticky.indent_depth = node.depth + 1;
+          sticky.node = *active;
+          sticky.node.children.clear();
+          sticky.parent_folder_id = node.folder_id;
+          out->push_back(std::move(sticky));
+        }
+      }
+
+      if (is_last) {
+        const std::string append_target = next_sibling_folder_ids[index].empty()
+                                              ? node.folder_id
+                                              : next_sibling_folder_ids[index];
+        out->push_back(MakeProjectionLaneRow(section, SidebarNodeKind::kFolder,
+                                             append_target, /*append=*/true,
+                                             sibling_parent_folder_id,
+                                             /*target_child_index=*/-1));
+      }
+    } else if (node.kind == SidebarNodeKind::kSplitGroup) {
+      SidebarVisualRow split_row;
+      split_row.kind = SidebarVisualRowKind::kSplitGroup;
+      split_row.section = section;
+      split_row.stable_id = node.split_id;
+      split_row.indent_depth = node.depth;
+      split_row.node = node;
+      split_row.parent_folder_id = parent_folder_id;
+      out->push_back(std::move(split_row));
+    } else {
+      out->push_back(MakeProjectionLaneRow(section, SidebarNodeKind::kTab,
+                                           node.tab_id, /*append=*/false,
+                                           parent_folder_id,
+                                           static_cast<int>(index)));
+
+      SidebarVisualRow tab_row;
+      tab_row.kind = SidebarVisualRowKind::kTab;
+      tab_row.section = section;
+      tab_row.stable_id = node.tab_id;
+      tab_row.indent_depth = node.depth;
+      tab_row.node = node;
+      tab_row.node.children.clear();
+      tab_row.parent_folder_id = parent_folder_id;
+      out->push_back(std::move(tab_row));
+
+      if (is_last) {
+        out->push_back(MakeProjectionLaneRow(section, SidebarNodeKind::kTab,
+                                             node.tab_id, /*append=*/true,
+                                             parent_folder_id,
+                                             static_cast<int>(index + 1)));
+      }
+    }
+  }
+}
+
+int CountProjectionTabRows(const std::vector<SidebarVisualRow>& projection) {
+  int count = 0;
+  for (const auto& row : projection) {
+    switch (row.kind) {
+      case SidebarVisualRowKind::kTab:
+      case SidebarVisualRowKind::kCollapsedStickyTab:
+        ++count;
+        break;
+      case SidebarVisualRowKind::kSplitGroup:
+        count += CountProjectionModelTabs(row.node.children);
+        break;
+      case SidebarVisualRowKind::kInsertionLane:
+      case SidebarVisualRowKind::kFolder:
+        break;
+    }
+  }
+  return count;
+}
+
+}  // namespace
+
+SidebarVisualRow::SidebarVisualRow() = default;
+SidebarVisualRow::SidebarVisualRow(const SidebarVisualRow&) = default;
+SidebarVisualRow::SidebarVisualRow(SidebarVisualRow&&) = default;
+SidebarVisualRow& SidebarVisualRow::operator=(const SidebarVisualRow&) = default;
+SidebarVisualRow& SidebarVisualRow::operator=(SidebarVisualRow&&) = default;
+SidebarVisualRow::~SidebarVisualRow() = default;
+
+int MeasureVisualRowHeight(const SidebarVisualRow& row) {
+  switch (row.kind) {
+    case SidebarVisualRowKind::kInsertionLane:
+      return kDropIndicatorThicknessDp;
+    case SidebarVisualRowKind::kTab:
+    case SidebarVisualRowKind::kFolder:
+    case SidebarVisualRowKind::kCollapsedStickyTab:
+      return kRowHeightDp;
+    case SidebarVisualRowKind::kSplitGroup: {
+      // Matches RebuildSplitGroupContainer(): split_orientation == "vertical"
+      // lays panes side-by-side (one row tall); any other value stacks them.
+      // A stacked pane realizes before+append insertion lanes (kDropIndicator
+      // ThicknessDp each) around its kRowHeightDp row, and adjacent panes are
+      // separated by a 1dp divider — so the stacked height matches the eager
+      // container exactly, keeping the section extent stable.
+      const bool side_by_side = (row.node.split_orientation == "vertical");
+      if (side_by_side) {
+        return kRowHeightDp;
+      }
+      const int child_count =
+          std::max(static_cast<int>(row.node.children.size()), 1);
+      constexpr int kSplitStackedDividerDp = 1;
+      const int pane_height = kRowHeightDp + 2 * kDropIndicatorThicknessDp;
+      return child_count * pane_height +
+             (child_count - 1) * kSplitStackedDividerDp;
+    }
+  }
+  return kRowHeightDp;
+}
+
+void BuildSectionProjection(const std::vector<SidebarTreeNode>& nodes,
+                            MahoSidebarTabSection section,
+                            std::vector<SidebarVisualRow>* out) {
+  out->clear();
+  AppendProjectionRows(nodes, section, std::string(), out);
+  int cumulative_top = 0;
+  for (SidebarVisualRow& row : *out) {
+    row.height_dp = MeasureVisualRowHeight(row);
+    row.cumulative_top_dp = cumulative_top;
+    cumulative_top += row.height_dp;
+  }
+}
+
 void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                                              Browser* browser) {
   base::ElapsedTimer maho_rr_t;
   ++rebuild_rows_count_for_testing_;
   last_visible_row_ = -1;
+  pinned_projection_.clear();
+  normal_projection_.clear();
   HandleTabRowHoverEnd();
+
   favicon_task_tracker_.TryCancelAll();
   folder_rows_by_id_.clear();
   active_menu_runner_.reset();
@@ -4428,6 +4772,15 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;
   pinned_separator_ = nullptr;
+  // RemoveAllChildViews() freed every realized row; drop the now-dangling
+  // realized-only lookup entries (the drag-preserved row was already erased
+  // above and lives in drag_preserve_holder_). Spacer/window state is reset by
+  // RebuildTreeSection below.
+  tab_id_to_row_view_.clear();
+  pinned_top_spacer_ = nullptr;
+  pinned_bottom_spacer_ = nullptr;
+  normal_top_spacer_ = nullptr;
+  normal_bottom_spacer_ = nullptr;
 
   const bool has_tree = !model.pinned_tree.empty() ||
                         !model.normal_tree.empty();
@@ -4473,29 +4826,47 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
             << rr_normal_t.Elapsed().InMillisecondsF()
             << "ms nodes=" << effective_model->normal_tree.size();
 
-  // Rebuild O(1) tab_id -> row_view map used by UpdateActiveTabHighlightOnly.
-  tab_id_to_row_view_.clear();
-  if (tab_rows_) {
-    std::function<void(views::View*)> collect_rows;
-    collect_rows = [&](views::View* parent) {
-      for (views::View* child : parent->children()) {
-        if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
-          if (!row->tab_id().empty()) {
-            tab_id_to_row_view_[row->tab_id()] = row;
-          }
+  BuildSectionProjection(effective_model->pinned_tree,
+                         MahoSidebarTabSection::kPinned, &pinned_projection_);
+  BuildSectionProjection(effective_model->normal_tree,
+                         MahoSidebarTabSection::kNormal, &normal_projection_);
+
+  // Realize only the rows inside each section's visible window; the spacers
+  // absorb the culled extent. tab_id_to_row_view_ / folder_rows_by_id_ are
+  // populated lazily by RealizeProjectionRow as rows enter the window.
+  ReconcileSectionWindow(MahoSidebarTabSection::kPinned, browser);
+  ReconcileSectionWindow(MahoSidebarTabSection::kNormal, browser);
+#if DCHECK_IS_ON()
+  if (drag_source_tab_id_.empty()) {
+    DCHECK_LE(static_cast<int>(GetTabRowsInVisualOrder().size()),
+              CountProjectionTabRows(pinned_projection_) +
+                  CountProjectionTabRows(normal_projection_))
+        << "Realized tab rows exceed the section projection";
+  }
+#endif
+
+  // Prune stale selection IDs against the full MODEL (every tab, including
+  // tabs hidden inside collapsed folders), NOT against realization or the
+  // visible projection — an off-window OR collapsed selected tab must survive.
+  {
+    std::unordered_set<std::string> model_tab_ids;
+    std::function<void(const std::vector<SidebarTreeNode>&)> collect_model_tabs;
+    collect_model_tabs = [&](const std::vector<SidebarTreeNode>& nodes) {
+      for (const SidebarTreeNode& n : nodes) {
+        if (n.kind == SidebarNodeKind::kTab && !n.tab_id.empty()) {
+          model_tab_ids.insert(n.tab_id);
         }
-        collect_rows(child);
+        collect_model_tabs(n.children);
       }
     };
-    collect_rows(tab_rows_);
-  }
-
-  // Prune stale selection IDs (intersect selected_tab_ids_ with new model)
-  for (auto it = selected_tab_ids_.begin(); it != selected_tab_ids_.end();) {
-    if (tab_id_to_row_view_.find(*it) == tab_id_to_row_view_.end()) {
-      it = selected_tab_ids_.erase(it);
-    } else {
-      ++it;
+    collect_model_tabs(effective_model->pinned_tree);
+    collect_model_tabs(effective_model->normal_tree);
+    for (auto it = selected_tab_ids_.begin(); it != selected_tab_ids_.end();) {
+      if (model_tab_ids.find(*it) == model_tab_ids.end()) {
+        it = selected_tab_ids_.erase(it);
+      } else {
+        ++it;
+      }
     }
   }
 
@@ -4505,10 +4876,14 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     selection_anchor_tab_id_.clear();
   }
 
-  // Update visual state of all currently selected rows
+  // Sync visual selection state on the realized rows (off-window selected tabs
+  // are re-synced by RealizeProjectionRow when they enter the window).
   for (const auto& [tab_id, row] : tab_id_to_row_view_) {
     row->SetSelected(selected_tab_ids_.count(tab_id) > 0);
   }
+
+  // Expose the full projection to assistive tech regardless of realization.
+  RebuildAccessibilityTree();
 
   last_rendered_split_ids_ = current_rebuild_split_ids_;
 
@@ -4634,9 +5009,26 @@ void MahoSidebarTabListView::RebuildTreeSection(
   rows_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  if (!nodes.empty()) {
-    RebuildTreeNodes(rows_container, nodes, section, browser, std::string());
+  // Leading/trailing spacers bound the realized window; ReconcileSectionWindow
+  // sizes them so the section's preferred height equals the full projected
+  // extent even though only the windowed rows between them are realized.
+  auto* top_spacer =
+      rows_container->AddChildView(std::make_unique<SidebarSkeletonSpacerView>());
+  top_spacer->SetPreferredSize(gfx::Size(0, 0));
+  auto* bottom_spacer =
+      rows_container->AddChildView(std::make_unique<SidebarSkeletonSpacerView>());
+  bottom_spacer->SetPreferredSize(gfx::Size(0, 0));
+  if (section == MahoSidebarTabSection::kPinned) {
+    pinned_top_spacer_ = top_spacer;
+    pinned_bottom_spacer_ = bottom_spacer;
+    pinned_window_ = {0, -1};
   } else {
+    normal_top_spacer_ = top_spacer;
+    normal_bottom_spacer_ = bottom_spacer;
+    normal_window_ = {0, -1};
+  }
+
+  if (nodes.empty()) {
     auto* drop_target =
         static_cast<SidebarSectionDropTarget*>(section_container);
     drop_target->SetMinDropTargetHeight(kRowHeightDp);
@@ -4955,6 +5347,15 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
     MahoSidebarTabSection section,
     Browser* browser,
     const std::string& parent_folder_id) {
+  parent->AddChildView(
+      BuildSplitGroupContainer(group_node, section, browser, parent_folder_id));
+}
+
+std::unique_ptr<views::View> MahoSidebarTabListView::BuildSplitGroupContainer(
+    const SidebarTreeNode& group_node,
+    MahoSidebarTabSection section,
+    Browser* browser,
+    const std::string& parent_folder_id) {
   auto split_container = std::make_unique<SplitGroupContainerView>();
 
   const bool is_side_by_side = (group_node.split_orientation == "vertical");
@@ -4989,7 +5390,7 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
     splits_awaiting_anim_.insert(group_node.split_id);
   }
 
-  auto* container_ptr = parent->AddChildView(std::move(split_container));
+  auto* container_ptr = split_container.get();
 
   if (!group_node.split_id.empty()) {
     split_id_to_container_[group_node.split_id] = container_ptr;
@@ -5039,6 +5440,307 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
     // debounced reveal animation runs; AnimateAwaitingSplits fades/expands it.
     container_ptr->layer()->SetOpacity(0.0f);
   }
+
+  return split_container;
+}
+
+std::unique_ptr<views::View> MahoSidebarTabListView::RealizeProjectionRow(
+    const SidebarVisualRow& row,
+    Browser* browser) {
+  switch (row.kind) {
+    case SidebarVisualRowKind::kInsertionLane: {
+      auto lane = std::make_unique<SidebarInsertionLaneView>(
+          active_space_id_, row.lane_target_id, row.lane_target_kind,
+          row.lane_target_id, row.lane_append, row.lane_parent_folder_id,
+          row.lane_target_child_index, row.section,
+          weak_factory_.GetWeakPtr());
+      if (favorites_drop_accepted_callback_) {
+        lane->SetFavoritesDropAcceptedCallback(
+            favorites_drop_accepted_callback_);
+      }
+      lane->SetRevealEmptyPinnedDropLaneCallback(
+          base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
+                              base::Unretained(this)));
+      return lane;
+    }
+    case SidebarVisualRowKind::kTab:
+    case SidebarVisualRowKind::kCollapsedStickyTab: {
+      std::unique_ptr<SidebarTabRowView> tab_row =
+          CreateTabRowView(row.node, row.section, browser);
+      if (row.kind == SidebarVisualRowKind::kCollapsedStickyTab) {
+        tab_row->SetCollapsedStickyFolderId(row.parent_folder_id);
+      }
+      tab_row->SetSelected(selected_tab_ids_.count(row.node.tab_id) > 0);
+      // The full projection is exposed via AXVirtualView children; ignore the
+      // realized View so assistive tech does not see it twice.
+      tab_row->GetViewAccessibility().SetIsIgnored(true);
+      tab_id_to_row_view_[row.node.tab_id] = tab_row.get();
+      return tab_row;
+    }
+    case SidebarVisualRowKind::kFolder: {
+      auto folder_row = std::make_unique<SidebarFolderRowView>(
+          row.node, row.section, active_space_id_, browser,
+          base::BindRepeating(&MahoSidebarTabListView::ToggleFolderExpanded,
+                              weak_factory_.GetWeakPtr(), row.node.folder_id),
+          base::BindRepeating(&MahoSidebarTabListView::CommitFolderNameChange,
+                              weak_factory_.GetWeakPtr()),
+          row.folder_next_sibling_id, row.node.parent_of_folder_id);
+      if (favorites_drop_accepted_callback_) {
+        folder_row->SetFavoritesDropAcceptedCallback(
+            favorites_drop_accepted_callback_);
+      }
+      folder_row->SetRevealEmptyPinnedDropLaneCallback(
+          base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
+                              base::Unretained(this)));
+      folder_row->children_snapshot_ = row.node.children;
+      folder_rows_by_id_[row.node.folder_id] = folder_row.get();
+      folder_row->GetViewAccessibility().SetIsIgnored(true);
+      folder_row->SetHoverPopupCallbacks(
+          base::BindRepeating(&MahoSidebarFolderHoverController::ScheduleShow,
+                              folder_hover_controller_->AsWeakPtr(),
+                              folder_row.get(), row.node.folder_id,
+                              row.node.folder_name),
+          base::BindRepeating(
+              &MahoSidebarFolderHoverController::OnRowMouseExited,
+              folder_hover_controller_->AsWeakPtr()));
+      folder_row->SetSpringExpandCallback(
+          base::BindRepeating(&MahoSidebarTabListView::ToggleFolderExpanded,
+                              weak_factory_.GetWeakPtr(), row.node.folder_id));
+      return folder_row;
+    }
+    case SidebarVisualRowKind::kSplitGroup: {
+      std::unique_ptr<views::View> container = BuildSplitGroupContainer(
+          row.node, row.section, browser, row.parent_folder_id);
+      // The split's member tab rows are built inside the container; register
+      // and selection-sync them the way top-level tab rows are, so the
+      // realized-only lookup stays complete for the window.
+      std::function<void(views::View*)> register_members;
+      register_members = [&](views::View* view) {
+        for (views::View* child : view->children()) {
+          if (auto* member = views::AsViewClass<SidebarTabRowView>(child)) {
+            if (!member->tab_id().empty()) {
+              tab_id_to_row_view_[member->tab_id()] = member;
+              member->SetSelected(selected_tab_ids_.count(member->tab_id()) >
+                                  0);
+              member->GetViewAccessibility().SetIsIgnored(true);
+            }
+          }
+          register_members(child);
+        }
+      };
+      register_members(container.get());
+      return container;
+    }
+  }
+  return nullptr;
+}
+
+void MahoSidebarTabListView::RebuildAccessibilityTree() {
+  views::ViewAccessibility& ax = GetViewAccessibility();
+  ax.RemoveAllVirtualChildViews();
+
+  const int set_size = static_cast<int>(GetTabVisualOrderIds().size());
+  int pos_in_set = 0;
+
+  auto add_tab_node = [&](const SidebarTreeNode& node) {
+    auto virtual_view = std::make_unique<views::AXVirtualView>();
+    virtual_view->SetRole(ax::mojom::Role::kTab);
+    std::u16string name = ResolveTabDisplayText(node);
+    if (name.empty()) {
+      name = base::UTF8ToUTF16(node.tab_id);
+    }
+    virtual_view->SetName(name);
+    virtual_view->SetPosInSet(++pos_in_set);
+    virtual_view->SetSetSize(set_size);
+    virtual_view->SetIsSelected(selected_tab_ids_.count(node.tab_id) > 0);
+    ax.AddVirtualChildView(std::move(virtual_view));
+  };
+  auto add_folder_node = [&](const SidebarTreeNode& node) {
+    auto virtual_view = std::make_unique<views::AXVirtualView>();
+    virtual_view->SetRole(ax::mojom::Role::kGroup);
+    virtual_view->SetName(node.folder_name.empty() ? std::u16string(u"Folder")
+                                                    : node.folder_name);
+    ax.AddVirtualChildView(std::move(virtual_view));
+  };
+  std::function<void(const std::vector<SidebarTreeNode>&)> add_split_members;
+  add_split_members = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const SidebarTreeNode& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && !n.tab_id.empty()) {
+        add_tab_node(n);
+      }
+      add_split_members(n.children);
+    }
+  };
+
+  for (const std::vector<SidebarVisualRow>* proj :
+       {&pinned_projection_, &normal_projection_}) {
+    for (const SidebarVisualRow& row : *proj) {
+      switch (row.kind) {
+        case SidebarVisualRowKind::kTab:
+        case SidebarVisualRowKind::kCollapsedStickyTab:
+          add_tab_node(row.node);
+          break;
+        case SidebarVisualRowKind::kFolder:
+          add_folder_node(row.node);
+          break;
+        case SidebarVisualRowKind::kSplitGroup:
+          add_split_members(row.node.children);
+          break;
+        case SidebarVisualRowKind::kInsertionLane:
+          break;
+      }
+    }
+  }
+}
+
+void MahoSidebarTabListView::ReconcileSectionWindow(
+    MahoSidebarTabSection section,
+    Browser* browser) {
+  // Never re-enter reconciliation: a synchronous scroll callback (e.g. a spacer
+  // resize clamping the offset) must not corrupt window_/children mid-mutation.
+  if (reconciling_) {
+    return;
+  }
+  base::AutoReset<bool> reentry_guard(&reconciling_, true);
+
+  const bool is_pinned = (section == MahoSidebarTabSection::kPinned);
+  std::vector<SidebarVisualRow>& projection =
+      is_pinned ? pinned_projection_ : normal_projection_;
+  RealizedWindow& window = is_pinned ? pinned_window_ : normal_window_;
+  views::View* top_spacer =
+      is_pinned ? pinned_top_spacer_ : normal_top_spacer_;
+  views::View* bottom_spacer =
+      is_pinned ? pinned_bottom_spacer_ : normal_bottom_spacer_;
+  if (!top_spacer || !bottom_spacer) {
+    return;
+  }
+  views::View* rows_container = top_spacer->parent();
+  if (!rows_container) {
+    return;
+  }
+
+  auto remove_realized_at = [&](size_t pos) {
+    views::View* child = rows_container->children()[pos];
+    // Never free the active drag source: its drag runs a nested run loop on its
+    // own stack frame (macOS), so move it to the hidden preserve holder instead
+    // (mirrors the RebuildRows path); OnDragSourceFinished releases it later.
+    if (!drag_source_tab_id_.empty()) {
+      if (auto* tab_row = views::AsViewClass<SidebarTabRowView>(child);
+          tab_row && tab_row->tab_id() == drag_source_tab_id_) {
+        if (!drag_preserve_holder_) {
+          auto holder = std::make_unique<views::View>();
+          holder->SetVisible(false);
+          drag_preserve_holder_ = AddChildView(std::move(holder));
+        }
+        tab_id_to_row_view_.erase(tab_row->tab_id());
+        drag_preserve_holder_->AddChildView(
+            rows_container->RemoveChildViewT(child));
+        return;
+      }
+    }
+    // Drop registry entries before the view is freed (UAF/dangling raw_ptr).
+    UnregisterRowsRecursive(child);
+    rows_container->RemoveChildViewT(child);
+  };
+
+  const int row_count = static_cast<int>(projection.size());
+  if (row_count == 0) {
+    while (rows_container->children().size() > 2u) {
+      remove_realized_at(1);
+    }
+    top_spacer->SetPreferredSize(gfx::Size(0, 0));
+    bottom_spacer->SetPreferredSize(gfx::Size(0, 0));
+    window = {0, -1};
+    return;
+  }
+
+  // Section-local visible rect. Before the first real layout the scroll
+  // geometry is not yet meaningful, so fall back to a top-anchored window.
+  gfx::Rect local_rect;
+  if (scroll_view_) {
+    local_rect = views::View::ConvertRectToTarget(
+        this, rows_container, scroll_view_->GetVisibleRect());
+  }
+  if (local_rect.height() <= 0) {
+    local_rect = gfx::Rect(0, 0, 1, 40 * kRowHeightDp);
+  }
+
+  std::vector<int> cumulative_tops;
+  cumulative_tops.reserve(row_count);
+  int total_height = 0;
+  for (const SidebarVisualRow& r : projection) {
+    cumulative_tops.push_back(r.cumulative_top_dp);
+    total_height = r.cumulative_top_dp + r.height_dp;
+  }
+
+  const SidebarVisibilityManager::VisibleRange range =
+      visibility_manager_->ComputeVisibleRangeForProjection(
+          local_rect, cumulative_tops, total_height);
+  const int new_first = std::clamp(range.first_visible_index, 0, row_count - 1);
+  const int new_last =
+      std::clamp(range.last_visible_index, new_first, row_count - 1);
+
+  const int old_first = window.first;
+  const int old_last = window.last;
+  const bool have_old = (old_last >= old_first);
+
+  if (!have_old || new_first > old_last || new_last < old_first) {
+    // No overlap: drop every realized row, rebuild the window fresh.
+    while (rows_container->children().size() > 2u) {
+      remove_realized_at(1);
+    }
+    for (int i = new_first; i <= new_last; ++i) {
+      rows_container->AddChildViewAt(RealizeProjectionRow(projection[i], browser),
+                                     1 + (i - new_first));
+    }
+  } else {
+    // Remove rows that left the window; keep the overlap untouched.
+    for (int i = old_first; i < new_first; ++i) {
+      remove_realized_at(1);  // just after top_spacer
+    }
+    for (int i = old_last; i > new_last; --i) {
+      remove_realized_at(rows_container->children().size() - 2u);
+    }
+    // Add rows that entered. Leading rows are inserted just after top_spacer
+    // in descending order so the final ascending order is preserved.
+    for (int i = old_first - 1; i >= new_first; --i) {
+      rows_container->AddChildViewAt(RealizeProjectionRow(projection[i], browser),
+                                     1);
+    }
+    for (int i = old_last + 1; i <= new_last; ++i) {
+      rows_container->AddChildViewAt(
+          RealizeProjectionRow(projection[i], browser),
+          rows_container->children().size() - 1u);
+    }
+  }
+  window = {new_first, new_last};
+
+  // Refresh the projected height of each realized row from its measured height
+  // so variable-height (split) rows keep the extent invariant exact, then
+  // recompute the prefix sums the next window computation reads.
+  for (int i = new_first; i <= new_last; ++i) {
+    views::View* child = rows_container->children()[1 + (i - new_first)];
+    projection[i].height_dp =
+        child->GetPreferredSize(views::SizeBounds()).height();
+  }
+  int cumulative = 0;
+  for (SidebarVisualRow& r : projection) {
+    r.cumulative_top_dp = cumulative;
+    cumulative += r.height_dp;
+  }
+  const int extent = cumulative;
+  const int top_height = projection[new_first].cumulative_top_dp;
+  const int bottom_height =
+      extent - (projection[new_last].cumulative_top_dp +
+                projection[new_last].height_dp);
+  top_spacer->SetPreferredSize(gfx::Size(0, top_height));
+  bottom_spacer->SetPreferredSize(gfx::Size(0, bottom_height));
+  DCHECK_EQ(top_height + bottom_height +
+                (projection[new_last].cumulative_top_dp +
+                 projection[new_last].height_dp -
+                 projection[new_first].cumulative_top_dp),
+            extent)
+      << "Section window extent invariant violated";
 }
 
 void MahoSidebarTabListView::AnimateAwaitingSplits() {
@@ -5158,20 +5860,95 @@ void MahoSidebarTabListView::ActivateTabById(const std::string& tab_id) {
   }
 }
 
-bool MahoSidebarTabListView::ActivateAdjacentTabInVisualOrder(bool forward) {
-  std::vector<SidebarTabRowView*> rows = GetTabRowsInVisualOrder();
-
-  // A collapsed folder surfaces its active descendant as a duplicate "sticky"
-  // row; dedupe by tab_id so each tab is visited exactly once while preserving
-  // visual order.
-  std::vector<SidebarTabRowView*> ordered;
-  ordered.reserve(rows.size());
-  std::unordered_set<std::string> seen;
-  for (SidebarTabRowView* row : rows) {
-    if (row && seen.insert(row->tab_id()).second) {
-      ordered.push_back(row);
+std::vector<std::string> MahoSidebarTabListView::GetTabVisualOrderIds() const {
+  std::vector<std::string> ids;
+  std::function<void(const std::vector<SidebarTreeNode>&)> collect_split_tabs;
+  collect_split_tabs = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const SidebarTreeNode& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && !n.tab_id.empty()) {
+        ids.push_back(n.tab_id);
+      }
+      collect_split_tabs(n.children);
+    }
+  };
+  for (const std::vector<SidebarVisualRow>* proj :
+       {&pinned_projection_, &normal_projection_}) {
+    for (const SidebarVisualRow& row : *proj) {
+      switch (row.kind) {
+        case SidebarVisualRowKind::kTab:
+        case SidebarVisualRowKind::kCollapsedStickyTab:
+          if (!row.node.tab_id.empty()) {
+            ids.push_back(row.node.tab_id);
+          }
+          break;
+        case SidebarVisualRowKind::kSplitGroup:
+          collect_split_tabs(row.node.children);
+          break;
+        case SidebarVisualRowKind::kInsertionLane:
+        case SidebarVisualRowKind::kFolder:
+          break;
+      }
     }
   }
+  return ids;
+}
+
+void MahoSidebarTabListView::RevealTabById(const std::string& tab_id) {
+  if (tab_id.empty() || !visibility_manager_) {
+    return;
+  }
+  auto index_in = [&tab_id](const std::vector<SidebarVisualRow>& proj) -> int {
+    for (size_t i = 0; i < proj.size(); ++i) {
+      const SidebarVisualRow& row = proj[i];
+      if ((row.kind == SidebarVisualRowKind::kTab ||
+           row.kind == SidebarVisualRowKind::kCollapsedStickyTab) &&
+          row.node.tab_id == tab_id) {
+        return static_cast<int>(i);
+      }
+      if (row.kind == SidebarVisualRowKind::kSplitGroup) {
+        for (const SidebarTreeNode& child : row.node.children) {
+          if (child.kind == SidebarNodeKind::kTab && child.tab_id == tab_id) {
+            return static_cast<int>(i);
+          }
+        }
+      }
+    }
+    return -1;
+  };
+  MahoSidebarTabSection section = MahoSidebarTabSection::kNormal;
+  int index = index_in(normal_projection_);
+  if (index < 0) {
+    index = index_in(pinned_projection_);
+    section = MahoSidebarTabSection::kPinned;
+  }
+  if (index < 0) {
+    return;
+  }
+
+  // Force the descriptor into the realized window so it materializes even when
+  // geometrically off-window, lay it out, then scroll it into view. The forced
+  // index keeps it realized across the (possibly async) scroll; the geometric
+  // window covers it once the scroll settles, so bounded realization is
+  // restored by the next scroll-driven reconcile.
+  visibility_manager_->SetForcedVisibleIndex(index);
+  ReconcileSectionWindow(section, browser_);
+  if (GetWidget()) {
+    GetWidget()->LayoutRootViewIfNecessary();
+  }
+  auto it = tab_id_to_row_view_.find(tab_id);
+  if (it != tab_id_to_row_view_.end() && it->second) {
+    it->second->ScrollViewToVisible();
+  }
+  visibility_manager_->ClearForcedVisibleIndex();
+  if (tab_rows_) {
+    tab_rows_->InvalidateLayout();
+  }
+}
+
+bool MahoSidebarTabListView::ActivateAdjacentTabInVisualOrder(bool forward) {
+  // Projection order includes every tab (realized or not); a collapsed folder's
+  // sticky descendant appears once here, so no realized-row dedupe is needed.
+  std::vector<std::string> ordered = GetTabVisualOrderIds();
   if (ordered.empty()) {
     return false;
   }
@@ -5184,7 +5961,7 @@ bool MahoSidebarTabListView::ActivateAdjacentTabInVisualOrder(bool forward) {
 
   int current = -1;
   for (size_t i = 0; i < ordered.size(); ++i) {
-    if (ordered[i]->tab_id() == active_tab_id) {
+    if (ordered[i] == active_tab_id) {
       current = static_cast<int>(i);
       break;
     }
@@ -5198,7 +5975,7 @@ bool MahoSidebarTabListView::ActivateAdjacentTabInVisualOrder(bool forward) {
     target = (current + (forward ? 1 : -1) + count) % count;
   }
 
-  ActivateTabById(ordered[target]->tab_id());
+  ActivateTabById(ordered[target]);
   return true;
 }
 
@@ -5831,7 +6608,7 @@ void MahoSidebarTabListView::ToggleFolderExpanded(
       // reflecting this toggle will fingerprint identically, so arm exactly
       // that fingerprint for one-shot suppression in Update().
       suppress_push_fingerprint_ = ComputeModelFingerprint(last_model_);
-      IncrementalToggleFolder(folder_id, new_expanded_state);
+      RebuildRows(last_model_, browser_);
       return;
     }
   }
@@ -6309,14 +7086,16 @@ void MahoSidebarTabListView::SelectRangeTo(const std::string& tab_id) {
     return;
   }
 
-  std::vector<SidebarTabRowView*> rows = GetTabRowsInVisualOrder();
+  // Range over the projection order (every tab), so a range that crosses the
+  // realized window boundary selects the correct contiguous id run.
+  const std::vector<std::string> order = GetTabVisualOrderIds();
   int anchor_idx = -1;
   int target_idx = -1;
-  for (size_t i = 0; i < rows.size(); ++i) {
-    if (rows[i]->tab_id() == anchor) {
+  for (size_t i = 0; i < order.size(); ++i) {
+    if (order[i] == anchor) {
       anchor_idx = static_cast<int>(i);
     }
-    if (rows[i]->tab_id() == tab_id) {
+    if (order[i] == tab_id) {
       target_idx = static_cast<int>(i);
     }
   }
@@ -6331,12 +7110,16 @@ void MahoSidebarTabListView::SelectRangeTo(const std::string& tab_id) {
 
   selected_tab_ids_.clear();
   for (int i = start; i <= end; ++i) {
-    selected_tab_ids_.insert(rows[i]->tab_id());
+    selected_tab_ids_.insert(order[i]);
   }
   selection_anchor_tab_id_ = anchor;
 
-  for (auto* row : rows) {
-    row->SetSelected(selected_tab_ids_.count(row->tab_id()) > 0);
+  // Apply visual selection to realized rows; off-window rows pick it up from
+  // selected_tab_ids_ when they enter the window (RealizeProjectionRow).
+  for (const auto& [id, row] : tab_id_to_row_view_) {
+    if (row) {
+      row->SetSelected(selected_tab_ids_.count(id) > 0);
+    }
   }
 }
 
@@ -6381,7 +7164,7 @@ std::vector<SidebarTabRowView*> MahoSidebarTabListView::GetTabRowsInVisualOrder(
 void MahoSidebarTabListView::CloseSelected() {
   std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
   std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
-    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+    return !HasTabInLastModel(tab_id);
   });
   if (snapshot_ids.empty()) {
     return;
@@ -6414,7 +7197,7 @@ void MahoSidebarTabListView::CloseSelected() {
 void MahoSidebarTabListView::PinSelected(bool pin) {
   std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
   std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
-    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+    return !HasTabInLastModel(tab_id);
   });
   if (snapshot_ids.empty()) {
     return;
@@ -6431,7 +7214,7 @@ void MahoSidebarTabListView::PinSelected(bool pin) {
 void MahoSidebarTabListView::MoveSelectedToSpace(const std::string& space_id) {
   std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
   std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
-    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+    return !HasTabInLastModel(tab_id);
   });
   if (snapshot_ids.empty()) {
     return;
@@ -6452,7 +7235,7 @@ void MahoSidebarTabListView::MoveSelectedToSpace(const std::string& space_id) {
 void MahoSidebarTabListView::MuteSelected(bool mute) {
   std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
   std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
-    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+    return !HasTabInLastModel(tab_id);
   });
   if (snapshot_ids.empty()) {
     return;
@@ -6476,7 +7259,7 @@ void MahoSidebarTabListView::MuteSelected(bool mute) {
 void MahoSidebarTabListView::ArchiveSelected() {
   std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
   std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
-    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+    return !HasTabInLastModel(tab_id);
   });
   if (snapshot_ids.empty()) {
     return;
@@ -6533,7 +7316,7 @@ void MahoSidebarTabListView::OpenSelectedInSplit() {
 void MahoSidebarTabListView::NewFolderWithSelected() {
   std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
   std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
-    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+    return !HasTabInLastModel(tab_id);
   });
   if (snapshot_ids.empty()) {
     return;

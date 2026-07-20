@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VISIBILITY_MANAGER_H_
 
 #include <algorithm>
+#include <vector>
 
 #include "ui/gfx/geometry/rect.h"
 
@@ -19,6 +20,12 @@ class SidebarVisibilityManager {
     int buffer_rows_below = 30;   // Pre-render below viewport
     int drag_overscan_rows = 50;  // Extra buffer during DnD
   };
+
+  // Hard cap on the leading (scroll-direction) overscan the velocity-aware path
+  // may request. Bounds total realized rows to O(viewport + this) so a fast
+  // fling never makes realization scale with the tab count. 50 rows (~1800dp)
+  // comfortably covers a frame of fling travel on top of synchronous layout.
+  static constexpr int kMaxVelocityOverscanRows = 50;
 
   explicit SidebarVisibilityManager(Config config);
   ~SidebarVisibilityManager();
@@ -37,8 +44,31 @@ class SidebarVisibilityManager {
   VisibleRange ComputeVisibleRange(const gfx::Rect& visible_rect,
                                    int total_row_count) const;
 
+  // Variable-height counterpart to ComputeVisibleRange() for the section-local
+  // projection. |cumulative_tops| holds the top offset (dp) of each row within
+  // the section (size N); |total_height| is the section's full content height.
+  // Overscan buffering matches the uniform path — (drag_active_ ?
+  // drag_overscan_rows : buffer_rows_below) * row_height_dp on each edge — and
+  // the forced-visible index is always included.
+  VisibleRange ComputeVisibleRangeForProjection(
+      const gfx::Rect& section_local_visible_rect,
+      const std::vector<int>& cumulative_tops,
+      int total_height) const;
+
   void SetDragActive(bool active) { drag_active_ = active; }
   bool is_drag_active() const { return drag_active_; }
+
+  // Per-edge overscan (rows) for the projection path. Callers set the leading
+  // (scroll-direction) edge larger during fast flings, capped at
+  // kMaxVelocityOverscanRows; the trailing edge keeps the base buffer. Both
+  // default to config().buffer_rows_below. Ignored while a drag is active
+  // (drag_overscan_rows takes over on both edges).
+  void SetProjectionOverscanRows(int above_rows, int below_rows) {
+    overscan_above_rows_ = std::max(0, above_rows);
+    overscan_below_rows_ = std::max(0, below_rows);
+  }
+  int overscan_above_rows_for_testing() const { return overscan_above_rows_; }
+  int overscan_below_rows_for_testing() const { return overscan_below_rows_; }
 
   // Force a specific row visible regardless of scroll position (for focus).
   void SetForcedVisibleIndex(int index) { forced_visible_index_ = index; }
@@ -50,6 +80,8 @@ class SidebarVisibilityManager {
   Config config_;
   bool drag_active_ = false;
   int forced_visible_index_ = -1;
+  int overscan_above_rows_;
+  int overscan_below_rows_;
 };
 
 }  // namespace maho

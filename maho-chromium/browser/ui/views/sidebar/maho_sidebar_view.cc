@@ -58,6 +58,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/controls/scroll_view.h"
+#include "ui/views/controls/scrollbar/overlay_scroll_bar.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
@@ -360,7 +361,13 @@ void MahoSidebarView::BuildUi() {
   scroll->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
   scroll->SetVerticalScrollBarMode(
-      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+      views::ScrollView::ScrollBarMode::kEnabled);
+  // Arc-style thin, auto-hiding OVERLAY scrollbar: fades in during scroll and
+  // out when idle, slim rounded thumb, no track chrome, and overlays the
+  // content (reserves no layout width). Scroll extent still derives from the
+  // spacer-based content height, so GetMaxPosition() stays correct.
+  scroll->SetVerticalScrollBar(std::make_unique<views::OverlayScrollBar>(
+      views::ScrollBar::Orientation::kVertical));
   scroll->SetDrawOverflowIndicator(false);
   // Use (0, 0) so ScrollView reports preferred height = 0 and accepts whatever
   // height the parent BoxLayout flex assigns. (0, INT_MAX) would make preferred

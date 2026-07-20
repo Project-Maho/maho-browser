@@ -95,6 +95,61 @@ class RebuildRowsBatchScoper {
   raw_ptr<MahoSidebarTabListView> view_;
 };
 
+// ---------------------------------------------------------------------------
+// Section-local row virtualization projection.
+//
+// A SidebarVisualRow is a flat, deterministic description of one visual row in
+// a section's render order, mirroring the exact DFS order produced by
+// RebuildTreeNodes(). ReconcileSectionWindow() realizes only the rows inside
+// the current visible window (viewport + overscan) from this projection, so the
+// realized view count is bounded by the viewport rather than the tab count.
+// See maho_sidebar_visibility_manager.h for the matching variable-height
+// visible-range computation.
+// ---------------------------------------------------------------------------
+enum class SidebarVisualRowKind {
+  kInsertionLane,
+  kTab,
+  kFolder,
+  kCollapsedStickyTab,
+  kSplitGroup,
+};
+
+struct SidebarVisualRow {
+  SidebarVisualRow();
+  SidebarVisualRow(const SidebarVisualRow&);
+  SidebarVisualRow(SidebarVisualRow&&);
+  SidebarVisualRow& operator=(const SidebarVisualRow&);
+  SidebarVisualRow& operator=(SidebarVisualRow&&);
+  ~SidebarVisualRow();
+
+  SidebarVisualRowKind kind = SidebarVisualRowKind::kTab;
+  // tab_id | folder_id | split_id | lane_key | sticky_key (see .cc for scheme).
+  std::string stable_id;
+  MahoSidebarTabSection section = MahoSidebarTabSection::kNormal;
+  int indent_depth = 0;
+  int height_dp = 0;          // deterministic (see MeasureVisualRowHeight).
+  int cumulative_top_dp = 0;  // prefix sum within the section.
+  // Shallow copy: folders/splits keep children; tabs are childless.
+  SidebarTreeNode node;
+  std::string parent_folder_id;
+  std::string folder_next_sibling_id;                        // folder-only
+  SidebarNodeKind lane_target_kind = SidebarNodeKind::kTab;  // lane-only
+  std::string lane_target_id;                                // lane-only
+  bool lane_append = false;                                  // lane-only
+  std::string lane_parent_folder_id;                         // lane-only
+  int lane_target_child_index = -1;                          // lane-only
+};
+
+// Deterministic per-row height in dp (see .cc for the exact token mapping).
+int MeasureVisualRowHeight(const SidebarVisualRow& row);
+
+// Flattens |nodes| into |out| in the exact DFS visual order of
+// RebuildTreeNodes(), filling height_dp and the running cumulative_top_dp
+// prefix sum within the section.
+void BuildSectionProjection(const std::vector<SidebarTreeNode>& nodes,
+                            MahoSidebarTabSection section,
+                            std::vector<SidebarVisualRow>* out);
+
 class MahoSidebarTabListView : public views::View,
                                public views::ContextMenuController,
                                public ui::SimpleMenuModel::Delegate {
@@ -144,6 +199,11 @@ class MahoSidebarTabListView : public views::View,
   // |forward| = next/down, !forward = previous/up.
   bool ActivateAdjacentTabInVisualOrder(bool forward);
 
+  // Ensures the row for |tab_id| is realized and scrolled into view even when
+  // it is currently outside the section window (off-window). Used by activation,
+  // focus, and keyboard/range navigation to reach culled rows.
+  void RevealTabById(const std::string& tab_id);
+
   // Spring-load drag support. On macOS a drag runs a nested run loop on the
   // drag-source row's own stack frame, so freeing that row mid-drag (as a Space
   // switch's RebuildRows would) is a use-after-free. SetDragSourceTabId records
@@ -178,11 +238,29 @@ class MahoSidebarTabListView : public views::View,
       const std::string& folder_id);
   views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
   views::View* tab_rows_for_testing() { return tab_rows_; }
+  const std::vector<SidebarVisualRow>& pinned_projection_for_testing() const {
+    return pinned_projection_;
+  }
+  const std::vector<SidebarVisualRow>& normal_projection_for_testing() const {
+    return normal_projection_;
+  }
+  std::vector<std::string> tab_visual_order_ids_for_testing() const {
+    return GetTabVisualOrderIds();
+  }
+  int velocity_leading_overscan_rows_for_testing() const {
+    return velocity_leading_overscan_rows_for_testing_;
+  }
   views::View* pinned_separator_for_testing() { return pinned_separator_; }
   int scroll_layout_invalidation_count_for_testing() const {
     return scroll_layout_invalidation_count_for_testing_;
   }
   void ResetScrollLayoutInvalidationStateForTesting();
+
+  // Returns true if a re-entrant ReconcileSectionWindow call is correctly
+  // blocked (no-op) while an outer reconcile is notionally in progress — i.e.
+  // the window/children are left untouched. Locks the fast-fling re-entrancy
+  // crash regression.
+  bool ReentrantReconcileIsBlockedForTesting();
 
   void ToggleFolderExpandedForTesting(const std::string& folder_id);
   bool IsTabPreviewShowingForTesting() const;
@@ -285,6 +363,21 @@ class MahoSidebarTabListView : public views::View,
                           const std::vector<SidebarTreeNode>& nodes,
                           MahoSidebarTabSection section,
                           Browser* browser);
+  // Realizes only the rows of |section|'s projection that fall inside the
+  // current visible window (viewport + overscan), diffing against the section's
+  // RealizedWindow: staying rows are kept untouched, exiting rows destroyed,
+  // entering rows built in order between the section's top/bottom spacers. The
+  // spacers absorb the culled extent so the section's preferred height always
+  // equals the full projected extent (extent invariant).
+  void ReconcileSectionWindow(MahoSidebarTabSection section, Browser* browser);
+  // Builds a single realized view for one projection row, dispatching on kind
+  // to the existing row factories.
+  std::unique_ptr<views::View> RealizeProjectionRow(const SidebarVisualRow& row,
+                                                     Browser* browser);
+  // Rebuilds the AXVirtualView subtree that exposes the FULL per-section tab/
+  // folder projection to assistive tech, independent of which rows are
+  // realized. Realized row Views are AX-ignored so they don't duplicate these.
+  void RebuildAccessibilityTree();
   void RebuildTreeNodes(views::View* parent,
                         const std::vector<SidebarTreeNode>& nodes,
                         MahoSidebarTabSection section,
@@ -312,6 +405,14 @@ class MahoSidebarTabListView : public views::View,
                                   MahoSidebarTabSection section,
                                   Browser* browser,
                                   const std::string& parent_folder_id);
+  // Returning counterpart of RebuildSplitGroupContainer used by the windowed
+  // realizer: builds the split container (and its split-tracking side state)
+  // without attaching it to a parent.
+  std::unique_ptr<views::View> BuildSplitGroupContainer(
+      const SidebarTreeNode& group_node,
+      MahoSidebarTabSection section,
+      Browser* browser,
+      const std::string& parent_folder_id);
   void AnimateAwaitingSplits();
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
@@ -379,6 +480,22 @@ class MahoSidebarTabListView : public views::View,
   int last_visible_row_ = -1;
   int scroll_layout_invalidation_count_for_testing_ = 0;
 
+  // Scroll-velocity tracking for directional overscan (OnScrollChanged). The
+  // leading (scroll-direction) window edge grows with fling velocity, capped at
+  // SidebarVisibilityManager::kMaxVelocityOverscanRows.
+  int last_scroll_velocity_y_ = 0;
+  base::TimeTicks last_scroll_velocity_time_;
+  int velocity_leading_overscan_rows_for_testing_ = 0;
+
+  // Re-entrancy guard for ReconcileSectionWindow. A synchronous scroll callback
+  // (e.g. a spacer resize clamping the offset and re-firing the contents-
+  // scrolled callback) must never re-enter reconciliation while an outer
+  // reconcile is mid-mutation of window_ indices / rows_container children.
+  bool reconciling_ = false;
+  // reconciling_ ends after each reconcile; this spans the full scroll
+  // reconcile plus synchronous presentation callback.
+  bool scroll_presenting_ = false;
+
   std::unique_ptr<SidebarVisibilityManager> visibility_manager_;
 
   base::CancelableTaskTracker favicon_task_tracker_;
@@ -410,8 +527,11 @@ class MahoSidebarTabListView : public views::View,
   mutable std::unordered_map<std::string, int> tab_id_to_index_;
 
   // P4 (Fix 2): O(1) tab_id->row view lookup for UpdateActiveTabHighlightOnly.
-  // Replaces two RecursiveFindView O(N) walks per active-tab change.
-  // Rebuilt at end of RebuildRows; cleared on teardown via RemoveAllChildViews.
+  // REALIZED-ONLY: holds an entry only for tab rows currently inside a section
+  // window (populated by RealizeProjectionRow, dropped by UnregisterRowsRecursive
+  // as rows leave the window). Callers that must reach every model tab
+  // (selection prune, bulk actions) use the projection / HasTabInLastModel(),
+  // never this map.
   std::unordered_map<std::string, raw_ptr<SidebarTabRowView>> tab_id_to_row_view_;
 
   // Split IDs rendered in the previous rebuild, used to detect newly-created
@@ -440,6 +560,34 @@ class MahoSidebarTabListView : public views::View,
   bool batch_rebuild_needed_ = false;
 
   std::vector<SidebarTabRowView*> GetTabRowsInVisualOrder();
+
+  // All tab ids in DFS visual order from the section projections (every tab,
+  // realized or not). Used by keyboard/range/adjacent navigation so targets
+  // past the realized window are reachable; realized-only callers keep using
+  // GetTabRowsInVisualOrder().
+  std::vector<std::string> GetTabVisualOrderIds() const;
+
+  // Section-local visual projections, rebuilt in RebuildRows. Drive windowed
+  // realization via ReconcileSectionWindow(); the projected height of a
+  // realized variable-height row is refreshed to its measured height so the
+  // extent invariant stays exact.
+  std::vector<SidebarVisualRow> pinned_projection_;
+  std::vector<SidebarVisualRow> normal_projection_;
+
+  // Inclusive projection-index range currently realized for each section
+  // (last < first means nothing realized).
+  struct RealizedWindow {
+    int first = 0;
+    int last = -1;
+  };
+  RealizedWindow pinned_window_;
+  RealizedWindow normal_window_;
+  // Leading/trailing spacers that absorb the culled extent of each section's
+  // rows_container so its preferred height equals the full projected extent.
+  raw_ptr<views::View> pinned_top_spacer_ = nullptr;
+  raw_ptr<views::View> pinned_bottom_spacer_ = nullptr;
+  raw_ptr<views::View> normal_top_spacer_ = nullptr;
+  raw_ptr<views::View> normal_bottom_spacer_ = nullptr;
 
   std::string drag_source_tab_id_;
   raw_ptr<views::View> drag_preserve_holder_ = nullptr;
