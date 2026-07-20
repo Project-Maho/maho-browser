@@ -70,13 +70,19 @@ python3 maho-chromium/build/scripts/build_maho.py
 
 This produces `chromium/src/out/Default/Maho.app`.
 
-If you only need a narrower Chromium rebuild from `chromium/src`, use:
+`build_maho.py` holds the shared `.build.lock`, so builds SERIALIZE across agents/sessions.
+This is intentional: concurrent Chromium builds on one machine exhaust RAM (tens of GB of
+swap) and make ALL builds slower — one heavy build at a time is faster than several thrashing.
+
+For a narrower/faster rebuild, keep the lock and pass a narrow target (do NOT run raw
+`autoninja -C out/Default`, which bypasses the lock):
 
 ```bash
-autoninja -C out/Default chrome
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target <target>
 ```
 
-For targeted rebuilds, use `chrome_framework_shared_library` or `chrome_app`.
+Build the NARROWEST target that verifies your change — avoid full `unit_tests` /
+`interactive_ui_tests` / `browser_tests` unless you must run that whole suite.
 
 ## NOTES
 - Prefer the nearest AGENTS.md when working inside a subtree.

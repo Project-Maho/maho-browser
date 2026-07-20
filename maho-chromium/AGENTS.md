@@ -27,7 +27,6 @@ maho-chromium/
 │       ├── webui/        # Mojo-backed WebUI surfaces (14 features; see browser/ui/webui/AGENTS.md)
 │       ├── theme/        # Color mixer, space theme state, color IDs
 │       ├── context_menu/ # Tab, space, folder, favorites, address bar menus
-│       ├── link_preview/ # Hover preview manager
 │       ├── find_bar/     # Find-bar theming
 │       ├── reader/       # Reader mode theming
 │       ├── downloads/    # Download UI theming
@@ -107,15 +106,20 @@ maho-chromium/
 
 ## COMMANDS
 ```bash
-# Canonical build from the overlay repo root (builds chrome target)
+# Canonical build from the overlay repo root (builds chrome target).
+# build_maho.py holds the shared .build.lock, so builds SERIALIZE. This is intentional:
+# concurrent Chromium builds on one machine exhaust RAM (tens of GB of swap) and make ALL
+# builds slower. Always build through this wrapper.
 python3 build/scripts/build_maho.py
 
-# Narrow target through the wrapper (lock + maho-core + overrides applied)
-python3 build/scripts/build_maho.py --skip-rust --ninja-target unit_tests
+# Narrow target through the wrapper (lock + maho-core + overrides applied).
+# Build the NARROWEST target that verifies your change — avoid full unit_tests /
+# interactive_ui_tests / browser_tests (they compile every test TU) unless you must run them.
+python3 build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target <target>
 
-# Bypass the wrapper entirely (skips maho-core rebuild + overlay apply)
-autoninja -C out/Default chrome
-autoninja -C out/Default unit_tests
+# DO NOT run raw `autoninja -C out/Default` on the shared build machine — it bypasses the
+# build lock, so parallel agents build at once and swap-thrash. If you truly need raw ninja:
+#   python3 ../maho/scripts/build_lock.py -- autoninja -C out/Default <target>
 
 # Build maho-core prebuilt
 python3 build/scripts/build_maho_core.py

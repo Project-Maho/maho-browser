@@ -7,6 +7,11 @@
 ## OVERVIEW
 Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells (macOS/iOS/Android). Also includes Maho Mail (Tauri) and Maho Website (Astro). Brave-style architecture — `maho-chromium` patches upstream Chromium, `maho` crates provide backend logic via FFI bridge.
 
+## COMMUNICATION (MANDATORY)
+- **한국어로 답할 때는 항상 존댓말로, 공손하게 답한다.** 반말 금지. 사용자를 친구처럼 대하지 말 것.
+- When replying in Korean, ALWAYS use polite/formal speech (존댓말). Never use casual/informal speech (반말).
+- Keep a respectful, professional tone at all times.
+
 ## LICENSING & DISTRIBUTION
 - **Maho is CLOSED-SOURCE / PROPRIETARY.** This monorepo (browser, mail, relay, native shells) is NOT open source. Do NOT introduce OSS-claim language ("open source", "MIT licensed", "auditable source", "View on GitHub for source code", etc.) into marketing copy, docs, or WebUI strings.
 - **Public source repositories do NOT exist for this codebase.** Never link to a public source repo URL for Maho itself. Any `github.com/*/maho*` link outside of upstream dependency references is wrong by default.
@@ -49,7 +54,7 @@ maho-workspace/
 | Upstream overrides | `maho-chromium/chromium_src/` | Brave-style #define + #include |
 | Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml. See `maho/relay/AGENTS.md` |
 | AI WebView bundle (iOS/Android/Desktop) | `maho/web-ai/` | Preact SPA loaded by WKWebView/WebView; see `maho/web-ai/AGENTS.md` |
-| Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Pass `--ninja-target <T>` (repeatable) to build a narrower target through the same lock-backed wrapper, e.g. `--ninja-target unit_tests`. Falling back to `autoninja -C out/Default <target>` from `chromium/src` skips the wrapper entirely (no maho-core rebuild, no overlay/override apply). |
+| Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. It holds the shared `.build.lock`, so builds SERIALIZE — this is intentional: concurrent Chromium builds exhaust RAM and swap-thrash, making all builds slower. Pass `--ninja-target <T>` (repeatable) to build a narrower target through the same lock-backed wrapper. Build the NARROWEST target that verifies your change; avoid full `unit_tests`/`interactive_ui_tests`/`browser_tests` unless you must run that suite. Do NOT run raw `autoninja -C out/Default` on the shared machine — it bypasses the lock; if unavoidable, wrap it: `python3 maho/scripts/build_lock.py -- autoninja -C out/Default <target>`. |
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
 | Icon system (canonical) | `docs/icon-system.md` + `maho/assets/icons/sf-to-lucide-mapping.json` | Lucide is the unified icon library across all surfaces. Per-platform: `lucide-react` (Mail; canonical for new WebUI surfaces, see `maho-chromium/docs/webui-shadcn-conventions.md`), legacy vendored SVGs at `browser/resources/<feature>/icons/` for pre-shadcn surfaces, `aggregate_vector_icons` GN target at `maho-chromium/browser/ui/views/maho_lucide_icons/` (Native Views; auto-generated from `manifest.json` via `maho-chromium/build/scripts/lucide_icons/generate.py`), `lucide-icons-swift` SwiftPM (macOS/iOS), AVDs at `maho/android-shell/app/src/main/res/drawable/ic_*.xml`. License: `LICENSES/lucide.txt` |
@@ -110,13 +115,22 @@ cd mail && cargo test                 # Rust tests (run inside mail/ folder)
 cd website && bun run dev             # Astro dev (port 5555)
 cd website && bun run build           # Build site
 
-# Chromium build
+# Chromium build — ALWAYS via build_maho.py; it holds the shared .build.lock so builds
+# SERIALIZE. Concurrent Chromium builds on one machine exhaust RAM (→ tens of GB of swap)
+# and make ALL builds crawl. One heavy build at a time finishes faster than three thrashing.
 python3 maho-chromium/build/scripts/build_maho.py    # canonical, builds chrome target
-python3 maho-chromium/build/scripts/build_maho.py --skip-rust --ninja-target unit_tests  # narrow target through the wrapper
+# Fast locked incremental rebuild of a NARROW target (skip rust + lucide, keep the lock):
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target <target>
 
-# Chromium-only rebuilds, from chromium/src (skips Rust prebuild + overlay apply)
-autoninja -C out/Default chrome
-autoninja -C out/Default unit_tests
+# Build the NARROWEST target that verifies your change. Do NOT build full `unit_tests`,
+# `interactive_ui_tests`, or `browser_tests` (they compile every test TU — huge) unless you
+# actually need to run that whole suite. To just check a change compiles, build `chrome` or
+# the single affected target.
+
+# DO NOT run raw `autoninja -C out/Default ...` on the shared build machine — it BYPASSES the
+# build lock, so parallel agents build at once, blow past RAM, and everything swap-thrashes.
+# If you truly need raw ninja, wrap it in the lock:
+#   python3 maho/scripts/build_lock.py -- autoninja -C out/Default <target>
 
 # Build maho-core static lib for Chromium
 python3 maho-chromium/build/scripts/build_maho_core.py
