@@ -161,6 +161,21 @@ source_set("maho_prompt_utils") {
   ]
 }
 
+source_set("maho_ai_ingress_coordinator") {
+  sources = [
+    "ui/maho_ai_ingress_coordinator.cc",
+    "ui/maho_ai_ingress_coordinator.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser/ui/browser_window",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//ui/views",
+  ]
+}
+
 
 source_set("maho_browser_ai_tools") {
   sources = [
@@ -381,6 +396,8 @@ if (is_mac) {
     sources = [
       "ui/views/little_arc/maho_little_arc_window.cc",
       "ui/views/little_arc/maho_little_arc_window.h",
+      "ui/views/little_arc/maho_little_arc_top_bar_view.cc",
+      "ui/views/little_arc/maho_little_arc_top_bar_view.h",
     ]
     deps = [
       "//base",
@@ -445,6 +462,20 @@ if (is_mac) {
   }
 }
 
+if (is_linux) {
+  source_set("maho_notification_share_linux") {
+    sources = [
+      "ui/notifications/maho_notification_share_linux_stub.cc",
+      "ui/notifications/maho_notification_share_mac.h",
+    ]
+    deps = [
+      "//base",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
 source_set("maho_theme_support") {
   sources = [
     "ui/theme/maho_color_mixer.cc",
@@ -488,11 +519,14 @@ source_set("maho_theme_support") {
     "//net",
     "//ui/color",
     "//ui/gfx",
+    "//ui/native_theme",
     "//ui/views",
     "//url",
   ]
   if (is_mac) {
     deps += [ ":maho_notification_share_mac" ]
+  } else if (is_linux) {
+    deps += [ ":maho_notification_share_linux" ]
   }
 }
 
@@ -500,10 +534,6 @@ source_set("maho_ui_stubs") {
   deps = [
     ":maho_theme_support",
   ]
-}
-
-group("maho_link_preview") {
-  public_deps = [ "//maho/browser/ui/link_preview:maho_link_preview" ]
 }
 
 source_set("maho_space_profile_bridge") {
@@ -541,6 +571,8 @@ source_set("maho_extension_state_bridge_unittests") {
   sources = [
     "extensions/maho_extension_state_bridge_unittest.cc",
     "ui/views/side_panel/maho_extension_side_panel_coordinator_unittest.cc",
+    "extensions/api/maho_extension_api_unittest.cc",
+    "net/maho_webstore_ua_throttle_unittest.cc",
   ]
   deps = [
     ":maho_core_holder",
@@ -554,6 +586,10 @@ source_set("maho_extension_state_bridge_unittests") {
     "//extensions/common",
     "//maho/third_party/maho:maho_ffi_headers",
     "//testing/gtest",
+    "//maho/browser/ui/webui/maho_settings",
+    "//maho/browser/net",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/views/frame",
   ]
 }
 
@@ -588,6 +624,7 @@ source_set("maho_browser_main_extra_parts") {
 
     "//maho/browser/importer",
     "//maho/browser/mail_helper:maho_mail_service_factory",
+    ":maho_download_bridge",
     "//maho/browser/mcp:maho_mcp",
     "//maho/browser/updates:maho_config_manager",
     "//maho/browser/updates:maho_updates_lib",
@@ -822,11 +859,13 @@ source_set("maho_theme_io_unittests") {
     "ui/theme/maho_space_theme_io_unittest.cc",
     "ui/notifications/maho_notification_overlay_unittest.cc",
     "maho_tab_id_helper_unittest.cc",
+    "ui/maho_ai_ingress_coordinator_unittest.cc",
   ]
   deps = [
     ":maho_tab_id_helper",
     ":maho_theme_support",
     ":maho_unified_agent_adapter",
+    ":maho_ai_ingress_coordinator",
     "//base",
     "//base/test:test_support",
     "//chrome/test:test_support",
@@ -861,7 +900,6 @@ test("maho_theme_io_test") {
 # three without pulling in the full chrome unit_tests target.
 test("maho_qa_automation_test") {
   sources = [
-    "extensions/api/maho_extension_api_unittest.cc",
     "run_all_maho_unittests_main.cc",
     "ui/views/importer/maho_migration_dialog_safari_csv_unittest.cc",
     "ui/webui/maho_routines/maho_routines_page_handler_unittest.cc",
@@ -889,6 +927,71 @@ test("maho_qa_automation_test") {
     "//testing/gtest",
     "//ui/shell_dialogs",
     "//ui/views:test_support",
+    "//url",
+  ]
+}
+
+test("maho_atc_navigation_throttle_test") {
+  sources = [
+    "net/maho_atc_navigation_throttle_unittest.cc",
+    "run_all_maho_unittests_main.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/views/frame:frame",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/views:test_support",
+    "//url",
+  ]
+}
+
+source_set("maho_download_bridge") {
+  sources = [
+    "ui/downloads/maho_download_bridge_service.cc",
+    "ui/downloads/maho_download_bridge_service.h",
+    "ui/downloads/maho_download_bridge_service_factory.cc",
+    "ui/downloads/maho_download_bridge_service_factory.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/download/content/public",
+    "//components/keyed_service/core",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    ":maho_core_holder",
+    "//components/download/public/common:public",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+  ]
+}
+
+source_set("maho_download_bridge_unittests") {
+  testonly = true
+  sources = [ "ui/downloads/maho_download_bridge_service_unittest.cc" ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_download_bridge",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//components/download/public/common:public",
+    "//components/download/public/common:test_support",
+    "//content/test:test_support",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//testing/gmock",
+    "//testing/gtest",
     "//url",
   ]
 }

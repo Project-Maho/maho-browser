@@ -31,6 +31,14 @@ class MahoSpaceThemeState {
     SkScalar hue;        // 0-360
     SkScalar saturation; // 0.0-1.0
     SkScalar value;      // 0.0-1.0
+
+    bool operator==(const SpaceHSV& other) const {
+      return hue == other.hue && saturation == other.saturation &&
+             value == other.value;
+    }
+    bool operator!=(const SpaceHSV& other) const {
+      return !(*this == other);
+    }
   };
 
   struct ThemeData {
@@ -42,18 +50,40 @@ class MahoSpaceThemeState {
     float grain;
     ColorScheme color_scheme = ColorScheme::kAuto;
     bool achromatic = false;
+
+    bool operator==(const ThemeData& other) const {
+      return kind == other.kind && primary_hsv == other.primary_hsv &&
+             secondary_hsv == other.secondary_hsv && opacity == other.opacity &&
+             texture == other.texture && grain == other.grain &&
+             color_scheme == other.color_scheme && achromatic == other.achromatic;
+    }
+    bool operator!=(const ThemeData& other) const {
+      return !(*this == other);
+    }
   };
 
   // Updates cached state by reading the active space's theme from Rust core FFI.
-  static void UpdateFromCore();
+  // Returns true if the active theme changed compared to the previous state.
+  static bool UpdateFromCore();
 
   // Returns cached theme data for the active space, or std::nullopt if none.
   static std::optional<ThemeData> GetThemeData();
 
-  // Returns the active space's forced dark-mode preference for the color
-  // pipeline: true = force dark, false = force light, std::nullopt = follow the
-  // browser/OS setting (kAuto or no active theme). Honors preview overrides.
+  // Returns the active space's forced dark-mode preference for the SIDEBAR
+  // only: true = force dark, false = force light, std::nullopt = follow the OS
+  // system appearance (kAuto or no active theme). Honors preview overrides.
+  // This no longer drives the whole-window ColorProviderKey; the browser chrome
+  // follows prefs::kBrowserColorScheme independently.
   static std::optional<bool> GetForcedDarkMode();
+
+  // Resolves the sidebar's effective dark mode: the space theme scheme when set
+  // (kLight/kDark), otherwise `os_dark` (the OS system appearance, passed in by
+  // the caller so this class stays free of ui::NativeTheme dependencies).
+  static bool ResolveSidebarDarkMode(bool os_dark);
+
+  // Returns true when the OS system appearance is dark. Pref-independent: reads
+  // ui::NativeTheme's native-UI instance, not prefs::kBrowserColorScheme.
+  static bool IsOsDarkMode();
 
   // Returns a chrome tint color for space theme blending, or SK_ColorTRANSPARENT
   // if no space has an active color. Preserved as a compatibility helper for

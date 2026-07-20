@@ -20,15 +20,21 @@
 #include "base/memory/weak_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "url/gurl.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/i18n/case_conversion.h"
 #include "chrome/browser/platform_util.h"
+#include "chrome/browser/ui/browser.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/downloads/maho_download_bridge_service.h"
+#include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_download_visual_loader.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_tile_helpers.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -44,11 +50,13 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
@@ -73,10 +81,9 @@ constexpr int kHeaderSearchIconSizeDp = 14;
 constexpr int kHeaderSummaryTopInsetDp = 8;
 constexpr int kRowCornerRadiusDp = 10;
 constexpr int kRowSpacingDp = 2;
-constexpr int kRowHorizontalSpacingDp = 10;
-constexpr int kRowVerticalSpacingDp = 4;
-constexpr int kRowVerticalPaddingDp = 10;
-constexpr int kRowHorizontalPaddingDp = 10;
+constexpr int kRowHorizontalSpacingDp = 8;
+constexpr int kRowVerticalPaddingDp = 6;
+constexpr int kRowHorizontalPaddingDp = 8;
 constexpr int kBadgeSizeDp = 28;
 constexpr int kBadgeCornerRadiusDp = 7;
 constexpr int kBadgeLabelMaxChars = 4;
@@ -114,6 +121,15 @@ struct DownloadSection {
 
 std::u16string FormatByteCount(uint64_t bytes) {
   return ui::FormatBytes(base::ByteSize(bytes));
+}
+
+bool EndsWithAny(std::string_view str, std::initializer_list<std::string_view> suffixes) {
+  for (const auto& suffix : suffixes) {
+    if (base::EndsWith(str, suffix, base::CompareCase::INSENSITIVE_ASCII)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::u16string StateLabel(const std::string& state) {
@@ -371,6 +387,7 @@ class DownloadSectionHeaderView : public views::View {
 
     auto* title_label =
         AddChildView(std::make_unique<views::Label>(title));
+    title_label->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
     title_label->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
     title_label->SetAutoColorReadabilityEnabled(false);
@@ -380,6 +397,7 @@ class DownloadSectionHeaderView : public views::View {
     auto* count_label = AddChildView(
         std::make_unique<views::Label>(
             base::UTF8ToUTF16(std::to_string(count))));
+    count_label->SetSkipSubpixelRenderingOpacityCheck(true);
     count_label->SetTextStyle(views::style::STYLE_BODY_5);
     count_label->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
     count_label->SetAutoColorReadabilityEnabled(false);
@@ -410,20 +428,139 @@ class DownloadSectionHeaderView : public views::View {
 BEGIN_METADATA(DownloadSectionHeaderView)
 END_METADATA
 
-std::u16string DetailText(const DownloadItem& item) {
-  if (item.error.has_value() && !item.error->empty()) {
-    return base::UTF8ToUTF16(*item.error);
+std::u16string GetDownloadFileType(const DownloadItem& item) {
+  std::string mime = item.mime_type.value_or("");
+  std::string filename = base::UTF16ToUTF8(item.filename);
+  if (filename.empty() && item.file_path.has_value()) {
+    filename = *item.file_path;
   }
+
+  auto match_ext = [&](std::initializer_list<std::string_view> suffixes) {
+    return EndsWithAny(filename, suffixes);
+  };
+
+  if (base::StartsWith(mime, "image/", base::CompareCase::SENSITIVE) ||
+      match_ext({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg", ".ico"})) {
+    return u"Image";
+  }
+  if (base::StartsWith(mime, "video/", base::CompareCase::SENSITIVE) ||
+      match_ext({".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".wmv"})) {
+    return u"Movie";
+  }
+  if (base::StartsWith(mime, "audio/", base::CompareCase::SENSITIVE) ||
+      match_ext({".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".wma"})) {
+    return u"Audio";
+  }
+  if (mime == "application/pdf" || match_ext({".pdf"})) {
+    return u"PDF";
+  }
+  if (mime == "application/x-apple-diskimage" || mime == "application/isoimage" ||
+      mime == "application/x-iso9660-image" || match_ext({".dmg", ".iso", ".img"})) {
+    return u"Disk Image";
+  }
+  if (mime == "application/zip" || mime == "application/x-zip-compressed" ||
+      mime == "application/x-tar" || mime == "application/x-gzip" ||
+      mime == "application/x-bzip2" || mime == "application/x-7z-compressed" ||
+      mime == "application/x-rar-compressed" ||
+      match_ext({".zip", ".tar", ".gz", ".tgz", ".bz2", ".7z", ".rar"})) {
+    return u"Zip Archive";
+  }
+  if (mime == "application/msword" ||
+      mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      mime == "application/rtf" || mime == "text/plain" ||
+      match_ext({".doc", ".docx", ".rtf", ".txt", ".pages"})) {
+    return u"Document";
+  }
+  if (mime == "application/vnd.ms-excel" ||
+      mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      match_ext({".xls", ".xlsx", ".csv", ".numbers"})) {
+    return u"Spreadsheet";
+  }
+  if (mime == "application/vnd.ms-powerpoint" ||
+      mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+      match_ext({".ppt", ".pptx", ".key"})) {
+    return u"Presentation";
+  }
+
+  if (!filename.empty()) {
+    base::FilePath file_path = base::FilePath::FromUTF8Unsafe(filename);
+    std::string ext = file_path.Extension();
+    if (!ext.empty() && ext.front() == '.') {
+      ext.erase(0, 1);
+    }
+    ext = base::ToUpperASCII(ext);
+    static constexpr std::string_view kSafeExts[] = {
+        "7Z", "AVI", "CSS", "CSV", "DMG", "DOC", "DOCX", "EXE",
+        "GIF", "GZ", "HTML", "ISO", "JPEG", "JPG", "JS", "JSON",
+        "MKV", "MOV", "MP3", "MP4", "PDF", "PNG", "PPT", "PPTX",
+        "RAR", "SVG", "TAR", "TXT", "WAV", "WEBP", "XLS", "XLSX",
+        "XML", "ZIP"
+    };
+    if (std::binary_search(std::begin(kSafeExts), std::end(kSafeExts), ext)) {
+      return base::UTF8ToUTF16(ext);
+    }
+  }
+
+  return u"";
+}
+
+std::u16string GetDownloadStatusDescription(const DownloadItem& item) {
+  std::u16string host;
+  GURL url(item.url);
+  if (url.is_valid() && !url.host().empty()) {
+    host = base::UTF8ToUTF16(url.host());
+  }
+
+  if (item.state == "completed") {
+    std::u16string type = GetDownloadFileType(item);
+    if (!type.empty() && !host.empty()) {
+      return type + u" from " + host;
+    } else if (type.empty() && !host.empty()) {
+      return u"Download from " + host;
+    } else if (!type.empty() && host.empty()) {
+      return type;
+    } else {
+      return u"Download";
+    }
+  }
+
   if (item.state == "downloading" || item.state == "paused") {
-    return ProgressText(item);
+    std::u16string base_desc;
+    if (item.total_bytes > 0) {
+      base_desc = FormatByteCount(item.received_bytes) + u" of " + FormatByteCount(item.total_bytes);
+      if (!host.empty()) {
+        base_desc += u" from " + host;
+      }
+    } else {
+      if (!host.empty()) {
+        base_desc = u"Downloading from " + host;
+      } else {
+        base_desc = u"Downloading";
+      }
+    }
+
+    if (item.state == "paused") {
+      return u"Paused - " + base_desc;
+    }
+    return base_desc;
   }
-  if (item.total_bytes > 0) {
-    return FormatByteCount(item.total_bytes);
+
+  if (item.state == "failed" || item.state == "interrupted") {
+    if (item.error.has_value() && !item.error->empty()) {
+      return base::UTF8ToUTF16(*item.error);
+    }
+    return u"Failed";
   }
-  if (item.file_path.has_value() && !item.file_path->empty()) {
-    return base::FilePath::FromUTF8Unsafe(*item.file_path).BaseName().LossyDisplayName();
+
+  if (item.state == "cancelled") {
+    return u"Cancelled";
   }
+
   return StateLabel(item.state);
+}
+
+std::u16string DetailText(const DownloadItem& item) {
+  return GetDownloadStatusDescription(item);
 }
 
 std::u16string DownloadSubtitleText(const DownloadItem& item) {
@@ -438,110 +575,6 @@ std::u16string DownloadSubtitleText(const DownloadItem& item) {
   return base::StrCat({detail, u" · ", timestamp});
 }
 
-std::u16string StatusText(const DownloadItem& item) {
-  if (item.state == "downloading") {
-    if (item.total_bytes > 0) {
-      const uint64_t percent = std::min<uint64_t>(
-          100, (item.received_bytes * 100) / item.total_bytes);
-      return base::UTF8ToUTF16(std::to_string(percent) + "%");
-    }
-    return u"Live";
-  }
-  if (item.state == "completed") {
-    return u"Done";
-  }
-  return StateLabel(item.state);
-}
-
-std::string DownloadBadgeToken(const DownloadItem& item) {
-  std::string token;
-  std::string source_path;
-  if (item.file_path.has_value() && !item.file_path->empty()) {
-    source_path = *item.file_path;
-  } else {
-    source_path = base::UTF16ToUTF8(item.filename);
-  }
-
-  if (!source_path.empty()) {
-    token = base::FilePath(
-                base::FilePath::FromUTF8Unsafe(source_path).Extension())
-                .AsUTF8Unsafe();
-    if (!token.empty() && token.front() == '.') {
-      token.erase(0, 1);
-    }
-  }
-
-  if (token.empty() && item.mime_type.has_value() && !item.mime_type->empty()) {
-    const size_t slash_index = item.mime_type->find('/');
-    token = slash_index == std::string::npos
-                ? *item.mime_type
-                : item.mime_type->substr(slash_index + 1);
-  }
-
-  if (token.empty()) {
-    token = "FILE";
-  }
-
-  token = base::ToUpperASCII(token);
-  if (token.length() > kBadgeLabelMaxChars) {
-    token.resize(kBadgeLabelMaxChars);
-  }
-  return token;
-}
-
-std::u16string DownloadBadgeText(const DownloadItem& item) {
-  return base::UTF8ToUTF16(DownloadBadgeToken(item));
-}
-
-MahoSidebarTileAccent DownloadBadgeAccentForToken(std::string_view token) {
-  if (token == "PDF") {
-    return MahoSidebarTileAccent::kRed;
-  }
-  if (token == "ZIP" || token == "RAR" || token == "7Z" ||
-      token == "TAR" || token == "GZ") {
-    return MahoSidebarTileAccent::kPurple;
-  }
-  if (token == "PNG" || token == "JPG" || token == "JPEG" ||
-      token == "GIF" || token == "WEBP" || token == "SVG" ||
-      token == "SVG+" || token == "HEIC" || token == "AVIF") {
-    return MahoSidebarTileAccent::kCyan;
-  }
-  if (token == "MOV" || token == "MP4" || token == "M4V" ||
-      token == "MKV" || token == "AVI" || token == "WEBM") {
-    return MahoSidebarTileAccent::kBlue;
-  }
-  if (token == "FIG" || token == "AI" || token == "PSD" ||
-      token == "SKET" || token == "XD") {
-    return MahoSidebarTileAccent::kOrange;
-  }
-  if (token == "DOC" || token == "DOCX" || token == "TXT" ||
-      token == "RTF" || token == "MD" || token == "PAGE") {
-    return MahoSidebarTileAccent::kGreen;
-  }
-
-  return MahoSidebarTileAccentForSeed(token);
-}
-
-void StyleDownloadActionButton(views::MdTextButton* button, bool primary_action) {
-  if (!button) {
-    return;
-  }
-
-  button->SetStyle(ui::ButtonStyle::kText);
-  button->SetCornerRadius(14);
-  button->SetMinSize(gfx::Size(0, kActionButtonHeightDp));
-  button->SetMaxSize(gfx::Size(0, kActionButtonHeightDp));
-  button->SetRequestFocusOnPress(false);
-  button->SetEnabledTextColors(primary_action ? kMahoColorPrimaryText
-                                              : kMahoColorSecondaryText);
-  button->SetBackground(views::CreateRoundedRectBackground(
-      primary_action ? kMahoColorLibraryRowSelected
-                     : kMahoColorLibrarySearchPillBackground,
-      14));
-  button->SetBorder(views::CreateRoundedRectBorder(
-      1, 14, kMahoColorLibraryGlyphBorder));
-}
-
 class DownloadsEmptyStateView : public views::View {
   METADATA_HEADER(DownloadsEmptyStateView, views::View)
 
@@ -550,41 +583,27 @@ class DownloadsEmptyStateView : public views::View {
     GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
     GetViewAccessibility().SetName(u"Downloads empty state");
 
-    tile_ = AddChildView(std::make_unique<views::View>());
-    tile_->SetPreferredSize(
-        gfx::Size(kEmptyStateIconTileSizeDp, kEmptyStateIconTileSizeDp));
-    tile_->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryListRowBackground, kEmptyStateIconTileCornerRadiusDp));
-    tile_->SetBorder(views::CreateRoundedRectBorder(
-        1, kEmptyStateIconTileCornerRadiusDp, kMahoColorLibraryGlyphBorder));
-    auto* tile_layout = tile_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal));
-    tile_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    tile_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    tile_->GetViewAccessibility().SetIsIgnored(true);
-
-    auto* icon = tile_->AddChildView(std::make_unique<views::ImageView>());
-    icon->SetPreferredSize(
-        gfx::Size(kEmptyStateIconSizeDp, kEmptyStateIconSizeDp));
-    icon->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kFileDownloadOffChromeRefreshIcon,
-        kMahoColorSecondaryText, kEmptyStateIconSizeDp));
-    icon->GetViewAccessibility().SetIsIgnored(true);
+    icon_ = AddChildView(std::make_unique<views::ImageView>());
+    icon_->SetPreferredSize(gfx::Size(24, 24));
+    icon_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kArrowDownToLineIcon,
+        kMahoColorSidebarSecondaryText, 24));
+    icon_->GetViewAccessibility().SetIsIgnored(true);
 
     title_label_ = AddChildView(
         std::make_unique<views::Label>(u"No downloads yet"));
+    title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-    title_label_->SetEnabledColor(kMahoColorPrimaryText);
+    title_label_->SetEnabledColor(kMahoColorSidebarPrimaryText);
     title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     title_label_->SetAutoColorReadabilityEnabled(false);
     title_label_->GetViewAccessibility().SetIsIgnored(true);
 
     subtitle_label_ = AddChildView(std::make_unique<views::Label>(
-        u"Files you save will collect here so you can open, reveal, or remove them later."));
+        u"Files you download will show up here."));
+    subtitle_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle_label_->SetTextStyle(views::style::STYLE_BODY_4);
-    subtitle_label_->SetEnabledColor(kMahoColorSecondaryText);
+    subtitle_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
     subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     subtitle_label_->SetAutoColorReadabilityEnabled(false);
     subtitle_label_->SetMultiLine(true);
@@ -593,11 +612,11 @@ class DownloadsEmptyStateView : public views::View {
 
   void Layout(PassKey) override {
     LayoutSuperclass<views::View>(this);
-    if (!tile_ || !title_label_ || !subtitle_label_) {
+    if (!icon_ || !title_label_ || !subtitle_label_) {
       return;
     }
 
-    const gfx::Size tile_size = tile_->GetPreferredSize();
+    const gfx::Size icon_size = icon_->GetPreferredSize();
     const gfx::Size title_size = title_label_->GetPreferredSize();
     const int subtitle_width = std::max(
         0, std::min(kEmptyStateTextMaxWidthDp,
@@ -606,18 +625,18 @@ class DownloadsEmptyStateView : public views::View {
         subtitle_width > 0 ? subtitle_label_->GetHeightForWidth(subtitle_width)
                            : subtitle_label_->GetPreferredSize().height();
     const int content_width = std::max(
-        {tile_size.width(), title_size.width(), subtitle_width});
-    const int content_height = tile_size.height() + kEmptyStateItemSpacingDp +
+        {icon_size.width(), title_size.width(), subtitle_width});
+    const int content_height = icon_size.height() + kEmptyStateItemSpacingDp +
                                title_size.height() + kEmptyStateItemSpacingDp +
                                subtitle_height;
     const int content_top = std::max(0, (height() - content_height) / 2);
     const int content_left = (width() - content_width) / 2;
 
-    tile_->SetBounds(content_left + ((content_width - tile_size.width()) / 2),
-                     content_top, tile_size.width(), tile_size.height());
+    icon_->SetBounds(content_left + ((content_width - icon_size.width()) / 2),
+                     content_top, icon_size.width(), icon_size.height());
     title_label_->SetBounds(
         content_left + ((content_width - title_size.width()) / 2),
-        tile_->bounds().bottom() + kEmptyStateItemSpacingDp, title_size.width(),
+        icon_->bounds().bottom() + kEmptyStateItemSpacingDp, title_size.width(),
         title_size.height());
     subtitle_label_->SetBounds(
         content_left + ((content_width - subtitle_width) / 2),
@@ -626,7 +645,7 @@ class DownloadsEmptyStateView : public views::View {
   }
 
  private:
-  raw_ptr<views::View> tile_ = nullptr;
+  raw_ptr<views::ImageView> icon_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;
 };
@@ -652,6 +671,41 @@ std::vector<DownloadActionSpec> BuildActionsForDownload(const DownloadItem& item
   return {{u"Remove", u"Remove download", DownloadActionKind::kRemove}};
 }
 
+const gfx::VectorIcon& GetIconForAction(DownloadActionKind kind) {
+  switch (kind) {
+    case DownloadActionKind::kOpen:
+      return maho_lucide_icons::kArrowUpRightIcon;
+    case DownloadActionKind::kReveal:
+      return maho_lucide_icons::kFolderOpenIcon;
+    case DownloadActionKind::kPause:
+      return maho_lucide_icons::kPauseIcon;
+    case DownloadActionKind::kResume:
+      return maho_lucide_icons::kPlayIcon;
+    case DownloadActionKind::kCancel:
+      return maho_lucide_icons::kXIcon;
+    case DownloadActionKind::kRemove:
+      return maho_lucide_icons::kTrash2Icon;
+  }
+}
+
+std::unique_ptr<views::ImageButton> CreateActionButton(
+    const gfx::VectorIcon& icon,
+    const std::u16string& tooltip,
+    const std::u16string& accessible_name,
+    base::RepeatingClosure callback) {
+  auto button = views::CreateVectorImageButtonWithNativeTheme(
+      std::move(callback), icon, 14, ui::kColorSysOnSurfaceSubtle,
+      ui::kColorSysOnSurface, ui::kColorSysOnSurface);
+  button->SetBorder(nullptr);
+  button->SetPreferredSize(gfx::Size(24, 24));
+  button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
+  button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
+  button->SetTooltipText(tooltip);
+  button->SetAccessibleName(accessible_name);
+  views::InstallCircleHighlightPathGenerator(button.get());
+  return button;
+}
+
 class DownloadRowView : public views::View {
   METADATA_HEADER(DownloadRowView, views::View)
 
@@ -663,7 +717,6 @@ class DownloadRowView : public views::View {
                   std::vector<DownloadActionSpec> actions,
                   ActionCallback action_callback)
       : download_id_(item.id),
-        badge_token_(DownloadBadgeToken(item)),
         action_callback_(std::move(action_callback)) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal,
@@ -673,24 +726,28 @@ class DownloadRowView : public views::View {
     layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kCenter);
 
-    SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryListRowBackground, kRowCornerRadiusDp));
-    SetBorder(views::CreateRoundedRectBorder(
-        1, kRowCornerRadiusDp, kMahoColorLibraryGlyphBorder));
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    views::FocusRing::Install(this);
+    views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
+                                                  kRowCornerRadiusDp);
 
     badge_slot_ = AddChildView(std::make_unique<views::View>());
     badge_slot_->SetPreferredSize(gfx::Size(kBadgeSizeDp, kBadgeSizeDp));
     badge_slot_->SetLayoutManager(std::make_unique<views::FillLayout>());
     badge_slot_->GetViewAccessibility().SetIsIgnored(true);
 
-    badge_label_ = badge_slot_->AddChildView(
-        std::make_unique<views::Label>(DownloadBadgeText(item)));
-    badge_label_->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
-    badge_label_->SetFontList(badge_label_->font_list().Derive(
-        0, gfx::Font::NORMAL, gfx::Font::Weight::BOLD));
-    badge_label_->SetAutoColorReadabilityEnabled(false);
-    badge_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    badge_label_->GetViewAccessibility().SetIsIgnored(true);
+    icon_view_ = badge_slot_->AddChildView(std::make_unique<views::ImageView>());
+    icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kFileIcon, kMahoColorSidebarPrimaryText, 16));
+    icon_view_->GetViewAccessibility().SetIsIgnored(true);
+
+    if (item.state == "completed" && item.file_path.has_value() && !item.file_path->empty()) {
+      visual_loader_ = std::make_unique<MahoSidebarDownloadVisualLoader>();
+      visual_loader_->Start(
+          base::FilePath::FromUTF8Unsafe(*item.file_path), 28,
+          base::BindOnce(&DownloadRowView::OnThumbnailLoaded,
+                         weak_factory_.GetWeakPtr()));
+    }
 
     auto* text_block = AddChildView(std::make_unique<views::View>());
     auto* text_layout = text_block->SetLayoutManager(
@@ -703,8 +760,9 @@ class DownloadRowView : public views::View {
 
     auto* title = text_block->AddChildView(
         std::make_unique<views::Label>(item.filename));
+    title->SetSkipSubpixelRenderingOpacityCheck(true);
     title->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    title->SetEnabledColor(kMahoColorPrimaryText);
+    title->SetEnabledColor(kMahoColorSidebarPrimaryText);
     title->SetAutoColorReadabilityEnabled(false);
     title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title->SetMultiLine(false);
@@ -712,37 +770,22 @@ class DownloadRowView : public views::View {
 
     auto* subtitle = text_block->AddChildView(
         std::make_unique<views::Label>(DownloadSubtitleText(item)));
+    subtitle->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle->SetTextStyle(views::style::STYLE_BODY_5);
-    subtitle->SetEnabledColor(kMahoColorSecondaryText);
+    subtitle->SetEnabledColor(kMahoColorSidebarSecondaryText);
     subtitle->SetAutoColorReadabilityEnabled(false);
     subtitle->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     subtitle->SetMultiLine(false);
     subtitle->SetElideBehavior(gfx::ELIDE_TAIL);
 
-    auto* trailing_region = AddChildView(std::make_unique<views::View>());
-    auto* trailing_layout = trailing_region->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(
-            views::BoxLayout::Orientation::kVertical, gfx::Insets(),
-            kRowVerticalSpacingDp));
-    trailing_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kEnd);
-
-    auto* status_label = trailing_region->AddChildView(
-        std::make_unique<views::Label>(StatusText(item)));
-    status_label->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
-    status_label->SetEnabledColor(kMahoColorSecondaryText);
-    status_label->SetAutoColorReadabilityEnabled(false);
-    status_label->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
-    status_label->SetMultiLine(false);
-
     if (HasProgressBar(item)) {
-      trailing_region->AddChildView(
+      text_block->AddChildView(
           std::make_unique<DownloadProgressBarView>(ProgressFraction(item)));
     }
 
     if (!actions.empty()) {
-      auto* action_row = trailing_region->AddChildView(std::make_unique<views::View>());
-      auto* action_layout = action_row->SetLayoutManager(
+      action_row_ = AddChildView(std::make_unique<views::View>());
+      auto* action_layout = action_row_->SetLayoutManager(
           std::make_unique<views::BoxLayout>(
               views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
               kActionSpacingDp));
@@ -752,30 +795,43 @@ class DownloadRowView : public views::View {
           views::BoxLayout::MainAxisAlignment::kEnd);
 
       for (const auto& action : actions) {
-        auto* button = action_row->AddChildView(
-            std::make_unique<views::MdTextButton>(
+        auto* button = action_row_->AddChildView(
+            CreateActionButton(
+                GetIconForAction(action.kind),
+                action.label,
+                action.accessible_name.empty() ? action.label : action.accessible_name,
                 base::BindRepeating(&DownloadRowView::HandleActionPressed,
-                                    weak_factory_.GetWeakPtr(), action.kind),
-                action.label));
-        button->SetAccessibleName(action.accessible_name.empty()
-                                      ? action.label
-                                      : action.accessible_name);
-        StyleDownloadActionButton(button,
-                                  action.kind == DownloadActionKind::kOpen ||
-                                      action.kind == DownloadActionKind::kResume ||
-                                      action.kind == DownloadActionKind::kPause);
+                                    weak_factory_.GetWeakPtr(), action.kind)));
         action_buttons_.push_back(button);
       }
     }
 
     GetViewAccessibility().SetRole(ax::mojom::Role::kListItem);
     GetViewAccessibility().SetName(item.filename);
-    UpdateBadgeColors();
+    UpdateAppearance();
+  }
+
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    UpdateAppearance();
+  }
+
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    UpdateAppearance();
+  }
+
+  void OnFocus() override {
+    views::View::OnFocus();
+    UpdateAppearance();
+  }
+
+  void OnBlur() override {
+    views::View::OnBlur();
+    UpdateAppearance();
   }
 
   void OnThemeChanged() override {
     views::View::OnThemeChanged();
-    UpdateBadgeColors();
+    UpdateAppearance();
   }
 
   bool MatchesDownloadId(const std::string& download_id) const {
@@ -790,19 +846,34 @@ class DownloadRowView : public views::View {
   }
 
  private:
-  void UpdateBadgeColors() {
-    if (!badge_slot_ || !badge_label_) {
-      return;
+  void OnThumbnailLoaded(const gfx::Image& image) {
+    if (!image.IsEmpty()) {
+      icon_view_->SetImage(ui::ImageModel::FromImageSkia(image.AsImageSkia()));
+    }
+  }
+
+  void UpdateAppearance() {
+    const bool active = HasFocus() || IsMouseHovered();
+    if (HasFocus()) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorLibraryRowSelected, kRowCornerRadiusDp));
+      SetBorder(views::CreateRoundedRectBorder(
+          1, kRowCornerRadiusDp, kMahoColorLibraryGlyphBorder));
+    } else if (IsMouseHovered()) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorLibraryRowHover, kRowCornerRadiusDp));
+      SetBorder(views::CreateRoundedRectBorder(
+          1, kRowCornerRadiusDp, kMahoColorLibraryGlyphBorder));
+    } else {
+      SetBackground(nullptr);
+      SetBorder(nullptr);
     }
 
-    const MahoSidebarTilePalette colors = MahoSidebarTilePaletteForAccent(
-        DownloadBadgeAccentForToken(badge_token_),
-        MahoSidebarTilePaletteStyle::kTinted);
-    badge_slot_->SetBackground(views::CreateRoundedRectBackground(
-        colors.background, kBadgeCornerRadiusDp));
-    badge_slot_->SetBorder(views::CreateRoundedRectBorder(
-        1, kBadgeCornerRadiusDp, kMahoColorLibraryGlyphBorder));
-    badge_label_->SetEnabledColor(colors.foreground);
+    if (action_row_) {
+      action_row_->SetVisible(active);
+    }
+    InvalidateLayout();
+    SchedulePaint();
   }
 
   void HandleActionPressed(DownloadActionKind kind) {
@@ -813,11 +884,12 @@ class DownloadRowView : public views::View {
   }
 
   std::string download_id_;
-  std::string badge_token_;
   ActionCallback action_callback_;
   raw_ptr<views::View> badge_slot_ = nullptr;
-  raw_ptr<views::Label> badge_label_ = nullptr;
+  raw_ptr<views::ImageView> icon_view_ = nullptr;
+  raw_ptr<views::View> action_row_ = nullptr;
   std::vector<views::Button*> action_buttons_;
+  std::unique_ptr<MahoSidebarDownloadVisualLoader> visual_loader_;
   base::WeakPtrFactory<DownloadRowView> weak_factory_{this};
 };
 
@@ -829,11 +901,29 @@ END_METADATA
 BEGIN_METADATA(MahoSidebarDownloadsView)
 END_METADATA
 
-MahoSidebarDownloadsView::MahoSidebarDownloadsView() {
+MahoSidebarDownloadsView::MahoSidebarDownloadsView(Browser* browser)
+    : browser_(browser) {
   BuildUi();
+  if (browser_ && browser_->profile()) {
+    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(browser_->profile());
+    if (service) {
+      service->AddObserver(this);
+    }
+  }
 }
 
-MahoSidebarDownloadsView::~MahoSidebarDownloadsView() = default;
+MahoSidebarDownloadsView::~MahoSidebarDownloadsView() {
+  if (browser_ && browser_->profile()) {
+    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfileIfExists(browser_->profile());
+    if (service) {
+      service->RemoveObserver(this);
+    }
+  }
+}
+
+void MahoSidebarDownloadsView::OnMahoDownloadsChanged() {
+  ReloadDownloads();
+}
 
 views::View* MahoSidebarDownloadsView::download_row_for_download_id_for_testing(
     const std::string& download_id) {
@@ -882,12 +972,12 @@ void MahoSidebarDownloadsView::BuildUi() {
   auto* header_strip = AddChildView(std::make_unique<views::View>());
   auto* header_layout = header_strip->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kVertical,
+          views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::TLBR(kHeaderTopInsetDp, kHeaderHorizontalInsetDp,
                             kHeaderBottomInsetDp, kHeaderHorizontalInsetDp),
-          0));
+          8));
   header_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
   auto* search_shell = header_strip->AddChildView(std::make_unique<views::View>());
   search_shell->SetPreferredSize(gfx::Size(0, kHeaderSearchHeightDp));
@@ -909,7 +999,7 @@ void MahoSidebarDownloadsView::BuildUi() {
   search_icon->SetPreferredSize(
       gfx::Size(kHeaderSearchIconSizeDp, kHeaderSearchIconSizeDp));
   search_icon->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSearchIcon, kMahoColorSecondaryText,
+      vector_icons::kSearchIcon, kMahoColorSidebarSecondaryText,
       kHeaderSearchIconSizeDp));
 
   auto search_field = std::make_unique<views::Textfield>();
@@ -919,22 +1009,12 @@ void MahoSidebarDownloadsView::BuildUi() {
   search_field_->SetPreferredSize(gfx::Size(0, kHeaderSearchHeightDp));
   search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   search_field_->SetBorder(nullptr);
-  search_field_->SetTextColor(kMahoColorPrimaryText);
+  search_field_->SetTextColor(kMahoColorSidebarPrimaryText);
   search_field_->SetAccessibleName(u"Search Downloads");
   search_layout->SetFlexForView(search_field_, 1);
   search_shell->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   search_shell->GetViewAccessibility().SetName(u"Search downloads header");
-
-  header_summary_label_ = header_strip->AddChildView(
-      std::make_unique<views::Label>(HeaderSummaryText(0)));
-  header_summary_label_->SetTextStyle(views::style::STYLE_BODY_5);
-  header_summary_label_->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
-  header_summary_label_->SetAutoColorReadabilityEnabled(false);
-  header_summary_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  header_summary_label_->SetBorder(views::CreateEmptyBorder(
-      gfx::Insets::TLBR(kHeaderSummaryTopInsetDp, 2, 0, 0)));
-  header_summary_label_->GetViewAccessibility().SetIsIgnored(true);
-  header_summary_label_->SetVisible(false);
+  header_layout->SetFlexForView(search_shell, 1);
 
   auto* body_container = AddChildView(std::make_unique<views::View>());
   body_container->SetLayoutManager(std::make_unique<views::FillLayout>());
@@ -944,15 +1024,17 @@ void MahoSidebarDownloadsView::BuildUi() {
   scroll_view_->SetBackgroundColor(std::nullopt);
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
+  scroll_view_->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
   scroll_view_->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   scroll_view_->GetViewAccessibility().SetName(u"Downloads results container");
 
   list_container_ = scroll_view_->SetContents(std::make_unique<views::View>());
   auto* list_layout = list_container_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
-                                         gfx::Insets::TLBR(0, kListHorizontalInsetDp,
+                                         gfx::Insets::TLBR(0, 10,
                                                            kListBottomInsetDp,
-                                                           kListHorizontalInsetDp),
+                                                           18),
                                          0));
   list_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
@@ -967,7 +1049,12 @@ void MahoSidebarDownloadsView::BuildUi() {
 }
 
 void MahoSidebarDownloadsView::ReloadDownloads() {
-  std::vector<DownloadItem> downloads = ParseDownloads();
+  std::vector<DownloadItem> downloads;
+  if (testing_downloads_) {
+    downloads = *testing_downloads_;
+  } else {
+    downloads = ParseDownloads();
+  }
 
   if (search_field_) {
     std::u16string query = base::i18n::FoldCase(search_field_->GetText());
@@ -985,12 +1072,6 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
   }
 
   list_container_->RemoveAllChildViews();
-  if (header_summary_label_) {
-    header_summary_label_->SetVisible(!downloads.empty());
-    if (!downloads.empty()) {
-      header_summary_label_->SetText(HeaderSummaryText(downloads.size()));
-    }
-  }
   if (downloads.empty()) {
     empty_state_view_->SetVisible(true);
     scroll_view_->SetVisible(false);
@@ -1032,6 +1113,18 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
   scroll_view_->GetViewAccessibility().SetValue(DownloadCountText(download_count));
 }
 
+void MahoSidebarDownloadsView::SetDownloadsForTesting(std::vector<DownloadItem> downloads) {
+  testing_downloads_ = std::move(downloads);
+  ReloadDownloads();
+}
+
+void MahoSidebarDownloadsView::SetSearchQueryForTesting(const std::u16string& query) {
+  if (search_field_) {
+    search_field_->SetText(query);
+  }
+  ReloadDownloads();
+}
+
 void MahoSidebarDownloadsView::SetDownloadFileActionCallbackForTesting(
     base::RepeatingCallback<void(const std::string&, DownloadActionKind)>
         callback) {
@@ -1060,38 +1153,67 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
     }
 
     if (action == DownloadActionKind::kOpen) {
-      platform_util::OpenItem(nullptr, path, platform_util::OPEN_FILE,
+      platform_util::OpenItem(browser_ ? browser_->profile() : nullptr, path,
+                              platform_util::OPEN_FILE,
                               platform_util::OpenOperationCallback());
     } else {
-      platform_util::ShowItemInFolder(nullptr, path);
+      platform_util::ShowItemInFolder(
+          browser_ ? browser_->profile() : nullptr, path);
     }
     return;
   }
 
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return;
+  // Drive the maho-core store directly by download id so the action works for
+  // historical downloads that have no live download::DownloadItem in this
+  // session (the store is authoritative and outlives the browser process).
+  if (MahoCore* core = maho::GetCore()) {
+    switch (action) {
+      case DownloadActionKind::kPause:
+        maho_core_pause_download(core, download_id.c_str());
+        break;
+      case DownloadActionKind::kResume:
+        maho_core_resume_download(core, download_id.c_str());
+        break;
+      case DownloadActionKind::kCancel:
+        maho_core_cancel_download(core, download_id.c_str());
+        break;
+      case DownloadActionKind::kRemove:
+        maho_core_remove_download(core, download_id.c_str());
+        // Core-only (historical) removals do not fire the live download
+        // observer, so refresh the list directly to drop the removed row.
+        ReloadDownloads();
+        break;
+      case DownloadActionKind::kOpen:
+      case DownloadActionKind::kReveal:
+        break;
+    }
   }
 
-  switch (action) {
-    case DownloadActionKind::kPause:
-      maho_core_pause_download(core, download_id.c_str());
-      break;
-    case DownloadActionKind::kResume:
-      maho_core_resume_download(core, download_id.c_str());
-      break;
-    case DownloadActionKind::kCancel:
-      maho_core_cancel_download(core, download_id.c_str());
-      break;
-    case DownloadActionKind::kRemove:
-      maho_core_remove_download(core, download_id.c_str());
-      break;
-    case DownloadActionKind::kOpen:
-    case DownloadActionKind::kReveal:
-      break;
+  // Additionally drive the live download::DownloadItem (if one exists in this
+  // session) so an in-progress transfer actually pauses/resumes/cancels in
+  // Chromium's download system. These no-op safely when there is no live item.
+  if (browser_ && browser_->profile()) {
+    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(browser_->profile());
+    if (service) {
+      switch (action) {
+        case DownloadActionKind::kPause:
+          service->PauseDownload(download_id);
+          break;
+        case DownloadActionKind::kResume:
+          service->ResumeDownload(download_id);
+          break;
+        case DownloadActionKind::kCancel:
+          service->CancelDownload(download_id);
+          break;
+        case DownloadActionKind::kRemove:
+          service->RemoveDownload(download_id);
+          break;
+        case DownloadActionKind::kOpen:
+        case DownloadActionKind::kReveal:
+          break;
+      }
+    }
   }
-
-  ReloadDownloads();
 }
 
 void MahoSidebarDownloadsView::ContentsChanged(

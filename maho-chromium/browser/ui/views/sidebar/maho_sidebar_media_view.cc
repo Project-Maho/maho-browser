@@ -410,7 +410,7 @@ void MahoSidebarMediaView::BuildUi() {
   search_icon->GetViewAccessibility().SetIsIgnored(true);
   search_icon->SetPreferredSize(gfx::Size(14, 14));
   search_icon->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSearchIcon, kMahoColorSecondaryText, 14));
+      vector_icons::kSearchIcon, kMahoColorSidebarSecondaryText, 14));
 
   auto search_field = std::make_unique<views::Textfield>();
   search_field_ = search_shell->AddChildView(std::move(search_field));
@@ -419,7 +419,7 @@ void MahoSidebarMediaView::BuildUi() {
   search_field_->SetPreferredSize(gfx::Size(0, 36));
   search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   search_field_->SetBorder(nullptr);
-  search_field_->SetTextColor(kMahoColorPrimaryText);
+  search_field_->SetTextColor(kMahoColorSidebarPrimaryText);
   search_field_->SetAccessibleName(u"Search Media");
   search_layout->SetFlexForView(search_field_, 1);
   search_shell->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);

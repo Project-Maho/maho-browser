@@ -98,6 +98,10 @@
   E_CPONLY(kMahoColorPrimaryText) \
   E_CPONLY(kMahoColorSecondaryText) \
   E_CPONLY(kMahoColorTertiaryText) \
+  /* Sidebar Text */ \
+  E_CPONLY(kMahoColorSidebarPrimaryText) \
+  E_CPONLY(kMahoColorSidebarSecondaryText) \
+  E_CPONLY(kMahoColorSidebarTertiaryText) \
   /* Legacy Aliases */ \
   E_CPONLY(kMahoColorDivider) \
   E_CPONLY(kMahoColorFooterDivider) \

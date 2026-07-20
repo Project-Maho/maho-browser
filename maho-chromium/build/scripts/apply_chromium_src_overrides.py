@@ -58,6 +58,93 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/ui/views/status_bubble_views.h": [
+        Replacement(
+            old="static const int kTotalVerticalPadding = 7;",
+            new="static const int kTotalVerticalPadding = 14;",
+            description="Maho: widen vertical padding between the status-bar text and the bubble edge",
+            guard="static const int kTotalVerticalPadding = 14;",
+        ),
+    ],
+    # ── status_bubble_views.cc: enlarge the bottom-left hover-URL text and
+    #    inset the bubble with a small margin ─────────────────────────────────
+    "chrome/browser/ui/views/status_bubble_views.cc": [
+        Replacement(
+            old="constexpr int kBubbleCornerRadius = 4;",
+            new="constexpr int kBubbleCornerRadius = 8;",
+            description="Maho: round the hover-URL status bubble corners more",
+            guard="constexpr int kBubbleCornerRadius = 8;",
+        ),
+        Replacement(
+            old=(
+                "    rad[index] = {radius, radius};\n"
+                "  };\n"
+                "\n"
+                "  // Top Edges"
+            ),
+            new=(
+                "    rad[index] = {radius, radius};\n"
+                "  };\n"
+                "\n"
+                "  // Maho: the bubble is inset from the window edge, so round all\n"
+                "  // four corners for a floating pill look.\n"
+                "  round_corner(gfx::RRectF::Corner::kUpperLeft);\n"
+                "  round_corner(gfx::RRectF::Corner::kUpperRight);\n"
+                "  round_corner(gfx::RRectF::Corner::kLowerLeft);\n"
+                "  round_corner(gfx::RRectF::Corner::kLowerRight);\n"
+                "\n"
+                "  // Top Edges"
+            ),
+            description="Maho: round all four corners of the inset hover-URL bubble",
+            guard="round all\n  // four corners for a floating pill look.",
+        ),
+        Replacement(
+            old='#include "base/memory/raw_ptr.h"\n',
+            new=(
+                '#include "base/memory/raw_ptr.h"\n'
+                '#include "base/no_destructor.h"\n'
+            ),
+            description="Maho: include base/no_destructor.h for the enlarged status-bar font",
+            guard='#include "base/no_destructor.h"',
+        ),
+        Replacement(
+            old=(
+                "const gfx::FontList& GetFont() {\n"
+                "  return views::TypographyProvider::Get().GetFont(views::style::CONTEXT_LABEL,\n"
+                "                                                  views::style::STYLE_PRIMARY);\n"
+                "}"
+            ),
+            new=(
+                "const gfx::FontList& GetFont() {\n"
+                "  // Maho: enlarge the hover-URL status-bar text by 2pt.\n"
+                "  static const base::NoDestructor<gfx::FontList> kMahoStatusFont(\n"
+                "      views::TypographyProvider::Get()\n"
+                "          .GetFont(views::style::CONTEXT_LABEL, views::style::STYLE_PRIMARY)\n"
+                "          .DeriveWithSizeDelta(3));\n"
+                "  return *kMahoStatusFont;\n"
+                "}"
+            ),
+            description="Maho: enlarge the status-bar (hover URL) text by 3pt",
+            guard="kMahoStatusFont",
+        ),
+        Replacement(
+            old=(
+                "  std::unique_ptr<views::Label> text = std::make_unique<views::Label>();\n"
+            ),
+            new=(
+                "  std::unique_ptr<views::Label> text = std::make_unique<views::Label>();\n"
+                "  text->SetFontList(GetFont());\n"
+            ),
+            description="Maho: apply the enlarged font to the status-bar label so the rendered text grows",
+            guard="text->SetFontList(GetFont());",
+        ),
+        Replacement(
+            old="constexpr int kTextHorizPadding = 5;",
+            new="constexpr int kTextHorizPadding = 10;",
+            description="Maho: widen horizontal padding between the status-bar text and the bubble edge",
+            guard="constexpr int kTextHorizPadding = 10;",
+        ),
+    ],
     "chrome/browser/device_reauth/chrome_device_authenticator_factory.cc": [
         Replacement(
             old=(
@@ -101,6 +188,44 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    sources += [ \"chrome_device_authenticator_factory.cc\" ]"
             ),
             description="Maho Linux: compile device authenticator factory source on Linux",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_widget.cc": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/theme/maho_space_theme_state.h"\n'
+                '#include "maho/browser/ui/theme/maho_color_mixer.h"\n'
+                '#include "ui/native_theme/native_theme.h"\n'
+            ),
+            description="Maho: include maho_space_theme_state.h and native_theme.h in browser_widget.cc",
+            guard='#include "maho/browser/ui/theme/maho_space_theme_state.h"',
+        ),
+        Replacement(
+            old=(
+                '  // user_color.\n'
+            ),
+            new=(
+                '  // Maho: the whole window (sidebar-dominated chrome) follows the active Space\n'
+                '  // theme. Auto / no theme → OS system appearance. Incognito stays forced-dark.\n'
+                '  if (!IsIncognitoBrowser()) {\n'
+                '    const bool os_dark =\n'
+                '        ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==\n'
+                '        ui::NativeTheme::PreferredColorScheme::kDark;\n'
+                '    key.color_mode = MahoSpaceThemeState::ResolveSidebarDarkMode(os_dark)\n'
+                '                         ? ui::ColorProviderKey::ColorMode::kDark\n'
+                '                         : ui::ColorProviderKey::ColorMode::kLight;\n'
+                '  } else {\n'
+                '    key.app_controller = GetMahoOtrSentinel();\n'
+                '  }\n'
+                '\n'
+                '  // user_color.\n'
+            ),
+            description="Maho: force window color_mode to follow space theme or OS dark mode",
+            guard="MahoSpaceThemeState::ResolveSidebarDarkMode",
         ),
     ],
     "chrome/browser/ui/views/frame/contents_web_view.cc": [
@@ -452,6 +577,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Attach MahoWebStoreRebrandHandler in TabHelpers::AttachTabHelpers()"
             ),
             guard="MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);",
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/link_preview/maho_link_preview_manager.h"\n',
+            new="",
+            description="Maho: strip deleted link-preview manager include from tab_helpers.cc",
+            idempotent=True,
+        ),
+        Replacement(
+            old="  MahoLinkPreviewManager::CreateForWebContents(web_contents);\n",
+            new="",
+            description="Maho: strip deleted link-preview manager attach from tab_helpers.cc",
+            idempotent=True,
         ),
     ],
     # ── browser_live_tab_context.cc ───────────────────────────────────────────
@@ -1307,6 +1444,12 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/BUILD.gn": [
         Replacement(
+            old='    "//maho/browser:maho_link_preview",\n',
+            new="",
+            description="Maho: strip deleted maho_link_preview dep from chrome/browser/ui:ui",
+            idempotent=True,
+        ),
+        Replacement(
             old=(
                 '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.cc",\n'
                 '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.h",\n'
@@ -1324,6 +1467,23 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "chrome/browser/ui:ui target"
             ),
             guard='"//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc"',
+        ),
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc",\n'
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc",\n'
+                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h",\n'
+                '      "//maho/browser/ui/views/maho_content_gradient_view.cc",\n'
+                '      "//maho/browser/ui/views/maho_content_gradient_view.h",\n'
+            ),
+            description=(
+                "Compile MahoContentGradientView into the chrome/browser/ui:ui "
+                "target used by BrowserView"
+            ),
+            guard='"//maho/browser/ui/views/maho_content_gradient_view.cc"',
         ),
         Replacement(
             old=(
@@ -2660,6 +2820,30 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     # ── startup_browser_creator_impl.cc ──────────────────────────────────────
     "chrome/browser/ui/startup/startup_browser_creator_impl.cc": [
         Replacement(
+            old="#include <iterator>\n",
+            new=(
+                "#include <atomic>\n"
+                "#include <iterator>\n"
+            ),
+            description=(
+                "Maho cold-start: include <atomic> for the process-global once-guard "
+                "that auto-opens the command palette on a zero-tab launch"
+            ),
+            guard="#include <atomic>",
+        ),
+        Replacement(
+            old='#include "chrome/browser/ui/browser_window.h"\n',
+            new=(
+                '#include "chrome/browser/ui/browser_window.h"\n'
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+            ),
+            description=(
+                "Maho cold-start: include BrowserView so the zero-tab branch can reach "
+                "ShowMahoCommandOverlayForNewTab() via GetBrowserViewForBrowser()"
+            ),
+            guard='#include "chrome/browser/ui/views/frame/browser_view.h"',
+        ),
+        Replacement(
             old="  bool prefs_tabs_originally_empty = prefs_tabs.empty();\n",
             new="",
             description=(
@@ -2756,6 +2940,46 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "normal browser window directly instead of synthesising an NTP tab via "
                 "OpenTabsInBrowser (which DCHECKs on empty input)"
             ),
+            guard=(
+                "  // Maho zero-tab: when the tab list is empty and we are targeting a normal\n"
+                "  // browser window, create/show the browser without synthesising an NTP tab."
+            ),
+        ),
+        Replacement(
+            old=(
+                "      if (browser) {\n"
+                "        browser->window()->Show();\n"
+                "      }\n"
+                "    }\n"
+                "  } else {\n"
+            ),
+            new=(
+                "      if (browser) {\n"
+                "        browser->window()->Show();\n"
+                "        // Maho cold-start: auto-open the command palette exactly once on the\n"
+                "        // zero-tab (cold empty) startup path. This empty-|tabs| branch is the\n"
+                "        // ONLY cold empty-start path (Ctrl+N windows and\n"
+                "        // session-restore-with-tabs do not reach it), so the process-global\n"
+                "        // once-guard is belt-and-suspenders. ShowMahoCommandOverlayForNewTab()\n"
+                "        // self-defers until the BrowserView widget is ready and shows recent\n"
+                "        // tabs on the empty query; pressing Esc merely Dismiss()es the overlay\n"
+                "        // (no tab created), leaving the zero-tab themed gradient window.\n"
+                "        static std::atomic<bool> g_maho_cold_start_palette_shown{false};\n"
+                "        if (!g_maho_cold_start_palette_shown.exchange(true)) {\n"
+                "          if (auto* maho_browser_view =\n"
+                "                  BrowserView::GetBrowserViewForBrowser(browser)) {\n"
+                "            maho_browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "          }\n"
+                "        }\n"
+                "      }\n"
+                "    }\n"
+                "  } else {\n"
+            ),
+            description=(
+                "Maho cold-start: auto-open the command palette exactly once on the "
+                "zero-tab empty-|tabs| startup path (Esc creates no tab)"
+            ),
+            guard="g_maho_cold_start_palette_shown",
         ),
         Replacement(
             old=(
@@ -2841,6 +3065,89 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="Maho login gate: while active (no valid relay session)",
             idempotent=True,
+        ),
+        Replacement(
+            old='#include "base/functional/bind.h"\n',
+            new=(
+                '#include "base/functional/bind.h"\n'
+                '#include "base/task/single_thread_task_runner.h"\n'
+                '#include "base/time/time.h"\n'
+            ),
+            description=(
+                "Maho cold-start: include SingleThreadTaskRunner + TimeDelta so the "
+                "zero-tab command-palette trigger can retry on the UI task runner "
+                "until the BrowserView widget is ready"
+            ),
+            guard='#include "base/task/single_thread_task_runner.h"',
+        ),
+        Replacement(
+            old="void UrlsToTabs(const std::vector<GURL>& urls, StartupTabs* tabs) {\n",
+            new=(
+                "// Maho cold-start: retry opening the new-tab command palette until the\n"
+                "// BrowserView and its sidebar container are constructed. On the zero-tab\n"
+                "// startup path BrowserView::GetBrowserViewForBrowser() can briefly return\n"
+                "// null (or the sidebar container is not built yet) right after\n"
+                "// window()->Show(), so a single attempt is dropped and no palette appears.\n"
+                "// Give up without creating a tab once the attempt budget is exhausted so\n"
+                "// the zero-tab themed gradient window remains.\n"
+                "void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<Browser> browser,\n"
+                "                                       int remaining_attempts) {\n"
+                "  if (!browser) {\n"
+                "    return;\n"
+                "  }\n"
+                "  if (auto* browser_view =\n"
+                "          BrowserView::GetBrowserViewForBrowser(browser.get())) {\n"
+                "    if (browser_view->maho_sidebar_container()) {\n"
+                "      browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "      return;\n"
+                "    }\n"
+                "  }\n"
+                "  if (remaining_attempts <= 0) {\n"
+                "    return;\n"
+                "  }\n"
+                "  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(\n"
+                "      FROM_HERE,\n"
+                "      base::BindOnce(&ShowMahoColdStartPaletteWhenReady, browser,\n"
+                "                     remaining_attempts - 1),\n"
+                "      base::Milliseconds(25));\n"
+                "}\n"
+                "\n"
+                "void UrlsToTabs(const std::vector<GURL>& urls, StartupTabs* tabs) {\n"
+            ),
+            description=(
+                "Maho cold-start: add a bounded UI-task-runner retry helper that opens "
+                "the new-tab command palette once the BrowserView + sidebar container "
+                "are ready (mirrors the browser_command_controller anon-namespace "
+                "retry, which is unreachable from this TU)"
+            ),
+            guard="void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<Browser> browser,",
+        ),
+        Replacement(
+            old=(
+                "        static std::atomic<bool> g_maho_cold_start_palette_shown{false};\n"
+                "        if (!g_maho_cold_start_palette_shown.exchange(true)) {\n"
+                "          if (auto* maho_browser_view =\n"
+                "                  BrowserView::GetBrowserViewForBrowser(browser)) {\n"
+                "            maho_browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "          }\n"
+                "        }\n"
+            ),
+            new=(
+                "        static std::atomic<bool> g_maho_cold_start_palette_shown{false};\n"
+                "        if (!g_maho_cold_start_palette_shown.exchange(true)) {\n"
+                "          // Maho cold-start: BrowserView (and its sidebar container) may not\n"
+                "          // be registered yet at window()->Show() time, so a single\n"
+                "          // GetBrowserViewForBrowser() attempt can be lost. Retry on the UI\n"
+                "          // task runner until the view is ready, then open the palette.\n"
+                "          ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr(), 200);\n"
+                "        }\n"
+            ),
+            description=(
+                "Maho cold-start: route the once-guarded zero-tab palette trigger "
+                "through the bounded widget-ready retry helper so it is not dropped "
+                "when the BrowserView is not yet registered"
+            ),
+            guard="ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr()",
         ),
     ],
     # ── browser_commands.cc ──────────────────────────────────────────────────
@@ -3191,6 +3498,47 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="maho::MahoAtcNavigationThrottle",
         ),
+        Replacement(
+            old=(
+                '  } else {\n'
+                '    // WebUI and regular pages follow the browser theme color mode, provided by\n'
+                '    // the color provider.\n'
+                '    preferred_color_scheme =\n'
+                '        web_contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kLight\n'
+                '            ? blink::mojom::PreferredColorScheme::kLight\n'
+                '            : blink::mojom::PreferredColorScheme::kDark;\n'
+                '  }\n'
+                '  // Update the preferred root scrollbar color based on the lightness level of\n'
+                '  // the toolbar\'s color.\n'
+                '  preferred_root_scrollbar_color_scheme =\n'
+                '      color_utils::IsDark(\n'
+                '          web_contents->GetColorProvider().GetColor(kColorToolbar))\n'
+                '          ? blink::mojom::PreferredColorScheme::kDark\n'
+                '          : blink::mojom::PreferredColorScheme::kLight;'
+            ),
+            new=(
+                '  } else {\n'
+                '    // Maho: web page rendering follows Browser theme, not Space theme.\n'
+                '    Profile* maho_profile = Profile::FromBrowserContext(web_contents->GetBrowserContext());\n'
+                '    auto* theme_service = ThemeServiceFactory::GetForProfile(maho_profile);\n'
+                '    const auto scheme = theme_service ? theme_service->GetBrowserColorScheme()\n'
+                '                                      : ThemeService::BrowserColorScheme::kSystem;\n'
+                '    bool prefers_dark = false;\n'
+                '    if (scheme == ThemeService::BrowserColorScheme::kSystem) {\n'
+                '      prefers_dark = ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==\n'
+                '                     ui::NativeTheme::PreferredColorScheme::kDark;\n'
+                '    } else {\n'
+                '      prefers_dark = (scheme == ThemeService::BrowserColorScheme::kDark);\n'
+                '    }\n'
+                '    preferred_color_scheme = prefers_dark ? blink::mojom::PreferredColorScheme::kDark\n'
+                '                                          : blink::mojom::PreferredColorScheme::kLight;\n'
+                '  }\n'
+                '  // Maho: scrollbar matches the page color scheme.\n'
+                '  preferred_root_scrollbar_color_scheme = preferred_color_scheme;'
+            ),
+            description="Maho: derive preferred_color_scheme and preferred_root_scrollbar_color_scheme from Browser theme instead of web_contents->GetColorMode()",
+            guard="Maho: web page rendering follows Browser theme",
+        ),
     ],
     "chrome/test/BUILD.gn": [
         Replacement(
@@ -3209,19 +3557,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 '      "//chrome/browser/ui/views/side_panel:interactive_tests",\n'
-                '      "//maho/browser/ui/link_preview:interactive_tests",\n'
-            ),
-            description="Include Maho link-preview interactive tests in Chromium interactive_ui_tests deps",
-        ),
-        Replacement(
-            old=(
-                '      "//maho/browser/ui/link_preview:interactive_tests",\n'
-            ),
-            new=(
-                '      "//maho/browser/ui/link_preview:interactive_tests",\n'
                 '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
             ),
             description="Include Maho sidebar interactive tests in Chromium interactive_ui_tests deps",
+        ),
+        Replacement(
+            old='      "//maho/browser/ui/link_preview:interactive_tests",\n',
+            new="",
+            description="Maho: strip deleted link-preview interactive_tests dep from chrome/test/BUILD.gn",
+            idempotent=True,
         ),
         Replacement(
             old='      "//maho/browser/ui/views/spaces_overlay:unit_tests",\n',
@@ -4224,51 +4568,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="Maho: enable kGlassFrame by default on macOS",
         ),
     ],
-    "chrome/browser/ui/views/frame/browser_widget.cc": [
-        Replacement(
-            old=(
-                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-            ),
-            new=(
-                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-                '#include "maho/browser/ui/theme/maho_space_theme_state.h"\n'
-            ),
-            description=(
-                "Maho: include space theme state so GetColorProviderKey can "
-                "force the active space light/dark scheme"
-            ),
-            guard="maho/browser/ui/theme/maho_space_theme_state.h",
-        ),
-        Replacement(
-            old=(
-                "  }();\n"
-                "\n"
-                "  // user_color.\n"
-            ),
-            new=(
-                "  }();\n"
-                "\n"
-                "  // Maho: force the active space light/dark scheme onto the\n"
-                "  // ColorProviderKey. Auto (or no active theme) leaves the\n"
-                "  // upstream value untouched. Incognito stays forced-dark.\n"
-                "  if (!IsIncognitoBrowser()) {\n"
-                "    if (std::optional<bool> maho_dark =\n"
-                "            MahoSpaceThemeState::GetForcedDarkMode()) {\n"
-                "      key.color_mode = *maho_dark\n"
-                "                           ? ui::ColorProviderKey::ColorMode::kDark\n"
-                "                           : ui::ColorProviderKey::ColorMode::kLight;\n"
-                "    }\n"
-                "  }\n"
-                "\n"
-                "  // user_color.\n"
-            ),
-            description=(
-                "Maho: force per-space light/dark color scheme in "
-                "BrowserWidget::GetColorProviderKey"
-            ),
-            guard="MahoSpaceThemeState::GetForcedDarkMode",
-        ),
-    ],
     "chrome/browser/ui/views/frame/multi_contents_view.h": [
         Replacement(
             old="  static constexpr int kSplitViewContentInset = 8;\n",
@@ -4494,6 +4793,48 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Maho: Style Little Arc window with transparent titlebar and full size content",
             guard="browser_view_->browser()->is_little_arc()",
         ),
+        Replacement(
+            old=(
+                "    // height reported here; report the 38dip Little Arc top bar\n"
+                "    // height so they center on its midline, not near the top edge.\n"
+                "    *override_titlebar_height = true;\n"
+                "    *titlebar_height = 38;\n"
+            ),
+            new=(
+                "    // height reported here; report the 46dip Little Arc top bar\n"
+                "    // height so they center on its midline, not near the top edge.\n"
+                "    *override_titlebar_height = true;\n"
+                "    *titlebar_height = 46;\n"
+            ),
+            description="Maho: Raise an existing Little Arc titlebar override to 46dip",
+            idempotent=True,
+            guard="*titlebar_height = 46;",
+        ),
+        Replacement(
+            old=(
+                "void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(\n"
+                "    bool* override_titlebar_height,\n"
+                "    float* titlebar_height) {\n"
+                "  if (browser_view_ && browser_view_->browser_widget() &&\n"
+            ),
+            new=(
+                "void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(\n"
+                "    bool* override_titlebar_height,\n"
+                "    float* titlebar_height) {\n"
+                "  if (browser_view_ && browser_view_->browser() &&\n"
+                "      browser_view_->browser()->is_little_arc()) {\n"
+                "    // Maho: macOS centers the traffic lights within the titlebar\n"
+                "    // height reported here; report the 46dip Little Arc top bar\n"
+                "    // height so they center on its midline, not near the top edge.\n"
+                "    *override_titlebar_height = true;\n"
+                "    *titlebar_height = 46;\n"
+                "    return;\n"
+                "  }\n"
+                "  if (browser_view_ && browser_view_->browser_widget() &&\n"
+            ),
+            description="Maho: Center traffic lights in Little Arc 46dip top bar",
+            guard="*titlebar_height = 46;",
+        ),
     ],
     "chrome/browser/ui/views/frame/browser_frame_view_mac.mm": [
         Replacement(
@@ -4519,6 +4860,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/browser_view.h": [
         Replacement(
+            old="class MahoCommandOverlayController;\n",
+            new=(
+                "class MahoCommandOverlayController;\n"
+                "class MahoContentGradientView;\n"
+            ),
+            description=(
+                "Forward-declare MahoContentGradientView for BrowserView's "
+                "zero-tab content background"
+            ),
+            guard="class MahoContentGradientView;",
+        ),
+        Replacement(
             old=(
                 "  // Maho: left sidebar host container.\n"
                 "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
@@ -4532,6 +4885,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Maho: Add maho_little_arc_top_bar_ to BrowserView",
             guard="maho_little_arc_top_bar_",
         ),
+        Replacement(
+            old="  raw_ptr<views::View> maho_little_arc_top_bar_ = nullptr;\n",
+            new=(
+                "  raw_ptr<views::View> maho_little_arc_top_bar_ = nullptr;\n"
+                "\n"
+                "  raw_ptr<maho::MahoContentGradientView>\n"
+                "      maho_content_gradient_view_ = nullptr;\n"
+            ),
+            description=(
+                "Store the lowest-z Maho content gradient child on BrowserView"
+            ),
+            guard="maho_content_gradient_view_ = nullptr;",
+        ),
     ],
     "chrome/browser/ui/views/frame/browser_view.cc": [
         Replacement(
@@ -4544,6 +4910,39 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: Include maho_little_arc_top_bar_view.h in browser_view.cc",
             guard="maho_little_arc_top_bar_view.h",
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h"\n'
+                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
+            ),
+            description="Maho: Include maho_content_gradient_view.h in browser_view.cc",
+            guard="maho_content_gradient_view.h",
+        ),
+        Replacement(
+            old=(
+                "  auto contents_container = std::make_unique<views::View>();\n"
+                "\n"
+                "  views::View* contents_view;\n"
+            ),
+            new=(
+                "  auto contents_container = std::make_unique<views::View>();\n"
+                "\n"
+                "  if (GetIsNormalType()) {\n"
+                "    maho_content_gradient_view_ = contents_container->AddChildView(\n"
+                "        std::make_unique<maho::MahoContentGradientView>());\n"
+                "    maho_content_gradient_view_->SetVisible(\n"
+                "        browser_->tab_strip_model()->count() == 0);\n"
+                "  }\n"
+                "\n"
+                "  views::View* contents_view;\n"
+            ),
+            description=(
+                "Create MahoContentGradientView as the first content-container "
+                "child and initialize it from the live tab count"
+            ),
+            guard="maho_content_gradient_view_ = contents_container->AddChildView(",
         ),
         Replacement(
             old=(
@@ -4564,6 +4963,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                "void BrowserView::OnTabStripModelChanged(\n"
+                "    TabStripModel* tab_strip_model,\n"
+                "    const TabStripModelChange& change,\n"
+                "    const TabStripSelectionChange& selection) {\n"
+            ),
+            new=(
+                "void BrowserView::OnTabStripModelChanged(\n"
+                "    TabStripModel* tab_strip_model,\n"
+                "    const TabStripModelChange& change,\n"
+                "    const TabStripSelectionChange& selection) {\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(\n"
+                "        tab_strip_model->count() == 0);\n"
+                "  }\n"
+                "\n"
+            ),
+            description=(
+                "Toggle the Maho content gradient whenever BrowserView observes "
+                "a live-tab count change"
+            ),
+            guard="tab_strip_model->count() == 0",
+        ),
+        Replacement(
+            old=(
+                "BrowserView::~BrowserView() {\n"
+                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
+                "  // other cleanups that destroy views referenced in the layout manager.\n"
+                "  SetLayoutManager(nullptr);\n"
+            ),
+            new=(
+                "BrowserView::~BrowserView() {\n"
+                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
+                "\n"
+                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
+                "  // other cleanups that destroy views referenced in the layout manager.\n"
+                "  SetLayoutManager(nullptr);\n"
+            ),
+            description=(
+                "Remove BrowserView's TabStripModel observation before gradient "
+                "and content children are destroyed"
+            ),
+            guard="browser_->tab_strip_model()->RemoveObserver(this);",
+        ),
+        Replacement(
+            old=(
+                "  window_scrim_view_ = nullptr;\n"
+                "  contents_container_ = nullptr;\n"
+            ),
+            new=(
+                "  window_scrim_view_ = nullptr;\n"
+                "  maho_content_gradient_view_ = nullptr;\n"
+                "  contents_container_ = nullptr;\n"
+            ),
+            description=(
+                "Clear BrowserView's raw Maho content gradient pointer before "
+                "removing the child hierarchy"
+            ),
+            guard="  maho_content_gradient_view_ = nullptr;\n  contents_container_ = nullptr;",
+        ),
+        Replacement(
+            old=(
                 "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
                 "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
                 "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
@@ -4576,6 +5036,47 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: Populate maho_little_arc_top_bar in layout_views",
             guard="layout_views.maho_little_arc_top_bar =",
+        ),
+        Replacement(
+            old=(
+                "  layout_views.maho_little_arc_top_bar = maho_little_arc_top_bar_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            new=(
+                "  layout_views.maho_little_arc_top_bar = maho_little_arc_top_bar_;\n"
+                "  layout_views.maho_content_gradient_view = maho_content_gradient_view_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            description="Maho: Populate maho_content_gradient_view in layout_views",
+            guard="layout_views.maho_content_gradient_view =",
+        ),
+        Replacement(
+            old=(
+                "  multi_contents_view_ =\n"
+                "      contents_container->AddChildView(std::move(multi_contents_view));\n"
+                "  contents_view = multi_contents_view_;\n"
+            ),
+            new=(
+                "  multi_contents_view_ =\n"
+                "      contents_container->AddChildView(std::move(multi_contents_view));\n"
+                "  contents_view = multi_contents_view_;\n"
+                "\n"
+                "  // Maho: raise the zero-tab content gradient above the opaque\n"
+                "  // MultiContentsView so the empty (cold-start) content area shows the\n"
+                "  // theme gradient instead of the gray empty-web-contents background.\n"
+                "  // The gradient is only SetVisible(true) while the tab strip is empty,\n"
+                "  // so once a real tab exists it is hidden and never occludes web content.\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    contents_container->ReorderChildView(\n"
+                "        maho_content_gradient_view_, contents_container->children().size());\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: reorder the zero-tab content gradient above the opaque "
+                "MultiContentsView so the empty content area paints the theme "
+                "gradient instead of Chromium's gray empty-web-contents background"
+            ),
+            guard="Maho: raise the zero-tab content gradient above the opaque",
         ),
     ],
     "chrome/browser/ui/views/frame/layout/browser_view_layout.h": [
@@ -4597,8 +5098,119 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Maho: Add maho_little_arc_top_bar to BrowserViewLayoutViews",
             guard="maho_little_arc_top_bar = nullptr;",
         ),
+        Replacement(
+            old="  raw_ptr<views::View> maho_little_arc_top_bar = nullptr;\n",
+            new=(
+                "  raw_ptr<views::View> maho_little_arc_top_bar = nullptr;\n"
+                "\n"
+                "  raw_ptr<views::View> maho_content_gradient_view = nullptr;\n"
+            ),
+            description="Maho: Add maho_content_gradient_view to BrowserViewLayoutViews",
+            guard="maho_content_gradient_view = nullptr;",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc": [
+        Replacement(
+            old=(
+                "  layout.AddChild(views().contents_container, contents_bounds);\n"
+                "\n"
+                "  if (views().maho_create_space_blank_view &&\n"
+            ),
+            new=(
+                "  layout.AddChild(views().contents_container, contents_bounds);\n"
+                "\n"
+                "  if (views().maho_content_gradient_view) {\n"
+                "    views().maho_content_gradient_view->SetBoundsRect(\n"
+                "        gfx::Rect(contents_bounds.size()));\n"
+                "  }\n"
+                "\n"
+                "  if (views().maho_create_space_blank_view &&\n"
+            ),
+            description=(
+                "Size the nested Maho content gradient to the Arc content rect "
+                "during BrowserView layout"
+            ),
+            guard="views().maho_content_gradient_view->SetBoundsRect(",
+        ),
+    ],
+    # ── contents_layout_manager.cc: robustly size the zero-tab content gradient ──
+    # ContentsLayoutManager (the layout manager that owns the top-level
+    # contents_container's children) only emits child_layouts for the contents
+    # view, lens overlay, and AI-highlight view. LayoutManagerBase::ApplyLayout
+    # only sizes children present in child_layouts, so the injected
+    # MahoContentGradientView keeps its default 0x0 bounds and its OnPaint
+    # early-returns on GetContentsBounds().IsEmpty() -> the opaque gray empty
+    # MultiContentsView shows through. Size any extra child (the gradient) to
+    # the full contents bounds here, in the correct layout scope, so it paints
+    # every relayout. contents_container is the ONLY view using
+    # ContentsLayoutManager (split-view ContentsContainerView uses
+    # DelegatingLayoutManager), so the gradient is the sole extra child touched.
+    "chrome/browser/ui/views/frame/contents_layout_manager.cc": [
+        Replacement(
+            old=(
+                "  // The AI highlight view bounds are the same as the contents view.\n"
+                "  CHECK(context_highlight_view_);\n"
+                "  layouts.child_layouts.emplace_back(context_highlight_view_.get(),\n"
+                "                                     context_highlight_view_->GetVisible(),\n"
+                "                                     contents_rect, optional_size_bound);\n"
+                "\n"
+                "  layouts.host_size = gfx::Size(width, height);\n"
+            ),
+            new=(
+                "  // The AI highlight view bounds are the same as the contents view.\n"
+                "  CHECK(context_highlight_view_);\n"
+                "  layouts.child_layouts.emplace_back(context_highlight_view_.get(),\n"
+                "                                     context_highlight_view_->GetVisible(),\n"
+                "                                     contents_rect, optional_size_bound);\n"
+                "\n"
+                "  // Maho: size any extra content-area child (the zero-tab theme gradient\n"
+                "  // view MahoContentGradientView, injected by BrowserView into\n"
+                "  // contents_container) to fill the full contents bounds so it paints the\n"
+                "  // theme gradient over the opaque gray empty MultiContentsView. The\n"
+                "  // child's own visibility is honored, so once a real tab exists (the\n"
+                "  // gradient is SetVisible(false)) it is laid out hidden and never\n"
+                "  // occludes live web content. contents_container is the only view that\n"
+                "  // uses ContentsLayoutManager, so the gradient is the sole extra child\n"
+                "  // this loop ever touches.\n"
+                "  for (views::View* maho_extra_child : host_view()->children()) {\n"
+                "    if (maho_extra_child == contents_view_ ||\n"
+                "        maho_extra_child == lens_overlay_view_ ||\n"
+                "        maho_extra_child == context_highlight_view_) {\n"
+                "      continue;\n"
+                "    }\n"
+                "    layouts.child_layouts.emplace_back(maho_extra_child,\n"
+                "                                       maho_extra_child->GetVisible(),\n"
+                "                                       contents_rect, optional_size_bound);\n"
+                "  }\n"
+                "\n"
+                "  layouts.host_size = gfx::Size(width, height);\n"
+            ),
+            description=(
+                "Maho: size the injected zero-tab content gradient child to the "
+                "full contents bounds inside ContentsLayoutManager (the correct "
+                "layout scope), so the theme gradient paints over the gray empty "
+                "MultiContentsView on cold start instead of keeping default 0x0 "
+                "bounds. Honors the child's visibility so it is hidden when a real "
+                "tab exists."
+            ),
+            guard="for (views::View* maho_extra_child : host_view()->children()) {",
+        ),
     ],
     "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc": [
+        Replacement(
+            old="    return gfx::Size(400, 38 + 1);\n",
+            new="    return gfx::Size(400, 46 + 1);\n",
+            description="Maho: Raise an existing Little Arc minimum height to 46dip",
+            idempotent=True,
+            guard="return gfx::Size(400, 46 + 1);",
+        ),
+        Replacement(
+            old="    top_bar_bounds.set_height(38);\n",
+            new="    top_bar_bounds.set_height(46);\n",
+            description="Maho: Raise an existing Little Arc layout height to 46dip",
+            idempotent=True,
+            guard="top_bar_bounds.set_height(46);",
+        ),
         Replacement(
             old=(
                 '#include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"\n'
@@ -4622,7 +5234,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\n"
                 "  if (views().maho_little_arc_top_bar && views().maho_little_arc_top_bar->GetVisible()) {\n"
                 "    gfx::Rect top_bar_bounds = params.visual_client_area;\n"
-                "    top_bar_bounds.set_height(38);\n"
+                "    top_bar_bounds.set_height(46);\n"
                 "    layout.AddChild(views().maho_little_arc_top_bar, top_bar_bounds);\n"
                 "    params.SetTop(top_bar_bounds.bottom());\n"
                 "  }\n"
@@ -4670,7 +5282,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 "  if (browser()->is_little_arc()) {\n"
-                "    return gfx::Size(400, 38 + 1);\n"
+                "    return gfx::Size(400, 46 + 1);\n"
                 "  }\n"
                 "\n"
                 "  constexpr gfx::Size kMinContentsSize(1, 1);\n"

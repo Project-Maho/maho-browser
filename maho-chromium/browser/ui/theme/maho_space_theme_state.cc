@@ -16,6 +16,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/native_theme/native_theme.h"
 
 std::optional<MahoSpaceThemeState::ThemeData> MahoSpaceThemeState::active_theme_;
 std::optional<MahoSpaceThemeState::ThemeData> MahoSpaceThemeState::preview_override_;
@@ -300,19 +301,24 @@ SkColor ApplyAppearanceAdjustments(const MahoSpaceThemeState::SpaceHSV& hsv,
 
 }  // namespace
 
-void MahoSpaceThemeState::UpdateFromCore() {
+bool MahoSpaceThemeState::UpdateFromCore() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
+  auto previous = active_theme_;
   active_theme_.reset();
+
+  auto get_return_val = [&]() {
+    return active_theme_ != previous;
+  };
 
   MahoCore* core = maho::GetCore();
   if (!core) {
-    return;
+    return get_return_val();
   }
 
   char* active_id_cstr = maho_core_get_active_space_id(core);
   if (!active_id_cstr) {
-    return;
+    return get_return_val();
   }
   std::optional<base::Value> parsed_active_id =
       base::JSONReader::Read(active_id_cstr, base::JSON_PARSE_RFC);
@@ -323,7 +329,7 @@ void MahoSpaceThemeState::UpdateFromCore() {
 
   char* json_str = maho_core_get_space_view_models(core);
   if (!json_str) {
-    return;
+    return get_return_val();
   }
   std::string json(json_str);
   maho_string_free(json_str);
@@ -331,7 +337,7 @@ void MahoSpaceThemeState::UpdateFromCore() {
   std::optional<base::Value> parsed =
       base::JSONReader::Read(json, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list()) {
-    return;
+    return get_return_val();
   }
 
   for (const auto& item : parsed->GetList()) {
@@ -367,8 +373,10 @@ void MahoSpaceThemeState::UpdateFromCore() {
                << " opacity=" << theme_data->opacity
                << " texture=" << theme_data->texture;
     }
-    return;
+    break;
   }
+
+  return get_return_val();
 }
 
 std::optional<MahoSpaceThemeState::ThemeData>
@@ -461,4 +469,15 @@ std::optional<bool> MahoSpaceThemeState::GetForcedDarkMode() {
       return std::nullopt;
   }
   return std::nullopt;
+}
+
+bool MahoSpaceThemeState::ResolveSidebarDarkMode(bool os_dark) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return GetForcedDarkMode().value_or(os_dark);
+}
+
+bool MahoSpaceThemeState::IsOsDarkMode() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
+         ui::NativeTheme::PreferredColorScheme::kDark;
 }

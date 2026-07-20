@@ -77,7 +77,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     key: 'appearance.theme',
     metadata: {
       label: 'Browser theme',
-      description: 'Choose whether the browser chrome follows the system appearance or stays light or dark.',
+      description: 'Choose whether the browsing environment — the content area and web pages — follows the system appearance or stays light or dark. The sidebar follows its Space theme separately.',
       control: 'select',
       options: THEME_OPTIONS,
       segmented: true,
@@ -92,6 +92,20 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       min: 180,
       max: 400,
       step: 1,
+      unit: 'px',
+    },
+  },
+  {
+    key: 'appearance.density',
+    metadata: {
+      label: 'Interface density',
+      description: 'Adjust the padding and layout spacing of browser controls.',
+      control: 'select',
+      options: [
+        {value: 'comfortable', label: 'Comfortable'},
+        {value: 'compact', label: 'Compact'},
+      ],
+      segmented: true,
     },
   },
   {
