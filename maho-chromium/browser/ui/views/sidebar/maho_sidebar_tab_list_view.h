@@ -299,9 +299,29 @@ class MahoSidebarTabListView : public views::View,
   bool TrySuspendFastPath(const std::string& suspended_tab_id,
                           const std::string& new_active_tab_id);
 
+  // Inverse of TrySuspendFastPath for waking a suspended tab. Uses
+  // |waking_tab_id_| (set by WakeSuspendedTab before Navigate) to flip that
+  // row is_suspended=false (X->-) + last_model_ node in place, move the
+  // highlight to it, and arm the one-shot suppress fingerprint. Decoupled from
+  // the new WebContents' stable-id timing (which is still the throwaway UUID at
+  // the synchronous kInserted moment). Returns false when it isn't a tracked
+  // wake of a currently-suspended row, so the caller falls through.
+  bool TryWakeFastPath();
+
+  // Corrects a row rendered X purely because its live WebContents had not yet
+  // attached at the last rebuild (CreateTabRowView derives is_suspended from
+  // live_index). The strip insertion proves the tab is live, so re-sync the
+  // row to core truth: flip X->minus iff last_model_ says it is not suspended.
+  // No last_model_/fingerprint mutation — the core node is already not
+  // suspended, so the follow-up push fp-dedupes with no rebuild. Returns true
+  // when a row was flipped.
+  bool ReconcileInsertedRowLiveness(content::WebContents* inserted_contents);
+
   void SetFavoritesSyncCallback(base::RepeatingClosure callback);
 
   bool HasTabInLastModel(const std::string& tab_id) const;
+
+  bool CoreSuspendedForTab(const std::string& tab_id) const;
 
   int rebuild_rows_count_for_testing() const {
     return rebuild_rows_count_for_testing_;
@@ -513,6 +533,7 @@ class MahoSidebarTabListView : public views::View,
 
   std::string last_model_fingerprint_;
   std::string last_active_tab_id_;
+  std::string waking_tab_id_;
   base::RepeatingClosure favorites_sync_callback_;
 
   int rebuild_rows_count_for_testing_ = 0;

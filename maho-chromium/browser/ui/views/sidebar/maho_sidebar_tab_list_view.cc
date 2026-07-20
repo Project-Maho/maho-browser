@@ -4130,6 +4130,31 @@ bool MahoSidebarTabListView::HasTabInLastModel(
   return search(last_model_.pinned_tree) || search(last_model_.normal_tree);
 }
 
+bool MahoSidebarTabListView::CoreSuspendedForTab(
+    const std::string& tab_id) const {
+  if (!has_last_model_ || tab_id.empty()) {
+    return false;
+  }
+  bool found_suspended = false;
+  std::function<bool(const std::vector<SidebarTreeNode>&)> search;
+  search = [&](const std::vector<SidebarTreeNode>& nodes) -> bool {
+    for (const auto& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && n.tab_id == tab_id) {
+        found_suspended = n.is_suspended;
+        return true;
+      }
+      if (!n.children.empty() && search(n.children)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!search(last_model_.pinned_tree)) {
+    search(last_model_.normal_tree);
+  }
+  return found_suspended;
+}
+
 void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
     const std::string& new_active_tab_id) {
   if (last_active_tab_id_ == new_active_tab_id) {
@@ -4339,6 +4364,88 @@ bool MahoSidebarTabListView::TrySuspendFastPath(
   // (is_suspended is in the fingerprint, active tab is not), so arm one-shot
   // suppression to swallow it instead of a full RebuildRows.
   suppress_push_fingerprint_ = ComputeModelFingerprint(last_model_);
+  return true;
+}
+
+bool MahoSidebarTabListView::TryWakeFastPath() {
+  if (!has_last_model_ || waking_tab_id_.empty()) {
+    return false;
+  }
+  const std::string tab_id = waking_tab_id_;
+  auto row_it = tab_id_to_row_view_.find(tab_id);
+  if (row_it == tab_id_to_row_view_.end() || !row_it->second) {
+    return false;
+  }
+  // Only handle a genuine suspended->live transition; flip is_suspended in
+  // last_model_ so the node matches the fingerprint we arm below.
+  bool node_found = false;
+  bool was_suspended = false;
+  std::function<void(std::vector<SidebarTreeNode>&)> flip;
+  flip = [&](std::vector<SidebarTreeNode>& nodes) {
+    for (auto& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && n.tab_id == tab_id) {
+        was_suspended = n.is_suspended;
+        n.is_suspended = false;
+        node_found = true;
+      }
+      if (!n.children.empty()) {
+        flip(n.children);
+      }
+    }
+  };
+  flip(last_model_.pinned_tree);
+  flip(last_model_.normal_tree);
+  if (!node_found || !was_suspended) {
+    return false;
+  }
+  row_it->second->SetSuspended(false);
+  UpdateActiveTabHighlightOnly(tab_id);
+  suppress_push_fingerprint_ = ComputeModelFingerprint(last_model_);
+  return true;
+}
+
+bool MahoSidebarTabListView::ReconcileInsertedRowLiveness(
+    content::WebContents* inserted_contents) {
+  if (!has_last_model_ || !inserted_contents) {
+    return false;
+  }
+  const std::string tab_id = FindCoreTabIdByWebContents(inserted_contents);
+  if (tab_id.empty()) {
+    return false;
+  }
+  auto it = tab_id_to_row_view_.find(tab_id);
+  if (it == tab_id_to_row_view_.end() || !it->second) {
+    return false;
+  }
+  SidebarTabRowView* row = it->second;
+  if (!row->is_suspended()) {
+    return false;
+  }
+  // Only un-X a row whose core model says it is live; a genuinely suspended
+  // tab (core is_suspended=true) must stay X.
+  bool node_found = false;
+  bool core_suspended = false;
+  std::function<void(const std::vector<SidebarTreeNode>&)> walk;
+  walk = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const auto& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && n.tab_id == tab_id) {
+        core_suspended = n.is_suspended;
+        node_found = true;
+        return;
+      }
+      if (!n.children.empty()) {
+        walk(n.children);
+      }
+    }
+  };
+  walk(last_model_.pinned_tree);
+  if (!node_found) {
+    walk(last_model_.normal_tree);
+  }
+  if (!node_found || core_suspended) {
+    return false;
+  }
+  row->SetSuspended(false);
   return true;
 }
 
@@ -5170,7 +5277,12 @@ std::unique_ptr<SidebarTabRowView> MahoSidebarTabListView::CreateTabRowView(
   const int live_index = node.tab_strip_index >= 0
                              ? node.tab_strip_index
                              : ResolveTabStripIndexForTabId(node.tab_id);
-  const bool is_suspended = (live_index < 0) || node.is_suspended;
+  // The close-affordance icon reflects CORE suspend state only. A lazily
+  // restored pinned tab is live in core (is_suspended=false) but has no live
+  // WebContents yet (live_index<0); it must still render "−" (unload), not "X"
+  // (delete). Deriving this from live_index<0 caused restored live pinned tabs
+  // to render X and — worse — CloseTabById to delete them on first click.
+  const bool is_suspended = node.is_suspended;
   content::WebContents* contents = nullptr;
   tabs::TabInterface* tab_iface = nullptr;
   if (browser && browser->tab_strip_model() && live_index >= 0) {
@@ -6042,7 +6154,9 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
     // below stays as a fallback for paths where no announcement happened
     // (e.g. space bridge not yet initialized).
     maho::ScopedMahoTabWakeId wake_scope(tab_id);
+    waking_tab_id_ = tab_id;
     Navigate(&params);
+    waking_tab_id_.clear();
   }
   const double navigate_ms = nav_t.Elapsed().InMillisecondsF();
   TRACE_EVENT_INSTANT1("browser", "WakeSuspendedTab.NavigateEnd",
@@ -6131,7 +6245,15 @@ void MahoSidebarTabListView::CloseTabById(const std::string& tab_id) {
       CloseTab(index);
     }
   } else {
-    // If it's a suspended tab (index < 0), close it directly in rust core
+    // Two-stage close for a close-protected (pinned/favorite) tab with no live
+    // WebContents (index < 0): a core-LIVE tab suspends (stage 1); only a
+    // core-SUSPENDED tab is really deleted (stage 2). Keying stage 2 on core
+    // suspend state (not index) prevents destroying a lazily-restored live tab.
+    // Absent from last_model_ defaults to the non-destructive suspend path.
+    if (maho::IsCoreCloseProtectedTab(tab_id) && !CoreSuspendedForTab(tab_id)) {
+      maho::DispatchShellEvent("suspend_tab", {{"tab_id", tab_id}});
+      return;
+    }
     auto* bridge = MahoSpaceProfileBridge::GetInstance();
     std::string active_space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
     if (!active_space_id.empty()) {
