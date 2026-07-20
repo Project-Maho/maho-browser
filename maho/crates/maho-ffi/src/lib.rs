@@ -3380,10 +3380,13 @@ pub unsafe extern "C" fn maho_core_start_download(
                 Some(s) => s,
                 None => return ptr::null_mut(),
             };
-            let total_bytes = parsed["total_bytes"].as_u64().unwrap_or(0);
+            let total_bytes = parsed["total_bytes"].as_u64()
+                .or_else(|| parsed["total_bytes"].as_f64().map(|f| f as u64))
+                .unwrap_or(0);
             let file_path = parsed["file_path"].as_str();
             let mime_type = parsed["mime_type"].as_str();
-            let download_id = core.start_download(filename, url, total_bytes, file_path, mime_type);
+            let chromium_guid = parsed["chromium_guid"].as_str();
+            let download_id = core.start_download(filename, url, total_bytes, file_path, mime_type, chromium_guid);
             to_json_cstring(&download_id)
         },
         ptr::null_mut()
@@ -3420,6 +3423,51 @@ pub unsafe extern "C" fn maho_core_update_download_progress(
 }
 
 /// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `download_id` and `json` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_update_download_metadata(
+    ptr: *mut MahoCore,
+    download_id: *const c_char,
+    json: *const c_char,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null() || download_id.is_null() || json.is_null() {
+                return;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent a data race on MahoCore.
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *ptr;
+            let download_id_str = match CStr::from_ptr(download_id).to_str() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let json_str = match CStr::from_ptr(json).to_str() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            let total_bytes = parsed["total_bytes"].as_u64()
+                .or_else(|| parsed["total_bytes"].as_f64().map(|f| f as u64));
+            core.update_download_metadata(
+                download_id_str,
+                parsed["filename"].as_str(),
+                parsed["file_path"].as_str(),
+                parsed["mime_type"].as_str(),
+                total_bytes,
+            );
+        },
+        ()
+    )
+}
+
+/// # Safety
 /// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `download_id` must be a
 /// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
@@ -3443,6 +3491,38 @@ pub unsafe extern "C" fn maho_core_complete_download(
             };
             let updates = core.complete_download(download_id_str);
             to_json_cstring(&updates)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `guid` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free` if not null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_find_download_by_chromium_guid(
+    ptr: *mut MahoCore,
+    guid: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || guid.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let guid_str = match CStr::from_ptr(guid).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            if let Some(id_str) = core.find_download_by_chromium_guid(guid_str) {
+                to_json_cstring(&id_str)
+            } else {
+                ptr::null_mut()
+            }
         },
         ptr::null_mut()
     )
@@ -5092,29 +5172,6 @@ pub unsafe extern "C" fn maho_core_set_density(ptr: *mut MahoCore, density: *con
 }
 
 /// # Safety
-/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `color_json` must be a
-/// valid NUL-terminated C string. No-op on null input or if import is active.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_set_accent_color(ptr: *mut MahoCore, color_json: *const c_char) {
-    ffi_safe!(
-        {
-            if ptr.is_null() || color_json.is_null() {
-                return;
-            }
-            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-            if import_gate::is_active() {
-                return;
-            }
-            let core = &mut *ptr;
-            if let Ok(s) = CStr::from_ptr(color_json).to_str() {
-                core.set_accent_color(s);
-            }
-        },
-        ()
-    )
-}
-
-/// # Safety
 /// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `css` may be null
 /// (treated as clearing the CSS) or a valid NUL-terminated C string. No-op if import is active.
 #[no_mangle]
@@ -5673,6 +5730,191 @@ pub unsafe extern "C" fn maho_core_toggle_atc_rule(
 
 /// # Safety
 /// `core` must be a valid pointer returned by `maho_core_new`.
+/// `rule_json` must be a valid null-terminated C string containing TrafficRule JSON.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_traffic_rule(
+    core: *mut MahoCore,
+    rule_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || rule_json.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *core;
+            let json_str = match CStr::from_ptr(rule_json).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let rule: maho_types::air_traffic::TrafficRule = match serde_json::from_str(json_str) {
+                Ok(r) => r,
+                Err(_) => return ptr::null_mut(),
+            };
+            let created = core.create_traffic_rule_persisted(rule);
+            CString::new(created.id)
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `rule_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_remove_traffic_rule_persisted(
+    core: *mut MahoCore,
+    rule_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || rule_id.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *core;
+            let rule_id_str = match CStr::from_ptr(rule_id).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let result = core.delete_traffic_rule_persisted(rule_id_str);
+            to_json_cstring(&result)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `rule_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_toggle_traffic_rule_persisted(
+    core: *mut MahoCore,
+    rule_id: *const c_char,
+    enabled: bool,
+) {
+    ffi_safe!(
+        {
+            if core.is_null() || rule_id.is_null() {
+                return;
+            }
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *core;
+            let rule_id_str = match CStr::from_ptr(rule_id).to_str() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            core.toggle_traffic_rule_persisted(rule_id_str, enabled);
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `url` must be a valid null-terminated C string.
+/// `space_rules_json` must be a valid null-terminated C string containing JSON space rules or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_decide_link_destination(
+    core: *mut MahoCore,
+    url: *const c_char,
+    is_external: bool,
+    space_rules_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || url.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*core;
+            let url_str = match CStr::from_ptr(url).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+
+            #[derive(serde::Deserialize)]
+            struct SpaceRulesInput {
+                space_id: maho_types::identifiers::SpaceId,
+                rules: Vec<maho_types::space::ATCRule>,
+            }
+
+            let space_rules = if space_rules_json.is_null() {
+                core.space_manager().get_all_atc_rules()
+            } else {
+                let space_rules_str = match CStr::from_ptr(space_rules_json).to_str() {
+                    Ok(s) => s,
+                    Err(_) => return ptr::null_mut(),
+                };
+                let parsed: Vec<SpaceRulesInput> = match serde_json::from_str(space_rules_str) {
+                    Ok(p) => p,
+                    Err(_) => return ptr::null_mut(),
+                };
+                parsed.into_iter().map(|item| (item.space_id, item.rules)).collect()
+            };
+
+            let destination = core.decide_link_destination(url_str, is_external, &space_rules);
+            to_json_cstring(&destination)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_open_external_links_in_little_arc(
+    core: *mut MahoCore,
+    enabled: bool,
+) {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return;
+            }
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *core;
+            core.set_open_external_links_in_little_arc_persisted(enabled);
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_open_external_links_in_little_arc(
+    core: *mut MahoCore,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return false;
+            }
+            if import_gate::is_active() {
+                return false;
+            }
+            let core = &*core;
+            core.get_open_external_links_in_little_arc()
+        },
+        false
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
 /// `query` must be a valid null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_search_history_paginated(
@@ -6011,7 +6253,10 @@ pub unsafe extern "C" fn maho_core_create_profile(
                 Ok(s) => s.to_string(),
                 Err(_) => return ptr::null_mut(),
             };
-            let profile = core.create_profile_persisted(name_str);
+            let profile = match core.create_profile_persisted(name_str) {
+                Ok(p) => p,
+                Err(_) => return ptr::null_mut(),
+            };
             to_json_cstring(&profile)
         },
         ptr::null_mut()
@@ -6021,29 +6266,35 @@ pub unsafe extern "C" fn maho_core_create_profile(
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `profile_id` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_delete_profile(
     ptr: *mut MahoCore,
     profile_id: *const c_char,
-) -> bool {
+) -> *mut c_char {
     ffi_safe!(
         {
             if ptr.is_null() || profile_id.is_null() {
-                return false;
+                return ptr::null_mut();
             }
             // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
             if import_gate::is_active() {
-                return false;
+                return ptr::null_mut();
             }
             let core = &mut *ptr;
             let id_str = match CStr::from_ptr(profile_id).to_str() {
                 Ok(s) => s,
-                Err(_) => return false,
+                Err(_) => return ptr::null_mut(),
             };
             let id = maho_types::identifiers::ProfileId::new(id_str);
-            core.delete_profile(&id)
+            let success = core.delete_profile(&id);
+            let result = serde_json::json!({
+                "success": success,
+                "profile_id": if success { Some(id_str) } else { None }
+            });
+            to_json_cstring(&result)
         },
-        false
+        ptr::null_mut()
     )
 }
 
@@ -8927,6 +9178,23 @@ pub unsafe extern "C" fn maho_agent_send_message(
     session: *mut MahoAgentSession,
     message: *const c_char,
     on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_thinking: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char)>,
+    on_tool_call: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            id: *const c_char,
+            name: *const c_char,
+            args: *const c_char,
+        ),
+    >,
+    on_tool_result: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            id: *const c_char,
+            name: *const c_char,
+            result: *const c_char,
+        ),
+    >,
     on_complete: Option<
         unsafe extern "C" fn(
             user_data: *mut std::ffi::c_void,
@@ -8978,6 +9246,57 @@ pub unsafe extern "C" fn maho_agent_send_message(
                 callback
             });
 
+            let on_event_cb = if on_tool_call.is_some() || on_tool_result.is_some() || on_thinking.is_some() {
+                let on_tool_call_sendable = SendableCallback(on_tool_call);
+                let on_tool_result_sendable = SendableCallback(on_tool_result);
+                let on_thinking_sendable = SendableCallback(on_thinking);
+                let user_data_val = SendableUserData(user_data as usize);
+                let callback = move |event: maho_agent::AgentStreamEvent| {
+                    let udata = user_data_val.0 as *mut std::ffi::c_void;
+                    match event {
+                        maho_agent::AgentStreamEvent::Thinking(thinking) => {
+                            if let Some(cb) = on_thinking_sendable.0 {
+                                if let Ok(thinking_c) = CString::new(thinking) {
+                                    unsafe {
+                                        cb(udata, thinking_c.as_ptr());
+                                    }
+                                }
+                            }
+                        }
+                        maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
+                            if let Some(cb) = on_tool_call_sendable.0 {
+                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) = (
+                                    CString::new(id),
+                                    CString::new(name),
+                                    CString::new(args),
+                                ) {
+                                    unsafe {
+                                        cb(udata, id_c.as_ptr(), name_c.as_ptr(), args_c.as_ptr());
+                                    }
+                                }
+                            }
+                        }
+                        maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
+                            if let Some(cb) = on_tool_result_sendable.0 {
+                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) = (
+                                    CString::new(id),
+                                    CString::new(name),
+                                    CString::new(result),
+                                ) {
+                                    unsafe {
+                                        cb(udata, id_c.as_ptr(), name_c.as_ptr(), result_c.as_ptr());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                };
+                Some(Arc::new(callback) as Arc<dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static>)
+            } else {
+                None
+            };
+
             let on_complete = SendableCallback(on_complete);
             let on_error = SendableCallback(on_error);
             let user_data_val = SendableUserData(user_data as usize);
@@ -8987,7 +9306,7 @@ pub unsafe extern "C" fn maho_agent_send_message(
                     maho_types::chat::ChatContent::text(msg_str),
                 );
                 match runtime
-                    .run_turn(&session_id, user_chat_msg, on_token_cb)
+                    .run_turn(&session_id, user_chat_msg, on_token_cb, on_event_cb)
                     .await
                 {
                     Ok(response) => {
@@ -9041,6 +9360,7 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
     session: *mut MahoAgentSession,
     message: *const c_char,
     on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_thinking: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char)>,
     on_complete: Option<
         unsafe extern "C" fn(
             user_data: *mut std::ffi::c_void,
@@ -9082,6 +9402,29 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
                 callback
             });
 
+            let on_thinking_sendable = SendableCallback(on_thinking);
+            let on_event_cb = if on_thinking.is_some() {
+                let user_data_val = SendableUserData(user_data as usize);
+                let callback = move |event: maho_agent::AgentStreamEvent| {
+                    let udata = user_data_val.0 as *mut std::ffi::c_void;
+                    match event {
+                        maho_agent::AgentStreamEvent::Thinking(thinking) => {
+                            if let Some(cb) = on_thinking_sendable.0 {
+                                if let Ok(thinking_c) = CString::new(thinking) {
+                                    unsafe {
+                                        cb(udata, thinking_c.as_ptr());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                };
+                Some(Arc::new(callback) as Arc<dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static>)
+            } else {
+                None
+            };
+
             let on_complete = SendableCallback(on_complete);
             let on_error = SendableCallback(on_error);
             let user_data_val = SendableUserData(user_data as usize);
@@ -9091,7 +9434,7 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
                     maho_types::chat::ChatContent::text(msg_str),
                 );
                 match runtime
-                    .run_turn_simple(&session_id, user_chat_msg, on_token_cb)
+                    .run_turn_simple(&session_id, user_chat_msg, on_token_cb, on_event_cb)
                     .await
                 {
                     Ok(response) => {
@@ -11019,6 +11362,7 @@ mod tests {
         // Run on a freshly-spawned OS thread that is guaranteed to have NO
         // ambient tokio runtime, mirroring the Chromium browser-thread call site.
         let handle = std::thread::spawn(|| {
+            let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
             // Prove the precondition: there is genuinely no ambient runtime here.
             assert!(
                 tokio::runtime::Handle::try_current().is_err(),
@@ -11118,6 +11462,7 @@ mod tests {
     /// against a real (temp) sqlite-backed core.
     #[test]
     fn custom_routine_ffi_create_list_delete_roundtrip() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
         use maho_core::maho_core::MahoCore;
         use std::ffi::{CStr, CString};
 

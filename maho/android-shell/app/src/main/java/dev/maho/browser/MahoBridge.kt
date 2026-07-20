@@ -1,6 +1,7 @@
 package dev.maho.browser
 
 import dev.maho.browser.support.MahoJson
+import org.json.JSONObject
 
 object MahoBridge {
 
@@ -120,12 +121,6 @@ object MahoBridge {
         val ptr = corePtr
         if (ptr == 0L) return
         nativeSetDensity(ptr, density)
-    }
-
-    fun setAccentColor(colorJson: String) {
-        val ptr = corePtr
-        if (ptr == 0L) return
-        nativeSetAccentColor(ptr, colorJson)
     }
 
     fun setCustomChromeCss(css: String) {
@@ -873,6 +868,13 @@ object MahoBridge {
     }
 
     private const val BYOK_PREFS = "maho_byok_keys"
+    private const val DB_KEYS_PREFS = "maho_db_keys"
+    private const val SQLCIPHER_KEY_ENTRY = "sqlcipher_key"
+    private const val AI_SETTINGS_PREFS = "maho_ai_settings"
+    private const val AI_PROVIDER_KEY = "provider"
+    private const val AI_BASE_URL_KEY = "base_url"
+    private const val AI_API_KEY = "api_key"
+    private const val AI_MODEL_KEY = "model"
 
     private object SecureStorageHelper {
         private const val KEY_PROVIDER = "AndroidKeyStore"
@@ -969,6 +971,82 @@ object MahoBridge {
         return true
     }
 
+    fun getAiSettings(): String {
+        val context = appContext
+        val prefs = context?.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+        return JSONObject()
+            .put("provider", prefs?.getString(AI_PROVIDER_KEY, "").orEmpty())
+            .put("baseUrl", prefs?.getString(AI_BASE_URL_KEY, "").orEmpty())
+            .put("model", prefs?.getString(AI_MODEL_KEY, "").orEmpty())
+            .put("hasApiKey", getCustomAiApiKey()?.isNotEmpty() == true)
+            .put("hasByokOpenai", byokGetKey("openai")?.isNotEmpty() == true)
+            .put("hasByokAnthropic", byokGetKey("anthropic")?.isNotEmpty() == true)
+            .toString()
+    }
+
+    fun setAiProvider(provider: String): Boolean = putAiSetting(AI_PROVIDER_KEY, provider)
+
+    fun setAiBaseUrl(url: String): Boolean = putAiSetting(AI_BASE_URL_KEY, url)
+
+    fun setAiApiKey(key: String): Boolean {
+        val context = appContext ?: return false
+        val prefs = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        if (key.isEmpty()) {
+            editor.remove(AI_API_KEY)
+        } else {
+            editor.putString(AI_API_KEY, SecureStorageHelper.encrypt(key))
+        }
+        return editor.commit()
+    }
+
+    fun setAiModel(model: String): Boolean = putAiSetting(AI_MODEL_KEY, model)
+
+    private fun putAiSetting(name: String, value: String): Boolean {
+        val context = appContext ?: return false
+        return context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(name, value)
+            .commit()
+    }
+
+    private fun getCustomAiApiKey(): String? {
+        val context = appContext ?: return null
+        val encrypted = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+            .getString(AI_API_KEY, null) ?: return null
+        return SecureStorageHelper.decrypt(encrypted)
+    }
+
+    // --- SQLCipher key provisioning ---
+
+    private fun getOrCreateSqlcipherKeyHex(): String? {
+        val context = appContext ?: return null
+        val prefs = context.getSharedPreferences(DB_KEYS_PREFS, android.content.Context.MODE_PRIVATE)
+        val stored = prefs.getString(SQLCIPHER_KEY_ENTRY, null)
+        if (stored != null) {
+            val dec = SecureStorageHelper.decrypt(stored)
+            if (dec != null) {
+                return dec
+            }
+            // Blob exists but Keystore lost the wrapping key — refuse to rotate over a
+            // possibly-encrypted DB; caller must surface the error to the user.
+            android.util.Log.e("MahoBridge", "SQLCipher key blob present but decryption failed; refusing to regenerate to avoid bricking an encrypted DB")
+            return null
+        }
+        // No prior blob — generate a fresh 32-byte (256-bit) key.
+        val bytes = ByteArray(32)
+        java.security.SecureRandom().nextBytes(bytes)
+        val hex = bytes.joinToString("") { "%02x".format(it) }
+        val enc = SecureStorageHelper.encrypt(hex)
+        prefs.edit().putString(SQLCIPHER_KEY_ENTRY, enc).commit()
+        return hex
+    }
+
+    fun provisionSqlcipherKey(): Boolean {
+        val hex = getOrCreateSqlcipherKeyHex() ?: return false
+        return nativeSetSqlcipherKey(hex)
+    }
+
     // --- JVM callback bridges for JNI ---
     @JvmStatic
     fun requestAgentPermission(toolName: String, arguments: String): Int {
@@ -983,7 +1061,29 @@ object MahoBridge {
 
     @JvmStatic
     fun getAgentSecureStorage(provider: String): String? {
-        return byokGetKey(provider)
+        val context = appContext ?: return null
+        val prefs = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+        val storedProvider = prefs.getString(AI_PROVIDER_KEY, "").orEmpty()
+        val customKey = getCustomAiApiKey()
+        if (!customKey.isNullOrEmpty() && (storedProvider == provider || storedProvider == "$provider-compatible")) {
+            return JSONObject()
+                .put("key", customKey)
+                .put("base_url", prefs.getString(AI_BASE_URL_KEY, "").orEmpty().takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+                .put("model", prefs.getString(AI_MODEL_KEY, "").orEmpty().takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+                .toString()
+        }
+
+        val byokKey = when (provider) {
+            "openai" -> byokGetKey("openai")
+            "anthropic" -> byokGetKey("anthropic")
+            else -> null
+        }?.takeIf { it.isNotEmpty() } ?: return null
+
+        return JSONObject()
+            .put("key", byokKey)
+            .put("base_url", JSONObject.NULL)
+            .put("model", JSONObject.NULL)
+            .toString()
     }
 
     // --- Agent Session Methods ---
@@ -1106,7 +1206,6 @@ object MahoBridge {
     private external fun nativeGetSiteSearchEntries(ptr: Long): String?
     private external fun nativeSetSiteSearchEntries(ptr: Long, json: String)
     private external fun nativeSetDensity(ptr: Long, density: String)
-    private external fun nativeSetAccentColor(ptr: Long, colorJson: String)
     private external fun nativeSetCustomChromeCss(ptr: Long, css: String)
     private external fun nativeSetWindowTransparency(ptr: Long, enabled: Boolean)
     private external fun nativeSetAppIcon(ptr: Long, path: String)
@@ -1280,6 +1379,7 @@ object MahoBridge {
     private external fun nativeAgentCancel(sessionPtr: Long): Boolean
     private external fun nativeAgentListTools(sessionPtr: Long): String?
     private external fun nativeAgentPollEvent(sessionPtr: Long): String?
+    private external fun nativeSetSqlcipherKey(keyHex: String): Boolean
 
     // --- Conversation ---
     private external fun nativeCreateConversation(ptr: Long, id: String, title: String, spaceId: String, model: String): Boolean

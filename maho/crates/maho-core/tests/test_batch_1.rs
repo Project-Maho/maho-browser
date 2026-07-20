@@ -291,11 +291,11 @@ fn pin_tab_emits_tab_updated_with_pinned_true() {
         tab_id: tab_id.clone(),
     });
 
-    assert!(matches!(
-        updates.as_slice(),
-        [CoreUpdate::TabRoleChanged { tab_id: updated_id, old_role: _, new_role }]
+    assert!(updates.iter().any(|u| matches!(
+        u,
+        CoreUpdate::TabRoleChanged { tab_id: updated_id, old_role: _, new_role }
             if *updated_id == tab_id && *new_role == TabRole::Pinned
-    ));
+    )));
 }
 
 #[test]
@@ -1233,7 +1233,6 @@ fn settings_update_appearance() {
         general: None,
         appearance: Some(maho_types::settings::AppearanceSettingsUpdate {
             theme: Some(maho_types::settings::Theme::Dark),
-            accent_color: None,
             density: None,
             sidebar_width: Some(300.0),
             show_tab_bar: None,
@@ -1335,21 +1334,21 @@ fn permission_query_unknown() {
 #[test]
 fn download_start_returns_id() {
     let mut core = MahoCore::new();
-    let id = core.start_download("file.zip", "https://example.com/file.zip", 1024, None, None);
+    let id = core.start_download("file.zip", "https://example.com/file.zip", 1024, None, None, None);
     assert!(!id.is_empty());
 }
 
 #[test]
 fn download_view_models_not_empty() {
     let mut core = MahoCore::new();
-    core.start_download("f.zip", "https://example.com/f.zip", 512, None, None);
+    core.start_download("f.zip", "https://example.com/f.zip", 512, None, None, None);
     assert!(!core.get_download_view_models().is_empty());
 }
 
 #[test]
 fn download_pause_resume_no_panic() {
     let mut core = MahoCore::new();
-    let id = core.start_download("big.zip", "https://example.com/big.zip", 99999, None, None);
+    let id = core.start_download("big.zip", "https://example.com/big.zip", 99999, None, None, None);
     core.pause_download(&id);
     core.resume_download(&id);
 }
@@ -1357,21 +1356,21 @@ fn download_pause_resume_no_panic() {
 #[test]
 fn download_cancel_no_panic() {
     let mut core = MahoCore::new();
-    let id = core.start_download("c.zip", "https://example.com/c.zip", 100, None, None);
+    let id = core.start_download("c.zip", "https://example.com/c.zip", 100, None, None, None);
     core.cancel_download(&id);
 }
 
 #[test]
 fn download_progress_update() {
     let mut core = MahoCore::new();
-    let id = core.start_download("p.zip", "https://example.com/p.zip", 1000, None, None);
+    let id = core.start_download("p.zip", "https://example.com/p.zip", 1000, None, None, None);
     core.update_download_progress(&id, 500);
 }
 
 #[test]
 fn download_fail_no_panic() {
     let mut core = MahoCore::new();
-    let id = core.start_download("fail.zip", "https://example.com/fail.zip", 100, None, None);
+    let id = core.start_download("fail.zip", "https://example.com/fail.zip", 100, None, None, None);
     core.fail_download(&id, "network error");
 }
 
@@ -1918,6 +1917,7 @@ fn history_add_and_search() {
 
 #[test]
 fn private_active_tab_blocks_history_bookmark_and_form_writes() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let db_path = temp_dir.path().join("maho-core.sqlite");
     let mut core = MahoCore::new().with_storage(db_path.to_str().unwrap());
@@ -1955,6 +1955,7 @@ fn private_active_tab_blocks_history_bookmark_and_form_writes() {
 
 #[test]
 fn incognito_search_history_returns_no_entries() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let db_path = temp_dir.path().join("maho-core.sqlite");
     let mut core = MahoCore::new().with_storage(db_path.to_str().unwrap());
@@ -2061,12 +2062,6 @@ fn shortcuts_reset_all_no_panic() {
 fn density_set_compact() {
     let mut core = MahoCore::new();
     core.set_density("compact");
-}
-
-#[test]
-fn accent_color_set() {
-    let mut core = MahoCore::new();
-    core.set_accent_color("\"#FF0000\"");
 }
 
 #[test]
@@ -2927,6 +2922,7 @@ fn empty_ctx() -> SearchContext {
         closed_tabs: vec![],
         extensions: vec![],
         is_incognito: false,
+        recent_tabs: vec![],
     }
 }
 

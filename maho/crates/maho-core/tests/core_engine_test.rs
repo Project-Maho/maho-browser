@@ -129,22 +129,6 @@ fn set_density_comfortable() {
 }
 
 #[test]
-fn set_accent_color() {
-    let mut core = MahoCore::new();
-    core.set_accent_color(r#"{"r":255,"g":100,"b":50,"a":1.0}"#);
-    let settings = core.get_settings();
-    assert!(settings.appearance.accent_color.is_some());
-}
-
-#[test]
-fn set_accent_color_null() {
-    let mut core = MahoCore::new();
-    core.set_accent_color("null");
-    let settings = core.get_settings();
-    assert!(settings.appearance.accent_color.is_none());
-}
-
-#[test]
 fn set_window_transparency() {
     let mut core = MahoCore::new();
     core.set_window_transparency(true);
@@ -212,7 +196,7 @@ fn delete_active_space_falls_back_and_persists_order_name_and_profile_linkage() 
     let storage_path = temp_dir.path().join("maho-core.lmdb");
 
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-    let profile = core.create_profile_persisted("Work Profile".to_string());
+    let profile = core.create_profile_persisted("Work Profile".to_string()).unwrap();
     let color = SpaceColor {
         hue: 210.0,
         saturation: 0.6,
@@ -283,6 +267,7 @@ mod persistence_tests {
     use tempfile::TempDir;
 
     fn create_persisted_core(temp_dir: &TempDir) -> MahoCore {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
         let storage_path = temp_dir.path().join("maho-core.sqlite");
         let storage_path = storage_path.to_string_lossy();
         MahoCore::new().with_storage(&storage_path)
@@ -376,6 +361,36 @@ mod persistence_tests {
     }
 
     #[test]
+    fn traffic_rule_toggle_persistence_round_trip() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+        let rule = TrafficRule {
+            id: "traffic-rule-toggle".to_string(),
+            url_pattern: "example.com".to_string(),
+            match_type: MatchType::Contains,
+            target_space_id: maho_types::identifiers::SpaceId::new("space-1"),
+            enabled: true,
+        };
+        let created_rule = core.create_traffic_rule_persisted(rule.clone());
+        let rule_id = created_rule.id.clone();
+
+        core.toggle_traffic_rule_persisted(&rule_id, false);
+
+        drop(core);
+
+        let mut restored_core = create_persisted_core(&temp_dir);
+        assert!(restored_core.load_persisted_data().is_ok());
+
+        let restored_rule = restored_core
+            .get_atc_rules()
+            .iter()
+            .find(|restored_rule| restored_rule.id == rule_id);
+        assert!(restored_rule.is_some());
+        let restored_rule = restored_rule.expect("traffic rule should exist after restore");
+        assert_eq!(restored_rule.enabled, false);
+    }
+
+    #[test]
     fn permission_persistence_round_trip() {
         let temp_dir = temp_dir();
         let mut core = create_persisted_core(&temp_dir);
@@ -390,6 +405,42 @@ mod persistence_tests {
             restored_core.query_permission("https://example.com", "camera"),
             "allow"
         );
+    }
+
+    #[test]
+    fn atc_settings_persistence_round_trip() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+
+        // Verify default values
+        assert_eq!(
+            core.get_open_external_links_in_little_arc(),
+            false
+        );
+
+        // Set values and trigger events
+        core.set_open_external_links_in_little_arc_persisted(true);
+        core.handle_event(ShellEvent::SetDefaultLinkBehavior {
+            behavior: maho_types::air_traffic::DefaultLinkBehavior::SpecificSpace {
+                space_id: maho_types::identifiers::SpaceId::new("space-abc"),
+            },
+        });
+
+        drop(core);
+
+        let mut restored_core = create_persisted_core(&temp_dir);
+        assert!(restored_core.load_persisted_data().is_ok());
+
+        assert_eq!(
+            restored_core.get_open_external_links_in_little_arc(),
+            true
+        );
+        match restored_core.get_default_link_behavior() {
+            maho_types::air_traffic::DefaultLinkBehavior::SpecificSpace { space_id } => {
+                assert_eq!(space_id.as_ref(), "space-abc");
+            }
+            _ => panic!("Expected SpecificSpace behavior"),
+        }
     }
 
     #[test]
@@ -611,7 +662,7 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
         assert!(core.load_persisted_data().is_ok());
 
-        let profile = core.create_profile_persisted("Test Profile".to_string());
+        let profile = core.create_profile_persisted("Test Profile".to_string()).unwrap();
         let profile_id = profile.id.clone();
 
         drop(core);
@@ -631,7 +682,7 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
         assert!(core.load_persisted_data().is_ok());
 
-        let profile = core.create_profile_persisted("Test Profile 2".to_string());
+        let profile = core.create_profile_persisted("Test Profile 2".to_string()).unwrap();
         let profile_id = profile.id.clone();
 
         let deleted = core.delete_profile(&profile_id);
@@ -652,7 +703,7 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
         assert!(core.load_persisted_data().is_ok());
 
-        let profile = core.create_profile_persisted("Test Profile 3".to_string());
+        let profile = core.create_profile_persisted("Test Profile 3".to_string()).unwrap();
         let profile_id = profile.id.clone();
 
         let switched = core.switch_profile(&profile_id);

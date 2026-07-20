@@ -6,6 +6,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/vector_icons/vector_icons.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/views/controls/image_view.h"
@@ -13,7 +14,6 @@
 
 #include <string>
 
-#include "base/strings/string_util.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -22,7 +22,6 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
-#include "ui/views/border.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
@@ -33,23 +32,9 @@ namespace {
 
 constexpr int kRowPaddingVerticalDp = 3;
 constexpr int kGlyphSizeDp = 16;
-constexpr int kGlyphCornerRadiusDp = 5;
 constexpr int kTextSpacingDp = 6;
 constexpr int kHeaderSpacingDp = 6;
 constexpr int kChipSpacingDp = 4;
-
-std::u16string TabGlyphText(const SpaceBoardTabItem& tab) {
-  std::u16string title = SpaceBoardTabCompactTitle(tab);
-  for (char16_t ch : title) {
-    if (base::IsAsciiAlpha(ch)) {
-      return std::u16string(1, base::ToUpperASCII(ch));
-    }
-    if (base::IsAsciiDigit(ch)) {
-      return std::u16string(1, ch);
-    }
-  }
-  return u"•";
-}
 
 }  // namespace
 
@@ -70,25 +55,9 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
 
   favicon_view_ = AddChildView(std::make_unique<views::ImageView>());
   favicon_view_->SetPreferredSize(gfx::Size(kGlyphSizeDp, kGlyphSizeDp));
-  favicon_view_->SetVisible(false);
-
-  glyph_container_ = AddChildView(std::make_unique<views::View>());
-  glyph_container_->SetPreferredSize(gfx::Size(kGlyphSizeDp, kGlyphSizeDp));
-  glyph_container_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal));
-  static_cast<views::BoxLayout*>(glyph_container_->GetLayoutManager())
-      ->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
-  static_cast<views::BoxLayout*>(glyph_container_->GetLayoutManager())
-      ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-  glyph_label_ = glyph_container_->AddChildView(std::make_unique<views::Label>(
-      TabGlyphText(tab_), views::style::CONTEXT_LABEL,
-      views::style::STYLE_BODY_4_MEDIUM));
-  glyph_label_->SetAutoColorReadabilityEnabled(false);
-  glyph_label_->SetSubpixelRenderingEnabled(false);
-  glyph_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-  // Default to showing glyph container
-  glyph_container_->SetVisible(true);
+  favicon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+      vector_icons::kGlobeIcon, ui::kColorSysOnSurfaceSubtle,
+      kGlyphSizeDp));
 
   if (profile && !tab_.url.empty()) {
     favicon::FaviconService* service =
@@ -163,10 +132,8 @@ MahoSpacesOverlayTabRowView::~MahoSpacesOverlayTabRowView() = default;
 
 void MahoSpacesOverlayTabRowView::OnFaviconLoaded(
     const favicon_base::FaviconImageResult& result) {
-  if (!result.image.IsEmpty() && favicon_view_ && glyph_container_) {
+  if (!result.image.IsEmpty() && favicon_view_) {
     favicon_view_->SetImage(ui::ImageModel::FromImageSkia(result.image.AsImageSkia()));
-    favicon_view_->SetVisible(true);
-    glyph_container_->SetVisible(false);
   }
 }
 
@@ -181,11 +148,6 @@ void MahoSpacesOverlayTabRowView::UpdateColors() {
     return;
   }
 
-  const SkColor glyph_fill = SkColorSetA(
-      color_provider->GetColor(kMahoColorAccentBlueBright), 0x24);
-  const SkColor glyph_border = SkColorSetA(
-      color_provider->GetColor(kMahoColorAccentBlue), 0x18);
-
   if (IsMouseHovered() && !callback_.is_null()) {
     SetBackground(views::CreateRoundedRectBackground(
         color_provider->GetColor(kMahoColorTabRowHoverBackground), 6));
@@ -193,12 +155,7 @@ void MahoSpacesOverlayTabRowView::UpdateColors() {
     SetBackground(nullptr);
   }
   SetBorder(nullptr);
-  glyph_container_->SetBackground(
-      views::CreateRoundedRectBackground(glyph_fill, kGlyphCornerRadiusDp));
-  glyph_container_->SetBorder(
-      views::CreateRoundedRectBorder(1, kGlyphCornerRadiusDp, glyph_border));
 
-  glyph_label_->SetEnabledColor(kMahoColorAccentBlueBright);
   title_label_->SetEnabledColor(kMahoColorPrimaryText);
   subtitle_label_->SetEnabledColor(kMahoColorTertiaryText);
 

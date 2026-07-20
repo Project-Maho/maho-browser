@@ -52,7 +52,6 @@ struct SettingsSearchEngine: Codable {
 
 struct AppearanceSettings: Codable {
     let theme: Theme
-    let accentColor: MahoColor?
     let density: Density
     let sidebarWidth: Double
     let showTabBar: Bool
@@ -253,7 +252,6 @@ struct GeneralSettingsUpdate: Codable {
 
 struct AppearanceSettingsUpdate: Codable {
     var theme: Theme? = nil
-    var accentColor: Patchable<MahoColor> = .absent
     var density: Density? = nil
     var sidebarWidth: Double? = nil
     var showTabBar: Bool? = nil
@@ -263,7 +261,7 @@ struct AppearanceSettingsUpdate: Codable {
     var customIconPath: Patchable<String> = .absent
 
     private enum CodingKeys: String, CodingKey {
-        case theme, accentColor, density, sidebarWidth, showTabBar
+        case theme, density, sidebarWidth, showTabBar
         case windowTransparency, sidebarCollapsed, customChromeCss, customIconPath
     }
 }
@@ -272,7 +270,6 @@ extension AppearanceSettingsUpdate {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         theme = try container.decodeIfPresent(Theme.self, forKey: .theme)
-        accentColor = try container.decodePatchable(Patchable<MahoColor>.self, forKey: .accentColor)
         density = try container.decodeIfPresent(Density.self, forKey: .density)
         sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth)
         showTabBar = try container.decodeIfPresent(Bool.self, forKey: .showTabBar)
@@ -285,7 +282,6 @@ extension AppearanceSettingsUpdate {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(theme, forKey: .theme)
-        try container.encodePatchable(accentColor, forKey: .accentColor)
         try container.encodeIfPresent(density, forKey: .density)
         try container.encodeIfPresent(sidebarWidth, forKey: .sidebarWidth)
         try container.encodeIfPresent(showTabBar, forKey: .showTabBar)

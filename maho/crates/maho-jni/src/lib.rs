@@ -75,6 +75,22 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateWithStorage<
 }
 
 #[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetSqlcipherKey<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    key: JString<'local>,
+) -> jboolean {
+    let key_str = match get_rust_string(&mut env, &key) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    match maho_storage::sqlite::set_sqlcipher_key(&key_str) {
+        Ok(_) => jni::sys::JNI_TRUE,
+        Err(_) => jni::sys::JNI_FALSE,
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDestroy(
     _env: JNIEnv,
     _class: JClass,
@@ -777,7 +793,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeStartDownload<'loc
         }
         None => None,
     };
-    let download_id = core.start_download(&filename_str, &url_str, 0, None, mime_type.as_deref());
+    let download_id = core.start_download(&filename_str, &url_str, 0, None, mime_type.as_deref(), None);
     match env.new_string(&download_id) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -1181,7 +1197,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeJoinSync<'local>(
         Some(s) => s,
         None => return std::ptr::null_mut(),
     };
-    let json = core.join_sync("wss://sync.mahobrowser.com", &phrase);
+    let json = core.join_sync("wss://relay.mahobrowser.com", &phrase);
     match env.new_string(&json) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -1950,24 +1966,6 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetDensity<'local>
         None => return,
     };
     core.set_density(&density_str);
-}
-
-#[no_mangle]
-pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetAccentColor<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    ptr: jlong,
-    color_json: JString<'local>,
-) {
-    let core = match unsafe { get_core(ptr) } {
-        Some(c) => c,
-        None => return,
-    };
-    let color_str = match get_rust_string(&mut env, &color_json) {
-        Some(s) => s,
-        None => return,
-    };
-    core.set_accent_color(&color_str);
 }
 
 #[no_mangle]
@@ -2855,6 +2853,41 @@ fn call_android_secure_storage_callback(provider: &str) -> Option<String> {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct AndroidSecureStorageResponse {
+    key: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+fn parse_android_secure_storage_response(
+    response: &str,
+) -> Result<maho_agent::SecureKeyBundle, AgentError> {
+    let parsed = serde_json::from_str::<AndroidSecureStorageResponse>(response);
+    let (key, base_url, model) = match parsed {
+        Ok(bundle) => (bundle.key, bundle.base_url, bundle.model),
+        Err(_) if response.trim_start().starts_with('{') => {
+            return Err(AgentError::ExecutionError(
+                "Invalid secure storage response".to_string(),
+            ));
+        }
+        Err(_) => (response.to_string(), None, None),
+    };
+    if key.is_empty() {
+        return Err(AgentError::ExecutionError(
+            "Secure key not found".to_string(),
+        ));
+    }
+
+    Ok(maho_agent::SecureKeyBundle {
+        key: ZeroizedString::new(key),
+        base_url: base_url.filter(|value| !value.is_empty()),
+        model: model.filter(|value| !value.is_empty()),
+    })
+}
+
 fn jni_permission_handler(req: maho_agent::PermissionRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = maho_agent::PermissionDecision> + Send>> {
     let decision = call_android_permission_callback(&req.tool_name, &req.arguments);
     let p_decision = if decision == 0 {
@@ -2865,18 +2898,21 @@ fn jni_permission_handler(req: maho_agent::PermissionRequest) -> std::pin::Pin<B
     Box::pin(async move { p_decision })
 }
 
-fn jni_secure_storage_handler(provider: &str) -> Result<ZeroizedString, AgentError> {
-    if let Some(key) = call_android_secure_storage_callback(provider) {
-        Ok(ZeroizedString::new(key))
-    } else {
-        Err(AgentError::ExecutionError("Secure key not found".to_string()))
-    }
+fn jni_secure_storage_handler(provider: &str) -> Result<maho_agent::SecureKeyBundle, AgentError> {
+    let response = call_android_secure_storage_callback(provider)
+        .ok_or_else(|| AgentError::ExecutionError("Secure key not found".to_string()))?;
+    parse_android_secure_storage_response(&response)
 }
+
+use std::sync::atomic::{AtomicU64, Ordering};
+static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn enqueue_event(queue: &Arc<Mutex<Vec<String>>>, event_type: &str, data: serde_json::Value) {
     const MAX_EVENT_QUEUE_DEPTH: usize = 2048;
+    let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let payload = serde_json::json!({
         "type": event_type,
+        "seq": seq,
         "data": data
     });
     if let Ok(mut lock) = queue.lock() {
@@ -2933,13 +2969,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         false, // allow_insecure_key_storage = false on mobile/Android JNI
     ));
 
-    let secure_storage_cb = Box::new(|provider: &str| {
-        jni_secure_storage_handler(provider).map(|key| maho_agent::SecureKeyBundle {
-            key,
-            base_url: None,
-            model: None,
-        })
-    });
+    let secure_storage_cb = Box::new(jni_secure_storage_handler);
     if runtime.set_secure_storage_callback(secure_storage_cb).is_err() {
         return 0;
     }
@@ -2992,14 +3022,40 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
     let session_id = session.session_id.clone();
     let q_clone = Arc::clone(&session.event_queue);
     let q_clone_token = Arc::clone(&session.event_queue);
+    let q_clone_event = Arc::clone(&session.event_queue);
 
     let on_token = Box::new(move |token: &str| {
         enqueue_event(&q_clone_token, "token", serde_json::json!(token));
     });
 
+    let on_event = Arc::new(move |event: maho_agent::AgentStreamEvent| {
+        match event {
+            // Tokens are enqueued by `on_token` above; ignore here to avoid
+            // double-enqueuing each streamed token (matches maho-ffi iOS wiring).
+            maho_agent::AgentStreamEvent::Token(_) => {}
+            maho_agent::AgentStreamEvent::Thinking(thinking) => {
+                enqueue_event(&q_clone_event, "thinking", serde_json::json!(thinking));
+            }
+            maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
+                enqueue_event(&q_clone_event, "tool_call", serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "args": args
+                }));
+            }
+            maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
+                enqueue_event(&q_clone_event, "tool_result", serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "result": result
+                }));
+            }
+        }
+    });
+
     let fut = async move {
         let user_chat_msg = maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
-        match runtime.run_turn(&session_id, user_chat_msg, Some(on_token)).await {
+        match runtime.run_turn(&session_id, user_chat_msg, Some(on_token), Some(on_event)).await {
             Ok(response) => {
                 let text = match &response.content {
                     maho_types::chat::ChatContent::Text(t) => t.clone(),
@@ -3325,6 +3381,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn secure_storage_json_preserves_provider_overrides() {
+        let bundle = parse_android_secure_storage_response(
+            r#"{"key":"custom-key","base_url":"https://ai.example.test/v1","model":"custom-model"}"#,
+        )
+        .expect("valid secure-storage JSON should parse");
+
+        assert_eq!(bundle.key.as_str(), "custom-key");
+        assert_eq!(
+            bundle.base_url.as_deref(),
+            Some("https://ai.example.test/v1")
+        );
+        assert_eq!(bundle.model.as_deref(), Some("custom-model"));
+    }
+
+    #[test]
+    fn legacy_secure_storage_plain_string_remains_supported() {
+        let bundle = parse_android_secure_storage_response("legacy-key")
+            .expect("legacy plain key should remain supported");
+
+        assert_eq!(bundle.key.as_str(), "legacy-key");
+        assert_eq!(bundle.base_url, None);
+        assert_eq!(bundle.model, None);
+    }
+
+    #[test]
+    fn malformed_secure_storage_json_is_not_used_as_a_key() {
+        assert!(parse_android_secure_storage_response(r#"{"base_url":"https://example.test"}"#).is_err());
+    }
+
+    #[test]
     fn normal_preview_call_order_stays_compatible() {
         let mut core = MahoCore::new();
         let tab_id = maho_types::identifiers::TabId::new("test-tab");
@@ -3352,5 +3438,3 @@ mod tests {
         assert!(core.get_tab_preview(&tab_id).is_some());
     }
 }
-
-

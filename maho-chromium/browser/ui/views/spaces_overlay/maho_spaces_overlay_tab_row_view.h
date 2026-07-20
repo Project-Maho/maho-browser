@@ -57,8 +57,6 @@ class MahoSpacesOverlayTabRowView : public views::View {
   SpaceBoardTabItem tab_;
   std::string space_id_;
   TabSelectedCallback callback_;
-  raw_ptr<views::View> glyph_container_ = nullptr;
-  raw_ptr<views::Label> glyph_label_ = nullptr;
   raw_ptr<views::ImageView> favicon_view_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;

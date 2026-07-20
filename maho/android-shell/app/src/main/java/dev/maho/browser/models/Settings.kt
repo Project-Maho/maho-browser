@@ -106,7 +106,6 @@ data class SiteSearchEntry(
 @Serializable
 data class AppearanceSettings(
     val theme: Theme,
-    @SerialName("accentColor") val accentColor: Color? = null,
     val density: Density,
     @SerialName("sidebarWidth") val sidebarWidth: Double,
     @SerialName("showTabBar") val showTabBar: Boolean,
@@ -242,7 +241,6 @@ data class GeneralSettingsUpdate(
 @Serializable
 data class AppearanceSettingsUpdate(
     val theme: Theme? = null,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("accentColor") val accentColor: Patchable<Color> = Patchable.Absent,
     val density: Density? = null,
     @SerialName("sidebarWidth") val sidebarWidth: Double? = null,
     @SerialName("showTabBar") val showTabBar: Boolean? = null,

@@ -4,12 +4,9 @@
 
 #include <algorithm>
 
-#include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/values.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "content/public/browser/browser_thread.h"
-#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/downloads/maho_download_theme.h"
 #include "maho/browser/ui/find_bar/maho_find_bar_theme.h"
 #include "maho/browser/ui/permissions/maho_permission_theme.h"
@@ -17,7 +14,11 @@
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
-#include "maho/third_party/maho/maho_ffi.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_mixer.h"
 #include "ui/color/color_provider.h"
@@ -44,16 +45,19 @@ constexpr SkColor kContentGradientTopLight = SkColorSetARGB(255, 252, 252, 254);
 constexpr SkColor kContentGradientBottomDark = SkColorSetARGB(255, 24, 23, 39);
 constexpr SkColor kContentGradientBottomLight = SkColorSetARGB(255, 237, 239, 248);
 
-void AddWindowAndSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorWindowBackground] = {dark_mode
-      ? kWindowBackgroundDark
-      : kWindowBackgroundLight};
+void AddSidebarSurfaceColors(ui::ColorMixer& mixer, bool sidebar_dark) {
   // Translucent by default (no active Space theme) so the kGlassFrame vibrancy
   // shows through. The tint mixer below raises alpha per the opacity slider
   // when a theme is active.
-  mixer[kMahoColorSidebarBackground] = {dark_mode
+  mixer[kMahoColorSidebarBackground] = {sidebar_dark
       ? SkColorSetA(kSidebarBackgroundDark, kSidebarMinAlpha)
       : SkColorSetA(kSidebarBackgroundLight, kSidebarMinAlpha)};
+}
+
+void AddChromeSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
+  mixer[kMahoColorWindowBackground] = {dark_mode
+      ? kWindowBackgroundDark
+      : kWindowBackgroundLight};
   mixer[kMahoColorContentBackground] = {dark_mode
       ? kContentBackgroundDark
       : kContentBackgroundLight};
@@ -303,6 +307,18 @@ void AddTextColors(ui::ColorMixer& mixer, bool dark_mode) {
       : SkColorSetARGB(255, 128, 136, 166)};
 }
 
+void AddSidebarTextColors(ui::ColorMixer& mixer, bool sidebar_dark) {
+  mixer[kMahoColorSidebarPrimaryText] = {sidebar_dark
+      ? SkColorSetARGB(255, 243, 243, 247)
+      : SkColorSetARGB(255, 45, 51, 74)};
+  mixer[kMahoColorSidebarSecondaryText] = {sidebar_dark
+      ? SkColorSetARGB(255, 188, 188, 202)
+      : SkColorSetARGB(255, 89, 97, 128)};
+  mixer[kMahoColorSidebarTertiaryText] = {sidebar_dark
+      ? SkColorSetARGB(255, 143, 143, 159)
+      : SkColorSetARGB(255, 128, 136, 166)};
+}
+
 void AddToastColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorToastBackground] = {dark_mode
       ? SkColorSetARGB(40, 42, 39, 61)
@@ -500,98 +516,111 @@ void AddPrivateColors(ui::ColorMixer& mixer) {
 
 }  // namespace
 
+ui::ColorProviderKey::InitializerSupplier* GetMahoOtrSentinel() {
+  static char g_otr_sentinel;
+  return reinterpret_cast<ui::ColorProviderKey::InitializerSupplier*>(&g_otr_sentinel);
+}
+
 void AddMahoColorMixers(ui::ColorProvider* provider,
                         const ui::ColorProviderKey& key) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  const bool dark_mode =
-      key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
-  // Incognito windows use dark mode via key.color_mode.
+  const bool is_otr = (key.app_controller == GetMahoOtrSentinel());
 
-  SkColor accent_color = SkColorSetRGB(99, 102, 241);  // Default indigo.
-  MahoCore* core = maho::GetCore();
-  if (core) {
-    char* json_str = maho_core_get_settings(core);
-    if (json_str) {
-      auto parsed = base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
-      maho_string_free(json_str);
-      if (parsed && parsed->is_dict()) {
-        const auto* appearance = parsed->GetDict().FindDict("appearance");
-        if (appearance) {
-          const auto* color_dict = appearance->FindDict("accentColor");
-          if (color_dict) {
-            auto r = color_dict->FindInt("r");
-            auto g = color_dict->FindInt("g");
-            auto b = color_dict->FindInt("b");
-            if (r && g && b) {
-              accent_color = SkColorSetRGB(
-                  static_cast<uint8_t>(std::clamp(*r, 0, 255)),
-                  static_cast<uint8_t>(std::clamp(*g, 0, 255)),
-                  static_cast<uint8_t>(std::clamp(*b, 0, 255)));
-            }
-          }
+  const bool sidebar_dark =
+      is_otr || (key.color_mode == ui::ColorProviderKey::ColorMode::kDark);
+  // Sidebar (and the whole window) follows the active space theme scheme.
+
+  bool browser_theme_dark = false;
+  if (is_otr) {
+    browser_theme_dark = true;
+  } else {
+    Profile* maho_profile = nullptr;
+    if (g_browser_process && g_browser_process->profile_manager()) {
+      maho_profile = g_browser_process->profile_manager()->GetLastUsedProfileIfLoaded();
+    }
+    if (maho_profile &&
+        g_browser_process->profile_manager()->IsValidProfile(maho_profile)) {
+      auto* theme_service = ThemeServiceFactory::GetForProfile(maho_profile);
+      if (theme_service) {
+        const auto scheme = theme_service->GetBrowserColorScheme();
+        if (scheme == ThemeService::BrowserColorScheme::kSystem) {
+          browser_theme_dark = MahoSpaceThemeState::IsOsDarkMode();
+        } else {
+          browser_theme_dark = (scheme == ThemeService::BrowserColorScheme::kDark);
         }
       }
+    } else {
+      browser_theme_dark = MahoSpaceThemeState::IsOsDarkMode();
     }
   }
+  // Content area and browsing environment follow the Browser Theme.
+
+  const SkColor kFixedAccentColor = SkColorSetRGB(99, 102, 241);
+  // Fixed brand accent (indigo-500); no longer user-configurable.
 
   ui::ColorMixer& mixer = provider->AddMixer();
 
-  AddWindowAndSurfaceColors(mixer, dark_mode);
-  AddCanvasColors(mixer, dark_mode);
-  AddInteractiveSurfaceColors(mixer, dark_mode);
-  AddTabRowColors(mixer, dark_mode);
-  AddFavoritesColors(mixer, dark_mode);
-  AddArchiveColors(mixer, dark_mode);
-  AddLibraryRailColors(mixer, dark_mode);
-  AddLibraryContentColors(mixer, dark_mode);
-  AddTextColors(mixer, dark_mode);
-  AddToastColors(mixer, dark_mode);
-  AddLegacyAliasColors(mixer, dark_mode);
-  AddCommandBarColors(mixer, dark_mode);
-  AddAccentAndSemanticColors(mixer, accent_color);
+  AddSidebarSurfaceColors(mixer, sidebar_dark);
+  AddChromeSurfaceColors(mixer, browser_theme_dark);
+  AddCanvasColors(mixer, browser_theme_dark);
+  AddInteractiveSurfaceColors(mixer, sidebar_dark);
+  AddTabRowColors(mixer, sidebar_dark);
+  AddFavoritesColors(mixer, sidebar_dark);
+  AddArchiveColors(mixer, sidebar_dark);
+  AddLibraryRailColors(mixer, sidebar_dark);
+  AddLibraryContentColors(mixer, sidebar_dark);
+  AddTextColors(mixer, browser_theme_dark);
+  AddSidebarTextColors(mixer, sidebar_dark);
+  AddToastColors(mixer, browser_theme_dark);
+  AddLegacyAliasColors(mixer, browser_theme_dark);
+  AddCommandBarColors(mixer, browser_theme_dark);
+  AddAccentAndSemanticColors(mixer, kFixedAccentColor);
   AddPrivateColors(mixer);  // R-12: unconditional; always registered.
 
   // Phase 4: Component theme overrides.
-  MahoDownloadTheme::AddColors(mixer, dark_mode);
-  MahoFindBarTheme::AddColors(mixer, dark_mode);
-  MahoPermissionTheme::AddColors(mixer, dark_mode);
-  MahoReaderTheme::AddColors(mixer, dark_mode);
+  MahoDownloadTheme::AddColors(mixer, browser_theme_dark);
+  MahoFindBarTheme::AddColors(mixer, browser_theme_dark);
+  MahoPermissionTheme::AddColors(mixer, browser_theme_dark);
+  MahoReaderTheme::AddColors(mixer, browser_theme_dark);
 
   // Phase 3: Space theme tinting.
-  // TODO: Skip for incognito/guest windows. ColorProviderKey lacks an incognito
-  // signal, so we cannot distinguish incognito from normal dark-mode windows here.
+  // Skip for incognito/guest windows.
   std::optional<MahoSpaceThemeState::ThemeData> theme_data =
-      MahoSpaceThemeState::GetThemeData();
+      is_otr ? std::nullopt : MahoSpaceThemeState::GetThemeData();
   if (theme_data && !theme_data->achromatic) {
-    const SkColor base_titlebar = dark_mode ? kTitlebarGlassDark
-                                            : kTitlebarGlassLight;
-    const SkColor base_sidebar = dark_mode ? kSidebarBackgroundDark
-                                           : kSidebarBackgroundLight;
-    const SkColor base_content = dark_mode ? kContentBackgroundDark
-                                           : kContentBackgroundLight;
-    const SkColor base_gradient_top = dark_mode ? kContentGradientTopDark
-                                                : kContentGradientTopLight;
-    const SkColor base_gradient_bottom = dark_mode ? kContentGradientBottomDark
-                                                   : kContentGradientBottomLight;
-    const SkColor base_window = dark_mode ? kWindowBackgroundDark
-                                          : kWindowBackgroundLight;
+    const SkColor base_titlebar = browser_theme_dark ? kTitlebarGlassDark
+                                                     : kTitlebarGlassLight;
+    const SkColor base_sidebar = sidebar_dark ? kSidebarBackgroundDark
+                                              : kSidebarBackgroundLight;
+    const SkColor base_content = browser_theme_dark ? kContentBackgroundDark
+                                                    : kContentBackgroundLight;
+    const SkColor base_gradient_top = browser_theme_dark ? kContentGradientTopDark
+                                                         : kContentGradientTopLight;
+    const SkColor base_gradient_bottom = browser_theme_dark ? kContentGradientBottomDark
+                                                            : kContentGradientBottomLight;
+    const SkColor base_window = browser_theme_dark ? kWindowBackgroundDark
+                                                   : kWindowBackgroundLight;
 
     const float opacity_bias = 0.65f + theme_data->opacity * 0.35f;
     const float texture_bias = 0.04f + theme_data->texture * 0.08f;
 
     const SkColor primary_tint = SkColorSetA(AdjustThemeTint(
-        theme_data->primary_hsv, dark_mode,
+        theme_data->primary_hsv, browser_theme_dark,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
-        1.0f, dark_mode ? 0.02f : 0.0f, 0.85f, 1.08f), 255);
+        1.0f, browser_theme_dark ? 0.02f : 0.0f, 0.85f, 1.08f), 255);
+    const SkColor primary_tint_sidebar = SkColorSetA(AdjustThemeTint(
+        theme_data->primary_hsv, sidebar_dark,
+        theme_data->kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
+        1.0f, sidebar_dark ? 0.02f : 0.0f, 0.85f, 1.08f), 255);
 
     const MahoSpaceThemeState::SpaceHSV& secondary_hsv =
         theme_data->secondary_hsv.value_or(theme_data->primary_hsv);
     const SkColor secondary_tint = SkColorSetA(AdjustThemeTint(
-        secondary_hsv, dark_mode,
+        secondary_hsv, browser_theme_dark,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 15 : 18,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 0.72f : 0.9f,
-        dark_mode ? -0.03f : 0.0f, 0.78f,
+        browser_theme_dark ? -0.03f : 0.0f, 0.78f,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 1.02f : 1.05f), 255);
 
     ui::ColorMixer& tint_mixer = provider->AddMixer();
@@ -607,7 +636,7 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
         base_window, primary_tint,
         GetContentBlendForKind(theme_data->kind) * opacity_bias)};
     const SkColor sidebar_blended = maho_theme::BlendColors(
-        base_sidebar, primary_tint,
+        base_sidebar, primary_tint_sidebar,
         GetSidebarBlendForKind(theme_data->kind) * opacity_bias);
     const SkAlpha sidebar_alpha = static_cast<SkAlpha>(
         kSidebarMinAlpha +
@@ -625,22 +654,23 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
         base_gradient_bottom, secondary_tint,
         GetGradientBlendForKind(theme_data->kind) * opacity_bias +
             texture_bias * 0.75f)};
-    const SkColor base_tab_active = dark_mode
+    const SkColor base_tab_active = sidebar_dark
         ? SkColorSetARGB(51, 255, 255, 255)
         : SkColorSetARGB(38, 0, 0, 0);
     const SkColor tinted_tab_active =
-        maho_theme::BlendColors(base_tab_active, primary_tint, 0.05f);
+        maho_theme::BlendColors(base_tab_active, primary_tint_sidebar, 0.05f);
     tint_mixer[kMahoColorTabRowActiveBackground] = {tinted_tab_active};
     tint_mixer[kMahoColorTabRowActiveHoveredBackground] = {tinted_tab_active};
-    const SkColor base_tab_selected = dark_mode
+    const SkColor base_tab_selected = sidebar_dark
         ? SkColorSetARGB(38, 255, 255, 255)
         : SkColorSetARGB(25, 0, 0, 0);
     const SkColor tinted_tab_selected =
-        maho_theme::BlendColors(base_tab_selected, primary_tint, 0.05f);
+        maho_theme::BlendColors(base_tab_selected, primary_tint_sidebar, 0.05f);
     tint_mixer[kMahoColorTabRowSelectedBackground] = {tinted_tab_selected};
     tint_mixer[kMahoColorTabRowSelectedHoveredBackground] = {tinted_tab_selected};
   }
 
   DVLOG(1) << "MahoColorMixers: registered " << (kMahoColorsEnd - kMahoColorsStart)
-           << " color IDs, dark_mode=" << dark_mode;
+           << " color IDs, browser_theme_dark=" << browser_theme_dark
+           << " sidebar_dark=" << sidebar_dark;
 }

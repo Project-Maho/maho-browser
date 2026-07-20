@@ -440,7 +440,7 @@ class FavoriteTileButton : public views::Button,
         ui::ColorVariant border_color =
             has_active_border_color_
                 ? ui::ColorVariant(active_border_color_)
-                : ui::ColorVariant(kMahoColorSelectionHighlight);
+                : ui::ColorVariant(kMahoColorTabRowActiveBackground);
         SetBorder(views::CreateRoundedRectBorder(
             1, sidebar_layout::kFavoriteTileCornerRadiusDp, border_color));
       } else {

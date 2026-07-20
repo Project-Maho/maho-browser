@@ -943,10 +943,27 @@ void maho_core_update_download_progress(struct MahoCore *ptr,
 
 /**
  * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `download_id` and `json` must be valid null-terminated C strings.
+ */
+void maho_core_update_download_metadata(struct MahoCore *ptr,
+                                        const char *download_id,
+                                        const char *json);
+
+/**
+ * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `download_id` must be a
  * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_complete_download(struct MahoCore *ptr, const char *download_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `guid` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free` if not null.
+ */
+char *maho_core_find_download_by_chromium_guid(struct MahoCore *ptr, const char *guid);
 
 /**
  * # Safety
@@ -1337,13 +1354,6 @@ void maho_core_set_density(struct MahoCore *ptr, const char *density);
 
 /**
  * # Safety
- * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `color_json` must be a
- * valid NUL-terminated C string. No-op on null input or if import is active.
- */
-void maho_core_set_accent_color(struct MahoCore *ptr, const char *color_json);
-
-/**
- * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `css` may be null
  * (treated as clearing the CSS) or a valid NUL-terminated C string. No-op if import is active.
  */
@@ -1487,6 +1497,52 @@ void maho_core_toggle_atc_rule(struct MahoCore *core, const char *rule_id, bool 
 /**
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
+ * `rule_json` must be a valid null-terminated C string containing TrafficRule JSON.
+ */
+char *maho_core_add_traffic_rule(struct MahoCore *core, const char *rule_json);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `rule_id` must be a valid null-terminated C string.
+ */
+char *maho_core_remove_traffic_rule_persisted(struct MahoCore *core, const char *rule_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `rule_id` must be a valid null-terminated C string.
+ */
+void maho_core_toggle_traffic_rule_persisted(struct MahoCore *core,
+                                             const char *rule_id,
+                                             bool enabled);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `url` must be a valid null-terminated C string.
+ * `space_rules_json` must be a valid null-terminated C string containing JSON space rules or null.
+ */
+char *maho_core_decide_link_destination(struct MahoCore *core,
+                                        const char *url,
+                                        bool is_external,
+                                        const char *space_rules_json);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+void maho_core_set_open_external_links_in_little_arc(struct MahoCore *core, bool enabled);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+bool maho_core_get_open_external_links_in_little_arc(struct MahoCore *core);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
  * `query` must be a valid null-terminated C string.
  */
 char *maho_core_search_history_paginated(struct MahoCore *core,
@@ -1573,11 +1629,9 @@ char *maho_core_get_activation_target_for_space(struct MahoCore *ptr, const char
 char *maho_core_create_profile(struct MahoCore *ptr, const char *name);
 
 /**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `profile_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
  */
-bool maho_core_delete_profile(struct MahoCore *ptr, const char *profile_id);
+char *maho_core_delete_profile(struct MahoCore *ptr, const char *profile_id);
 
 /**
  * # Safety
@@ -2234,6 +2288,15 @@ void maho_agent_session_free(struct MahoAgentSession *session);
 bool maho_agent_send_message(struct MahoAgentSession *session,
                              const char *message,
                              void (*on_token)(void *user_data, const char *token),
+                             void (*on_thinking)(void *user_data, const char *thinking),
+                             void (*on_tool_call)(void *user_data,
+                                                  const char *id,
+                                                  const char *name,
+                                                  const char *args),
+                             void (*on_tool_result)(void *user_data,
+                                                    const char *id,
+                                                    const char *name,
+                                                    const char *result),
                              void (*on_complete)(void *user_data,
                                                  const char *full_text,
                                                  const char *tool_calls_json),
@@ -2249,6 +2312,7 @@ bool maho_agent_send_message(struct MahoAgentSession *session,
 bool maho_agent_send_message_simple(struct MahoAgentSession *session,
                                     const char *message,
                                     void (*on_token)(void *user_data, const char *token),
+                                    void (*on_thinking)(void *user_data, const char *thinking),
                                     void (*on_complete)(void *user_data,
                                                         const char *full_text,
                                                         const char *tool_calls_json),

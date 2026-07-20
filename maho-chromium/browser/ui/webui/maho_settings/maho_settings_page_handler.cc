@@ -27,6 +27,12 @@
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/delete_profile_helper.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_metrics.h"
+#include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/profiles/nuke_profile_directory_utils.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser.h"
@@ -55,6 +61,8 @@
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
@@ -67,7 +75,6 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
-#include "ui/color/color_provider_manager.h"
 #include "ui/gfx/native_ui_types.h"
 
 namespace {
@@ -207,6 +214,15 @@ constexpr SettingMapping kSettingsMap[] = {
     {"notifications.quiet_permission_ui",
       prefs::kEnableQuietNotificationPermissionUi,
       SettingMapping::Type::kBool},
+    {"atc.little_arc_global_shortcut_enabled",
+     maho::sidebar_prefs::kLittleArcGlobalShortcutEnabled,
+     SettingMapping::Type::kBool},
+    {"atc.little_arc_click_override_enabled",
+     maho::sidebar_prefs::kLittleArcClickOverrideEnabled,
+     SettingMapping::Type::kBool},
+    {"atc.open_external_links_in_little_arc",
+     maho::sidebar_prefs::kOpenExternalLinksInLittleArc,
+     SettingMapping::Type::kBool},
 };
 
 
@@ -228,6 +244,34 @@ PrefService* GetPrefServiceForKey(Profile* profile,
     return g_browser_process->local_state();
   }
   return profile->GetPrefs();
+}
+
+void CheckHasEnabledRulesAndUpdate() {
+  maho::PostCoreTask<bool>(
+      FROM_HERE,
+      base::BindOnce([]() {
+        MahoCore* core = maho::GetCore();
+        if (!core) return false;
+        char* json_str = maho_core_get_atc_rules(core);
+        if (!json_str) return false;
+        std::string json(json_str);
+        maho_string_free(json_str);
+        std::optional<base::Value> parsed =
+            base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+        if (!parsed || !parsed->is_list()) return false;
+        for (const auto& item : parsed->GetList()) {
+          const auto* dict = item.GetIfDict();
+          if (!dict) continue;
+          std::optional<bool> enabled = dict->FindBool("enabled");
+          if (enabled.value_or(true)) {
+            return true;
+          }
+        }
+        return false;
+      }),
+      base::BindOnce([](bool has_enabled_rules) {
+        maho::MahoAtcState::SetHasEnabledRules(has_enabled_rules);
+      }));
 }
 
 // ── Profile domain helpers (MahoCore sequence) ──
@@ -324,10 +368,14 @@ maho_settings::mojom::ProfileInfoPtr CreateProfileOnCoreSequence(
   return profile;
 }
 
-bool DeleteProfileOnCoreSequence(const std::string& profile_id) {
+std::string DeleteProfileOnCoreSequence(const std::string& profile_id) {
   MahoCore* core = maho::GetCore();
-  if (!core) return false;
-  return maho_core_delete_profile(core, profile_id.c_str());
+  if (!core) return std::string();
+  char* json_str = maho_core_delete_profile(core, profile_id.c_str());
+  if (!json_str) return std::string();
+  std::string result(json_str);
+  maho_string_free(json_str);
+  return result;
 }
 
 bool SwitchProfileOnCoreSequence(const std::string& profile_id) {
@@ -357,6 +405,9 @@ std::vector<maho_settings::mojom::ATCRulePtr> BuildATCRulesOnCoreSequence() {
     if (!dict) continue;
     const std::string* id = dict->FindString("id");
     const std::string* pattern = dict->FindString("url_pattern");
+    if (!pattern || pattern->empty()) {
+      pattern = dict->FindString("name");
+    }
     const std::string* target = dict->FindString("space_id");
     std::optional<bool> enabled = dict->FindBool("enabled");
     if (!id || !pattern || !target) continue;
@@ -378,21 +429,18 @@ maho_settings::mojom::ATCRulePtr AddATCRuleOnCoreSequence(
   MahoCore* core = maho::GetCore();
   if (!core) return nullptr;
 
-  // The Rust ATCRule contract requires id/name/enabled and names the space
-  // field `space_id`. Generate the id here so the core echoes it back.
   const std::string id = base::Uuid::GenerateRandomV4().AsLowercaseString();
 
   base::DictValue rule_dict;
   rule_dict.Set("id", id);
-  rule_dict.Set("name", url_pattern);
-  rule_dict.Set("space_id", target_space_id);
-  rule_dict.Set("url_pattern", url_pattern);
+  rule_dict.Set("urlPattern", url_pattern);
+  rule_dict.Set("matchType", "glob");
+  rule_dict.Set("targetSpaceId", target_space_id);
   rule_dict.Set("enabled", true);
   std::string rule_json;
   base::JSONWriter::Write(rule_dict, &rule_json);
 
-  // maho_core_add_atc_rule returns the bare rule id string (not JSON).
-  char* result_str = maho_core_add_atc_rule(core, rule_json.c_str());
+  char* result_str = maho_core_add_traffic_rule(core, rule_json.c_str());
   if (!result_str) return nullptr;
   std::string returned_id(result_str);
   maho_string_free(result_str);
@@ -409,14 +457,14 @@ maho_settings::mojom::ATCRulePtr AddATCRuleOnCoreSequence(
 void RemoveATCRuleOnCoreSequence(const std::string& rule_id) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
-  char* result = maho_core_remove_atc_rule(core, rule_id.c_str());
+  char* result = maho_core_remove_traffic_rule_persisted(core, rule_id.c_str());
   if (result) maho_string_free(result);
 }
 
 void ToggleATCRuleOnCoreSequence(const std::string& rule_id, bool enabled) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
-  maho_core_toggle_atc_rule(core, rule_id.c_str(), enabled);
+  maho_core_toggle_traffic_rule_persisted(core, rule_id.c_str(), enabled);
 }
 
 // ── Shortcuts domain helpers (MahoCore sequence) ──
@@ -701,7 +749,24 @@ maho_settings::mojom::SyncStatusPtr ConfigureSyncEncryptionOnCoreSequence(
     return s;
   }
   char* result = maho_core_configure_sync_encryption(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
-  if (result) maho_string_free(result);
+  if (result) {
+    std::string json(result);
+    maho_string_free(result);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+    if (parsed && parsed->is_dict()) {
+      const auto& dict = parsed->GetDict();
+      std::optional<bool> success = dict.FindBool("success");
+      if (success && !*success) {
+        auto s = maho_settings::mojom::SyncStatus::New();
+        s->is_syncing = false;
+        s->status_label = "error";
+        const std::string* error = dict.FindString("error");
+        s->error_message = error ? *error : "Unknown sync configuration error";
+        return s;
+      }
+    }
+  }
   return BuildSyncStatusOnCoreSequence();
 }
 
@@ -715,7 +780,24 @@ maho_settings::mojom::SyncStatusPtr JoinSyncOnCoreSequence(
     return s;
   }
   char* result = maho_core_join_sync(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
-  if (result) maho_string_free(result);
+  if (result) {
+    std::string json(result);
+    maho_string_free(result);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+    if (parsed && parsed->is_dict()) {
+      const auto& dict = parsed->GetDict();
+      std::optional<bool> success = dict.FindBool("success");
+      if (success && !*success) {
+        auto s = maho_settings::mojom::SyncStatus::New();
+        s->is_syncing = false;
+        s->status_label = "error";
+        const std::string* error = dict.FindString("error");
+        s->error_message = error ? *error : "Unknown sync join error";
+        return s;
+      }
+    }
+  }
   return BuildSyncStatusOnCoreSequence();
 }
 
@@ -934,42 +1016,7 @@ void RemoveFilterListOnCoreSequence(const std::string& id) {
   maho_core_remove_filter_list(core, id.c_str());
 }
 
-// ── Extensions domain (read-only) ──
 
-std::vector<maho_settings::mojom::InstalledExtensionPtr>
-BuildInstalledExtensionsOnCoreSequence() {
-  std::vector<maho_settings::mojom::InstalledExtensionPtr> exts;
-  MahoCore* core = maho::GetCore();
-  if (!core) return exts;
-
-  char* json_str = maho_core_get_installed_extensions(core);
-  if (!json_str) return exts;
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) return exts;
-
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) continue;
-    auto ext = maho_settings::mojom::InstalledExtension::New();
-    auto s = [&](const char* k) -> std::string {
-      const std::string* v = dict->FindString(k);
-      return v ? *v : "";
-    };
-    ext->id = s("id");
-    ext->name = s("name");
-    ext->version = s("version");
-    ext->description = s("description");
-    ext->enabled = dict->FindBool("enabled").value_or(true);
-    ext->manifest_version = dict->FindInt("manifestVersion").value_or(0);
-    exts.push_back(std::move(ext));
-  }
-
-  return exts;
-}
 
 
 
@@ -1076,8 +1123,7 @@ bool DeleteAutofillPaymentOnCoreSequence(const std::string& id) {
 
 }  // namespace
 
-MahoSettingsPageHandler::PendingToggle::PendingToggle() = default;
-MahoSettingsPageHandler::PendingToggle::~PendingToggle() = default;
+
 
 // ── Constructor / Destructor ──
 
@@ -1129,6 +1175,9 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
                    base::BindRepeating(&MahoSettingsPageHandler::OnPrefChanged,
                                        weak_factory_.GetWeakPtr()));
   }
+  pref_registrar_.Add(maho::sidebar_prefs::kSidebarWidth,
+                      base::BindRepeating(&MahoSettingsPageHandler::OnPrefChanged,
+                                          weak_factory_.GetWeakPtr()));
 
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
@@ -1140,9 +1189,7 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
 
 
 
-  if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
-    ext_bridge_observation_.Observe(bridge);
-  }
+
 
   auto url_loader_factory = profile_->GetDefaultStoragePartition()
                                 ->GetURLLoaderFactoryForBrowserProcess();
@@ -1171,9 +1218,17 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
       weak_factory_.GetWeakPtr()));
   managed_connection_test_ = std::make_unique<maho::ai::MahoManagedConnectionTest>(
       prefs_, url_loader_factory);
+  maho::MahoMailService* service = maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (service) {
+    service->AddObserver(this);
+  }
 }
 
 MahoSettingsPageHandler::~MahoSettingsPageHandler() {
+  maho::MahoMailService* service = maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (service) {
+    service->RemoveObserver(this);
+  }
   if (g_active_instance == this) {
     g_active_instance = nullptr;
   }
@@ -1235,9 +1290,12 @@ void MahoSettingsPageHandler::GetSettings(GetSettingsCallback callback) {
 void MahoSettingsPageHandler::SetSetting(const std::string& key,
                                           const std::string& value,
                                           SetSettingCallback callback) {
-  if (HandleFfiSetting(key, value)) {
-    std::move(callback).Run(true);
-    ScheduleNotify();
+  FfiResult ffi_result = HandleFfiSetting(key, value);
+  if (ffi_result != FfiResult::kNotHandled) {
+    std::move(callback).Run(ffi_result == FfiResult::kOk);
+    if (ffi_result == FfiResult::kOk) {
+      ScheduleNotify();
+    }
     return;
   }
 
@@ -1284,6 +1342,20 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
 
     switch (m->type) {
       case SettingMapping::Type::kString:
+        if (key == "general.homepage") {
+          GURL gurl(value);
+          if (!gurl.is_valid() || (!gurl.SchemeIsHTTPOrHTTPS() && !gurl.SchemeIs("chrome"))) {
+            std::move(callback).Run(false);
+            return;
+          }
+          if (gurl.SchemeIs("chrome")) {
+            std::string host(gurl.host());
+            if (host != "newtab" && host != "settings" && host != "maho-settings" && host != "maho-ai") {
+              std::move(callback).Run(false);
+              return;
+            }
+          }
+        }
         prefs->SetString(m->pref_path, value);
         break;
       case SettingMapping::Type::kBool:
@@ -1298,6 +1370,18 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
         if (key == "advanced.preload_pages") {
           int_value = std::clamp(int_value, kNetworkPredictionOptionsMinValue,
                                  kNetworkPredictionOptionsMaxValue);
+        }
+        if (key == "general.restore_on_startup") {
+          if (int_value != 1 && int_value != 4) {
+            std::move(callback).Run(false);
+            return;
+          }
+        }
+        if (key == "appearance.theme") {
+          if (int_value < 0 || int_value > 2) {
+            std::move(callback).Run(false);
+            return;
+          }
         }
         prefs->SetInteger(m->pref_path, int_value);
         break;
@@ -1359,80 +1443,20 @@ void MahoSettingsPageHandler::FlushNotify() {
   page_->SettingsChanged(std::move(settings));
 }
 
-void MahoSettingsPageHandler::OnInstalledExtensionsChanged() {
-  auto* registry = extensions::ExtensionRegistry::Get(profile_);
-  if (registry) {
-    std::vector<std::string> resolved_ids;
-    for (const auto& pair : pending_toggles_) {
-      const std::string& id = pair.first;
-      const bool currently_enabled = registry->enabled_extensions().Contains(id);
-      if (currently_enabled == pair.second->target_state) {
-        resolved_ids.push_back(id);
-      }
-    }
-    for (const std::string& id : resolved_ids) {
-      auto it = pending_toggles_.find(id);
-      if (it != pending_toggles_.end()) {
-        std::move(it->second->callback).Run(it->second->target_state);
-        pending_toggles_.erase(it);
-      }
-    }
-  }
-  ScheduleExtensionNotify();
-}
 
-void MahoSettingsPageHandler::OnToggleTimeout(const std::string& extension_id) {
-  auto it = pending_toggles_.find(extension_id);
-  if (it != pending_toggles_.end()) {
-    LOG(WARNING) << "Toggle extension " << extension_id << " timed out waiting for state change.";
-    auto* registry = extensions::ExtensionRegistry::Get(profile_);
-    const bool currently_enabled = registry && registry->enabled_extensions().Contains(extension_id);
-    std::move(it->second->callback).Run(currently_enabled);
-    pending_toggles_.erase(it);
-  }
-}
 
-void MahoSettingsPageHandler::ScheduleExtensionNotify() {
-  ext_notify_timer_.Start(
-      FROM_HERE, base::Milliseconds(50),
-      base::BindOnce(&MahoSettingsPageHandler::FlushExtensionNotify,
-                     weak_factory_.GetWeakPtr()));
-}
-
-void MahoSettingsPageHandler::FlushExtensionNotify() {
-  maho::PostCoreTask(
-      FROM_HERE,
-      base::BindOnce(&BuildInstalledExtensionsOnCoreSequence),
-      base::BindOnce(
-          [](base::WeakPtr<MahoSettingsPageHandler> self,
-             std::vector<maho_settings::mojom::InstalledExtensionPtr> exts) {
-            if (!self) {
-              return;
-            }
-            self->page_->InstalledExtensionsChanged(std::move(exts));
-          },
-          weak_factory_.GetWeakPtr()));
-}
-
-bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
-                                                const std::string& value) {
+MahoSettingsPageHandler::FfiResult MahoSettingsPageHandler::HandleFfiSetting(
+    const std::string& key,
+    const std::string& value) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   MahoCore* core = maho::GetCore();
-  if (!core) return false;
+  if (!core) return FfiResult::kNotHandled;
 
-  bool handled = false;
-  bool needs_color_reset = false;
-
-  if (key == "appearance.accent_color") {
-    maho_core_set_accent_color(core, value.c_str());
-    handled = true;
-    needs_color_reset = true;
-  } else if (key == "appearance.density") {
+  if (key == "appearance.density") {
     maho_core_set_density(core, value.c_str());
-    handled = true;
   } else if (key == "appearance.sidebar_width") {
     int width = 0;
-    if (!base::StringToInt(value, &width)) return true;
+    if (!base::StringToInt(value, &width)) return FfiResult::kInvalid;
     width = std::clamp(width, 180, 400);
     // Chromium desktop authoritative source: sidebar_prefs::kSidebarWidth is
     // observed by MahoSidebarContainerView for live width updates. Also
@@ -1445,10 +1469,9 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
-    handled = true;
   } else if (key == "tabs.archive_timeout") {
     int hours = 0;
-    if (!base::StringToInt(value, &hours)) return true;
+    if (!base::StringToInt(value, &hours)) return FfiResult::kInvalid;
     base::DictValue settings;
     base::DictValue general;
     general.Set("archiveTimeoutHours", static_cast<double>(hours));
@@ -1456,10 +1479,9 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
-    handled = true;
   } else if (key == "tabs.today_tab_timeout") {
     int hours = 0;
-    if (!base::StringToInt(value, &hours)) return true;
+    if (!base::StringToInt(value, &hours)) return FfiResult::kInvalid;
     base::DictValue settings;
     base::DictValue general;
     general.Set("todayTabTimeoutHours", static_cast<double>(hours));
@@ -1467,7 +1489,6 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
-    handled = true;
   } else if (key == "tabs.pinned_close_behavior") {
     base::DictValue settings;
     base::DictValue general;
@@ -1476,7 +1497,6 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
-    handled = true;
   } else if (key == "tabs.auto_delete_empty_folders_on_tidy") {
     base::DictValue settings;
     base::DictValue general;
@@ -1485,14 +1505,11 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
-    handled = true;
+  } else {
+    return FfiResult::kNotHandled;
   }
 
-  if (needs_color_reset) {
-    ui::ColorProviderManager::Get().ResetColorProviderCache();
-  }
-
-  return handled;
+  return FfiResult::kOk;
 }
 
 void MahoSettingsPageHandler::AppendFfiSettings(
@@ -1510,8 +1527,6 @@ void MahoSettingsPageHandler::AppendFfiSettings(
   if (!parsed || !parsed->is_dict()) return;
 
   const base::DictValue& root = parsed->GetDict();
-  const base::DictValue* appearance = root.FindDict("appearance");
-  if (!appearance) return;
 
   auto add = [&](const std::string& key, const std::string& val) {
     auto s = maho_settings::mojom::SettingValue::New();
@@ -1520,27 +1535,23 @@ void MahoSettingsPageHandler::AppendFfiSettings(
     settings.push_back(std::move(s));
   };
 
-  if (const std::string* density = appearance->FindString("density")) {
-    add("appearance.density", *density);
-  }
-  // Sidebar width: prefer the Chromium pref (authoritative for desktop, observed
-  // by MahoSidebarContainerView). Fall back to maho-core if pref is unset.
-  {
-    int chromium_width =
-        prefs_->GetInteger(maho::sidebar_prefs::kSidebarWidth);
-    if (chromium_width > 0) {
-      add("appearance.sidebar_width", base::NumberToString(chromium_width));
-    } else if (auto width = appearance->FindDouble("sidebarWidth")) {
-      add("appearance.sidebar_width",
-          base::NumberToString(static_cast<int>(*width)));
+  const base::DictValue* appearance = root.FindDict("appearance");
+  if (appearance) {
+    if (const std::string* density = appearance->FindString("density")) {
+      add("appearance.density", *density);
     }
-  }
-  if (const base::DictValue* color = appearance->FindDict("accentColor")) {
-    std::string color_json;
-    base::JSONWriter::Write(base::Value(color->Clone()), &color_json);
-    add("appearance.accent_color", color_json);
-  } else {
-    add("appearance.accent_color", "");
+    // Sidebar width: prefer the Chromium pref (authoritative for desktop, observed
+    // by MahoSidebarContainerView). Fall back to maho-core if pref is unset.
+    {
+      int chromium_width =
+          prefs_->GetInteger(maho::sidebar_prefs::kSidebarWidth);
+      if (chromium_width > 0) {
+        add("appearance.sidebar_width", base::NumberToString(chromium_width));
+      } else if (auto width = appearance->FindDouble("sidebarWidth")) {
+        add("appearance.sidebar_width",
+            base::NumberToString(static_cast<int>(*width)));
+      }
+    }
   }
 
   const base::DictValue* general = root.FindDict("general");
@@ -1562,7 +1573,6 @@ void MahoSettingsPageHandler::AppendFfiSettings(
           *auto_delete ? "true" : "false");
     }
   }
-
 }
 
 // ── Profiles domain ──
@@ -1600,11 +1610,47 @@ void MahoSettingsPageHandler::DeleteProfile(const std::string& profile_id,
   maho::PostCoreTask(
       FROM_HERE,
       base::BindOnce(&DeleteProfileOnCoreSequence, profile_id),
-      base::BindOnce(
-          [](DeleteProfileCallback cb, bool success) {
-            std::move(cb).Run(success);
-          },
-          std::move(callback)));
+      base::BindOnce(&MahoSettingsPageHandler::OnProfileDeleted,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnProfileDeleted(DeleteProfileCallback callback,
+                                               std::string json_res) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (json_res.empty()) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json_res, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  const auto& dict = parsed->GetDict();
+  std::optional<bool> success = dict.FindBool("success");
+  const std::string* profile_id = dict.FindString("profile_id");
+
+  bool is_success = success.value_or(false);
+
+  if (is_success && profile_id && !profile_id->empty()) {
+    auto basename = maho::MahoSpaceProfileBridge::ProfileBasenameForId(*profile_id);
+    if (basename && *basename != base::FilePath::FromASCII("Default")) {
+      base::FilePath abs = g_browser_process->profile_manager()
+          ->user_data_dir().Append(*basename);
+      if (profiles::IsMultipleProfilesEnabled() &&
+          !IsProfileDirectoryMarkedForDeletion(abs)) {
+        g_browser_process->profile_manager()->GetDeleteProfileHelper()
+            .MaybeScheduleProfileForDeletion(
+                abs, base::DoNothing(),
+                ProfileMetrics::DELETE_PROFILE_SETTINGS);
+      }
+    }
+  }
+
+  std::move(callback).Run(is_success);
 }
 
 void MahoSettingsPageHandler::SwitchProfile(const std::string& profile_id,
@@ -1644,6 +1690,9 @@ void MahoSettingsPageHandler::AddATCRule(const std::string& url_pattern,
       base::BindOnce(&AddATCRuleOnCoreSequence, url_pattern, target_space_id),
       base::BindOnce(
           [](AddATCRuleCallback cb, maho_settings::mojom::ATCRulePtr rule) {
+            if (rule && rule->enabled) {
+              maho::MahoAtcState::SetHasEnabledRules(true);
+            }
             std::move(cb).Run(std::move(rule));
           },
           std::move(callback)));
@@ -1651,17 +1700,23 @@ void MahoSettingsPageHandler::AddATCRule(const std::string& url_pattern,
 
 void MahoSettingsPageHandler::RemoveATCRule(const std::string& rule_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::PostCoreClosure(
+  maho::PostCoreTaskAndReply(
       FROM_HERE,
-      base::BindOnce(&RemoveATCRuleOnCoreSequence, rule_id));
+      base::BindOnce(&RemoveATCRuleOnCoreSequence, rule_id),
+      base::BindOnce([]() {
+        CheckHasEnabledRulesAndUpdate();
+      }));
 }
 
 void MahoSettingsPageHandler::ToggleATCRule(const std::string& rule_id,
                                              bool enabled) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::PostCoreClosure(
+  maho::PostCoreTaskAndReply(
       FROM_HERE,
-      base::BindOnce(&ToggleATCRuleOnCoreSequence, rule_id, enabled));
+      base::BindOnce(&ToggleATCRuleOnCoreSequence, rule_id, enabled),
+      base::BindOnce([]() {
+        CheckHasEnabledRulesAndUpdate();
+      }));
 }
 
 // ── AI domain ──
@@ -2504,60 +2559,7 @@ void MahoSettingsPageHandler::GetContentBlockerStats(
           std::move(callback)));
 }
 
-void MahoSettingsPageHandler::GetInstalledExtensions(
-    GetInstalledExtensionsCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!ext_bridge_observation_.IsObserving()) {
-    if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
-      ext_bridge_observation_.Observe(bridge);
-    }
-  }
-  maho::PostCoreTask(
-      FROM_HERE,
-      base::BindOnce(&BuildInstalledExtensionsOnCoreSequence),
-      base::BindOnce(
-          [](GetInstalledExtensionsCallback cb,
-             std::vector<maho_settings::mojom::InstalledExtensionPtr> exts) {
-            std::move(cb).Run(std::move(exts));
-          },
-          std::move(callback)));
-}
 
-void MahoSettingsPageHandler::ToggleExtension(const std::string& id,
-                                              ToggleExtensionCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto* registry = extensions::ExtensionRegistry::Get(profile_);
-  auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_);
-  if (!bridge) {
-    std::move(callback).Run(
-        registry && registry->enabled_extensions().Contains(id));
-    return;
-  }
-  const bool currently_enabled =
-      registry && registry->enabled_extensions().Contains(id);
-
-  if (!ext_bridge_observation_.IsObserving()) {
-    ext_bridge_observation_.Observe(bridge);
-  }
-
-  const bool target_state = !currently_enabled;
-
-  auto pending = std::make_unique<PendingToggle>();
-  pending->target_state = target_state;
-  pending->callback = std::move(callback);
-  pending->timer.Start(
-      FROM_HERE, base::Seconds(2),
-      base::BindOnce(&MahoSettingsPageHandler::OnToggleTimeout,
-                     weak_factory_.GetWeakPtr(), id));
-
-  pending_toggles_[id] = std::move(pending);
-
-  if (currently_enabled) {
-    bridge->RequestDisable(id);
-  } else {
-    bridge->RequestEnable(id);
-  }
-}
 
 void MahoSettingsPageHandler::OpenExtensionsPage() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -2569,72 +2571,6 @@ void MahoSettingsPageHandler::OpenExtensionsPage() {
 }
 
 
-void MahoSettingsPageHandler::RemoveExtension(const std::string& id,
-                                              RemoveExtensionCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (uninstall_dialog_ || pending_remove_callback_) {
-    std::move(callback).Run(
-        maho_settings::mojom::RemoveExtensionResult::kBusy);
-    return;
-  }
-
-  auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_);
-  if (!bridge) {
-    std::move(callback).Run(
-        maho_settings::mojom::RemoveExtensionResult::kNotFound);
-    return;
-  }
-
-  if (!bridge->RequestUninstall(id)) {
-    auto* registry = extensions::ExtensionRegistry::Get(profile_);
-    const bool exists =
-        registry &&
-        registry->GetExtensionById(id,
-                                   extensions::ExtensionRegistry::EVERYTHING);
-    std::move(callback).Run(
-        exists ? maho_settings::mojom::RemoveExtensionResult::kBlockedByPolicy
-               : maho_settings::mojom::RemoveExtensionResult::kNotFound);
-    return;
-  }
-
-  auto* registry = extensions::ExtensionRegistry::Get(profile_);
-  scoped_refptr<const extensions::Extension> ext =
-      registry
-          ? registry->GetExtensionById(
-                id, extensions::ExtensionRegistry::EVERYTHING)
-          : nullptr;
-  if (!ext) {
-    std::move(callback).Run(
-        maho_settings::mojom::RemoveExtensionResult::kNotFound);
-    return;
-  }
-
-  pending_remove_callback_ = std::move(callback);
-  uninstall_dialog_ = extensions::ExtensionUninstallDialog::Create(
-      profile_, /*parent=*/gfx::NativeWindow(), this);
-  uninstall_dialog_->ConfirmUninstall(
-      ext, extensions::UNINSTALL_REASON_USER_INITIATED,
-      extensions::UNINSTALL_SOURCE_CHROME_EXTENSIONS_PAGE);
-}
-
-void MahoSettingsPageHandler::OnExtensionUninstallDialogClosed(
-    bool did_start_uninstall,
-    const std::u16string& error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  uninstall_dialog_.reset();
-  if (pending_remove_callback_) {
-    maho_settings::mojom::RemoveExtensionResult result;
-    if (!did_start_uninstall) {
-      result = maho_settings::mojom::RemoveExtensionResult::kCancelled;
-    } else if (!error.empty()) {
-      result = maho_settings::mojom::RemoveExtensionResult::kUninstallFailed;
-    } else {
-      result = maho_settings::mojom::RemoveExtensionResult::kSuccess;
-    }
-    std::move(pending_remove_callback_).Run(result);
-  }
-}
 
 void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
                                          const std::string& key,
@@ -2762,7 +2698,7 @@ void MahoSettingsPageHandler::OnRelayLoginCompleted(
 
   // Populate tier + subscription prefs from /auth/subscription.
   // Fire-and-forget — failure leaves tier empty until user opens Billing pane.
-  GetBillingInfo(base::BindOnce([](maho_settings::mojom::BillingInfoPtr) {
+  GetBillingInfo(base::BindOnce([](maho_settings::mojom::BillingInfoPtr, const std::string&) {
     // Result persisted to prefs inside OnSubscriptionResponse; discard here.
   }));
 
@@ -2863,51 +2799,21 @@ void MahoSettingsPageHandler::GetBillingInfo(GetBillingInfoCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!encryptor_.has_value()) {
-    auto info = maho_settings::mojom::BillingInfo::New();
-    info->tier = "";
-    info->subscription_status = "";
-    info->subscription_expires_at = 0;
-    info->period_start_at = 0;
-    info->anniversary_reset_day = 0;
-    info->tier_ceiling_usd = 0.0f;
-    info->credit_balance_usd = 0.0f;
-    info->lifetime_purchased_usd = 0.0f;
-    info->has_payment_method = false;
-    std::move(callback).Run(std::move(info));
+    std::move(callback).Run(nullptr, "Encryptor not ready");
     return;
   }
 
   std::string access_token =
       maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
   if (access_token.empty()) {
-    auto info = maho_settings::mojom::BillingInfo::New();
-    info->tier = "";
-    info->subscription_status = "";
-    info->subscription_expires_at = 0;
-    info->period_start_at = 0;
-    info->anniversary_reset_day = 0;
-    info->tier_ceiling_usd = 0.0f;
-    info->credit_balance_usd = 0.0f;
-    info->lifetime_purchased_usd = 0.0f;
-    info->has_payment_method = false;
-    std::move(callback).Run(std::move(info));
+    std::move(callback).Run(nullptr, "Not logged in");
     return;
   }
 
   std::string relay_url = maho::auth::GetRelayBaseUrl();
   GURL request_url(relay_url + "/auth/subscription");
   if (!request_url.is_valid()) {
-    auto info = maho_settings::mojom::BillingInfo::New();
-    info->tier = "";
-    info->subscription_status = "";
-    info->subscription_expires_at = 0;
-    info->period_start_at = 0;
-    info->anniversary_reset_day = 0;
-    info->tier_ceiling_usd = 0.0f;
-    info->credit_balance_usd = 0.0f;
-    info->lifetime_purchased_usd = 0.0f;
-    info->has_payment_method = false;
-    std::move(callback).Run(std::move(info));
+    std::move(callback).Run(nullptr, "Invalid relay URL");
     return;
   }
 
@@ -2943,27 +2849,17 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
     std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  auto make_empty_info = []() {
-    auto info = maho_settings::mojom::BillingInfo::New();
-    info->tier = "";
-    info->subscription_status = "";
-    info->subscription_expires_at = 0;
-    info->period_start_at = 0;
-    info->anniversary_reset_day = 0;
-    info->tier_ceiling_usd = 0.0f;
-    info->credit_balance_usd = 0.0f;
-    info->lifetime_purchased_usd = 0.0f;
-    info->has_payment_method = false;
-    return info;
-  };
-
   int net_error = loader->NetError();
   const auto* response_info = loader->ResponseInfo();
   int http_status =
       response_info ? response_info->headers->response_code() : 0;
 
-  if (net_error != net::OK || !response_body.has_value()) {
-    std::move(callback).Run(make_empty_info());
+  if (net_error != net::OK) {
+    std::move(callback).Run(nullptr, "Network error: " + base::NumberToString(net_error));
+    return;
+  }
+  if (!response_body.has_value()) {
+    std::move(callback).Run(nullptr, "Empty response from relay");
     return;
   }
 
@@ -2978,33 +2874,18 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
             [](base::WeakPtr<MahoSettingsPageHandler> handler,
                GetBillingInfoCallback cb, bool success, int refresh_http_status,
                std::optional<maho::auth::RefreshedTokens> tokens) {
-              auto make_empty = []() {
-                auto info = maho_settings::mojom::BillingInfo::New();
-                info->tier = "";
-                info->subscription_status = "";
-                info->subscription_expires_at = 0;
-                info->period_start_at = 0;
-                info->anniversary_reset_day = 0;
-                info->tier_ceiling_usd = 0.0f;
-                info->credit_balance_usd = 0.0f;
-                info->lifetime_purchased_usd = 0.0f;
-                info->has_payment_method = false;
-                return info;
-              };
               if (!handler) {
-                std::move(cb).Run(make_empty());
+                std::move(cb).Run(nullptr, "Handler destroyed during refresh");
                 return;
               }
               if (!success || !tokens || !handler->encryptor_.has_value()) {
                 if (refresh_http_status == 401) {
                   maho::auth::ClearRelayTokens(handler->prefs_);
                   handler->BroadcastAccountStatus();
+                  std::move(cb).Run(nullptr, "Session expired");
                 } else {
-                  DLOG(WARNING) << "Billing refresh failed (HTTP "
-                                << refresh_http_status
-                                << "); preserving auth state.";
+                  std::move(cb).Run(nullptr, "Refresh failed (HTTP " + base::NumberToString(refresh_http_status) + ")");
                 }
-                std::move(cb).Run(make_empty());
                 return;
               }
               maho::auth::StoreTokensParams params;
@@ -3024,7 +2905,7 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
                       handler->prefs_, *handler->encryptor_, params)) {
                 maho::auth::ClearRelayTokens(handler->prefs_);
                 handler->BroadcastAccountStatus();
-                std::move(cb).Run(make_empty());
+                std::move(cb).Run(nullptr, "Failed to store session tokens");
                 return;
               }
               handler->GetBillingInfo(std::move(cb));
@@ -3034,14 +2915,14 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
   }
 
   if (http_status != 200) {
-    std::move(callback).Run(make_empty_info());
+    std::move(callback).Run(nullptr, "HTTP error: " + base::NumberToString(http_status));
     return;
   }
 
   auto parsed =
       base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_dict()) {
-    std::move(callback).Run(make_empty_info());
+    std::move(callback).Run(nullptr, "Failed to parse billing JSON");
     return;
   }
 
@@ -3086,7 +2967,7 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
   // Re-broadcast so account pane updates without page reload:
   BroadcastAccountStatus();
 
-  std::move(callback).Run(std::move(info));
+  std::move(callback).Run(std::move(info), "");
 }
 
 void MahoSettingsPageHandler::BroadcastAccountStatus() {
@@ -3326,3 +3207,126 @@ void MahoSettingsPageHandler::GetBuyCreditsUrl(
   std::move(callback).Run(checkout_url);
 }
 
+void MahoSettingsPageHandler::MailListAccounts(
+    MailListAccountsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->ListAccounts(base::BindOnce(
+      [](MailListAccountsCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailAddAccount(
+    const std::string& request_json,
+    MailAddAccountCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->AddAccount(request_json, base::BindOnce(
+      [](MailAddAccountCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailDeleteAccount(
+    const std::string& account_id,
+    MailDeleteAccountCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->DeleteAccount(account_id, base::BindOnce(
+      [](MailDeleteAccountCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailOAuthStartUrl(
+    const std::string& provider,
+    const std::string& client_id,
+    const std::string& redirect_uri,
+    MailOAuthStartUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->OAuthLoopbackSignIn(
+      provider,
+      base::BindOnce(
+          [](MailOAuthStartUrlCallback cb, bool success, std::string msg) {
+            std::move(cb).Run(success, msg);
+          },
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailOAuthComplete(
+    const std::string& state,
+    const std::string& code,
+    MailOAuthCompleteCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->OAuthComplete(state, code, base::BindOnce(
+      [](MailOAuthCompleteCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailReconnectAccount(
+    const std::string& account_id,
+    MailReconnectAccountCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->ReconnectAccount(account_id, base::BindOnce(
+      [](MailReconnectAccountCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailOAuthCancel(
+    const std::string& state,
+    MailOAuthCancelCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false);
+    return;
+  }
+  service->OAuthCancel(state, std::move(callback));
+}
+
+void MahoSettingsPageHandler::OnAccountsChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  page_->OnMailAccountsChanged();
+}

@@ -90,7 +90,6 @@ fn profile_contains_all_entity_arrays() {
         settings: Settings {
             appearance: AppearanceSettings {
                 theme: Theme::System,
-                accent_color: None,
                 density: Density::Comfortable,
                 sidebar_width: 280.0,
                 show_tab_bar: true,

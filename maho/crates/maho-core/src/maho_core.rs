@@ -31,7 +31,7 @@ impl PersistThrottle {
 use maho_types::account::{AccountInfo, AuthState};
 use maho_types::ai::{AiProfile, AiWorkspace};
 use maho_types::boost::{Boost, BoostUpdate};
-use maho_types::common::{MemoryPressureLevel, Url};
+use maho_types::common::{DateTime, MemoryPressureLevel, Url};
 use maho_types::events::core_update::{CoreUpdate, MemoryAction, SPLIT_VIEW_SCHEMA_VERSION};
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId, WindowId};
@@ -44,7 +44,7 @@ use maho_types::space::{RootItem, Space, SpaceColor};
 use maho_types::split_view::{SplitConfig, SplitViewConfig};
 use maho_types::tab::{Tab, TabLifecycleState, TabRole};
 use maho_types::traits::shell_renderer::{
-    ArchivedTabViewModel, SearchContext, SpaceViewModel, SuggestionViewModel, TabViewModel,
+    ArchivedTabViewModel, DownloadState, SearchContext, SpaceViewModel, SuggestionViewModel, TabViewModel,
 };
 
 use crate::account_manager::AccountManager;
@@ -1421,6 +1421,9 @@ pub struct MahoCore {
     sharing_manager: SharingManager,
     memory_manager: MemoryManager,
     persist_throttle: RefCell<PersistThrottle>,
+    /// B3: Tracks last-persisted received_bytes per download to throttle SQLite writes.
+    /// Progress is only flushed to storage every DOWNLOAD_PERSIST_INTERVAL_BYTES.
+    download_progress_last_persisted: HashMap<String, u64>,
     sync_push_count: Cell<usize>,
     sync_last_snapshot_time: Cell<chrono::DateTime<chrono::Utc>>,
     sync_startup_time: Cell<chrono::DateTime<chrono::Utc>>,
@@ -1743,6 +1746,7 @@ impl MahoCore {
             sharing_manager: SharingManager::new(),
             memory_manager: MemoryManager::new(),
             persist_throttle: RefCell::new(PersistThrottle::new()),
+            download_progress_last_persisted: HashMap::new(),
             sync_push_count: Cell::new(0),
             sync_last_snapshot_time: Cell::new(chrono::Utc::now() - chrono::Duration::hours(6)),
             sync_startup_time: Cell::new(chrono::Utc::now()),
@@ -1834,6 +1838,50 @@ impl MahoCore {
                             if !enabled {
                                 self.shortcut_manager.toggle_shortcut(&action, false);
                             }
+                        }
+                    }
+                    if let Ok(downloads_data) = storage.load_downloads() {
+                        for (id, filename, url, total_bytes, received_bytes, state, file_path, started_at, completed_at, mime_type, chromium_guid) in downloads_data {
+                            let dl_state = match state.as_str() {
+                                "paused" => DownloadState::Paused,
+                                "completed" => DownloadState::Completed,
+                                "failed" => DownloadState::Failed,
+                                "cancelled" => DownloadState::Cancelled,
+                                _ => DownloadState::Downloading,
+                            };
+                            // Active rows are re-ingested live by the browser download
+                            // manager on restart under a fresh id; drop the stale row so
+                            // the same file does not appear twice.
+                            if matches!(dl_state, DownloadState::Downloading | DownloadState::Paused) {
+                                let _ = storage.delete_download(&id);
+                                continue;
+                            }
+                            // D4: delete stale completed rows with empty filename AND empty/missing file_path
+                            if matches!(dl_state, DownloadState::Completed)
+                                && filename.is_empty()
+                                && file_path.as_deref().unwrap_or("").is_empty()
+                            {
+                                let _ = storage.delete_download(&id);
+                                continue;
+                            }
+                            let dl_id = maho_types::identifiers::DownloadId::new(id);
+                            let download = crate::download_manager::Download {
+                                id: dl_id.clone(),
+                                filename,
+                                url,
+                                total_bytes,
+                                received_bytes,
+                                state: dl_state,
+                                started_at: DateTime::from_iso(started_at),
+                                file_path,
+                                resume_data: None,
+                                mime_type,
+                                error: None,
+                                completed_at: completed_at.map(DateTime::from_iso),
+                                original_filename: None,
+                                chromium_guid,
+                            };
+                            self.download_manager.seed_download(download);
                         }
                     }
                     // Memory feature: build HNSW from persisted embeddings
@@ -2404,7 +2452,9 @@ impl MahoCore {
 
         // Load ATC rules
         if let Ok(rules_data) = storage.load_atc_rules() {
-            for (id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled) in rules_data {
+            for (id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled, match_type) in
+                rules_data
+            {
                 let rule = crate::atc_manager::ATCRule {
                     id,
                     name,
@@ -2414,8 +2464,22 @@ impl MahoCore {
                     max_tabs,
                     enabled,
                 };
-                self.atc_manager.restore_rule(rule);
+                let traffic_match_type = match_type
+                    .as_deref()
+                    .and_then(maho_types::air_traffic::MatchType::parse);
+                self.atc_manager.restore_rule(rule, traffic_match_type);
             }
+        }
+
+        // Load default link behavior and open_external_links_in_little_arc
+        if let Ok(Some(behavior_json)) = storage.get_setting("default_link_behavior") {
+            if let Ok(behavior) = serde_json::from_str(&behavior_json) {
+                self.atc_manager.set_default_link_behavior(behavior);
+            }
+        }
+        if let Ok(Some(flag_str)) = storage.get_setting("open_external_links_in_little_arc") {
+            let flag = flag_str == "true";
+            self.atc_manager.set_open_external_links_in_little_arc(flag);
         }
 
         // Load autofill addresses
@@ -2739,6 +2803,13 @@ impl MahoCore {
         let active_space_id = self.space_manager.get_active_space_id().clone();
         let folders = self.get_folder_view_models(&active_space_id);
 
+        let recent_tabs: Vec<TabViewModel> = self
+            .tab_manager
+            .get_recent_tabs(12)
+            .into_iter()
+            .map(|tab| self.make_view_model(tab))
+            .collect();
+
         let ctx = SearchContext {
             tabs: external_tabs,
             spaces: space_view_models,
@@ -2749,6 +2820,7 @@ impl MahoCore {
             closed_tabs,
             extensions,
             is_incognito,
+            recent_tabs,
         };
 
         let mut results = self.command_bar.search(query, mode, &ctx);
@@ -2993,6 +3065,7 @@ impl MahoCore {
                 None,
                 None,
                 rule.enabled,
+                Some(rule.match_type.as_str()),
             );
         }
     }
@@ -3217,6 +3290,31 @@ impl MahoCore {
             let _ = storage.delete_atc_rule(rule_id);
         }
         rule
+    }
+
+    pub fn set_open_external_links_in_little_arc_persisted(&mut self, enabled: bool) {
+        self.atc_manager.set_open_external_links_in_little_arc(enabled);
+        if let Some(ref storage) = self.storage {
+            let val_str = if enabled { "true" } else { "false" };
+            let _ = storage.set_setting("open_external_links_in_little_arc", val_str);
+        }
+    }
+
+    pub fn get_open_external_links_in_little_arc(&self) -> bool {
+        self.atc_manager.get_open_external_links_in_little_arc()
+    }
+
+    pub fn get_default_link_behavior(&self) -> &maho_types::air_traffic::DefaultLinkBehavior {
+        self.atc_manager.get_default_link_behavior()
+    }
+
+    pub fn decide_link_destination(
+        &self,
+        url: &str,
+        is_external: bool,
+        space_rules: &[(maho_types::identifiers::SpaceId, Vec<maho_types::space::ATCRule>)],
+    ) -> maho_types::air_traffic::LinkDestination {
+        self.atc_manager.decide_link_destination(url, is_external, space_rules)
     }
 
     pub fn add_autofill_address_persisted(
@@ -3615,19 +3713,52 @@ impl MahoCore {
         joined
     }
 
+    fn save_download_to_storage(&self, download_id: &str) {
+        if let Some(ref storage) = self.storage {
+            let id = maho_types::identifiers::DownloadId::new(download_id);
+            if let Some(download) = self.download_manager.get_download(&id) {
+                let state_str = match download.state {
+                    DownloadState::Downloading => "downloading",
+                    DownloadState::Paused => "paused",
+                    DownloadState::Completed => "completed",
+                    DownloadState::Failed => "failed",
+                    DownloadState::Cancelled => "cancelled",
+                };
+                let _ = storage.save_download(
+                    download.id.as_ref(),
+                    &download.filename,
+                    &download.url,
+                    download.total_bytes,
+                    download.received_bytes,
+                    state_str,
+                    download.file_path.as_deref(),
+                    download.started_at.as_ref(),
+                    download.completed_at.as_ref().map(|dt| dt.as_ref()),
+                    download.mime_type.as_deref(),
+                    download.chromium_guid.as_deref(),
+                );
+            }
+        }
+    }
+
     pub fn pause_download(&mut self, download_id: &str) {
         let id = maho_types::identifiers::DownloadId::new(download_id);
         self.download_manager.pause_download(&id);
+        self.save_download_to_storage(download_id);
     }
 
     pub fn resume_download(&mut self, download_id: &str) {
         let id = maho_types::identifiers::DownloadId::new(download_id);
         self.download_manager.resume_download(&id);
+        self.save_download_to_storage(download_id);
     }
 
     pub fn cancel_download(&mut self, download_id: &str) {
         let id = maho_types::identifiers::DownloadId::new(download_id);
         self.download_manager.cancel_download(&id);
+        self.save_download_to_storage(download_id);
+        // Clean up throttle tracking entry — download is terminal.
+        self.download_progress_last_persisted.remove(download_id);
     }
 
     pub fn remove_download(&mut self, download_id: &str) {
@@ -3636,6 +3767,8 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_download(download_id);
         }
+        // Clean up throttle tracking entry to prevent unbounded growth.
+        self.download_progress_last_persisted.remove(download_id);
     }
 
     pub fn start_download(
@@ -3645,6 +3778,7 @@ impl MahoCore {
         total_bytes: u64,
         file_path: Option<&str>,
         mime_type: Option<&str>,
+        chromium_guid: Option<&str>,
     ) -> String {
         let id = self.download_manager.start_download(
             filename.to_string(),
@@ -3652,23 +3786,86 @@ impl MahoCore {
             total_bytes,
             file_path.map(String::from),
             mime_type.map(String::from),
+            chromium_guid.map(String::from),
         );
-        id.to_string()
+        let id_str = id.to_string();
+        self.save_download_to_storage(&id_str);
+        id_str
+    }
+
+    pub fn find_download_by_chromium_guid(&self, guid: &str) -> Option<String> {
+        self.download_manager
+            .find_by_chromium_guid(guid)
+            .map(|d| d.id.to_string())
     }
 
     pub fn update_download_progress(&mut self, download_id: &str, received_bytes: u64) {
         let id = maho_types::identifiers::DownloadId::new(download_id);
         self.download_manager.update_progress(&id, received_bytes);
+        // B3: Throttle SQLite progress writes to every 512 KB to avoid disk write storms
+        // on large/fast downloads. State transitions (complete/fail/cancel) always write
+        // immediately via save_download_to_storage.
+        const DOWNLOAD_PERSIST_INTERVAL_BYTES: u64 = 512 * 1024;
+        let last = self
+            .download_progress_last_persisted
+            .get(download_id)
+            .copied()
+            .unwrap_or(0);
+        if received_bytes.saturating_sub(last) >= DOWNLOAD_PERSIST_INTERVAL_BYTES {
+            if let Some(ref storage) = self.storage {
+                if let Some(download) = self.download_manager.get_download(&id) {
+                    let state_str = match download.state {
+                        DownloadState::Downloading => "downloading",
+                        DownloadState::Paused => "paused",
+                        DownloadState::Completed => "completed",
+                        DownloadState::Failed => "failed",
+                        DownloadState::Cancelled => "cancelled",
+                    };
+                    let _ = storage.update_download_progress(
+                        download_id,
+                        received_bytes,
+                        state_str,
+                    );
+                }
+            }
+            self.download_progress_last_persisted
+                .insert(download_id.to_string(), received_bytes);
+        }
+    }
+
+    pub fn update_download_metadata(
+        &mut self,
+        download_id: &str,
+        filename: Option<&str>,
+        file_path: Option<&str>,
+        mime_type: Option<&str>,
+        total_bytes: Option<u64>,
+    ) {
+        let id = maho_types::identifiers::DownloadId::new(download_id);
+        self.download_manager.update_metadata(
+            &id,
+            filename.map(String::from),
+            file_path.map(String::from),
+            mime_type.map(String::from),
+            total_bytes,
+        );
+        self.save_download_to_storage(download_id);
     }
 
     pub fn fail_download(&mut self, download_id: &str, error: &str) {
         let id = maho_types::identifiers::DownloadId::new(download_id);
         self.download_manager.fail_download(&id, error.to_string());
+        self.save_download_to_storage(download_id);
+        // Clean up throttle tracking entry — download is terminal.
+        self.download_progress_last_persisted.remove(download_id);
     }
 
     pub fn complete_download(&mut self, download_id: &str) -> Vec<CoreUpdate> {
         let id = maho_types::identifiers::DownloadId::new(download_id);
         self.download_manager.complete_download(&id);
+        self.save_download_to_storage(download_id);
+        // Clean up throttle tracking entry — download is terminal.
+        self.download_progress_last_persisted.remove(download_id);
         let mut updates = vec![CoreUpdate::DownloadCompleted {
             download_id: id.clone(),
         }];
@@ -3988,9 +4185,9 @@ impl MahoCore {
             | ShellEvent::FreezeTab { .. }
             | ShellEvent::UnfreezeTab { .. }
             | ShellEvent::SuspendTab { .. }
+            | ShellEvent::ArchiveTabById { .. }
             | ShellEvent::FavoriteTab { .. }
             | ShellEvent::ChangeTabRole { .. }
-            | ShellEvent::PinTab { .. }
             | ShellEvent::UnpinTab { .. }
             | ShellEvent::SetTabCustomTitle { .. }
             | ShellEvent::ResetPinnedTab { .. }
@@ -4006,6 +4203,7 @@ impl MahoCore {
             | ShellEvent::DuplicateTab { .. }
             | ShellEvent::RestoreArchivedTab { .. }
             | ShellEvent::DeleteArchivedTab { .. }
+            | ShellEvent::PinTab { .. }
             | ShellEvent::ReorderTab { .. }
             | ShellEvent::ReorderFavorite { .. }
             | ShellEvent::MoveTab { .. }
@@ -4181,7 +4379,9 @@ impl MahoCore {
                 return vec![];
             }
             ShellEvent::CreateProfile { name } => {
-                self.create_profile_persisted(name.clone());
+                if let Err(e) = self.create_profile_persisted(name.clone()) {
+                    eprintln!("[Maho] CreateProfile failed for '{name}': {e}");
+                }
                 return vec![];
             }
             ShellEvent::DeleteProfile { profile_id } => {
@@ -4492,6 +4692,11 @@ impl MahoCore {
             }
             ShellEvent::SetDefaultLinkBehavior { behavior } => {
                 self.atc_manager.set_default_link_behavior(behavior.clone());
+                if let Some(ref storage) = self.storage {
+                    if let Ok(json) = serde_json::to_string(&behavior) {
+                        let _ = storage.set_setting("default_link_behavior", &json);
+                    }
+                }
                 return vec![];
             }
             ShellEvent::RenameSpace { space_id, name } => {
@@ -4733,6 +4938,26 @@ impl MahoCore {
             }
             ShellEvent::PinTab { ref tab_id } => {
                 let mut updates = self.transition_tab_role(tab_id, TabRole::Pinned);
+                if let Some(space_id) =
+                    self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone())
+                {
+                    let pinned_tab_ids: HashSet<TabId> = self
+                        .tab_manager
+                        .get_all_tabs()
+                        .iter()
+                        .filter(|t| t.space_id == space_id && t.role.is_pinned())
+                        .map(|t| t.id.clone())
+                        .collect();
+                    self.space_manager.move_root_tab_to_end_of_pinned(
+                        &space_id,
+                        tab_id,
+                        &pinned_tab_ids,
+                    );
+                    updates.push(CoreUpdate::TabOrderChanged {
+                        space_id,
+                        order: vec![],
+                    });
+                }
                 if self.settings_manager.get_settings().max.tidy_tab_titles {
                     if let Some(tab) = self.tab_manager.get_tab(tab_id) {
                         let tidy_update = self
@@ -5257,6 +5482,7 @@ impl MahoCore {
             closed_tabs,
             extensions,
             is_incognito: event_is_incognito,
+            recent_tabs: Vec::new(),
         };
 
         // Extract PinTab info before dispatch consumes the event
@@ -5621,8 +5847,8 @@ impl MahoCore {
         self.profile_manager.list_profiles()
     }
 
-    pub fn create_profile_persisted(&mut self, name: String) -> maho_types::profile::ProfileConfig {
-        let profile = self.profile_manager.create_profile(name).clone();
+    pub fn create_profile_persisted(&mut self, name: String) -> Result<maho_types::profile::ProfileConfig, crate::profile_manager::ProfileError> {
+        let profile = self.profile_manager.create_profile(name)?.clone();
         self.persist_profile(&profile);
         let update = CoreUpdate::ProfileCreated {
             profile: profile.clone(),
@@ -5630,7 +5856,7 @@ impl MahoCore {
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
         }
-        profile
+        Ok(profile)
     }
 
     pub fn delete_profile(&mut self, id: &maho_types::identifiers::ProfileId) -> bool {
@@ -5794,6 +6020,7 @@ impl MahoCore {
                 rule.max_age_hours,
                 rule.max_tabs,
                 rule.enabled,
+                None,
             );
         }
         id
@@ -5816,6 +6043,14 @@ impl MahoCore {
 
     pub fn toggle_atc_rule(&mut self, rule_id: &str, enabled: bool) {
         self.atc_manager.toggle_rule(rule_id, enabled)
+    }
+
+    pub fn toggle_traffic_rule_persisted(&mut self, rule_id: &str, enabled: bool) {
+        if let Some(rule) = self.atc_manager.get_traffic_rules().iter().find(|r| r.id == rule_id).cloned() {
+            let mut updated_rule = rule;
+            updated_rule.enabled = enabled;
+            self.update_traffic_rule_persisted(updated_rule);
+        }
     }
 
     pub fn get_pinned_tabs(&self, space_id: &SpaceId) -> Vec<TabViewModel> {
@@ -5939,14 +6174,15 @@ impl MahoCore {
             .into_iter()
             .map(|tab| ArchivedTabViewModel {
                 id: tab.id.clone(),
+                space_id: tab.space_id.clone(),
                 title: tab.title.clone(),
                 url: tab.url.0.clone(),
                 favicon: tab.favicon.clone(),
                 archived_at: self
                     .tab_manager
-                    .state_timestamp_for_tab(&tab.id)
-                    .map(timestamp_millis_to_iso8601)
-                    .unwrap_or_else(|| tab.last_active_at.0.clone()),
+                     .state_timestamp_for_tab(&tab.id)
+                     .map(timestamp_millis_to_iso8601)
+                     .unwrap_or_else(|| tab.last_active_at.0.clone()),
             })
             .collect()
     }
@@ -7744,36 +7980,6 @@ impl MahoCore {
         self.update_settings(SettingsUpdate {
             appearance: Some(AppearanceSettingsUpdate {
                 density: Some(density),
-                ..Default::default()
-            }),
-            general: None,
-            privacy: None,
-            reader: None,
-            keyboard_shortcuts: None,
-            per_site_settings: None,
-            toolbar_items: None,
-            max: None,
-            autofill: None,
-            advanced: None,
-            notifications: None,
-        });
-    }
-
-    pub fn set_accent_color(&mut self, color_json: &str) {
-        let color: Option<maho_types::common::Color> = match serde_json::from_str(color_json) {
-            Ok(c) => c,
-            Err(_) => {
-                self.emit_error(
-                    "set_accent_color",
-                    "INVALID_COLOR",
-                    "Invalid accent color data",
-                );
-                return;
-            }
-        };
-        self.update_settings(SettingsUpdate {
-            appearance: Some(AppearanceSettingsUpdate {
-                accent_color: Some(color),
                 ..Default::default()
             }),
             general: None,
@@ -10692,6 +10898,10 @@ impl SpaceManagerInterface for SpaceManager {
 
     fn remove_tab_from_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: &TabId) {
         self.remove_tab_from_folder(space_id, folder_id, tab_id)
+    }
+
+    fn remove_empty_folders_in_space(&mut self, space_id: &SpaceId) -> Vec<FolderId> {
+        self.remove_empty_folders_in_space(space_id)
     }
 
     fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool {

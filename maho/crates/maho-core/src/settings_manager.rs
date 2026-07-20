@@ -77,7 +77,6 @@ impl SettingsManager {
             },
             appearance: AppearanceSettings {
                 theme: Theme::System,
-                accent_color: None,
                 density: Density::Comfortable,
                 sidebar_width: 260.0,
                 show_tab_bar: true,
@@ -161,9 +160,6 @@ impl SettingsManager {
         if let Some(appearance) = changes.appearance {
             if let Some(theme) = appearance.theme {
                 self.settings.appearance.theme = theme;
-            }
-            if let Some(accent_color) = appearance.accent_color {
-                self.settings.appearance.accent_color = accent_color;
             }
             if let Some(density) = appearance.density {
                 self.settings.appearance.density = density;

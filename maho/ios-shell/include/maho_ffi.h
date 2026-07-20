@@ -1316,13 +1316,6 @@ void maho_core_set_density(MahoCore *ptr, const char *density);
 
 /**
  * # Safety
- * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `color_json` must be a
- * valid NUL-terminated C string. No-op on null input or if import is active.
- */
-void maho_core_set_accent_color(MahoCore *ptr, const char *colorJson);
-
-/**
- * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `css` may be null
  * (treated as clearing the CSS) or a valid NUL-terminated C string. No-op if import is active.
  */
@@ -1462,6 +1455,50 @@ char *maho_core_remove_atc_rule(MahoCore *core, const char *ruleId);
  * `rule_id` must be a valid null-terminated C string.
  */
 void maho_core_toggle_atc_rule(MahoCore *core, const char *ruleId, bool enabled);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `rule_json` must be a valid null-terminated C string containing TrafficRule JSON.
+ */
+char *maho_core_add_traffic_rule(MahoCore *core, const char *ruleJson);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `rule_id` must be a valid null-terminated C string.
+ */
+char *maho_core_remove_traffic_rule_persisted(MahoCore *core, const char *ruleId);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `rule_id` must be a valid null-terminated C string.
+ */
+void maho_core_toggle_traffic_rule_persisted(MahoCore *core, const char *ruleId, bool enabled);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `url` must be a valid null-terminated C string.
+ * `space_rules_json` must be a valid null-terminated C string containing JSON space rules or null.
+ */
+char *maho_core_decide_link_destination(MahoCore *core,
+                                        const char *url,
+                                        bool isExternal,
+                                        const char *spaceRulesJson);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+void maho_core_set_open_external_links_in_little_arc(MahoCore *core, bool enabled);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+bool maho_core_get_open_external_links_in_little_arc(MahoCore *core);
 
 /**
  * # Safety
@@ -2197,6 +2234,15 @@ void maho_agent_session_free(struct MahoAgentSession *session);
 bool maho_agent_send_message(struct MahoAgentSession *session,
                              const char *message,
                              void (*onToken)(void *user_data, const char *token),
+                             void (*onThinking)(void *user_data, const char *thinking),
+                             void (*onToolCall)(void *user_data,
+                                                const char *id,
+                                                const char *name,
+                                                const char *args),
+                             void (*onToolResult)(void *user_data,
+                                                  const char *id,
+                                                  const char *name,
+                                                  const char *result),
                              void (*onComplete)(void *user_data,
                                                 const char *full_text,
                                                 const char *tool_calls_json),
@@ -2212,6 +2258,7 @@ bool maho_agent_send_message(struct MahoAgentSession *session,
 bool maho_agent_send_message_simple(struct MahoAgentSession *session,
                                     const char *message,
                                     void (*onToken)(void *user_data, const char *token),
+                                    void (*onThinking)(void *user_data, const char *thinking),
                                     void (*onComplete)(void *user_data,
                                                        const char *full_text,
                                                        const char *tool_calls_json),

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::autofill::{AutofillSettings, AutofillSettingsUpdate};
-use crate::common::Color;
 use crate::keyboard::KeyModifier;
 use crate::max_settings::{MaxSettings, MaxSettingsUpdate};
 
@@ -88,7 +87,6 @@ pub struct SearchEngine {
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceSettings {
     pub theme: Theme,
-    pub accent_color: Option<Color>,
     pub density: Density,
     pub sidebar_width: f64,
     pub show_tab_bar: bool,
@@ -314,8 +312,6 @@ pub struct GeneralSettingsUpdate {
 pub struct AppearanceSettingsUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<Theme>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accent_color: Option<Option<Color>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub density: Option<Density>,
     #[serde(skip_serializing_if = "Option::is_none")]

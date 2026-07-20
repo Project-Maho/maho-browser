@@ -20,6 +20,7 @@
 #include "cc/paint/paint_shader.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/functional/bind.h"
@@ -60,30 +61,27 @@ constexpr int kHeaderSpacingDp = 8;
 constexpr int kHeaderTextSpacingDp = 3;
 constexpr int kMetaSpacingDp = 4;
 
-SkColor ParseSpaceAccentColor(const std::string& color_string,
-                              SkColor fallback_color) {
+std::optional<SkColor> ParseSpaceThemeColor(const std::string& color_string) {
   std::string hex = color_string;
   if (!hex.empty() && hex.front() == '#') {
     hex.erase(hex.begin());
   }
   if (hex.size() != 6) {
-    return fallback_color;
+    return std::nullopt;
   }
 
   uint32_t value = 0;
   if (!base::HexStringToUInt(hex, &value)) {
-    return fallback_color;
+    return std::nullopt;
   }
 
   return SkColorSetRGB((value >> 16) & 0xFF, (value >> 8) & 0xFF,
                        value & 0xFF);
 }
 
-SkColor SpaceThemeAccentColor(const SpaceBoardColumn& column,
-                              SkColor fallback_color) {
-  return ParseSpaceAccentColor(
-      GetMahoSpaceDisplayPrimaryColor(column.theme, column.color),
-      fallback_color);
+std::optional<SkColor> SpaceThemeColor(const SpaceBoardColumn& column) {
+  return ParseSpaceThemeColor(
+      GetMahoSpaceDisplayPrimaryColor(column.theme, column.color));
 }
 
 std::u16string TabCountText(int count) {
@@ -447,19 +445,26 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
     return;
   }
 
-  const SkColor fallback_accent = color_provider->GetColor(kMahoColorAccentBlue);
-  const SkColor accent = SpaceThemeAccentColor(column_, fallback_accent);
+  const std::optional<SkColor> theme_color = SpaceThemeColor(column_);
   const SkColor column_border = SkColorSetA(
       color_provider->GetColor(kMahoColorCardBorder), 0x60);
-  const SkColor accent_dot = SkColorSetA(accent, 0xD0);
 
   const SkColor base_fill = color_provider->GetColor(kMahoColorContentBackground);
-  SetBackground(std::make_unique<ColumnThemeBackground>(base_fill, accent,
-                                                         is_active_));
+  if (theme_color) {
+    SetBackground(std::make_unique<ColumnThemeBackground>(
+        base_fill, *theme_color, is_active_));
+  } else {
+    SetBackground(views::CreateRoundedRectBackground(
+        base_fill, kColumnCornerRadiusDp));
+  }
   SetBorder(views::CreateRoundedRectBorder(1, kColumnCornerRadiusDp,
-                                           column_border));
-  badge_container_->SetBackground(
-      views::CreateRoundedRectBackground(accent_dot, kHeaderBadgeCornerRadiusDp));
+                                            column_border));
+  if (theme_color) {
+    badge_container_->SetBackground(views::CreateRoundedRectBackground(
+        SkColorSetA(*theme_color, 0xD0), kHeaderBadgeCornerRadiusDp));
+  } else {
+    badge_container_->SetBackground(nullptr);
+  }
   badge_container_->SetBorder(nullptr);
   title_label_->SetEnabledColor(kMahoColorPrimaryText);
   subtitle_label_->SetEnabledColor(kMahoColorTertiaryText);
@@ -487,10 +492,12 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
   }
 
   if (edit_button_) {
+    const SkColor edit_icon_color = theme_color.value_or(
+        color_provider->GetColor(kMahoColorTertiaryText));
     edit_button_->SetImageModel(
         views::Button::STATE_NORMAL,
         ui::ImageModel::FromVectorIcon(maho_lucide_icons::kPencilLineIcon,
-                                       accent, 16));
+                                       edit_icon_color, 16));
   }
 
   if (menu_button_) {
