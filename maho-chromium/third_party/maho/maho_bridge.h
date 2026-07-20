@@ -6,7 +6,10 @@
 #include <cstddef>
 #include <string>
 
-#include "maho_ffi.h"
+// Opaque Rust core handle (defined in the cbindgen-generated maho_ffi.h).
+// Forward-declared rather than #included so this facade does not re-export that
+// frequently-regenerated header to its includers, avoiding mass recompiles.
+struct MahoCore;
 
 namespace maho::core {
 
