@@ -10,6 +10,9 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "maho/browser/maho_core_holder.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/color/color_provider_manager.h"
@@ -100,21 +103,38 @@ bool MahoSpaceProfileBridge::SwitchToSpace(Browser* browser,
     maho_core_activate_space(core, space_id.c_str());
   }
 
-  // Always update both browser-scoped and the process-global fallback so
-  // surfaces that have no browser context see a consistent last-activated
-  // value.
-  if (browser) {
-    browser_active_space_[browser] = space_id;
-  } else {
-    active_space_id_ = space_id;
-  }
-
   if (profile_changed) {
+    // Cross-profile: current window cannot host this space (opens in a different window).
+    // Update global fallback only, do not touch current browser entry.
+    active_space_id_ = space_id;
+
+    // Seeding: if the target profile already has a loaded browser window,
+    // seed its active space entry immediately so that when it is focused
+    // by SwitchToProfile, it is already mapped correctly.
+    if (g_browser_process && g_browser_process->profile_manager()) {
+      Profile* target_profile = g_browser_process->profile_manager()->GetProfileByPath(
+          g_browser_process->profile_manager()->user_data_dir().Append(it->second));
+      if (target_profile) {
+        Browser* target_browser = chrome::FindBrowserWithProfile(target_profile);
+        if (target_browser) {
+          browser_active_space_[target_browser] = space_id;
+        }
+      }
+    }
+
     profiles::SwitchToProfile(it->second, /*always_create=*/false);
+  } else {
+    if (browser) {
+      browser_active_space_[browser] = space_id;
+    } else {
+      active_space_id_ = space_id;
+    }
   }
 
-  MahoSpaceThemeState::UpdateFromCore();
-  ui::ColorProviderManager::Get().ResetColorProviderCache();
+  bool theme_changed = MahoSpaceThemeState::UpdateFromCore();
+  if (theme_changed) {
+    ui::ColorProviderManager::Get().ResetColorProviderCache();
+  }
 
   for (Observer& observer : observers_) {
     observer.OnSpaceProfileBridgeChanged();
@@ -378,7 +398,7 @@ std::optional<base::FilePath> MahoSpaceProfileBridge::ProfileBasenameForId(
     if (c < 32 || c > 126) {
       return std::nullopt;
     }
-    if (c == '/' || c == '\\') {
+    if (c == '/' || c == '\\' || c == ':') {
       return std::nullopt;
     }
   }

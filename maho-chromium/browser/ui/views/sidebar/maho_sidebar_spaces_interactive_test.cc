@@ -19,6 +19,9 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
+#include "maho/browser/ui/theme/maho_space_theme_state.h"
 
 namespace maho {
 namespace {
@@ -222,10 +225,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ProfileBasenameForIdVal
   EXPECT_EQ(base::FilePath::FromASCII("MahoProfile_Default-Like-But-Not"),
             MahoSpaceProfileBridge::ProfileBasenameForId("Default-Like-But-Not"));
 
-  // Rejections (std::nullopt)
-  // contains / or backslash
+  // contains / or backslash or colon
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha/beta"));
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha\\beta"));
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(":"));
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("a:b"));
   // equals "." or ".."
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("."));
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(".."));
@@ -239,6 +243,38 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ProfileBasenameForIdVal
   // exceeds kMahoProfileIdMaxLen (64)
   std::string long_id(MahoSpaceProfileBridge::kMahoProfileIdMaxLen + 1, 'a');
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(long_id));
+}
+
+// Locks the cache-reset gating from MahoSpaceProfileBridge::SwitchToSpace:
+// UpdateFromCore() must return false when the active theme is unchanged (so the
+// process-wide ColorProviderManager cache reset is skipped on same-theme space
+// switches) and true when the active theme actually changed.
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       UpdateFromCoreGatesCacheResetOnThemeChange) {
+  MahoCore* core = maho::GetCore();
+  ASSERT_TRUE(core);
+  const std::string active_space = GetActiveSpaceId();
+  ASSERT_FALSE(active_space.empty());
+
+  // Apply a known theme, then sync cached state to it. The first sync's return
+  // value depends on prior process state, so it is intentionally ignored.
+  const std::string theme_a =
+      R"({"type":"solid","color":{"hue":240.0,"saturation":0.6,)"
+      R"("brightness":0.8,"grain":0.3}})";
+  ASSERT_TRUE(maho_theme::ApplyThemeJsonToSpace(core, active_space, theme_a));
+  MahoSpaceThemeState::UpdateFromCore();
+
+  // No mutation between calls -> must report no change (skips cache reset).
+  EXPECT_FALSE(MahoSpaceThemeState::UpdateFromCore())
+      << "UpdateFromCore must return false when the active theme is unchanged";
+
+  // A genuinely different theme -> must report a change (triggers cache reset).
+  const std::string theme_b =
+      R"({"type":"solid","color":{"hue":30.0,"saturation":0.9,)"
+      R"("brightness":0.5,"grain":0.1}})";
+  ASSERT_TRUE(maho_theme::ApplyThemeJsonToSpace(core, active_space, theme_b));
+  EXPECT_TRUE(MahoSpaceThemeState::UpdateFromCore())
+      << "UpdateFromCore must return true when the active theme changed";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ExplicitFailurePathNoMutation) {
