@@ -1,6 +1,18 @@
 use maho_types::identifiers::ProfileId;
 use maho_types::profile::ProfileConfig;
 
+#[derive(Debug, thiserror::Error, serde::Serialize, PartialEq, Eq, Clone)]
+pub enum ProfileError {
+    #[error("Profile name cannot be empty")]
+    EmptyName,
+    #[error("Profile with name '{0}' already exists")]
+    DuplicateName(String),
+    #[error("Maximum profile limit reached ({0})")]
+    LimitReached(usize),
+    #[error("Internal error")]
+    InternalError,
+}
+
 pub struct ProfileManager {
     profiles: Vec<ProfileConfig>,
     active_profile_id: Option<ProfileId>,
@@ -34,10 +46,26 @@ impl ProfileManager {
             .and_then(|id| self.profiles.iter().find(|p| &p.id == id))
     }
 
-    pub fn create_profile(&mut self, name: String) -> &ProfileConfig {
-        let profile = ProfileConfig::new(name);
+    pub fn create_profile(&mut self, name: String) -> Result<&ProfileConfig, ProfileError> {
+        let trimmed_name = name.trim().to_string();
+        if trimmed_name.is_empty() {
+            return Err(ProfileError::EmptyName);
+        }
+
+        // Limit check: max 20 profiles
+        if self.profiles.len() >= 20 {
+            return Err(ProfileError::LimitReached(20));
+        }
+
+        // Case-insensitive duplicate check
+        let lower_name = trimmed_name.to_lowercase();
+        if self.profiles.iter().any(|p| p.name.trim().to_lowercase() == lower_name) {
+            return Err(ProfileError::DuplicateName(trimmed_name));
+        }
+
+        let profile = ProfileConfig::new(trimmed_name);
         self.profiles.push(profile);
-        self.profiles.last().unwrap()
+        self.profiles.last().ok_or(ProfileError::InternalError)
     }
 
     pub fn delete_profile(&mut self, id: &ProfileId) -> bool {
@@ -134,7 +162,7 @@ mod tests {
     #[test]
     fn test_create_profile() {
         let mut manager = ProfileManager::new();
-        let created = manager.create_profile("Work".to_string());
+        let created = manager.create_profile("Work".to_string()).unwrap();
         assert_eq!(created.name, "Work");
         assert_eq!(manager.list_profiles().len(), 2);
         assert_eq!(manager.list_profiles()[1].name, "Work");
@@ -152,7 +180,7 @@ mod tests {
     fn test_delete_active_profile_reassigns() {
         let mut manager = ProfileManager::new();
         let default_id = manager.list_profiles()[0].id.clone();
-        manager.create_profile("Work".to_string());
+        manager.create_profile("Work".to_string()).unwrap();
         let work_id = manager.list_profiles()[1].id.clone();
         manager.switch_profile(&work_id);
         assert_eq!(manager.get_active_profile_id(), Some(&work_id));
@@ -172,7 +200,7 @@ mod tests {
     #[test]
     fn test_switch_profile() {
         let mut manager = ProfileManager::new();
-        manager.create_profile("Work".to_string());
+        manager.create_profile("Work".to_string()).unwrap();
         let work_id = manager.list_profiles()[1].id.clone();
         assert!(manager.switch_profile(&work_id));
         assert_eq!(manager.get_active_profile_id(), Some(&work_id));
@@ -249,8 +277,8 @@ mod tests {
     #[test]
     fn test_data_store_id_uniqueness() {
         let mut manager = ProfileManager::new();
-        manager.create_profile("One".to_string());
-        manager.create_profile("Two".to_string());
+        manager.create_profile("One".to_string()).unwrap();
+        manager.create_profile("Two".to_string()).unwrap();
         let profiles = manager.list_profiles();
         let id1 = profiles[1].data_store_id.as_ref().unwrap();
         let id2 = profiles[2].data_store_id.as_ref().unwrap();
@@ -262,5 +290,38 @@ mod tests {
         let manager = ProfileManager::new();
         let default_profile = &manager.list_profiles()[0];
         assert!(default_profile.data_store_id.is_none());
+    }
+
+    #[test]
+    fn test_create_profile_validation() {
+        let mut manager = ProfileManager::new();
+
+        // Empty/whitespace name rejections
+        assert!(matches!(manager.create_profile("".to_string()), Err(ProfileError::EmptyName)));
+        assert!(matches!(manager.create_profile("   ".to_string()), Err(ProfileError::EmptyName)));
+
+        // Duplicate case-insensitive name rejections
+        manager.create_profile("Work".to_string()).unwrap();
+        assert!(matches!(
+            manager.create_profile("work".to_string()),
+            Err(ProfileError::DuplicateName(_))
+        ));
+        assert!(matches!(
+            manager.create_profile(" WORK ".to_string()),
+            Err(ProfileError::DuplicateName(_))
+        ));
+
+        // Limit rejection (max 20 profiles)
+        // Currently 2 profiles exist (Default, Work). Let's create 18 more.
+        for i in 1..=18 {
+            manager.create_profile(format!("Profile {}", i)).unwrap();
+        }
+        assert_eq!(manager.list_profiles().len(), 20);
+
+        // 21st profile must fail
+        assert!(matches!(
+            manager.create_profile("Extra Profile".to_string()),
+            Err(ProfileError::LimitReached(20))
+        ));
     }
 }
