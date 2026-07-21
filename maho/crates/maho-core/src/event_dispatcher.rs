@@ -331,12 +331,14 @@ impl EventDispatcher {
                 // URL rather than letting about:blank silently create a ghost/url-less tab.
                 let resolved_url = Some(url.unwrap_or_else(|| Url::new("chrome://newtab")));
                 let tab_id_clone = tab_id.clone();
+                let mut is_reannounce = false;
                 let tab = if let Some(explicit_id) = tab_id {
                     // Re-announce of an existing tab: if the shell asks for a different
                     // space than the tab currently lives in, treat it as a move.
                     // Otherwise create_tab_with_id silently returns the existing tab and
                     // add_tab_to_space below would leak the same tab_id into two spaces.
                     if let Some(existing) = tab_mgr.get_tab(&explicit_id).cloned() {
+                        is_reannounce = true;
                         if existing.space_id != space_id {
                             let source = existing.space_id.clone();
                             tab_mgr.move_tab(&explicit_id, space_id.clone(), 0);
@@ -366,7 +368,11 @@ impl EventDispatcher {
                 } else {
                     tab_mgr.create_tab(space_id.clone(), resolved_url, parent_id, window_id, is_private)
                 };
-                space_mgr.add_tab_to_space(&space_id, tab.id.clone(), None);
+                // New tabs (freshly created, even with a C++-assigned id) open at the
+                // TOP of the normal area. Re-announce of an already-existing tab
+                // (session wake / move) keeps None so its position is not reshuffled.
+                let insert_position = if is_reannounce { None } else { Some(0) };
+                space_mgr.add_tab_to_space(&space_id, tab.id.clone(), insert_position);
                 if let Some(explicit_id) = tab_id_clone {
                     let is_in_folder = space_mgr.is_tab_in_folder(&space_id, &explicit_id);
                     space_mgr.apply_tab_residency(&space_id, &explicit_id, tab.role.is_favorite(), is_in_folder); // L3-EXEMPT: role query

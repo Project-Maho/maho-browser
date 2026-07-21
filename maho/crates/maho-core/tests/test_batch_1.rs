@@ -170,6 +170,45 @@ fn create_tab_emits_tab_created_update() {
 }
 
 #[test]
+fn new_tab_with_explicit_id_opens_at_top_of_normal_area() {
+    // Chromium assigns a stable tab_id before firing create_tab, so genuinely new
+    // tabs arrive WITH an explicit id yet must still open at the top.
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    let first = TabId::generate();
+    let second = TabId::generate();
+
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: space_id.clone(),
+        url: Some(Url::new("https://first.example.com")),
+        parent_id: None,
+        tab_id: Some(first.clone()),
+        window_id: None,
+        is_private: false,
+    });
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: space_id.clone(),
+        url: Some(Url::new("https://second.example.com")),
+        parent_id: None,
+        tab_id: Some(second.clone()),
+        window_id: None,
+        is_private: false,
+    });
+
+    let root_order = core.space_manager().get_root_order(&space_id);
+    let pos_first = root_order
+        .iter()
+        .position(|i| i == &maho_types::space::RootItem::Tab(first.clone()))
+        .expect("first tab in root_order");
+    let pos_second = root_order
+        .iter()
+        .position(|i| i == &maho_types::space::RootItem::Tab(second.clone()))
+        .expect("second tab in root_order");
+    assert_eq!(pos_second, 0, "newest tab must be at the top of the normal area");
+    assert!(pos_second < pos_first, "newest tab must sit above the older tab");
+}
+
+#[test]
 fn create_tab_threads_is_private_to_view_model() {
     let mut core = MahoCore::new();
     let space_id = core.get_active_space_id();

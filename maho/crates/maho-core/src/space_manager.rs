@@ -165,6 +165,53 @@ mod tests {
     }
 
     #[test]
+    fn move_root_tab_to_end_of_pinned_places_after_last_pinned() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let p1 = TabId::generate();
+        let n1 = TabId::generate();
+        let p2 = TabId::generate();
+        let x = TabId::generate();
+        let n2 = TabId::generate();
+        for id in [&x, &p1, &n1, &p2, &n2] {
+            manager.add_tab_to_space(&space_id, id.clone(), None);
+        }
+
+        let pinned: HashSet<TabId> = [p1.clone(), p2.clone(), x.clone()].into_iter().collect();
+        manager.move_root_tab_to_end_of_pinned(&space_id, &x, &pinned);
+
+        assert_eq!(
+            manager.get_root_order(&space_id),
+            vec![
+                RootItem::Tab(p1),
+                RootItem::Tab(n1),
+                RootItem::Tab(p2),
+                RootItem::Tab(x),
+                RootItem::Tab(n2),
+            ]
+        );
+    }
+
+    #[test]
+    fn move_root_tab_to_end_of_pinned_inserts_at_front_when_no_other_pinned() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let n1 = TabId::generate();
+        let x = TabId::generate();
+        for id in [&n1, &x] {
+            manager.add_tab_to_space(&space_id, id.clone(), None);
+        }
+
+        let pinned: HashSet<TabId> = [x.clone()].into_iter().collect();
+        manager.move_root_tab_to_end_of_pinned(&space_id, &x, &pinned);
+
+        assert_eq!(
+            manager.get_root_order(&space_id),
+            vec![RootItem::Tab(x), RootItem::Tab(n1)]
+        );
+    }
+
+    #[test]
     fn remove_tab_from_space_removes_root_order_entry() {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
@@ -1415,6 +1462,39 @@ impl SpaceManager {
                     }
                 }
             }
+        }
+    }
+
+    /// Moves `tab_id` to just after the last pinned root item. The sidebar
+    /// splits `root_order` by pinned flag but keeps each section in root_order
+    /// sequence, so this places the tab at the bottom of the pinned section.
+    /// `pinned_tab_ids` carries tab pinned-state (owned by the tab manager);
+    /// folder pinned-state is read locally. No-op if the tab is not in
+    /// `root_order` (e.g. folder-resident tabs).
+    pub fn move_root_tab_to_end_of_pinned(
+        &mut self,
+        space_id: &SpaceId,
+        tab_id: &TabId,
+        pinned_tab_ids: &HashSet<TabId>,
+    ) {
+        if let Some(space) = self.spaces.get_mut(space_id) {
+            let target = RootItem::Tab(tab_id.clone());
+            if !space.root_order.iter().any(|item| item == &target) {
+                return;
+            }
+            let pinned_folder_ids: HashSet<FolderId> = space
+                .folders
+                .iter()
+                .filter(|folder| folder.is_pinned)
+                .map(|folder| folder.id.clone())
+                .collect();
+            space.root_order.retain(|item| item != &target);
+            let last_pinned = space.root_order.iter().rposition(|item| match item {
+                RootItem::Tab(tid) => pinned_tab_ids.contains(tid),
+                RootItem::Folder(fid) => pinned_folder_ids.contains(fid),
+            });
+            let insert_at = last_pinned.map(|pos| pos + 1).unwrap_or(0);
+            space.root_order.insert(insert_at, target);
         }
     }
 
