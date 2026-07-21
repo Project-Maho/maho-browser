@@ -3149,6 +3149,33 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr()",
         ),
+        Replacement(
+            old=(
+                "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
+                "                                             tabs);\n"
+                "    if (browser) {\n"
+                "      return browser;\n"
+                "    }\n"
+            ),
+            new=(
+                "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
+                "                                             tabs);\n"
+                "    if (browser) {\n"
+                "      static std::atomic<bool> g_maho_restore_palette_shown{false};\n"
+                "      if (!g_maho_restore_palette_shown.exchange(true)) {\n"
+                "        ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr(), 200);\n"
+                "      }\n"
+                "      return browser;\n"
+                "    }\n"
+            ),
+            description=(
+                "Maho cold-start: also auto-open the command palette once on the "
+                "session-restore startup path so returning users with restored tabs "
+                "get the palette at launch too (empty-|tabs| path handles cold empty "
+                "start; these two paths are mutually exclusive so it fires once)"
+            ),
+            guard="g_maho_restore_palette_shown",
+        ),
     ],
     # ── browser_commands.cc ──────────────────────────────────────────────────
     "chrome/browser/ui/browser_commands.cc": [
