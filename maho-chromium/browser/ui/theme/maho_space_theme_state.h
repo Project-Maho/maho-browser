@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "base/no_destructor.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 // Static state holder for the active space's theme color data.
@@ -45,6 +47,9 @@ class MahoSpaceThemeState {
     ThemeKind kind;
     SpaceHSV primary_hsv;
     std::optional<SpaceHSV> secondary_hsv;
+    // All parsed gradient stops, canonical primary-first order. Solid themes
+    // hold a single stop. Empty only for the achromatic fallback.
+    std::vector<SpaceHSV> stops;
     float opacity;
     float texture;
     float grain;
@@ -53,7 +58,8 @@ class MahoSpaceThemeState {
 
     bool operator==(const ThemeData& other) const {
       return kind == other.kind && primary_hsv == other.primary_hsv &&
-             secondary_hsv == other.secondary_hsv && opacity == other.opacity &&
+             secondary_hsv == other.secondary_hsv && stops == other.stops &&
+             opacity == other.opacity &&
              texture == other.texture && grain == other.grain &&
              color_scheme == other.color_scheme && achromatic == other.achromatic;
     }
@@ -108,8 +114,8 @@ class MahoSpaceThemeState {
   static void Clear();
 
  private:
-  static std::optional<ThemeData> active_theme_;
-  static std::optional<ThemeData> preview_override_;
+  static base::NoDestructor<std::optional<ThemeData>> active_theme_;
+  static base::NoDestructor<std::optional<ThemeData>> preview_override_;
 };
 
 #endif  // MAHO_BROWSER_UI_THEME_MAHO_SPACE_THEME_STATE_H_

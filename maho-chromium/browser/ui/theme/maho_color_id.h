@@ -20,6 +20,8 @@
   /* Window & Surface */ \
   E_CPONLY(kMahoColorWindowBackground, kMahoColorsStart, kMahoColorsStart) \
   E_CPONLY(kMahoColorSidebarBackground) \
+  E_CPONLY(kMahoColorSidebarGradientStop1) \
+  E_CPONLY(kMahoColorSidebarGradientStop2) \
   E_CPONLY(kMahoColorContentBackground) \
   E_CPONLY(kMahoColorContentGradientTop) \
   E_CPONLY(kMahoColorContentGradientBottom) \

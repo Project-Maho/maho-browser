@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/browser_thread.h"
@@ -18,8 +20,10 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/native_theme/native_theme.h"
 
-std::optional<MahoSpaceThemeState::ThemeData> MahoSpaceThemeState::active_theme_;
-std::optional<MahoSpaceThemeState::ThemeData> MahoSpaceThemeState::preview_override_;
+base::NoDestructor<std::optional<MahoSpaceThemeState::ThemeData>>
+    MahoSpaceThemeState::active_theme_;
+base::NoDestructor<std::optional<MahoSpaceThemeState::ThemeData>>
+    MahoSpaceThemeState::preview_override_;
 
 namespace {
 
@@ -157,16 +161,28 @@ std::optional<MahoSpaceThemeState::SpaceHSV> ExtractHSBForStop(
   return ExtractHSBFromColorDict(stop);
 }
 
-const base::DictValue* FindSecondaryStop(const base::ListValue& colors,
-                                         const base::DictValue* primary) {
+std::vector<MahoSpaceThemeState::SpaceHSV> ExtractGradientStops(
+    const base::ListValue& colors,
+    MahoSpaceThemeState::ThemeKind kind) {
+  std::vector<MahoSpaceThemeState::SpaceHSV> stops;
+  const base::DictValue* dominant = FindDominantStop(colors);
+  if (dominant) {
+    if (std::optional<MahoSpaceThemeState::SpaceHSV> hsv =
+            ExtractHSBForStop(dominant, kind)) {
+      stops.push_back(*hsv);
+    }
+  }
   for (const auto& entry : colors) {
-    const auto* stop = entry.GetIfDict();
-    if (!stop || stop == primary) {
+    const base::DictValue* d = entry.GetIfDict();
+    if (!d || d == dominant) {
       continue;
     }
-    return stop;
+    if (std::optional<MahoSpaceThemeState::SpaceHSV> hsv =
+            ExtractHSBForStop(d, kind)) {
+      stops.push_back(*hsv);
+    }
   }
-  return nullptr;
+  return stops;
 }
 
 MahoSpaceThemeState::ColorScheme ColorSchemeFromString(
@@ -206,6 +222,7 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
         .kind = kind,
         .primary_hsv = *primary_hsv,
         .secondary_hsv = std::nullopt,
+        .stops = {*primary_hsv},
         .opacity = static_cast<float>(std::clamp(
             theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
         .texture = grain_val,
@@ -224,6 +241,7 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
           .kind = kind,
           .primary_hsv = {0.0f, 0.0f, 0.5f},
           .secondary_hsv = std::nullopt,
+          .stops = {},
           .opacity = static_cast<float>(std::clamp(
               theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
           .texture = static_cast<float>(std::clamp(
@@ -235,26 +253,23 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
     }
 
     const base::DictValue* dominant = FindDominantStop(*colors);
-    if (!dominant) {
+    std::vector<MahoSpaceThemeState::SpaceHSV> stops =
+        ExtractGradientStops(*colors, kind);
+    if (stops.empty()) {
       return std::nullopt;
     }
 
-    std::optional<MahoSpaceThemeState::SpaceHSV> primary_hsv =
-        ExtractHSBForStop(dominant, kind);
-    if (!primary_hsv) {
-      return std::nullopt;
-    }
-
+    MahoSpaceThemeState::SpaceHSV primary_hsv = stops[0];
     std::optional<MahoSpaceThemeState::SpaceHSV> secondary_hsv;
-    if (const base::DictValue* secondary =
-            FindSecondaryStop(*colors, dominant)) {
-      secondary_hsv = ExtractHSBForStop(secondary, kind);
+    if (stops.size() > 1) {
+      secondary_hsv = stops[1];
     }
 
     return MahoSpaceThemeState::ThemeData{
         .kind = kind,
-        .primary_hsv = *primary_hsv,
+        .primary_hsv = primary_hsv,
         .secondary_hsv = secondary_hsv,
+        .stops = stops,
         .opacity = static_cast<float>(std::clamp(
             theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
         .texture = static_cast<float>(std::clamp(
@@ -271,11 +286,17 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
 
 MahoSpaceThemeState::ThemeData MakeFallbackThemeData(
     const MahoSpaceThemeState::SpaceHSV& hsv) {
+  // Default (theme:None) space: match the theme picker's default opacity so it
+  // is translucent like an explicitly-themed space. Range [0.25, 0.9], default
+  // 0.5 per resources/maho_space_create/react/types.ts.
+  constexpr float kDefaultThemeOpacity = 0.5f;
   return MahoSpaceThemeState::ThemeData{
       .kind = MahoSpaceThemeState::ThemeKind::kSolid,
       .primary_hsv = hsv,
       .secondary_hsv = std::nullopt,
-      .opacity = 1.0f,
+      // Solid invariant: exactly one stop (the primary).
+      .stops = {hsv},
+      .opacity = kDefaultThemeOpacity,
       .texture = 0.0f,
       .grain = 0.0f,
   };
@@ -304,11 +325,11 @@ SkColor ApplyAppearanceAdjustments(const MahoSpaceThemeState::SpaceHSV& hsv,
 bool MahoSpaceThemeState::UpdateFromCore() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  auto previous = active_theme_;
-  active_theme_.reset();
+  auto previous = *active_theme_;
+  active_theme_->reset();
 
   auto get_return_val = [&]() {
-    return active_theme_ != previous;
+    return *active_theme_ != previous;
   };
 
   MahoCore* core = maho::GetCore();
@@ -363,7 +384,7 @@ bool MahoSpaceThemeState::UpdateFromCore() {
     }
 
     if (theme_data) {
-      active_theme_ = *theme_data;
+      *active_theme_ = *theme_data;
       DVLOG(1) << "MahoSpaceThemeState updated: active_id=" << active_id
                << " kind=" << static_cast<int>(theme_data->kind)
                << " hue=" << theme_data->primary_hsv.hue
@@ -382,16 +403,16 @@ bool MahoSpaceThemeState::UpdateFromCore() {
 std::optional<MahoSpaceThemeState::ThemeData>
 MahoSpaceThemeState::GetThemeData() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (preview_override_.has_value()) {
-    return preview_override_;
+  if (preview_override_->has_value()) {
+    return *preview_override_;
   }
-  return active_theme_;
+  return *active_theme_;
 }
 
 SkColor MahoSpaceThemeState::GetChromeTint(bool is_dark, uint8_t alpha) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const std::optional<ThemeData>& effective =
-      preview_override_.has_value() ? preview_override_ : active_theme_;
+      preview_override_->has_value() ? *preview_override_ : *active_theme_;
   if (!effective || effective->achromatic) {
     return SK_ColorTRANSPARENT;
   }
@@ -420,8 +441,8 @@ SkColor MahoSpaceThemeState::GetChromeTint(bool is_dark, uint8_t alpha) {
 
 void MahoSpaceThemeState::Clear() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  active_theme_.reset();
-  preview_override_.reset();
+  active_theme_->reset();
+  preview_override_->reset();
 }
 
 bool MahoSpaceThemeState::SetPreviewOverride(const std::string& theme_json) {
@@ -440,18 +461,18 @@ bool MahoSpaceThemeState::SetPreviewOverride(const std::string& theme_json) {
   if (!parsed_theme) {
     return false;
   }
-  preview_override_ = std::move(parsed_theme);
+  *preview_override_ = std::move(parsed_theme);
   return true;
 }
 
 void MahoSpaceThemeState::ClearPreviewOverride() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  preview_override_.reset();
+  preview_override_->reset();
 }
 
 bool MahoSpaceThemeState::HasPreviewOverride() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return preview_override_.has_value();
+  return preview_override_->has_value();
 }
 
 std::optional<bool> MahoSpaceThemeState::GetForcedDarkMode() {

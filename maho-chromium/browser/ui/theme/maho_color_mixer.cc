@@ -52,6 +52,11 @@ void AddSidebarSurfaceColors(ui::ColorMixer& mixer, bool sidebar_dark) {
   mixer[kMahoColorSidebarBackground] = {sidebar_dark
       ? SkColorSetA(kSidebarBackgroundDark, kSidebarMinAlpha)
       : SkColorSetA(kSidebarBackgroundLight, kSidebarMinAlpha)};
+  // Gradient stops default to the primary sidebar color; the theme tint mixer
+  // overrides them when a multi-stop theme is active. Registered unconditionally
+  // so the ColorProvider IDs always resolve.
+  mixer[kMahoColorSidebarGradientStop1] = {kMahoColorSidebarBackground};
+  mixer[kMahoColorSidebarGradientStop2] = {kMahoColorSidebarBackground};
 }
 
 void AddChromeSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
@@ -456,6 +461,24 @@ float GetSidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   return 0.08f;
 }
 
+// Builds one sidebar gradient stop color: appearance-adjusted theme tint,
+// blended over the base sidebar surface with the fixed per-kind weight, then
+// stamped with the shared sidebar alpha so vibrancy shows through uniformly.
+SkColor MakeSidebarStopColor(const MahoSpaceThemeState::SpaceHSV& hsv,
+                             MahoSpaceThemeState::ThemeKind kind,
+                             bool sidebar_dark,
+                             SkColor base_sidebar,
+                             SkAlpha sidebar_alpha) {
+  const SkColor tint = SkColorSetA(
+      AdjustThemeTint(hsv, sidebar_dark,
+                      kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
+                      1.0f, sidebar_dark ? 0.02f : 0.0f, 0.85f, 1.08f),
+      255);
+  const SkColor blended =
+      maho_theme::BlendColors(base_sidebar, tint, GetSidebarBlendForKind(kind));
+  return SkColorSetA(blended, sidebar_alpha);
+}
+
 float GetContentBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   switch (kind) {
     case MahoSpaceThemeState::ThemeKind::kSolid:
@@ -467,19 +490,6 @@ float GetContentBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   }
 
   return 0.05f;
-}
-
-float GetGradientBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
-  switch (kind) {
-    case MahoSpaceThemeState::ThemeKind::kSolid:
-      return 0.07f;
-    case MahoSpaceThemeState::ThemeKind::kGradient:
-      return 0.16f;
-    case MahoSpaceThemeState::ThemeKind::kZen:
-      return 0.13f;
-  }
-
-  return 0.07f;
 }
 
 float GetTitlebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
@@ -595,15 +605,8 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
                                               : kSidebarBackgroundLight;
     const SkColor base_content = browser_theme_dark ? kContentBackgroundDark
                                                     : kContentBackgroundLight;
-    const SkColor base_gradient_top = browser_theme_dark ? kContentGradientTopDark
-                                                         : kContentGradientTopLight;
-    const SkColor base_gradient_bottom = browser_theme_dark ? kContentGradientBottomDark
-                                                            : kContentGradientBottomLight;
     const SkColor base_window = browser_theme_dark ? kWindowBackgroundDark
                                                    : kWindowBackgroundLight;
-
-    const float opacity_bias = 0.65f + theme_data->opacity * 0.35f;
-    const float texture_bias = 0.04f + theme_data->texture * 0.08f;
 
     const SkColor primary_tint = SkColorSetA(AdjustThemeTint(
         theme_data->primary_hsv, browser_theme_dark,
@@ -616,17 +619,17 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
 
     const MahoSpaceThemeState::SpaceHSV& secondary_hsv =
         theme_data->secondary_hsv.value_or(theme_data->primary_hsv);
-    const SkColor secondary_tint = SkColorSetA(AdjustThemeTint(
-        secondary_hsv, browser_theme_dark,
+    const SkColor secondary_tint_sidebar = SkColorSetA(AdjustThemeTint(
+        secondary_hsv, sidebar_dark,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 15 : 18,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 0.72f : 0.9f,
-        browser_theme_dark ? -0.03f : 0.0f, 0.78f,
+        sidebar_dark ? -0.03f : 0.0f, 0.78f,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 1.02f : 1.05f), 255);
 
     ui::ColorMixer& tint_mixer = provider->AddMixer();
     tint_mixer[kMahoColorTitlebarGlass] = {maho_theme::BlendColors(
         base_titlebar, primary_tint,
-        GetTitlebarBlendForKind(theme_data->kind) * opacity_bias)};
+        GetTitlebarBlendForKind(theme_data->kind))};
     // Frame background: the opaque backdrop that shows through the rounded
     // gaps/corners around the sidebar and content. Tinted with the same
     // primary hue (content blend weight) so those gaps match the theme instead
@@ -634,26 +637,52 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
     // paint path applies its own reduced alpha over the desktop blur.
     tint_mixer[kMahoColorWindowBackground] = {maho_theme::BlendColors(
         base_window, primary_tint,
-        GetContentBlendForKind(theme_data->kind) * opacity_bias)};
-    const SkColor sidebar_blended = maho_theme::BlendColors(
-        base_sidebar, primary_tint_sidebar,
-        GetSidebarBlendForKind(theme_data->kind) * opacity_bias);
+        GetContentBlendForKind(theme_data->kind))};
+
     const SkAlpha sidebar_alpha = static_cast<SkAlpha>(
         kSidebarMinAlpha +
         (255 - kSidebarMinAlpha) * std::clamp(theme_data->opacity, 0.0f, 1.0f));
-    tint_mixer[kMahoColorSidebarBackground] = {
-        SkColorSetA(sidebar_blended, sidebar_alpha)};
+    // Sidebar gradient: up to three canonical theme stops, each mixed
+    // identically and sharing one alpha. Falls back to the primary hsv when the
+    // stops vector is empty (defensive; gradient/zen always populate it).
+    const MahoSpaceThemeState::SpaceHSV& sidebar_stop0 =
+        !theme_data->stops.empty() ? theme_data->stops[0]
+                                   : theme_data->primary_hsv;
+    tint_mixer[kMahoColorSidebarBackground] = {MakeSidebarStopColor(
+        sidebar_stop0, theme_data->kind, sidebar_dark, base_sidebar,
+        sidebar_alpha)};
+    if (theme_data->stops.size() >= 2) {
+      tint_mixer[kMahoColorSidebarGradientStop1] = {MakeSidebarStopColor(
+          theme_data->stops[1], theme_data->kind, sidebar_dark, base_sidebar,
+          sidebar_alpha)};
+    }
+    if (theme_data->stops.size() >= 3) {
+      tint_mixer[kMahoColorSidebarGradientStop2] = {MakeSidebarStopColor(
+          theme_data->stops[2], theme_data->kind, sidebar_dark, base_sidebar,
+          sidebar_alpha)};
+    }
+
     tint_mixer[kMahoColorContentBackground] = {maho_theme::BlendColors(
         base_content, primary_tint,
-        GetContentBlendForKind(theme_data->kind) * opacity_bias)};
+        GetContentBlendForKind(theme_data->kind))};
     tint_mixer[kColorWebContentsBackground] = {kMahoColorContentBackground};
-    tint_mixer[kMahoColorContentGradientTop] = {maho_theme::BlendColors(
-        base_gradient_top, primary_tint,
-        GetGradientBlendForKind(theme_data->kind) * opacity_bias + texture_bias)};
-    tint_mixer[kMahoColorContentGradientBottom] = {maho_theme::BlendColors(
-        base_gradient_bottom, secondary_tint,
-        GetGradientBlendForKind(theme_data->kind) * opacity_bias +
-            texture_bias * 0.75f)};
+    // Content gradient shares the sidebar's hue family and alpha but spans a
+    // real light->dark range (top lifted toward white, bottom deepened toward
+    // black). A wide delta is required: a near-flat fill posterizes into ~160px
+    // 8-bit bands over the tall content area.
+    const float content_grad_blend = GetSidebarBlendForKind(theme_data->kind);
+    const SkColor grad_top = maho_theme::BlendColors(
+        maho_theme::BlendColors(base_sidebar, primary_tint_sidebar,
+                                content_grad_blend),
+        SK_ColorWHITE, 0.10f);
+    const SkColor grad_bottom = maho_theme::BlendColors(
+        maho_theme::BlendColors(base_sidebar, secondary_tint_sidebar,
+                                content_grad_blend),
+        SK_ColorBLACK, 0.18f);
+    tint_mixer[kMahoColorContentGradientTop] = {
+        SkColorSetA(grad_top, sidebar_alpha)};
+    tint_mixer[kMahoColorContentGradientBottom] = {
+        SkColorSetA(grad_bottom, sidebar_alpha)};
     const SkColor base_tab_active = sidebar_dark
         ? SkColorSetARGB(51, 255, 255, 255)
         : SkColorSetARGB(38, 0, 0, 0);
