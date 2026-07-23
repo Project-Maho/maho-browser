@@ -66,6 +66,9 @@ class MahoSidebarSearchView : public views::View,
   views::Label* translate_label_view() { return secondary_label_; }
   views::View* idle_button_view() { return idle_button_; }
 
+  // views::View:
+  void OnThemeChanged() override;
+
   // views::ContextMenuController:
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,

@@ -50,6 +50,7 @@ class MahoSidebarFolderHoverPopupView : public views::View,
 
   // views::View:
   void Init();
+  void OnThemeChanged() override;
 
   // TextfieldController:
   void ContentsChanged(views::Textfield* sender,

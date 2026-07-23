@@ -1701,7 +1701,6 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   title_field->SetVisible(false);
   title_field->SetBorder(nullptr);
   title_field->SetBackgroundColor(SK_ColorTRANSPARENT);
-  title_field->SetTextColor(ui::kColorSysOnSurface);
   title_field->SetController(this);
   title_field->SetAccessibleName(u"Rename tab");
   title_field_ = AddChildView(std::move(title_field));
@@ -1968,6 +1967,10 @@ void SidebarTabRowView::RenameTab(int /*tab_index*/) {
 
 void SidebarTabRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
+  if (title_field_ && GetColorProvider()) {
+    title_field_->SetTextColor(
+        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+  }
   UpdateAppearance();
 }
 
@@ -2985,7 +2988,6 @@ SidebarFolderRowView::SidebarFolderRowView(
   auto name_field = std::make_unique<views::Textfield>();
   name_field->SetVisible(false);
   name_field->SetBorder(nullptr);
-  name_field->SetTextColor(ui::kColorSysOnSurface);
   name_field->SetController(this);
   name_field->SetAccessibleName(u"Rename folder");
   name_field_ = AddChildView(std::move(name_field));
@@ -3086,6 +3088,10 @@ void SidebarFolderRowView::EndFolderEditing(bool commit) {
 
 void SidebarFolderRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
+  if (name_field_ && GetColorProvider()) {
+    name_field_->SetTextColor(
+        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+  }
   UpdateAppearance();
 }
 

@@ -47,6 +47,7 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
@@ -343,7 +344,6 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   textfield->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::VH(0, kSearchTextfieldHorizontalInsetDp)));
   textfield->SetBackgroundColor(SK_ColorTRANSPARENT);
-  textfield->SetTextColor(ui::kColorSysOnSurface);
   textfield->SetAccessibleName(u"Search or Enter URL...");
   textfield->set_controller(this);
   textfield_ = search_shell_->AddChildView(std::move(textfield));
@@ -352,6 +352,16 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
 }
 
 MahoSidebarSearchView::~MahoSidebarSearchView() = default;
+
+void MahoSidebarSearchView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  if (textfield_ && GetColorProvider()) {
+    textfield_->SetTextColor(
+        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+    textfield_->set_placeholder_text_color(
+        GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle));
+  }
+}
 
 void MahoSidebarSearchView::FocusVisibleControl() {
   if (is_editing_ && textfield_ && textfield_->GetVisible()) {

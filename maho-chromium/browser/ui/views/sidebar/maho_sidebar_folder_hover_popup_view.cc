@@ -26,6 +26,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
@@ -431,7 +432,6 @@ void MahoSidebarFolderHoverPopupView::Init() {
   search_field->SetPlaceholderText(u"Search " + nav_stack_.back().name + u"…");
   search_field->SetBorder(nullptr);
   search_field->SetBackgroundColor(SK_ColorTRANSPARENT);
-  search_field->SetTextColor(ui::kColorSysOnSurface);
   search_field->SetController(this);
   search_field_ = search_row->AddChildView(std::move(search_field));
   search_layout->SetFlexForView(search_field_, 1);
@@ -451,6 +451,16 @@ void MahoSidebarFolderHoverPopupView::Init() {
   rows_container_ = scroll_view_->SetContents(std::move(rows_container));
 
   ApplyFilter(u"");
+}
+
+void MahoSidebarFolderHoverPopupView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  if (search_field_ && GetColorProvider()) {
+    search_field_->SetTextColor(
+        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+    search_field_->set_placeholder_text_color(
+        GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle));
+  }
 }
 
 void MahoSidebarFolderHoverPopupView::ContentsChanged(
