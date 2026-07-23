@@ -26,6 +26,7 @@
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
+#include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/view.h"
@@ -40,6 +41,10 @@ namespace ui {
 class Event;
 }  // namespace ui
 
+namespace gfx {
+class Canvas;
+}  // namespace gfx
+
 namespace content {
 class WebContents;
 }  // namespace content
@@ -49,6 +54,8 @@ class ViewTracker;
 }  // namespace views
 
 namespace maho {
+
+class MahoSidebarViewSpaceSwitchSlideTest;
 
 // Body-mode switch for the sidebar (tabs vs library).
 enum class MahoSidebarBodyMode {
@@ -81,6 +88,7 @@ class MahoSidebarView
       public MahoSpaceProfileBridge::Observer,
       public translate::ContentTranslateDriver::TranslationObserver {
   METADATA_HEADER(MahoSidebarView, views::View)
+  friend class MahoSidebarViewSpaceSwitchSlideTest;
 
  public:
   explicit MahoSidebarView(Browser* browser);
@@ -89,6 +97,7 @@ class MahoSidebarView
   ~MahoSidebarView() override;
 
   void OnThemeChanged() override;
+  void OnPaintBackground(gfx::Canvas* canvas) override;
   void ViewHierarchyChanged(
       const views::ViewHierarchyChangedDetails& details) override;
   void Layout(PassKey) override;
@@ -106,6 +115,10 @@ class MahoSidebarView
 
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
+  // User-facing entry point (footer button, ToggleArchiveMode): enters library
+  // mode and routes the category through the same logic as a rail selection, so
+  // kDownloads/kArchivedTabs open the fixed-width overlay identically.
+  void OpenLibraryCategory(MahoSidebarLibraryRailView::Category category);
   void ExitLibraryToTabs();
   void RestoreArchivedTabAndActivate(const std::string& tab_id,
                                      const std::string& space_id);
@@ -228,10 +241,37 @@ class MahoSidebarView
   void SetApplyingPin(bool applying) { applying_pin_ = applying; }
   bool IsApplyingPin() const { return applying_pin_; }
 
+
+
+  // Repaints the sidebar's themed background: opaque while a fixed-width
+  // overlay (Downloads/Archive library, or the Spaces full-viewport overlay)
+  // is active so the docked rail matches the opaque overlay; otherwise the
+  // translucent glass-frame look. Public so overlay dismiss paths can restore
+  // the translucent look when their overlay closes.
+  void ApplySidebarBackground();
+  void ApplyViewState(const MahoSidebarViewStateModel& model);
+  bool ShouldAnimateSpaceSwitch(const MahoSidebarViewStateModel& model,
+                                int* out_dir) const;
+  void StartSpaceSlide(int dir);
+  void FinishSpaceSlide();
+  bool space_switch_anim_in_progress_for_testing() const {
+    return space_switch_anim_in_progress_;
+  }
+  ui::LayerTreeOwner* outgoing_space_layer_owner_for_testing() const {
+    return outgoing_space_layer_owner_.get();
+  }
+  const std::string& last_rendered_active_space_id_for_testing() const {
+    return last_rendered_active_space_id_;
+  }
+
  private:
   void BuildUi();
   void OnTabListScrolled();
   void UpdateSidebarBorderForOverlay();
+  // Returns true when the docked sidebar must paint an opaque themed background
+  // so the rail matches a fully-opaque overlay (Downloads/Archive library, or
+  // the Spaces full-viewport overlay); false keeps the translucent glass look.
+  bool ShouldUseOpaqueSidebarBackground() const;
   void SetBodyMode(MahoSidebarBodyMode mode);
   void CaptureLastFocusedBodyView();
   void RestoreLastFocusedBodyView();
@@ -262,7 +302,7 @@ class MahoSidebarView
   void OnScrollIdle();
   // B2: Returns true if a tab-list scroll event arrived within |kScrollIdleDelay|.
   bool IsTabListScrolling() const;
-  void ApplyViewState(const MahoSidebarViewStateModel& model);
+
   void UpdateTopBar(const MahoSidebarTopBarModel& model);
   void UpdateSearch(const MahoSidebarSearchModel& model);
   void UpdateFavorites(const MahoSidebarFavoritesModel& model);
@@ -305,6 +345,10 @@ class MahoSidebarView
   // R-11: True for any off-the-record profile. Gates every MahoCore/Space read
   // out of the sidebar so an OTR window rebuilds only from its own TabStripModel.
   bool is_otr_ = false;
+  // R-12: True once SetPrivateAppearance() runs for an exact primary Incognito
+  // window. Gates the fixed Incognito identity header and keeps favorites,
+  // footer switcher, and pinned section suppressed against model refreshes.
+  bool is_private_ = false;
   raw_ptr<views::View> body_host_ = nullptr;
   raw_ptr<views::View> content_host_ = nullptr;
   raw_ptr<views::View> tabs_surface_ = nullptr;
@@ -332,6 +376,7 @@ class MahoSidebarView
       nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   raw_ptr<MahoSidebarGrainOverlayView> grain_overlay_ = nullptr;
+
   std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;
   MahoSidebarBodyMode current_body_mode_ = MahoSidebarBodyMode::kTabs;
@@ -371,6 +416,10 @@ class MahoSidebarView
   std::vector<base::WeakPtr<content::WebContents>> pending_pin_retries_;
   OnBackgroundStateReadyCallbackForTesting
       background_state_ready_callback_for_testing_;
+
+  std::unique_ptr<ui::LayerTreeOwner> outgoing_space_layer_owner_;
+  std::string last_rendered_active_space_id_;
+  bool space_switch_anim_in_progress_ = false;
 
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };

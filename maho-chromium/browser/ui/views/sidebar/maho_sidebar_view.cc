@@ -17,6 +17,9 @@
 #include "ui/base/ui_base_features.h"
 
 #include "ui/compositor/layer.h"
+#include "ui/gfx/animation/animation.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/views/animation/animation_builder.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
 
@@ -49,7 +52,9 @@
 #include "url/gurl.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/background.h"
@@ -77,6 +82,17 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_themed_background.h"
+#include "cc/paint/paint_flags.h"
+#include "cc/paint/paint_shader.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/skia_conversions.h"
+#include <algorithm>
+#include <optional>
 #include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -107,6 +123,38 @@ bool IsDescendantOfView(const views::View* candidate,
   }
 
   return false;
+}
+
+int IndexOf(const std::vector<std::string>& list, const std::string& item) {
+  auto it = std::find(list.begin(), list.end(), item);
+  return (it != list.end()) ? static_cast<int>(std::distance(list.begin(), it))
+                            : -1;
+}
+
+void CloneLayerChildren(ui::Layer* to_clone, ui::Layer* parent) {
+  std::vector<raw_ptr<ui::Layer, VectorExperimental>> children(
+      to_clone->children());
+  for (ui::Layer* child : children) {
+    ui::LayerOwner* owner = child->owner();
+    ui::Layer* old_layer = owner ? owner->RecreateLayer().release() : nullptr;
+    if (old_layer) {
+      parent->Add(old_layer);
+      CloneLayerChildren(owner->layer(), old_layer);
+    }
+  }
+}
+
+std::unique_ptr<ui::LayerTreeOwner> DeepRecreateLayers(ui::LayerOwner* root) {
+  if (!root || !root->OwnsLayer()) {
+    return nullptr;
+  }
+  std::unique_ptr<ui::Layer> layer = root->RecreateLayer();
+  if (!layer) {
+    return nullptr;
+  }
+  auto old_tree = std::make_unique<ui::LayerTreeOwner>(std::move(layer));
+  CloneLayerChildren(root->layer(), old_tree->root());
+  return old_tree;
 }
 
 }  // namespace
@@ -162,6 +210,7 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
 }
 
 MahoSidebarView::~MahoSidebarView() {
+  FinishSpaceSlide();
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->RemoveObserver(this);
   }
@@ -192,6 +241,40 @@ void MahoSidebarView::UpdateSidebarBorderForOverlay() {
   }
 }
 
+void MahoSidebarView::ApplySidebarBackground() {
+  if (is_private_) {
+    // Private/Incognito owns its solid background via SetPrivateAppearance();
+    // leave it untouched.
+    return;
+  }
+  // Normal windows paint their themed background in OnPaintBackground() — an
+  // opaque themed gradient while a library overlay is active, otherwise the
+  // translucent glass-frame gradient. Clear any Background so it does not paint
+  // beneath, and repaint so the opaque/translucent choice refreshes on
+  // body-mode / category changes.
+  SetBackground(nullptr);
+  SchedulePaint();
+}
+
+bool MahoSidebarView::ShouldUseOpaqueSidebarBackground() const {
+  if (current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
+      (active_library_category_ ==
+           MahoSidebarLibraryRailView::Category::kDownloads ||
+       active_library_category_ ==
+           MahoSidebarLibraryRailView::Category::kArchivedTabs)) {
+    return true;
+  }
+  // The Spaces full-viewport overlay is an opaque occluder too; match it so the
+  // docked rail is not a translucent-over-vibrancy mismatch beside it.
+  if (const auto* container =
+          views::AsViewClass<MahoSidebarContainerView>(parent())) {
+    if (container->IsSpacesOverlayVisible()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void MahoSidebarView::OnThemeChanged() {
   views::View::OnThemeChanged();
 
@@ -199,10 +282,7 @@ void MahoSidebarView::OnThemeChanged() {
       MahoSpaceThemeState::GetThemeData();
   const float texture = theme_data ? theme_data->texture : 0.0f;
 
-  SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorSidebarBackground,
-      gfx::RoundedCornersF(sidebar_layout::kRailCornerRadiusDp, 0, 0,
-                           sidebar_layout::kRailCornerRadiusDp)));
+  ApplySidebarBackground();
   UpdateSidebarBorderForOverlay();
   if (library_divider_) {
     library_divider_->SetBackground(
@@ -218,6 +298,40 @@ void MahoSidebarView::OnThemeChanged() {
   UpdateSearch(model.search);
   UpdateFavorites(model.favorites);
   UpdateFooter(model.footer);
+}
+
+void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
+  // Honor any explicitly installed Background (private appearance, or the opaque
+  // docked-rail fill during a library overlay); only themed windows that clear
+  // it via SetBackground(nullptr) fall through to the gradient paint below.
+  if (GetBackground()) {
+    views::View::OnPaintBackground(canvas);
+    return;
+  }
+
+  const ui::ColorProvider* provider = GetColorProvider();
+  const gfx::Rect bounds = GetLocalBounds();
+  if (!provider || bounds.IsEmpty()) {
+    return;
+  }
+
+  // Clip to the sidebar's rounded LEFT corners (right edge square), matching
+  // the previous CreateRoundedRectBackground shape.
+  const SkScalar radius =
+      static_cast<SkScalar>(sidebar_layout::kRailCornerRadiusDp);
+  const SkVector radii[4] = {
+      {radius, radius},  // upper-left
+      {0, 0},            // upper-right
+      {0, 0},            // lower-right
+      {radius, radius},  // lower-left
+  };
+
+  // Force an opaque themed gradient while a fixed-width overlay (Downloads/
+  // Archive library, or the Spaces full-viewport overlay) is active so the
+  // docked rail matches the opaque overlay content; otherwise keep the native
+  // (translucent) alpha for the glass-frame vibrancy look.
+  const bool opaque = ShouldUseOpaqueSidebarBackground();
+  PaintMahoSidebarThemedBackground(canvas, bounds, provider, opaque, radii);
 }
 
 void MahoSidebarView::ViewHierarchyChanged(
@@ -389,6 +503,8 @@ void MahoSidebarView::BuildUi() {
       },
       base::Unretained(this)));
 
+
+
   tab_scroll_subscription_ = tab_scroll_view_->AddContentsScrolledCallback(
       base::BindRepeating(&MahoSidebarView::OnTabListScrolled,
                           base::Unretained(this)));
@@ -453,6 +569,8 @@ void MahoSidebarView::BuildUi() {
       &MahoSidebarView::HideCreateSpace, weak_factory_.GetWeakPtr()));
   root_layout->SetFlexForView(create_space_view_, 1, true);
 
+
+
   grain_overlay_ = AddChildView(std::make_unique<MahoSidebarGrainOverlayView>());
   grain_overlay_->SetProperty(views::kViewIgnoredByLayoutKey, true);
 }
@@ -465,6 +583,10 @@ void MahoSidebarView::Layout(PassKey pass_key) {
 }
 
 void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
+  if (mode != MahoSidebarBodyMode::kTabs && space_switch_anim_in_progress_) {
+    FinishSpaceSlide();
+  }
+
   const MahoSidebarBodyMode previous_mode = current_body_mode_;
   if (mode == MahoSidebarBodyMode::kLibrary &&
       previous_mode != MahoSidebarBodyMode::kLibrary) {
@@ -478,6 +600,8 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
   if (top_bar_view_) {
     top_bar_view_->SetVisible(true);
     top_bar_view_->SetNavClusterVisible(mode != MahoSidebarBodyMode::kLibrary);
+    top_bar_view_->SetLeadingActionsVisible(mode !=
+                                            MahoSidebarBodyMode::kLibrary);
   }
   if (library_container_) {
     library_container_->SetVisible(mode == MahoSidebarBodyMode::kLibrary);
@@ -489,7 +613,8 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
     }
   }
   if (footer_view_) {
-    footer_view_->SetVisible(mode != MahoSidebarBodyMode::kLibrary);
+    footer_view_->SetVisible(!is_private_ &&
+                             mode != MahoSidebarBodyMode::kLibrary);
     footer_view_->RefreshPreferredSize();
   }
   if (mode == MahoSidebarBodyMode::kLibrary) {
@@ -510,6 +635,8 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
       active_pane->SetVisible(false);
     }
   }
+
+  ApplySidebarBackground();
 
   if (previous_mode == MahoSidebarBodyMode::kLibrary &&
       mode == MahoSidebarBodyMode::kTabs) {
@@ -568,6 +695,21 @@ void MahoSidebarView::HandleLibraryCategorySelected(
       prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
   auto* container = views::AsViewClass<MahoSidebarContainerView>(parent());
 
+  // Rail icons act as pure selectors, never toggles: re-selecting the
+  // already-active, already-visible category keeps it open instead of
+  // dismissing it. (Switching to a DIFFERENT category still works below.)
+  if (container && category == active_library_category_) {
+    if (category == MahoSidebarLibraryRailView::Category::kSpaces &&
+        container->IsSpacesOverlayVisible()) {
+      return;
+    }
+    if ((category == MahoSidebarLibraryRailView::Category::kDownloads ||
+         category == MahoSidebarLibraryRailView::Category::kArchivedTabs) &&
+        container->IsLibraryOverlayVisible()) {
+      return;
+    }
+  }
+
   if (category == MahoSidebarLibraryRailView::Category::kSpaces && use_overlay) {
     // D-11: Hide embedded library content instead of destroying views to avoid dangling pointers
     if (container && container->IsLibraryOverlayVisible()) {
@@ -583,6 +725,10 @@ void MahoSidebarView::HandleLibraryCategorySelected(
       container->ApplyPreferredWidthFromPrefs();
       container->ToggleSpacesOverlay();
     }
+    // Re-apply after toggling so ShouldUseOpaqueSidebarBackground() observes the
+    // now-visible (or now-dismissed, on toggle-close) Spaces overlay and paints
+    // the rail opaque to match it (or restores translucent).
+    ApplySidebarBackground();
     return;
   }
 
@@ -600,6 +746,7 @@ void MahoSidebarView::HandleLibraryCategorySelected(
       library_rail_view_->SetSelectedCategory(category);
     }
     UpdateSidebarBorderForOverlay();
+    ApplySidebarBackground();
     if (container) {
       container->ApplyPreferredWidthFromPrefs();
       container->ToggleLibraryOverlay(category);
@@ -796,6 +943,7 @@ void MahoSidebarView::ShowLibraryPane(
               media_view_) {
     media_view_->ReloadMedia();
   }
+  ApplySidebarBackground();
 }
 
 views::View* MahoSidebarView::ActiveLibraryPane() const {
@@ -812,7 +960,16 @@ MahoSidebarView::active_library_category_for_testing() const {
 }
 
 void MahoSidebarView::OpenLibrary() {
-  OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  OpenLibraryCategory(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+}
+
+void MahoSidebarView::OpenLibraryCategory(
+    MahoSidebarLibraryRailView::Category category) {
+  active_library_category_ = category;
+  if (current_body_mode_ != MahoSidebarBodyMode::kLibrary) {
+    SetBodyMode(MahoSidebarBodyMode::kLibrary);
+  }
+  HandleLibraryCategorySelected(category);
 }
 
 void MahoSidebarView::ActivateTabById(const std::string& tab_id) {
@@ -934,7 +1091,7 @@ void MahoSidebarView::ToggleArchiveMode() {
   if (current_body_mode_ == MahoSidebarBodyMode::kLibrary) {
     SetBodyMode(MahoSidebarBodyMode::kTabs);
   } else {
-    OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+    OpenLibraryCategory(MahoSidebarLibraryRailView::Category::kArchivedTabs);
   }
 }
 
@@ -1052,11 +1209,164 @@ void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result
 }
 
 void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
+  if (space_switch_anim_in_progress_) {
+    FinishSpaceSlide();
+  }
+
+  int slide_dir = 0;
+  bool should_animate = ShouldAnimateSpaceSwitch(model, &slide_dir);
+
+  if (should_animate) {
+    if (GetWidget()) {
+      GetWidget()->LayoutRootViewIfNecessary();
+    }
+
+    if (!content_host_->layer()) {
+      content_host_->SetPaintToLayer();
+      content_host_->layer()->SetName("MahoSidebarContentHost");
+    }
+    content_host_->layer()->SetMasksToBounds(true);
+    // These views paint no background; MahoSidebarView paints the themed/glass
+    // background behind them. Layers default to fills_bounds_opaquely=true,
+    // which renders the transparent content as opaque gray and hides that
+    // background, so mark them translucent (sidebar-wide convention).
+    content_host_->layer()->SetFillsBoundsOpaquely(false);
+
+    if (!tab_scroll_view_->layer()) {
+      tab_scroll_view_->SetPaintToLayer();
+      tab_scroll_view_->layer()->SetName("MahoSidebarTabScrollView");
+    }
+    tab_scroll_view_->layer()->SetFillsBoundsOpaquely(false);
+
+    // RebuildRows resets the scroll offset, fading the overlay scrollbar in.
+    // kHiddenButEnabled hides it (keeping scroll working) and, unlike per-view
+    // SetVisible, survives the ScrollView relayout RebuildRows triggers, so it
+    // stays out of the snapshot and the incoming view for the whole slide
+    // (restored to kEnabled in FinishSpaceSlide).
+    tab_scroll_view_->SetVerticalScrollBarMode(
+        views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+
+    auto owner = DeepRecreateLayers(tab_scroll_view_);
+    // RecreateLayer() gave tab_scroll_view_ a fresh (opaque-default) layer.
+    if (tab_scroll_view_->layer()) {
+      tab_scroll_view_->layer()->SetFillsBoundsOpaquely(false);
+    }
+    if (owner && owner->root()) {
+      ui::Layer* snap = owner->root();
+      snap->SetFillsBoundsOpaquely(false);
+      content_host_->layer()->Add(snap);
+      snap->SetBounds(tab_scroll_view_->bounds());
+      content_host_->layer()->StackAtTop(snap);
+      outgoing_space_layer_owner_ = std::move(owner);
+    }
+  }
+
   UpdateTopBar(model.top_bar);
   UpdateSearch(model.search);
   UpdateFavorites(model.favorites);
   UpdateTabList(model.tab_list);
   UpdateFooter(model.footer);
+
+  if (should_animate && outgoing_space_layer_owner_) {
+    if (GetWidget()) {
+      GetWidget()->LayoutRootViewIfNecessary();
+    }
+    StartSpaceSlide(slide_dir);
+  }
+
+  last_rendered_active_space_id_ = model.tab_list.active_space_id;
+}
+
+bool MahoSidebarView::ShouldAnimateSpaceSwitch(
+    const MahoSidebarViewStateModel& model,
+    int* out_dir) const {
+  if (!base::FeatureList::IsEnabled(
+          maho::features::kMahoSpaceSwitchSlideAnimation)) {
+    return false;
+  }
+  if (is_private_ || is_otr_) {
+    return false;
+  }
+  if (current_body_mode_ != MahoSidebarBodyMode::kTabs) {
+    return false;
+  }
+  if (gfx::Animation::PrefersReducedMotion()) {
+    return false;
+  }
+  if (!GetWidget() || !GetWidget()->IsVisible()) {
+    return false;
+  }
+  if (const_cast<views::Widget*>(GetWidget())->HasCapture()) {
+    return false;
+  }
+  if (!tab_scroll_view_ || !content_host_) {
+    return false;
+  }
+
+  const std::string& new_space_id = model.tab_list.active_space_id;
+  if (last_rendered_active_space_id_.empty() ||
+      last_rendered_active_space_id_ == new_space_id) {
+    return false;
+  }
+
+  int old_i = IndexOf(model.footer.space_ids, last_rendered_active_space_id_);
+  int new_i = IndexOf(model.footer.space_ids, new_space_id);
+  if (old_i < 0 || new_i < 0 || old_i == new_i) {
+    return false;
+  }
+
+  if (out_dir) {
+    *out_dir = (new_i > old_i) ? +1 : -1;
+  }
+  return true;
+}
+
+void MahoSidebarView::StartSpaceSlide(int dir) {
+  if (!tab_scroll_view_ || !tab_scroll_view_->layer() ||
+      !outgoing_space_layer_owner_ || !outgoing_space_layer_owner_->root()) {
+    FinishSpaceSlide();
+    return;
+  }
+
+  const int w = tab_scroll_view_->width();
+  if (w <= 0) {
+    FinishSpaceSlide();
+    return;
+  }
+
+  ui::Layer* snap = outgoing_space_layer_owner_->root();
+
+  gfx::Transform live_start;
+  live_start.Translate(dir * w, 0);
+  tab_scroll_view_->layer()->SetTransform(live_start);
+
+  gfx::Transform snap_end;
+  snap_end.Translate(-dir * w, 0);
+
+  space_switch_anim_in_progress_ = true;
+
+  views::AnimationBuilder()
+      .OnEnded(base::BindOnce(&MahoSidebarView::FinishSpaceSlide,
+                              weak_factory_.GetWeakPtr()))
+      .OnAborted(base::BindOnce(&MahoSidebarView::FinishSpaceSlide,
+                                weak_factory_.GetWeakPtr()))
+      .Once()
+      .SetDuration(base::Milliseconds(220))
+      .SetTransform(tab_scroll_view_->layer(), gfx::Transform(),
+                    gfx::Tween::EASE_OUT)
+      .SetTransform(snap, snap_end, gfx::Tween::EASE_OUT);
+}
+
+void MahoSidebarView::FinishSpaceSlide() {
+  outgoing_space_layer_owner_.reset();
+  if (tab_scroll_view_ && tab_scroll_view_->layer()) {
+    tab_scroll_view_->layer()->SetTransform(gfx::Transform());
+  }
+  if (tab_scroll_view_) {
+    tab_scroll_view_->SetVerticalScrollBarMode(
+        views::ScrollView::ScrollBarMode::kEnabled);
+  }
+  space_switch_anim_in_progress_ = false;
 }
 
 void MahoSidebarView::UpdateTopBar(const MahoSidebarTopBarModel& model) {
@@ -1072,6 +1382,9 @@ void MahoSidebarView::UpdateSearch(const MahoSidebarSearchModel& model) {
 }
 
 void MahoSidebarView::UpdateFavorites(const MahoSidebarFavoritesModel& model) {
+  if (is_private_) {
+    return;
+  }
   if (favorites_view_) {
     favorites_view_->Update(model);
   }
@@ -1084,7 +1397,7 @@ void MahoSidebarView::UpdateTabList(const MahoSidebarTabListModel& model) {
   if (tab_list_view_) {
     tab_list_view_->Update(model, browser_);
   }
-  if (space_header_view_) {
+  if (space_header_view_ && !is_private_) {
     UpdateSidebarSpaceHeaderRow(space_header_view_, model.active_space_icon,
                                 model.active_space_name);
     space_header_view_->SetVisible(!model.active_space_name.empty());
@@ -1117,6 +1430,9 @@ void MahoSidebarView::OnViewBoundsChanged(views::View* observed_view) {
 void MahoSidebarView::OnViewVisibilityChanged(views::View* observed_view,
                                               views::View* starting_view,
                                               bool visible) {
+  if (!visible && space_switch_anim_in_progress_) {
+    FinishSpaceSlide();
+  }
 }
 
 void MahoSidebarView::PositionUpdateNotification() {
@@ -1255,6 +1571,24 @@ void MahoSidebarView::OnTabStripModelChanged(
     }
   }
 
+  // Waking a suspended tab arrives as kInserted, but the fresh WebContents
+  // still carries a throwaway UUID at this synchronous moment (the real id is
+  // bound later, in the TabRegistry observer / after Navigate), so the
+  // fast_wake lookup below misses and the row's X->- flip would otherwise wait
+  // on a full RebuildRows. TryWakeFastPath uses the sidebar-tracked wake id to
+  // flip the row live in place; returns false for non-wake inserts.
+  if (change.type() == TabStripModelChange::kInserted &&
+      selection.active_tab_changed() && tab_list_view_ &&
+      tab_list_view_->TryWakeFastPath()) {
+    if (favorites_view_) {
+      UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+    }
+    refresh_active_tab_chrome();
+    LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake_flip) "
+              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+    return;
+  }
+
   if (change.type() == TabStripModelChange::kInserted &&
       selection.active_tab_changed() && tab_list_view_) {
     const std::string new_active_tab_id = get_new_active_tab_id();
@@ -1300,6 +1634,18 @@ void MahoSidebarView::OnTabStripModelChanged(
             << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_suspend) "
             << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
         return;
+      }
+    }
+  }
+
+  // Restore/insert of a tab whose row was rendered X only because its live
+  // WebContents hadn't attached at the last rebuild: the insertion proves the
+  // tab is live, so re-sync each inserted row to core truth in place. Does not
+  // early-return — genuinely new rows still need ScheduleRefreshAll below.
+  if (change.type() == TabStripModelChange::kInserted && tab_list_view_) {
+    if (const TabStripModelChange::Insert* insert = change.GetInsert()) {
+      for (const auto& ci : insert->contents) {
+        tab_list_view_->ReconcileInsertedRowLiveness(ci.contents);
       }
     }
   }
@@ -1672,14 +2018,26 @@ void MahoSidebarView::SetPrivateAppearance(
     const ui::ImageModel& identity_icon,
     ui::ColorId surface_color_id,
     ui::ColorId text_color_id) {
-  // R-11: Presentation-only. No profile/pref reads.
-  // Sets private-window background and stores identity icon for top-bar.
+  is_private_ = true;
   SetBackground(views::CreateRoundedRectBackground(
       surface_color_id,
       gfx::RoundedCornersF(sidebar_layout::kRailCornerRadiusDp, 0, 0,
                            sidebar_layout::kRailCornerRadiusDp)));
+  if (favorites_view_) {
+    favorites_view_->SetVisible(false);
+  }
+  if (footer_view_) {
+    footer_view_->SetVisible(false);
+  }
+  if (space_header_view_) {
+    ConfigureSidebarSpaceHeaderRowPrivate(space_header_view_, identity_icon,
+                                          u"Incognito", text_color_id);
+  }
+  if (tab_list_view_) {
+    tab_list_view_->SetPrivateMode(true);
+  }
   if (top_bar_view_) {
-    top_bar_view_->SetPrivateIdentityIcon(identity_icon, text_color_id);
+    top_bar_view_->SetPrivateAppearance();
   }
 }
 

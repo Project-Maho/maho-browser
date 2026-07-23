@@ -16,6 +16,13 @@
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/controls/label.h"
 #include "ui/compositor/layer.h"
+#include "base/test/scoped_feature_list.h"
+#include "maho/browser/maho_features.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "ui/gfx/animation/animation.h"
+#include "ui/views/widget/widget.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
 
 namespace maho {
 
@@ -41,6 +48,38 @@ class MahoSidebarSpaceDotViewTest : public views::ViewsTestBase {
   void SetHovered(MahoSidebarSpaceDotView* view, bool hovered) {
     view->is_hovered_ = hovered;
   }
+};
+
+class MahoSidebarViewSpaceSwitchSlideTest : public BrowserWithTestWindowTest {
+ public:
+  MahoSidebarViewSpaceSwitchSlideTest() = default;
+  ~MahoSidebarViewSpaceSwitchSlideTest() override = default;
+
+  void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+    widget_ = std::make_unique<views::Widget>();
+    views::Widget::InitParams params(
+        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_POPUP);
+    params.context = GetContext();
+    widget_->Init(std::move(params));
+    widget_->SetBounds(gfx::Rect(0, 0, 240, 800));
+    sidebar_view_ = widget_->SetContentsView(
+        std::make_unique<MahoSidebarView>(browser()));
+    sidebar_view_->SetBounds(0, 0, 240, 800);
+    sidebar_view_->DeprecatedLayoutImmediately();
+    widget_->Show();
+  }
+
+  void TearDown() override {
+    sidebar_view_ = nullptr;
+    widget_.reset();
+    BrowserWithTestWindowTest::TearDown();
+  }
+
+ protected:
+  std::unique_ptr<views::Widget> widget_;
+  raw_ptr<MahoSidebarView> sidebar_view_ = nullptr;
 };
 
 namespace {
@@ -217,6 +256,90 @@ TEST_F(MahoSidebarSpaceDotViewTest, SetActiveToggle) {
   view->SetActive(true);
   EXPECT_TRUE(view->is_active());
   EXPECT_EQ(GetIconLabel(view.get())->layer()->GetTargetOpacity(), 1.0f);
+}
+
+
+
+TEST_F(MahoSidebarViewSpaceSwitchSlideTest, FeatureDisabledNoAnimation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      maho::features::kMahoSpaceSwitchSlideAnimation);
+
+  MahoSidebarViewStateModel model1;
+  model1.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model1.tab_list.active_space_id = "space-1";
+  sidebar_view_->ApplyViewState(model1);
+
+  int dir = 0;
+  MahoSidebarViewStateModel model2;
+  model2.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model2.tab_list.active_space_id = "space-2";
+
+  EXPECT_FALSE(sidebar_view_->ShouldAnimateSpaceSwitch(model2, &dir));
+  sidebar_view_->ApplyViewState(model2);
+  EXPECT_FALSE(sidebar_view_->space_switch_anim_in_progress_for_testing());
+  EXPECT_EQ(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+}
+
+TEST_F(MahoSidebarViewSpaceSwitchSlideTest, FeatureEnabledDirectionsAndSnapshot) {
+  gfx::ScopedAnimationDurationScaleMode normal_duration(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      maho::features::kMahoSpaceSwitchSlideAnimation);
+
+  MahoSidebarViewStateModel model1;
+  model1.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model1.tab_list.active_space_id = "space-1";
+  sidebar_view_->ApplyViewState(model1);
+  sidebar_view_->DeprecatedLayoutImmediately();
+
+  EXPECT_EQ(sidebar_view_->last_rendered_active_space_id_for_testing(), "space-1");
+
+  // Switch right (space-1 -> space-2): old_i (0) < new_i (1) => dir = +1
+  int dir = 0;
+  MahoSidebarViewStateModel model2;
+  model2.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model2.tab_list.active_space_id = "space-2";
+
+  EXPECT_TRUE(sidebar_view_->ShouldAnimateSpaceSwitch(model2, &dir));
+  EXPECT_EQ(dir, 1);
+
+  sidebar_view_->ApplyViewState(model2);
+  EXPECT_TRUE(sidebar_view_->space_switch_anim_in_progress_for_testing());
+  EXPECT_NE(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+
+  // Switch left (space-2 -> space-1): old_i (1) > new_i (0) => dir = -1
+  MahoSidebarViewStateModel model3;
+  model3.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model3.tab_list.active_space_id = "space-1";
+
+  EXPECT_TRUE(sidebar_view_->ShouldAnimateSpaceSwitch(model3, &dir));
+  EXPECT_EQ(dir, -1);
+
+  // Rapid switch (re-entrancy): applying model3 finishes prior slide and starts new slide
+  sidebar_view_->ApplyViewState(model3);
+  EXPECT_TRUE(sidebar_view_->space_switch_anim_in_progress_for_testing());
+  EXPECT_NE(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+
+  sidebar_view_->FinishSpaceSlide();
+  EXPECT_FALSE(sidebar_view_->space_switch_anim_in_progress_for_testing());
+  EXPECT_EQ(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+}
+
+TEST_F(MahoSidebarViewSpaceSwitchSlideTest, SameSpaceNoAnimation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      maho::features::kMahoSpaceSwitchSlideAnimation);
+
+  MahoSidebarViewStateModel model1;
+  model1.footer.space_ids = {"space-1", "space-2"};
+  model1.tab_list.active_space_id = "space-1";
+  sidebar_view_->ApplyViewState(model1);
+
+  int dir = 0;
+  EXPECT_FALSE(sidebar_view_->ShouldAnimateSpaceSwitch(model1, &dir));
 }
 
 }  // namespace
