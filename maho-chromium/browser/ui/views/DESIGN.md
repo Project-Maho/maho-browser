@@ -60,3 +60,21 @@ Accessibility guidelines:
 * **Snap Layout:** Revealed maximize/restore must return `HTMAXBUTTON` from non-client hit testing so Windows 11 Snap Layout works. Minimize and close return their native hit-test codes.
 * **State Reset:** Window bounds, maximize/restore, fullscreen, removal, and destruction reset the caption controls to hidden and stop any hover monitor/timer.
 * **Platform Scope:** macOS traffic lights and Linux frame behavior are unchanged.
+
+## Sidebar Ellipsis Spark Action Row
+
+### Overview
+* The processing feedback is strictly contained within the 42dp New Tab/Tidy/Clear action row, keeping the actual tab list fully visible and allowing live updates.
+* Private mode restricts the action row to a "+ New Tab" button only and does not instantiate the processing feedback.
+
+### Motion & Timing Contract
+* **Rich Motion Timeline**: 300ms merge, at least 200ms working, 300ms success/failure resolve, and 200ms restore.
+* **Fast Path**: Fast Tidy and Clear complete in exactly 1000ms. Single cycle (Clear) resolves success automatically.
+* **Slow Path**: Long operations (Tidy) extend only the 2200ms working loop. Resolving captures the current pose and transitions immediately.
+* **Reduced Motion**: Static textless pose (dots and centered spark) with buttons hidden. Clear holds 180ms; Tidy waits for external resolve then hides immediately.
+
+### Styling & Accessibility
+* **Geometry**: Ellipsis scale factor `1.44`. Dots merge from thirds to rest offsets `[-15.84, 0, 15.84]` with radius easing `4.32` to `3.6`. Working dots settle at `[-14.4, 0, 14.4]`, radius `3.6`. Traversing spark tracks `[-14.4, 14.4]` at y-offset `-8.64`, radius `2.16`.
+* **Palette**: Dots map to `ui::kColorSysOnSurfaceSubtle`; spark/check mark map to `kMahoColorAccentBlueBright`.
+* **State & Announcements**: Textless states with no visible label. Accessible name/role `kAlert` is announced on start and resolution.
+* **Input Blocking**: Button subtree event processing and accessibility exposure are blocked during processing. Keyboard focus is restored to the initiating button upon completion.

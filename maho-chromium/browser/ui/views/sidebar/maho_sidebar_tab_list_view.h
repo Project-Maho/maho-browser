@@ -17,11 +17,14 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/tabs/public/tab_interface.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "ui/views/view_tracker.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/models/image_model.h"
+#include "ui/color/color_id.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/point.h"
@@ -84,6 +87,10 @@ std::unique_ptr<views::View> CreateSidebarSpaceHeaderRow();
 void UpdateSidebarSpaceHeaderRow(views::View* row,
                                  const std::string& icon,
                                  const std::u16string& name);
+void ConfigureSidebarSpaceHeaderRowPrivate(views::View* row,
+                                           const ui::ImageModel& icon,
+                                           const std::u16string& name,
+                                           ui::ColorId text_color);
 
 class MahoSidebarTabListView;
 
@@ -162,7 +169,35 @@ class MahoSidebarTabListView : public views::View,
   ~MahoSidebarTabListView() override;
 
   void Update(const MahoSidebarTabListModel& model, Browser* browser);
+  void SetPrivateMode(bool private_mode);
   void SetLastFavoritesModel(const MahoSidebarFavoritesModel& model);
+
+  views::View* action_row_for_testing() { return action_row_; }
+  views::View* action_buttons_for_testing() { return action_buttons_; }
+  views::View* tidy_button_for_testing() { return tidy_button_; }
+  views::View* clear_button_for_testing() { return clear_button_; }
+  MahoSidebarProcessingPlaceholderView* action_processing_view_for_testing() {
+    return action_processing_view_;
+  }
+  bool action_placeholder_active_for_testing() const {
+    return action_placeholder_active_;
+  }
+
+  // Thin test wrappers: anonymous-namespace gtest subclasses cannot be granted
+  // access via fixture friend declarations, so these delegate to the private
+  // production methods without exposing the methods themselves.
+  void RebuildRowsForTesting(const MahoSidebarTabListModel& model,
+                             Browser* browser) {
+    RebuildRows(model, browser);
+  }
+  void StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode mode,
+      views::View* trigger_button) {
+    StartActionProcessing(mode, trigger_button);
+  }
+  void ResolveActionPlaceholderDeferredForTesting(bool success) {
+    ResolveActionPlaceholderDeferred(success);
+  }
 
   // Sets a callback that section drop targets will invoke when a favorites-
   // origin tab is successfully dropped on a section container.  The callback
@@ -319,6 +354,10 @@ class MahoSidebarTabListView : public views::View,
 
   void SetFavoritesSyncCallback(base::RepeatingClosure callback);
 
+  // Called by MahoSidebarView when the overlay has fully faded/hidden. Clears
+  // the in-progress guard and re-enables the action buttons.
+  void OnActionPlaceholderHidden();
+
   bool HasTabInLastModel(const std::string& tab_id) const;
 
   bool CoreSuspendedForTab(const std::string& tab_id) const;
@@ -452,7 +491,6 @@ class MahoSidebarTabListView : public views::View,
   void OnTidyPressed(const ui::Event& event);
   void OnTidyFinished(int folder_count, const std::string& error_message);
   void OnClearPressed(const ui::Event& event);
-  void AddTabActionsRow();
 
   // ui::SimpleMenuModel::Delegate (Clear menu only).
   void ExecuteCommand(int command_id, int event_flags) override;
@@ -471,6 +509,7 @@ class MahoSidebarTabListView : public views::View,
                        const favicon_base::FaviconImageResult& result);
 
   raw_ptr<Browser> browser_ = nullptr;
+  bool private_mode_ = false;
   raw_ptr<views::LabelButton> new_tab_button_ = nullptr;
   raw_ptr<views::View> tidy_button_ = nullptr;
   raw_ptr<views::View> clear_button_ = nullptr;
@@ -535,6 +574,20 @@ class MahoSidebarTabListView : public views::View,
   std::string last_active_tab_id_;
   std::string waking_tab_id_;
   base::RepeatingClosure favorites_sync_callback_;
+
+  bool action_placeholder_active_ = false;
+  void ApplyActionPlaceholderButtonState();
+  void ResolveActionPlaceholderDeferred(bool success);
+  void StartActionProcessing(MahoSidebarProcessingPlaceholderView::Mode mode,
+                             views::View* trigger_button);
+  std::unique_ptr<views::View> CreateActionRow();
+
+  raw_ptr<views::View> action_row_ = nullptr;
+  raw_ptr<views::View> action_buttons_ = nullptr;
+  raw_ptr<MahoSidebarProcessingPlaceholderView> action_processing_view_ =
+      nullptr;
+  views::ViewTracker focus_tracker_;
+  raw_ptr<views::View> trigger_button_ = nullptr;
 
   int rebuild_rows_count_for_testing_ = 0;
 

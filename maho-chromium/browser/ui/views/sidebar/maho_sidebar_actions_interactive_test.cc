@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "base/check.h"
+#include "base/test/bind.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -1078,6 +1079,241 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   EXPECT_EQ(count_before, model->count())
       << "splitting when the active tab is already split must not create a tab";
   EXPECT_EQ(active_before, model->active_index());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       ProcessingSurfaceIsLocalizedToPersistentActionRow) {
+  // Seed 2 guarantees at least one top-level normal tab row, which we need to
+  // prove the processing surface stays localized to the action row and never
+  // blanks the surrounding tab list.
+  SeedProfile(2);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* action_row = list_view->action_row_for_testing();
+  views::View* button_surface = list_view->action_buttons_for_testing();
+  MahoSidebarProcessingPlaceholderView* processing =
+      list_view->action_processing_view_for_testing();
+  views::View* tidy = list_view->tidy_button_for_testing();
+
+  ASSERT_TRUE(action_row);
+  ASSERT_TRUE(button_surface);
+  ASSERT_TRUE(processing);
+  ASSERT_TRUE(tidy);
+
+  std::string normal_tab_id;
+  auto state = GetViewState();
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab && !node.tab_id.empty()) {
+      normal_tab_id = node.tab_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(normal_tab_id.empty())
+      << "Seed 2 must expose at least one normal tab row";
+  SidebarTabRowView* tab_row =
+      list_view->FindTabRowByIdForTesting(normal_tab_id);
+  ASSERT_TRUE(tab_row);
+
+  EXPECT_EQ(action_row->GetPreferredSize(views::SizeBounds()).height(), 42);
+  EXPECT_EQ(processing->parent(), action_row);
+  EXPECT_EQ(button_surface->parent(), action_row);
+
+  // Disable-animation routes loop resolution straight to the real hidden
+  // callback, so we can start/stop processing deterministically without sleeps.
+  processing->set_disable_animation_for_testing(true);
+
+  list_view->StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode::kLoop, tidy);
+  ASSERT_TRUE(list_view->action_placeholder_active_for_testing());
+
+  ASSERT_TRUE(list_view->GetWidget());
+  list_view->GetWidget()->LayoutRootViewIfNecessary();
+
+  EXPECT_TRUE(processing->GetVisible())
+      << "Processing surface must be visible while processing is active";
+  EXPECT_EQ(processing->GetLocalBounds(), action_row->GetLocalBounds())
+      << "Processing surface must fill exactly the persistent 42dp action row";
+
+  EXPECT_TRUE(tab_row->GetVisible())
+      << "Tab rows must remain visible while only the action row processes";
+  EXPECT_TRUE(tab_row->IsDrawn())
+      << "Tab rows must remain drawn while only the action row processes";
+
+  list_view->ResolveActionPlaceholderDeferredForTesting(true);
+  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+    return !list_view->action_placeholder_active_for_testing();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       ProcessingSurvivesRebuildAndRestoresActions) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* tidy = list_view->tidy_button_for_testing();
+  ASSERT_TRUE(tidy);
+  views::View* button_surface = list_view->action_buttons_for_testing();
+  ASSERT_TRUE(button_surface);
+  MahoSidebarProcessingPlaceholderView* processing_before =
+      list_view->action_processing_view_for_testing();
+  ASSERT_TRUE(processing_before);
+  processing_before->set_disable_animation_for_testing(true);
+
+  views::View* action_row_before = list_view->action_row_for_testing();
+  ASSERT_TRUE(action_row_before);
+
+  list_view->StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode::kLoop, tidy);
+  ASSERT_TRUE(list_view->action_placeholder_active_for_testing());
+  EXPECT_FALSE(button_surface->GetCanProcessEventsWithinSubtree());
+
+  const auto assert_survived = [&](const char* stage) {
+    EXPECT_EQ(action_row_before, list_view->action_row_for_testing())
+        << "Action row pointer must survive rebuild: " << stage;
+    EXPECT_EQ(processing_before,
+              list_view->action_processing_view_for_testing())
+        << "Processing view pointer must survive rebuild: " << stage;
+    EXPECT_TRUE(list_view->action_placeholder_active_for_testing())
+        << "Active processing must survive rebuild: " << stage;
+  };
+
+  // Two browser-context rebuilds and one zero-context (nullptr) rebuild must
+  // all keep the row/processing pointers and the in-progress flag unchanged.
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  base::RunLoop().RunUntilIdle();
+  assert_survived("first browser-context rebuild");
+
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  base::RunLoop().RunUntilIdle();
+  assert_survived("second browser-context rebuild");
+
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), nullptr);
+  base::RunLoop().RunUntilIdle();
+  assert_survived("zero-context rebuild");
+
+  list_view->ResolveActionPlaceholderDeferredForTesting(true);
+  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+    return !list_view->action_placeholder_active_for_testing();
+  }));
+  EXPECT_TRUE(button_surface->GetCanProcessEventsWithinSubtree())
+      << "Action buttons must accept input again after resolution";
+  EXPECT_FALSE(button_surface->GetViewAccessibility().GetIsIgnored())
+      << "Action buttons must be re-exposed to accessibility after resolution";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       ProcessingBlocksInputAndRestoresKeyboardFocus) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* tidy = list_view->tidy_button_for_testing();
+  ASSERT_TRUE(tidy);
+  MahoSidebarProcessingPlaceholderView* processing =
+      list_view->action_processing_view_for_testing();
+  ASSERT_TRUE(processing);
+  processing->set_disable_animation_for_testing(true);
+
+  tidy->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+  tidy->RequestFocus();
+  ASSERT_TRUE(tidy->HasFocus());
+
+  list_view->StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode::kLoop, tidy);
+
+  views::View* button_surface = list_view->action_buttons_for_testing();
+  ASSERT_TRUE(button_surface);
+  EXPECT_FALSE(button_surface->GetCanProcessEventsWithinSubtree());
+  EXPECT_TRUE(button_surface->GetViewAccessibility().GetIsIgnored());
+  EXPECT_FALSE(tidy->HasFocus());
+
+  // Restoration must run through the real placeholder lifecycle. Calling
+  // OnActionPlaceholderHidden() directly is forbidden: it would bypass the
+  // processing view and hide the actual hidden-callback wiring under test.
+  list_view->ResolveActionPlaceholderDeferredForTesting(true);
+  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+    return !list_view->action_placeholder_active_for_testing();
+  }));
+
+  EXPECT_TRUE(button_surface->GetCanProcessEventsWithinSubtree());
+  EXPECT_FALSE(button_surface->GetViewAccessibility().GetIsIgnored());
+  EXPECT_TRUE(tidy->HasFocus())
+      << "Keyboard focus must return to the trigger button after processing";
+}
+
+// Mouse-style activation: the trigger button is NOT focused when processing
+// starts, so the completed lifecycle must not force keyboard focus onto it.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       ProcessingMouseTriggerDoesNotForceFocusOnRestore) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* tidy = list_view->tidy_button_for_testing();
+  ASSERT_TRUE(tidy);
+  MahoSidebarProcessingPlaceholderView* processing =
+      list_view->action_processing_view_for_testing();
+  ASSERT_TRUE(processing);
+  processing->set_disable_animation_for_testing(true);
+
+  if (tidy->GetFocusManager()) {
+    tidy->GetFocusManager()->ClearFocus();
+  }
+  ASSERT_FALSE(tidy->HasFocus());
+
+  list_view->StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode::kLoop, tidy);
+  ASSERT_TRUE(list_view->action_placeholder_active_for_testing());
+  EXPECT_FALSE(tidy->HasFocus());
+
+  list_view->ResolveActionPlaceholderDeferredForTesting(true);
+  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+    return !list_view->action_placeholder_active_for_testing();
+  }));
+
+  EXPECT_FALSE(tidy->HasFocus())
+      << "A mouse-triggered action must not force keyboard focus onto the "
+         "trigger button after the processing lifecycle completes";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       SingleCycleRestoresWithoutExternalResolve) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  list_view->StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode::kSingleCycle,
+      list_view->clear_button_for_testing());
+
+  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+    return !list_view->action_placeholder_active_for_testing();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       DISABLED_ProcessingSlowWorkingVisualQaHarness) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* tidy = list_view->tidy_button_for_testing();
+  ASSERT_TRUE(tidy);
+
+  list_view->StartActionProcessingForTesting(
+      MahoSidebarProcessingPlaceholderView::Mode::kLoop, tidy);
+
+  base::RunLoop run_loop;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        list_view->ResolveActionPlaceholderDeferredForTesting(true);
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+            FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(600));
+      }),
+      base::Milliseconds(2500));
+  run_loop.Run();
 }
 
 }  // namespace

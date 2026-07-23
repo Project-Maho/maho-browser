@@ -2,8 +2,6 @@
 
 #include "maho/browser/maho_features.h"
 
-#include "base/feature_list.h"
-
 namespace maho::features {
 
 BASE_FEATURE(kMahoUnifiedClickPath,
@@ -28,5 +26,8 @@ BASE_FEATURE(kMahoSidebarVibrancy,
              "MahoSidebarVibrancy",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-}  // namespace maho::features
+BASE_FEATURE(kMahoSidebarActionPlaceholder,
+             "MahoSidebarActionPlaceholder",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
+}  // namespace maho::features

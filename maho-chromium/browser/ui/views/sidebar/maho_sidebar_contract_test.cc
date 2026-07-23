@@ -54,18 +54,17 @@ namespace {
 
 bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
   if (!view) return false;
-  if (view->GetClassName() == std::string("BoxLayoutView") ||
-      view->GetClassName() == std::string("View")) {
-    for (views::View* child : view->children()) {
-      if (auto* button = views::AsViewClass<views::LabelButton>(child)) {
-        if (button->GetText() == expected_text) {
-          return true;
-        }
-      }
+  if (auto* button = views::AsViewClass<views::LabelButton>(view)) {
+    if (button->GetText() == expected_text) {
+      return true;
     }
   }
-  auto* button = views::AsViewClass<views::LabelButton>(view);
-  return button && button->GetText() == expected_text;
+  for (views::View* child : view->children()) {
+    if (IsInlineRowButton(child, expected_text)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ExpectEmptyPinnedSectionLayout(views::View* rows) {
@@ -3286,6 +3285,135 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
       << "fast up-scroll must realize more rows ahead (above the viewport)";
   EXPECT_EQ(up_range.last_visible_index, base_range.last_visible_index)
       << "trailing (below) edge must stay at the base overscan";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ActionRowUsesDedicatedFortyTwoDpHeight) {
+  SeedProfile(2);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* action_row = list_view->action_row_for_testing();
+  ASSERT_TRUE(action_row);
+  EXPECT_EQ(action_row->GetPreferredSize(views::SizeBounds()).height(), 42);
+
+  std::string normal_tab_id;
+  auto state = GetViewState();
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab && !node.tab_id.empty()) {
+      normal_tab_id = node.tab_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(normal_tab_id.empty())
+      << "Seed 2 must expose at least one normal tab row";
+  SidebarTabRowView* tab_row =
+      list_view->FindTabRowByIdForTesting(normal_tab_id);
+  ASSERT_TRUE(tab_row);
+  EXPECT_EQ(tab_row->GetPreferredSize(views::SizeBounds()).height(), 36)
+      << "A normal tab row keeps the 36dp rhythm, distinct from the 42dp "
+         "action row";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ActionRowStaysBetweenPinnedSeparatorAndNormalSection) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* tab_rows = list_view->tab_rows_for_testing();
+  ASSERT_TRUE(tab_rows);
+  ASSERT_GE(tab_rows->children().size(), 4u);
+
+  EXPECT_EQ(tab_rows->children()[2], list_view->action_row_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ActionRowPointerSurvivesRebuild) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  views::View* action_row_before = list_view->action_row_for_testing();
+  ASSERT_TRUE(action_row_before);
+
+  // The action row is scaffold, not tab content: with the seeded projection
+  // populated it must sit between the two section containers and never appear
+  // in the tab visual order or either section projection. This is verified via
+  // public accessors + stable ids rather than internal view-tree walks.
+  views::View* rows = list_view->tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  ASSERT_GE(rows->children().size(), 4u);
+  EXPECT_EQ(rows->children()[2], action_row_before)
+      << "Action row must be a direct scaffold child, outside both sections";
+  EXPECT_FALSE(views::IsViewClass<SidebarTabRowView>(action_row_before))
+      << "Action row must not be a tab row";
+
+  const std::vector<std::string> visual_order =
+      list_view->tab_visual_order_ids_for_testing();
+  ASSERT_FALSE(visual_order.empty())
+      << "Seed 1 must populate the tab visual order for a meaningful check";
+  for (const std::string& id : visual_order) {
+    EXPECT_NE(
+        static_cast<views::View*>(list_view->FindTabRowByIdForTesting(id)),
+        action_row_before)
+        << "Visual-order tab id '" << id
+        << "' must not resolve to the action row";
+  }
+
+  const auto assert_projection_excludes_action_row =
+      [&](const std::vector<SidebarVisualRow>& projection) {
+        for (const SidebarVisualRow& row : projection) {
+          if (row.kind != SidebarVisualRowKind::kTab &&
+              row.kind != SidebarVisualRowKind::kCollapsedStickyTab) {
+            continue;
+          }
+          EXPECT_NE(static_cast<views::View*>(
+                        list_view->FindTabRowByIdForTesting(row.stable_id)),
+                    action_row_before)
+              << "Projection stable_id '" << row.stable_id
+              << "' must not resolve to the action row";
+        }
+      };
+  assert_projection_excludes_action_row(
+      list_view->normal_projection_for_testing());
+  assert_projection_excludes_action_row(
+      list_view->pinned_projection_for_testing());
+
+  // Two browser-context rebuilds plus one zero-context (nullptr) rebuild must
+  // all keep the same action row identity.
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(action_row_before, list_view->action_row_for_testing())
+      << "Action row must survive the first browser-context rebuild";
+
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(action_row_before, list_view->action_row_for_testing())
+      << "Action row must survive the second browser-context rebuild";
+
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), nullptr);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(action_row_before, list_view->action_row_for_testing())
+      << "Action row must survive the zero-context rebuild";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       PrivateActionRowRemainsNewTabOnly) {
+  SeedProfile(1);
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  list_view->SetPrivateMode(true);
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  base::RunLoop().RunUntilIdle();
+
+  views::View* action_row = list_view->action_row_for_testing();
+  ASSERT_TRUE(action_row);
+  EXPECT_TRUE(IsInlineRowButton(action_row, u"+ New Tab"));
+  EXPECT_FALSE(IsInlineRowButton(action_row, u"Tidy"));
+  EXPECT_FALSE(IsInlineRowButton(action_row, u"Clear"));
+  EXPECT_EQ(list_view->action_processing_view_for_testing(), nullptr);
 }
 
 }  // namespace

@@ -54,6 +54,14 @@ BASE_DECLARE_FEATURE(kMahoSpaceSwitchActivatesTab);
 // Win11 22H2 and on non-Windows platforms.
 BASE_DECLARE_FEATURE(kMahoSidebarVibrancy);
 
+// When enabled, the sidebar Tidy (async) and Clear (sync) actions show a local
+// Ellipsis Spark processing animation inside the 42dp New Tab/Tidy/Clear
+// action row, while the tab list remains visible.
+//
+// Disabling this flag restores standard action behavior without any animation.
+// Kill-switch pending end-to-end QA sign-off.
+BASE_DECLARE_FEATURE(kMahoSidebarActionPlaceholder);
+
 }  // namespace maho::features
 
 #endif  // MAHO_BROWSER_MAHO_FEATURES_H_
