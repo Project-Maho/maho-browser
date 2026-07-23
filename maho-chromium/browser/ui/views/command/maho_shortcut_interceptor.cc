@@ -4,9 +4,14 @@
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
 
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/values.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/input/native_web_keyboard_event.h"
@@ -80,6 +85,74 @@ std::string VKeyToString(int vk) {
       }
       return {};
   }
+}
+
+// Inverse of VKeyToString(); the two must stay in sync.
+ui::KeyboardCode StringToVKey(const std::string& key) {
+  if (key.size() == 1) {
+    char c = key[0];
+    if (c >= 'a' && c <= 'z') {
+      return static_cast<ui::KeyboardCode>(ui::VKEY_A + (c - 'a'));
+    }
+    if (c >= '0' && c <= '9') {
+      return static_cast<ui::KeyboardCode>(ui::VKEY_0 + (c - '0'));
+    }
+    switch (c) {
+      case ',': return ui::VKEY_OEM_COMMA;
+      case '.': return ui::VKEY_OEM_PERIOD;
+      case '/': return ui::VKEY_OEM_2;
+      case '[': return ui::VKEY_OEM_4;
+      case ']': return ui::VKEY_OEM_6;
+      case '-': return ui::VKEY_OEM_MINUS;
+      case '=': return ui::VKEY_OEM_PLUS;
+      default:  return ui::VKEY_UNKNOWN;
+    }
+  }
+
+  if (key == "enter") return ui::VKEY_RETURN;
+  if (key == "escape") return ui::VKEY_ESCAPE;
+  if (key == "tab") return ui::VKEY_TAB;
+  if (key == "space") return ui::VKEY_SPACE;
+  if (key == "backspace") return ui::VKEY_BACK;
+  if (key == "delete") return ui::VKEY_DELETE;
+  if (key == "arrowup") return ui::VKEY_UP;
+  if (key == "arrowdown") return ui::VKEY_DOWN;
+  if (key == "arrowleft") return ui::VKEY_LEFT;
+  if (key == "arrowright") return ui::VKEY_RIGHT;
+  if (key == "home") return ui::VKEY_HOME;
+  if (key == "end") return ui::VKEY_END;
+  if (key == "pageup") return ui::VKEY_PRIOR;
+  if (key == "pagedown") return ui::VKEY_NEXT;
+
+  // Function keys: "f1".."f12".
+  if (key.size() >= 2 && (key[0] == 'f' || key[0] == 'F')) {
+    int n = 0;
+    if (base::StringToInt(key.substr(1), &n) && n >= 1 && n <= 12) {
+      return static_cast<ui::KeyboardCode>(ui::VKEY_F1 + (n - 1));
+    }
+  }
+
+  return ui::VKEY_UNKNOWN;
+}
+
+int ModifiersFromList(const base::ListValue& modifiers) {
+  int flags = ui::EF_NONE;
+  for (const base::Value& mod : modifiers) {
+    if (!mod.is_string()) {
+      continue;
+    }
+    const std::string& name = mod.GetString();
+    if (name == "ctrl") {
+      flags |= ui::EF_CONTROL_DOWN;
+    } else if (name == "shift") {
+      flags |= ui::EF_SHIFT_DOWN;
+    } else if (name == "alt") {
+      flags |= ui::EF_ALT_DOWN;
+    } else if (name == "meta") {
+      flags |= ui::EF_COMMAND_DOWN;
+    }
+  }
+  return flags;
 }
 
 std::string BuildKeyComboJson(const input::NativeWebKeyboardEvent& event) {
@@ -234,6 +307,57 @@ std::string MahoShortcutInterceptor::ResolveActionForKeyEvent(
 std::string MahoShortcutInterceptor::ResolveActionForAccelerator(
     const ui::Accelerator& accelerator) {
   return ResolveActionForKeyComboJson(BuildKeyComboJson(accelerator));
+}
+
+// static
+std::vector<ui::Accelerator>
+MahoShortcutInterceptor::GetRegisteredAccelerators() {
+  std::vector<ui::Accelerator> accelerators;
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return accelerators;
+  }
+
+  char* shortcuts = maho_core_get_shortcuts(core);
+  if (!shortcuts) {
+    return accelerators;
+  }
+  std::string json(shortcuts);
+  maho_string_free(shortcuts);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return accelerators;
+  }
+
+  for (const base::Value& entry : parsed->GetList()) {
+    const base::DictValue* dict = entry.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    if (!dict->FindBool("enabled").value_or(false)) {
+      continue;
+    }
+    const base::DictValue* combo = dict->FindDict("keyCombo");
+    if (!combo) {
+      continue;
+    }
+    const std::string* key = combo->FindString("key");
+    if (!key) {
+      continue;
+    }
+    ui::KeyboardCode key_code = StringToVKey(*key);
+    if (key_code == ui::VKEY_UNKNOWN) {
+      continue;
+    }
+    const base::ListValue* modifiers = combo->FindList("modifiers");
+    int flags = modifiers ? ModifiersFromList(*modifiers) : ui::EF_NONE;
+    accelerators.emplace_back(key_code, flags);
+  }
+
+  return accelerators;
 }
 
 // static
