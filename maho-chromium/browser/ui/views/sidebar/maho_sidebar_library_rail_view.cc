@@ -134,8 +134,15 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
     label_ = AddChildView(std::make_unique<views::Label>(visible_label_));
     label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     label_->SetAutoColorReadabilityEnabled(false);
-    label_->SetMultiLine(true);
-    label_->SetMaximumWidth(sidebar_layout::kLibraryRailItemContentWidthDp);
+    const bool multiline =
+        (category == MahoSidebarLibraryRailView::Category::kArchivedTabs);
+    label_->SetMultiLine(multiline);
+    if (multiline) {
+      label_->SetMaximumWidth(sidebar_layout::kLibraryRailItemContentWidthDp);
+    } else {
+      label_->SetMaximumWidthSingleLine(
+          sidebar_layout::kLibraryRailItemContentWidthDp);
+    }
     label_->SetElideBehavior(gfx::NO_ELIDE);
     label_->SetLineHeight(kLibraryRailLabelLineHeightDp);
     base_label_font_list_ = label_->font_list().Derive(
@@ -164,7 +171,10 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
       const views::SizeBounds& available_size) const override {
     views::SizeBounds size_bounds(sidebar_layout::kLibraryRailItemWidthDp,
                                   available_size.height());
-    return views::Button::CalculatePreferredSize(size_bounds);
+    gfx::Size size = views::Button::CalculatePreferredSize(size_bounds);
+    // Pin to the uniform item width so all rail items share one button width.
+    size.set_width(sidebar_layout::kLibraryRailItemWidthDp);
+    return size;
   }
 
   MahoSidebarLibraryRailView::Category category() const { return category_; }
@@ -320,7 +330,10 @@ void MahoSidebarLibraryRailView::Layout(PassKey) {
   const gfx::Rect bounds = GetContentsBounds();
   const gfx::Size host_size = utility_host_->GetPreferredSize();
   utility_host_->SetBounds(
-      bounds.x() + sidebar_layout::kLibraryRailUtilitySpacingDp,
+      bounds.x() +
+          ((bounds.width() - sidebar_layout::kLibraryRailRightMarginDp) -
+           host_size.width()) /
+              2,
       bounds.bottom() - sidebar_layout::kLibraryRailBottomInsetDp -
           host_size.height(),
       host_size.width(), host_size.height());
@@ -336,8 +349,11 @@ void MahoSidebarLibraryRailView::Layout(PassKey) {
       bounds.y() + sidebar_layout::kLibraryRailTopInsetDp,
       centered_y - sidebar_layout::kLibraryRailItemStackVisualLiftDp);
   item_container_->SetBounds(
-      bounds.x() + (bounds.width() - item_size.width()) / 2, anchored_y,
-      item_size.width(), item_size.height());
+      bounds.x() +
+          ((bounds.width() - sidebar_layout::kLibraryRailRightMarginDp) -
+           item_size.width()) /
+              2,
+      anchored_y, item_size.width(), item_size.height());
 }
 
 views::Button* MahoSidebarLibraryRailView::button_for_category_for_testing(
@@ -458,8 +474,8 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
                                           : kMahoColorLibraryRailItemText;
   back_button_->SetImageModel(
       views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kChevronLeftIcon,
-                                     back_color, 12));
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kArrowLeftIcon,
+                                     back_color, kLibraryRailIconOpticalSizeDp));
   back_button_->layer()->SetOpacity(enabled ? 1.0f : kBackButtonDisabledAlpha);
 }
 

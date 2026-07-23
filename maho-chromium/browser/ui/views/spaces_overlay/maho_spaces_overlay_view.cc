@@ -14,7 +14,9 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_themed_background.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho_spaces_overlay_board_view.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
@@ -24,11 +26,14 @@
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_constants.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkPoint.h"
 #include "ui/views/background.h"
+#include "ui/views/widget/widget.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
@@ -139,14 +144,42 @@ void MahoSpacesOverlayView::OnThemeChanged() {
   if (!color_provider) {
     return;
   }
+  // The themed gradient is painted in OnPaintBackground(); repaint so it picks
+  // up the new space-theme colors.
+  SchedulePaint();
+}
 
-  // Force full opacity: the sidebar background token can be translucent (it
-  // blends with the window vibrancy layer), but the overlay must be an opaque
-  // occluder so accelerated web contents cannot bleed through underneath it.
-  const SkColor scrim =
-      SkColorSetA(color_provider->GetColor(kMahoColorSidebarBackground), 0xFF);
+void MahoSpacesOverlayView::SetThemeSourceWidget(const views::Widget* widget) {
+  theme_source_widget_ = widget;
+  SchedulePaint();
+}
 
-  SetBackground(views::CreateSolidBackground(scrim));
+void MahoSpacesOverlayView::OnPaintBackground(gfx::Canvas* canvas) {
+  // Paint the same space-theme-tinted gradient as the docked sidebar, forced
+  // opaque, so the Spaces overlay follows the theme instead of a flat color.
+  // Opaque stops keep the overlay a valid occluder (web contents must not bleed
+  // through) — identical to the fixed-width library overlay.
+  //
+  // Source the ColorProvider from the parent browser-frame widget: this
+  // top-level frameless overlay's own provider lacks the per-space tint mixer
+  // and would resolve an achromatic base (fall back to this view's provider
+  // only during teardown/reparent when the parent is not yet set).
+  const ui::ColorProvider* provider =
+      theme_source_widget_ ? theme_source_widget_->GetColorProvider()
+                           : GetColorProvider();
+  if (!provider) {
+    return;
+  }
+  const SkVector radii[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+  // Anchor the gradient span to the library-overlay content width (380dp): the
+  // narrow library overlay renders correctly with a full-bounds span at that
+  // width, so reusing it bounds the full-viewport diagonal to the same tint
+  // density instead of washing out across the ~2000px width (kClamp holds the
+  // final stop beyond the span). Chosen as the sanctioned proxy for the
+  // sidebar/rail width the docked gradient effectively paints across.
+  PaintMahoSidebarThemedBackground(
+      canvas, GetLocalBounds(), provider, /*opaque=*/true, radii,
+      /*gradient_span_dp=*/sidebar_layout::kLibraryOverlayContentWidthDp);
 }
 
 bool MahoSpacesOverlayView::AcceleratorPressed(

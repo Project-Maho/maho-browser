@@ -15,11 +15,16 @@
 
 class Browser;
 
+namespace gfx {
+class Canvas;
+}  // namespace gfx
+
 namespace views {
 class ImageButton;
 class Label;
 class ScrollView;
 class View;
+class Widget;
 }  // namespace views
 
 namespace maho {
@@ -56,8 +61,18 @@ class MahoSpacesOverlayView : public views::View {
   MahoSpacesOverlayBoardView* GetBoardViewForTesting() { return board_view_; }
   views::View* GetAnimatedView() { return surface_; }
 
+  // Sources the themed background's ColorProvider from `widget` (the browser
+  // frame widget the overlay is parented to) instead of this overlay's own
+  // widget. The full-viewport, activatable, frameless overlay is realized as a
+  // top-level native widget whose ColorProviderKey lacks the browser window's
+  // per-space tint mixer, so its own provider resolves an achromatic base;
+  // using the parent frame's provider yields the exact tint the docked rail
+  // uses. `widget` outlives the overlay (it is the parent).
+  void SetThemeSourceWidget(const views::Widget* widget);
+
   void RequestFocus() override;
   void OnThemeChanged() override;
+  void OnPaintBackground(gfx::Canvas* canvas) override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
 
  private:
@@ -77,6 +92,7 @@ class MahoSpacesOverlayView : public views::View {
   raw_ptr<views::ScrollView> board_scroll_view_ = nullptr;
   raw_ptr<MahoSpacesOverlayBoardView> board_view_ = nullptr;
   raw_ptr<views::View> separator_ = nullptr;
+  raw_ptr<const views::Widget> theme_source_widget_ = nullptr;
 };
 
 }  // namespace maho

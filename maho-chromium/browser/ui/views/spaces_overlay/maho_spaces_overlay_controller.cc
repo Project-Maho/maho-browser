@@ -103,6 +103,10 @@ void MahoSpacesOverlayController::Show(views::Widget* parent_widget) {
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
   widget_->Init(std::move(params));
 
+  // Source the themed background from the parent browser-frame widget's tinted
+  // ColorProvider (not this top-level overlay widget's untinted one). Set
+  // before SetContentsView so the first paint uses the correct provider.
+  overlay_view->SetThemeSourceWidget(parent_widget_);
   overlay_view_ = widget_->SetContentsView(std::move(overlay_view));
   widget_->AddObserver(this);
 

@@ -43,15 +43,22 @@ inline constexpr int kTopBarButtonSpacingDp = 0;
 inline constexpr int kTopBarCompactLeadingGapDp = 2;
 inline constexpr int kTopBarCompactNavSpacingDp = 4;
 inline constexpr int kTopBarCompactTrailingInsetDp = 3;
-inline constexpr int kLibraryRailWidthDp = 80;
+inline constexpr int kLibraryRailWidthDp = 92;
+// Fixed content width of the floating Downloads/Archive library overlay. The
+// overlay widget is pinned to this width regardless of the sidebar's persisted
+// pref width, so the pane never resizes with the sidebar (Arc-style panel).
+inline constexpr int kLibraryOverlayContentWidthDp = 380;
 inline constexpr int kLibraryContentSeparatorThicknessDp = 1;
 inline constexpr int kLibraryRailTopInsetDp = 14;
 inline constexpr int kLibraryRailSideInsetDp = 0;
 inline constexpr int kLibraryRailBottomInsetDp = 14;
 inline constexpr int kLibraryRailUtilitySpacingDp = 8;
-inline constexpr int kLibraryRailUtilityButtonSizeDp = 20;
+inline constexpr int kLibraryRailUtilityButtonSizeDp = 24;
 inline constexpr int kLibraryRailUtilityButtonCornerRadiusDp = 10;
-inline constexpr int kLibraryRailItemWidthDp = 64;
+inline constexpr int kLibraryRailItemWidthDp = 80;
+// Extra margin reserved on the right edge of the icon rail; the centered items
+// shift left by this amount for more breathing room on the right. Tunable.
+inline constexpr int kLibraryRailRightMarginDp = 8;
 inline constexpr int kLibraryRailItemCornerRadiusDp = 12;
 inline constexpr int kLibraryRailItemSpacingDp = 4;
 inline constexpr int kLibraryRailItemStackVisualLiftDp = 28;
