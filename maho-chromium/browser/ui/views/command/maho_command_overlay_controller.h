@@ -11,6 +11,8 @@
 #include "base/timer/timer.h"
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/events/event_observer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -21,6 +23,8 @@
 class Browser;
 
 namespace views {
+class EventMonitor;
+class FocusManager;
 class View;
 class Widget;
 }  // namespace views
@@ -30,6 +34,8 @@ namespace maho {
 class MahoCommandOverlayView;
 
 class MahoCommandOverlayController : public views::WidgetObserver,
+                                     public ui::EventObserver,
+                                     public ui::AcceleratorTarget,
                                      public gfx::AnimationDelegate {
  public:
   explicit MahoCommandOverlayController(Browser* browser);
@@ -61,6 +67,13 @@ class MahoCommandOverlayController : public views::WidgetObserver,
                              const gfx::Rect& new_bounds) override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
+  // ui::EventObserver:
+  void OnEvent(const ui::Event& event) override;
+
+  // ui::AcceleratorTarget:
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+  bool CanHandleAccelerators() const override;
+
   // gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
   void AnimationEnded(const gfx::Animation* animation) override;
@@ -73,6 +86,19 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   void AnimateBoundsToHeight(int height);
 
   void RestoreFocusToPreShowView();
+
+  // Dismisses the palette when native activation moves to another Chrome window
+  // while keeping it open when another application takes focus. Reschedules
+  // itself if the post-open grace window has not elapsed.
+  void MaybeHideAfterDeactivation();
+
+  // Outside-click dismissal: forwards Chrome-targeted mouse presses so a click
+  // outside the palette (and its picker) closes it, without seeing other apps.
+  void StartOutsideClickMonitor();
+
+  // Escape-to-close while the browser (not the palette widget) holds focus.
+  void RegisterParentEscAccelerator();
+  void UnregisterParentEscAccelerator();
 
   friend class MahoCommandOverlayControllerTest;
   friend class MahoUnifiedClickPathBehaviorTest;
@@ -87,6 +113,9 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   gfx::SlideAnimation resize_animation_{this};
   base::OneShotTimer deactivation_hide_timer_;
   bool is_hiding_ = false;
+
+  std::unique_ptr<views::EventMonitor> event_monitor_;
+  raw_ptr<views::FocusManager> esc_target_focus_manager_ = nullptr;
 
   views::ViewTracker pre_show_focused_view_;
 

@@ -19,9 +19,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "cc/paint/paint_flags.h"
 #include "ui/compositor/layer.h"
+#include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
+#include "maho/browser/ui/views/command/maho_command_action_selector_view.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -61,6 +63,7 @@
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
@@ -142,7 +145,19 @@ gfx::Insets EmptyStateInsets(bool compact) {
 class CommandPaletteTextfield : public views::Textfield {
  public:
   bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override {
-    return event.key_code() == ui::VKEY_TAB;
+    // Unmodified Escape must reach the textfield's key handler, not the
+    // accelerator manager, so IME composition-cancel and submode-exit survive.
+    // FocusManager::OnKeyEvent runs accelerators BEFORE the focused view unless
+    // the key is skipped here.
+    if (event.key_code() == ui::VKEY_ESCAPE && !event.IsShiftDown() &&
+        !event.IsControlDown() && !event.IsAltDown() &&
+        !event.IsCommandDown()) {
+      return true;
+    }
+    if (event.key_code() == ui::VKEY_TAB && !event.IsShiftDown()) {
+      return true;
+    }
+    return views::Textfield::SkipDefaultKeyEventProcessing(event);
   }
 
   METADATA_HEADER(CommandPaletteTextfield, views::Textfield)
@@ -231,6 +246,15 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
   mode_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+
+  action_selector_ = input_background->AddChildView(
+      std::make_unique<MahoCommandActionSelectorView>(
+          base::BindRepeating(&MahoCommandOverlayView::OnPaletteActionChanged,
+                              base::Unretained(this))));
+  if (context_class_ != MahoPrivateContextClass::kRegular &&
+      context_class_ != MahoPrivateContextClass::kNull) {
+    action_selector_->SetEnabled(false);
+  }
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
       search_row_, std::move(input_background),
@@ -432,6 +456,15 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
   mode_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+
+  action_selector_ = input_background->AddChildView(
+      std::make_unique<MahoCommandActionSelectorView>(
+          base::BindRepeating(&MahoCommandOverlayView::OnPaletteActionChanged,
+                              base::Unretained(this))));
+  if (context_class_ != MahoPrivateContextClass::kRegular &&
+      context_class_ != MahoPrivateContextClass::kNull) {
+    action_selector_->SetEnabled(false);
+  }
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
       search_row_, std::move(input_background),
@@ -875,9 +908,6 @@ void MahoCommandOverlayView::ContentsChanged(
 void MahoCommandOverlayView::OnAfterUserAction(views::Textfield* sender) {}
 
 void MahoCommandOverlayView::TriggerSearchForCurrentText() {
-  if (mode_ == CommandOverlayMode::kAI)
-    return;
-
   if (!model_)
     return;
 
@@ -914,34 +944,11 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
 
   switch (key_event.key_code()) {
     case ui::VKEY_ESCAPE:
-      if (textfield_->HasCompositionText()) {
-        return false;
-      }
-      if (mode_ == CommandOverlayMode::kAI) {
-        ExitAIMode();
-        return true;
-      }
-      if (mode_ == CommandOverlayMode::kSiteSearch) {
-        ExitSiteSearchMode();
-        return true;
-      }
-      if (mode_ == CommandOverlayMode::kCommandsOnly) {
-        ExitCommandsOnlyMode();
-        return true;
-      }
-      Dismiss();
-      return true;
+      return HandleEscape();
 
     case ui::VKEY_RETURN: {
-      if (mode_ == CommandOverlayMode::kAI) {
-        std::string query = base::UTF16ToUTF8(textfield_->GetText());
-        if (!query.empty() && AiIngressAllowed()) {
-          browser_->profile()->GetPrefs()->SetString(
-              maho::ai_prefs::kPendingInitialQuery, query);
-          Dismiss();
-          browser_->GetFeatures().side_panel_ui()->Show(
-              SidePanelEntryId::kMahoAiPanel);
-        }
+      if (palette_action_ == PaletteAction::kAskMaho) {
+        ActivateSelected();
         return true;
       }
       if (key_event.IsShiftDown()) {
@@ -970,6 +977,10 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
     }
 
     case ui::VKEY_TAB: {
+      if (key_event.IsShiftDown()) {
+        return false;
+      }
+
       std::string text = base::UTF16ToUTF8(textfield_->GetText());
       std::string trimmed = text;
       while (!trimmed.empty() && trimmed.back() == ' ')
@@ -977,28 +988,17 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
       while (!trimmed.empty() && trimmed.front() == ' ')
         trimmed.erase(trimmed.begin());
 
-      if (!trimmed.empty() &&
-          (mode_ == CommandOverlayMode::kSearch ||
-           mode_ == CommandOverlayMode::kNewTab ||
-           mode_ == CommandOverlayMode::kCurrentTab)) {
-        if (trimmed == "ai" || trimmed == "AI") {
-          if (AiIngressAllowed()) {
-            EnterAIMode();
-          }
-          return true;
-        }
-
-        const auto* engine = model_ ? model_->MatchSiteSearch("@" + trimmed) : nullptr;
-        if (!engine && model_) {
-          std::string with_at = trimmed;
-          if (!with_at.empty() && with_at[0] == '@')
-            with_at = with_at.substr(1);
-          engine = model_->MatchSiteSearch("@" + with_at);
-        }
+      if (palette_action_ == PaletteAction::kSearch) {
+        const auto* engine = model_ ? model_->MatchExactSiteSearchKeyword(trimmed) : nullptr;
         if (engine) {
           EnterSiteSearchMode(engine->prefix, engine->name);
-          return true;
+        } else if (AiIngressAllowed()) {
+          palette_action_ = PaletteAction::kAskMaho;
+          action_selector_->SetSelected(PaletteAction::kAskMaho);
         }
+      } else {
+        palette_action_ = PaletteAction::kSearch;
+        action_selector_->SetSelected(PaletteAction::kSearch);
       }
       return true;
     }
@@ -1227,6 +1227,22 @@ void MahoCommandOverlayView::ActivateResultAtIndex(int index) {
 
 void MahoCommandOverlayView::ActivateSelected() {
   DCHECK(browser_);
+
+  if (palette_action_ == PaletteAction::kAskMaho) {
+    std::string query = base::UTF16ToUTF8(textfield_->GetText());
+    Browser* browser = browser_;
+    if (MahoCommandActionHandler::OnQuerySubmitted(
+            browser, query, palette_action_, context_class_)) {
+      Dismiss();
+      bool has_popup = maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser) != nullptr;
+      if (!has_popup && browser && browser->GetFeatures().side_panel_ui()) {
+        browser->GetFeatures().side_panel_ui()->Show(
+            SidePanelEntryId::kMahoAiPanel);
+      }
+    }
+    return;
+  }
+
   const auto& results = model_->results();
   int index = model_->selected_index();
 
@@ -1315,7 +1331,8 @@ void MahoCommandOverlayView::NavigateTypedText() {
 
   // Use DispositionForMode() as the single authoritative source for the
   // intended open disposition.  This already accounts for sub-modes
-  // (kSiteSearch, kAI) that inherit their origin disposition via origin_mode_,
+  // (kSiteSearch, kCommandsOnly) that inherit their origin disposition via
+  // origin_mode_,
   // so a new-tab palette that transitioned into site-search will still produce
   // NEW_FOREGROUND_TAB here without needing a separate mode_ == kNewTab check.
   if (DispositionForMode() == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
@@ -1329,13 +1346,12 @@ void MahoCommandOverlayView::NavigateTypedText() {
 }
 
 WindowOpenDisposition MahoCommandOverlayView::DispositionForMode() const {
-  // For transient sub-modes (kSiteSearch, kAI, kCommandsOnly) the user is still operating in
+  // For transient sub-modes (kSiteSearch, kCommandsOnly) the user is still operating in
   // the context of the mode that was active before entering the sub-mode.
   // Use origin_mode_ so that a new-tab open which transitioned to site-search
   // still opens the result in a new foreground tab.
   const CommandOverlayMode effective_mode =
       (mode_ == CommandOverlayMode::kSiteSearch ||
-       mode_ == CommandOverlayMode::kAI ||
        mode_ == CommandOverlayMode::kCommandsOnly)
           ? origin_mode_
           : mode_;
@@ -1352,6 +1368,53 @@ WindowOpenDisposition MahoCommandOverlayView::DispositionForMode() const {
 void MahoCommandOverlayView::Dismiss() {
   if (dismiss_callback_)
     std::move(dismiss_callback_).Run();
+}
+
+bool MahoCommandOverlayView::HandleEscape() {
+  if (picker_widget_) {
+    picker_widget_->Close();
+    return true;
+  }
+  if (textfield_ && textfield_->HasCompositionText()) {
+    return false;
+  }
+  if (mode_ == CommandOverlayMode::kSiteSearch) {
+    ExitSiteSearchMode();
+    return true;
+  }
+  if (mode_ == CommandOverlayMode::kCommandsOnly) {
+    ExitCommandsOnlyMode();
+    return true;
+  }
+  Dismiss();
+  return true;
+}
+
+bool MahoCommandOverlayView::AcceleratorPressed(
+    const ui::Accelerator& accelerator) {
+  if (accelerator.key_code() == ui::VKEY_ESCAPE) {
+    HandleEscape();
+    return true;
+  }
+  return views::View::AcceleratorPressed(accelerator);
+}
+
+void MahoCommandOverlayView::AddedToWidget() {
+  views::View::AddedToWidget();
+  if (!esc_accelerator_registered_) {
+    AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
+    esc_accelerator_registered_ = true;
+  }
+}
+
+bool MahoCommandOverlayView::PickerContainsScreenPoint(
+    const gfx::Point& screen_point) const {
+  return picker_widget_ &&
+         picker_widget_->GetWindowBoundsInScreen().Contains(screen_point);
+}
+
+bool MahoCommandOverlayView::IsPickerOpen() const {
+  return picker_widget_ != nullptr;
 }
 
 void MahoCommandOverlayView::ResizeWidgetToContents() {
@@ -1405,42 +1468,9 @@ bool MahoCommandOverlayView::AiIngressAllowed() const {
          context_class_ == MahoPrivateContextClass::kNull;
 }
 
-void MahoCommandOverlayView::EnterAIMode() {
-  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
-  if (mode_ != CommandOverlayMode::kAI) {
-    origin_mode_ = mode_;
-  }
-  mode_ = CommandOverlayMode::kAI;
-  textfield_->SetText(std::u16string());
-  UpdateLayoutForMode();
-  UpdateModeChip();
-  UpdateSearchLeadingAccessory();
-
-  ApplyPlaceholderForMode();
-  if (model_) model_->Cancel();
-
-  results_container_->RemoveAllChildViews();
-  hint_label_ = nullptr;
-  if (divider_)
-    divider_->SetVisible(false);
-  if (scroll_view_)
-    scroll_view_->ClipHeightTo(0, 0);
-  InvalidateLayout();
-  ResizeWidgetToContents();
-}
-
-void MahoCommandOverlayView::ExitAIMode() {
-  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
-  mode_ = origin_mode_;
-  if (scroll_view_)
-    scroll_view_->ClipHeightTo(kFixedResultsHeightDp, kFixedResultsHeightDp);
-  textfield_->SetText(std::u16string());
-  UpdateLayoutForMode();
-  UpdateModeChip();
-  UpdateSearchLeadingAccessory();
-
-  ApplyPlaceholderForMode();
-  UpdateResultViews({});
+void MahoCommandOverlayView::OnPaletteActionChanged(PaletteAction action) {
+  palette_action_ = action;
+  TriggerSearchForCurrentText();
 }
 
 void MahoCommandOverlayView::EnterCommandsOnlyMode() {
@@ -1482,9 +1512,6 @@ void MahoCommandOverlayView::ApplyPlaceholderForMode() {
     case CommandOverlayMode::kSiteSearch:
       textfield_->SetPlaceholderText(u"Search\u2026");
       break;
-    case CommandOverlayMode::kAI:
-      textfield_->SetPlaceholderText(u"Ask anything\u2026");
-      break;
     case CommandOverlayMode::kCommandsOnly:
       textfield_->SetPlaceholderText(u"Search commands\u2026");
       break;
@@ -1492,17 +1519,17 @@ void MahoCommandOverlayView::ApplyPlaceholderForMode() {
 }
 
 void MahoCommandOverlayView::UpdateModeChipVisibility() {
-  if (!mode_chip_) {
-    return;
+  if (mode_chip_) {
+    const bool show_chip = mode_ == CommandOverlayMode::kSiteSearch ||
+                           mode_ == CommandOverlayMode::kCommandsOnly;
+    mode_chip_->SetVisible(show_chip);
   }
-
-  // The chip is an in-surface context indicator rendered inside the single
-  // command overlay, not a separate surface. It appears only in sub-modes
-  // (kSiteSearch, kAI, kCommandsOnly) where the input scope differs from the default.
-  const bool show_chip = mode_ == CommandOverlayMode::kSiteSearch ||
-                         mode_ == CommandOverlayMode::kAI ||
-                         mode_ == CommandOverlayMode::kCommandsOnly;
-  mode_chip_->SetVisible(show_chip);
+  if (action_selector_) {
+    const bool show_selector = mode_ == CommandOverlayMode::kSearch ||
+                               mode_ == CommandOverlayMode::kNewTab ||
+                               mode_ == CommandOverlayMode::kCurrentTab;
+    action_selector_->SetVisible(show_selector);
+  }
 }
 
 void MahoCommandOverlayView::UpdateModeChip() {
@@ -1518,18 +1545,14 @@ void MahoCommandOverlayView::UpdateModeChip() {
   }
 
   const bool show_chip = mode_ == CommandOverlayMode::kSiteSearch ||
-                         mode_ == CommandOverlayMode::kAI ||
                          mode_ == CommandOverlayMode::kCommandsOnly;
   if (!show_chip) {
     return;
   }
 
-  const bool is_ai_mode = mode_ == CommandOverlayMode::kAI;
   const bool is_commands_mode = mode_ == CommandOverlayMode::kCommandsOnly;
   std::u16string label_text;
-  if (is_ai_mode) {
-    label_text = std::u16string(u"AI Mode");
-  } else if (is_commands_mode) {
+  if (is_commands_mode) {
     label_text = std::u16string(u"Commands");
   } else {
     label_text = base::UTF8ToUTF16(site_search_engine_name_.empty()
@@ -1538,8 +1561,7 @@ void MahoCommandOverlayView::UpdateModeChip() {
   }
   mode_label_->SetText(label_text);
 
-  const SkColor accent_color = cp->GetColor(
-      is_ai_mode ? kMahoColorAccentBlueBright : kMahoColorAccentBlue);
+  const SkColor accent_color = cp->GetColor(kMahoColorAccentBlue);
   const SkColor chip_fill = SkColorSetA(accent_color, 0x14);
   const SkColor chip_border = SkColorSetA(accent_color, 0x2A);
   const SkColor chip_dot = SkColorSetA(accent_color, 0xE6);

@@ -14,12 +14,16 @@
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_vibrancy.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/accelerator_manager.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/events/event.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -27,6 +31,7 @@
 #include "ui/gfx/geometry/transform.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/event_monitor.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
@@ -39,7 +44,7 @@ namespace maho {
 //    instead of being a urlbar provider / omnibox replacement.
 // 2. Explicit open modes and mode-based disposition: kCurrentTab, kNewTab,
 //    and kSearch stay distinct.
-// 3. AI mode (ai + Tab) and @prefix site-search.
+// 3. Persistent Search / Ask Maho selector and @prefix site-search.
 // 4. Typed-text URL/domain/search fallback.
 // 5. Calculator / unit-conversion clipboard copy behavior.
 // 6. Pre-show focus restore and 200ms deactivation hide.
@@ -49,14 +54,12 @@ namespace {
 constexpr base::TimeDelta kFadeOutDuration = base::Milliseconds(180);
 constexpr base::TimeDelta kResizeDuration = base::Milliseconds(200);
 constexpr base::TimeDelta kFadeInDuration = base::Milliseconds(120);
-constexpr base::TimeDelta kSlideInDuration = base::Milliseconds(350);
 constexpr base::TimeDelta kDeactivationHideDelay = base::Milliseconds(200);
 
 constexpr int kPopupWidthDp = 744;
 constexpr int kPopupInitialHeightDp = 232;
 constexpr int kPopupMinTopMarginDp = 62;
 constexpr int kPopupMinBottomMarginDp = 32;
-constexpr int kSlideOffsetDp = 10;
 
 gfx::Rect GetWorkAreaForParentWidget(views::Widget* parent_widget,
                                      const gfx::Rect& parent_bounds) {
@@ -107,6 +110,8 @@ bool MahoCommandOverlayController::ShouldCreateForContext(
 }
 
 MahoCommandOverlayController::~MahoCommandOverlayController() {
+  event_monitor_.reset();
+  UnregisterParentEscAccelerator();
   if (parent_widget_) {
     parent_widget_->RemoveObserver(this);
     parent_widget_ = nullptr;
@@ -133,6 +138,9 @@ void MahoCommandOverlayController::Hide() {
 
   deactivation_hide_timer_.Stop();
   is_hiding_ = true;
+
+  event_monitor_.reset();
+  UnregisterParentEscAccelerator();
 
   RestoreFocusToPreShowView();
 
@@ -195,6 +203,10 @@ void MahoCommandOverlayController::RestoreFocusToPreShowView() {
 void MahoCommandOverlayController::OnWidgetDestroying(
     views::Widget* widget) {
   if (widget == parent_widget_) {
+    event_monitor_.reset();
+    // The parent focus manager is tearing down and will drop our accelerator;
+    // just forget it rather than calling Unregister on a dying manager.
+    esc_target_focus_manager_ = nullptr;
     parent_widget_->RemoveObserver(this);
     parent_widget_ = nullptr;
     anchor_ = nullptr;
@@ -203,6 +215,8 @@ void MahoCommandOverlayController::OnWidgetDestroying(
   if (widget == widget_.get()) {
     weak_factory_.InvalidateWeakPtrs();
     deactivation_hide_timer_.Stop();
+    event_monitor_.reset();
+    UnregisterParentEscAccelerator();
     is_hiding_ = false;
     overlay_view_ = nullptr;
     anchor_ = nullptr;
@@ -233,32 +247,44 @@ void MahoCommandOverlayController::OnWidgetActivationChanged(
   }
 
   if (active) {
-    if (parent_widget_ && parent_widget_->IsActive()) {
-      deactivation_hide_timer_.Stop();
-    }
+    deactivation_hide_timer_.Stop();
     return;
   }
 
   deactivation_hide_timer_.Start(
       FROM_HERE, kDeactivationHideDelay,
-      base::BindOnce(
-          [](base::WeakPtr<MahoCommandOverlayController> self) {
-            if (!self || !self->widget_ || self->is_hiding_) {
-              return;
-            }
-            if (self->widget_->IsActive()) {
-              return;
-            }
-            // Ignore dismiss requests that arrive within 500ms of Show().
-            // These are almost always spurious activation-change events during
-            // a window foreground transition.
-            if (base::TimeTicks::Now() - self->open_start_ticks_ <
-                base::Milliseconds(500)) {
-              return;
-            }
-            self->Hide();
-          },
-          weak_factory_.GetWeakPtr()));
+      base::BindOnce(&MahoCommandOverlayController::MaybeHideAfterDeactivation,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoCommandOverlayController::MaybeHideAfterDeactivation() {
+  if (!widget_ || is_hiding_ || widget_->IsActive()) {
+    return;
+  }
+  // Keep the palette open when the search-engine picker steals activation.
+  if (overlay_view_ && overlay_view_->IsPickerOpen()) {
+    return;
+  }
+  // Keep the palette open when another application (not another Chrome window)
+  // holds focus. GetActiveBrowser() is null iff no Chrome browser window is the
+  // active window, which is exactly the "switched apps" case.
+  auto* collection = GlobalBrowserCollection::GetInstance();
+  if (!collection || !collection->GetActiveBrowser()) {
+    return;
+  }
+  // Ignore spurious activation churn during the open transition, but reschedule
+  // instead of dropping so a genuine early click still dismisses.
+  const base::TimeDelta since_open = base::TimeTicks::Now() - open_start_ticks_;
+  constexpr base::TimeDelta kOpenGrace = base::Milliseconds(500);
+  if (since_open < kOpenGrace) {
+    deactivation_hide_timer_.Start(
+        FROM_HERE, kOpenGrace - since_open,
+        base::BindOnce(
+            &MahoCommandOverlayController::MaybeHideAfterDeactivation,
+            weak_factory_.GetWeakPtr()));
+    return;
+  }
+  Hide();
 }
 
 void MahoCommandOverlayController::AnimationProgressed(
@@ -350,6 +376,9 @@ void MahoCommandOverlayController::Show(views::View* anchor,
 
   open_start_ticks_ = base::TimeTicks::Now();
 
+  event_monitor_.reset();
+  UnregisterParentEscAccelerator();
+
   if (widget_) {
     widget_->RemoveObserver(this);
     widget_.reset();
@@ -415,10 +444,19 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   if (root_view) {
     root_view->SetPaintToLayer();
     root_view->layer()->SetFillsBoundsOpaquely(false);
+    // Prepare the transparent start state before Show() so no opaque frame can
+    // be presented ahead of the entrance fade.
+    root_view->layer()->SetOpacity(0.0f);
   }
 
-  widget_ptr->Show();
+  gfx::Size preferred = overlay_ptr->GetPreferredSize();
+  gfx::Rect bounds = ComputeBoundsForHeight(preferred.height());
+  widget_ptr->SetBounds(bounds);
+  animation_start_bounds_ = bounds;
+  animation_target_bounds_ = bounds;
+
   ApplyVibrancyToCommandOverlay(widget_ptr);
+  widget_ptr->Show();
   widget_ptr->Activate();
   {
     const base::TimeDelta open_latency =
@@ -428,28 +466,15 @@ void MahoCommandOverlayController::Show(views::View* anchor,
     UMA_HISTOGRAM_TIMES("Maho.CommandPalette.OpenLatency", open_latency);
   }
 
-  if (root_view && root_view->layer()) {
-    root_view->layer()->SetOpacity(0.0f);
-    root_view->layer()->SetTransform(
-        gfx::Transform::MakeTranslation(0, -kSlideOffsetDp));
-  }
-
-  gfx::Size preferred = overlay_ptr->GetPreferredSize();
-  gfx::Rect bounds = ComputeBoundsForHeight(preferred.height());
-  widget_ptr->SetBounds(bounds);
-  animation_start_bounds_ = bounds;
-  animation_target_bounds_ = bounds;
-
   widget_ = std::move(widget);
   overlay_view_ = overlay_ptr;
+
+  StartOutsideClickMonitor();
+  RegisterParentEscAccelerator();
 
   if (root_view && root_view->layer()) {
     views::AnimationBuilder()
         .Once()
-        .SetDuration(kSlideInDuration)
-        .SetTransform(root_view->layer(), gfx::Transform(),
-                      gfx::Tween::ACCEL_20_DECEL_100)
-        .At(base::TimeDelta())
         .SetDuration(kFadeInDuration)
         .SetOpacity(root_view->layer(), 1.0f, gfx::Tween::EASE_OUT);
   }
@@ -474,5 +499,69 @@ void MahoCommandOverlayController::Show(views::View* anchor,
           weak_factory_.GetWeakPtr()));
 }
 
+void MahoCommandOverlayController::OnEvent(const ui::Event& event) {
+  if (!IsVisible() || !event_monitor_ || !widget_) {
+    return;
+  }
+  if (event.type() != ui::EventType::kMousePressed) {
+    return;
+  }
+  const gfx::Point screen_point = event_monitor_->GetLastMouseLocation();
+  if (widget_->GetWindowBoundsInScreen().Contains(screen_point)) {
+    return;
+  }
+  if (overlay_view_ && overlay_view_->PickerContainsScreenPoint(screen_point)) {
+    return;
+  }
+  Hide();
+}
+
+bool MahoCommandOverlayController::AcceleratorPressed(
+    const ui::Accelerator& accelerator) {
+  if (accelerator.key_code() == ui::VKEY_ESCAPE && IsVisible()) {
+    Hide();
+    return true;
+  }
+  return false;
+}
+
+bool MahoCommandOverlayController::CanHandleAccelerators() const {
+  return IsVisible();
+}
+
+void MahoCommandOverlayController::StartOutsideClickMonitor() {
+  if (!parent_widget_) {
+    return;
+  }
+  event_monitor_ = views::EventMonitor::CreateApplicationMonitor(
+      this, parent_widget_->GetNativeWindow(),
+      {ui::EventType::kMousePressed});
+}
+
+void MahoCommandOverlayController::RegisterParentEscAccelerator() {
+  if (esc_target_focus_manager_ || !parent_widget_) {
+    return;
+  }
+  views::FocusManager* focus_manager = parent_widget_->GetFocusManager();
+  if (!focus_manager) {
+    return;
+  }
+  esc_target_focus_manager_ = focus_manager;
+  // Normal priority (registered late, so tried first among normal handlers) so
+  // the renderer still gets Escape first when a web page has focus; only an
+  // unhandled Escape falls through here to close a visible palette.
+  focus_manager->RegisterAccelerator(
+      ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
+      ui::AcceleratorManager::kNormalPriority, this);
+}
+
+void MahoCommandOverlayController::UnregisterParentEscAccelerator() {
+  if (!esc_target_focus_manager_) {
+    return;
+  }
+  esc_target_focus_manager_->UnregisterAccelerator(
+      ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE), this);
+  esc_target_focus_manager_ = nullptr;
+}
 
 }  // namespace maho
