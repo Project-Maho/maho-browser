@@ -1280,10 +1280,6 @@ void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
 bool MahoSidebarView::ShouldAnimateSpaceSwitch(
     const MahoSidebarViewStateModel& model,
     int* out_dir) const {
-  if (!base::FeatureList::IsEnabled(
-          maho::features::kMahoSpaceSwitchSlideAnimation)) {
-    return false;
-  }
   if (is_private_ || is_otr_) {
     return false;
   }

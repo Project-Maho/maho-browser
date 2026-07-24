@@ -62,11 +62,6 @@ BASE_DECLARE_FEATURE(kMahoSidebarVibrancy);
 // Kill-switch pending end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoSidebarActionPlaceholder);
 
-// When enabled, switching spaces in the vertical sidebar animates the tab list
-// area as an Arc-style horizontal cross-slide using snapshot layer transforms.
-// Disabled by default.
-BASE_DECLARE_FEATURE(kMahoSpaceSwitchSlideAnimation);
-
 }  // namespace maho::features
 
 #endif  // MAHO_BROWSER_MAHO_FEATURES_H_

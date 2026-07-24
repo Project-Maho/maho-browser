@@ -16,8 +16,6 @@
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/controls/label.h"
 #include "ui/compositor/layer.h"
-#include "base/test/scoped_feature_list.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/views/widget/widget.h"
@@ -260,34 +258,34 @@ TEST_F(MahoSidebarSpaceDotViewTest, SetActiveToggle) {
 
 
 
-TEST_F(MahoSidebarViewSpaceSwitchSlideTest, FeatureDisabledNoAnimation) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      maho::features::kMahoSpaceSwitchSlideAnimation);
+TEST_F(MahoSidebarViewSpaceSwitchSlideTest,
+       DefaultDifferentSpaceStartsAnimation) {
+  gfx::ScopedAnimationDurationScaleMode normal_duration(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   MahoSidebarViewStateModel model1;
   model1.footer.space_ids = {"space-1", "space-2", "space-3"};
   model1.tab_list.active_space_id = "space-1";
   sidebar_view_->ApplyViewState(model1);
+  sidebar_view_->DeprecatedLayoutImmediately();
 
   int dir = 0;
   MahoSidebarViewStateModel model2;
   model2.footer.space_ids = {"space-1", "space-2", "space-3"};
   model2.tab_list.active_space_id = "space-2";
 
-  EXPECT_FALSE(sidebar_view_->ShouldAnimateSpaceSwitch(model2, &dir));
+  EXPECT_TRUE(sidebar_view_->ShouldAnimateSpaceSwitch(model2, &dir));
+  EXPECT_EQ(dir, 1);
   sidebar_view_->ApplyViewState(model2);
-  EXPECT_FALSE(sidebar_view_->space_switch_anim_in_progress_for_testing());
-  EXPECT_EQ(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+  EXPECT_TRUE(sidebar_view_->space_switch_anim_in_progress_for_testing());
+  EXPECT_NE(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+
+  sidebar_view_->FinishSpaceSlide();
 }
 
-TEST_F(MahoSidebarViewSpaceSwitchSlideTest, FeatureEnabledDirectionsAndSnapshot) {
+TEST_F(MahoSidebarViewSpaceSwitchSlideTest, DirectionsAndSnapshot) {
   gfx::ScopedAnimationDurationScaleMode normal_duration(
       gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      maho::features::kMahoSpaceSwitchSlideAnimation);
 
   MahoSidebarViewStateModel model1;
   model1.footer.space_ids = {"space-1", "space-2", "space-3"};
@@ -329,10 +327,6 @@ TEST_F(MahoSidebarViewSpaceSwitchSlideTest, FeatureEnabledDirectionsAndSnapshot)
 }
 
 TEST_F(MahoSidebarViewSpaceSwitchSlideTest, SameSpaceNoAnimation) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      maho::features::kMahoSpaceSwitchSlideAnimation);
-
   MahoSidebarViewStateModel model1;
   model1.footer.space_ids = {"space-1", "space-2"};
   model1.tab_list.active_space_id = "space-1";

@@ -30,8 +30,4 @@ BASE_FEATURE(kMahoSidebarActionPlaceholder,
              "MahoSidebarActionPlaceholder",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kMahoSpaceSwitchSlideAnimation,
-             "MahoSpaceSwitchSlideAnimation",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 }  // namespace maho::features
