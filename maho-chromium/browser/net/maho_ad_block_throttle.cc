@@ -8,37 +8,8 @@
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "url/gurl.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/net/maho_ad_block_request_util.h"
 #include "maho/third_party/maho/maho_bridge.h"
-
-namespace {
-
-const char* MapRequestDestination(
-    network::mojom::RequestDestination destination) {
-  switch (destination) {
-    case network::mojom::RequestDestination::kScript:
-      return "script";
-    case network::mojom::RequestDestination::kImage:
-      return "image";
-    case network::mojom::RequestDestination::kStyle:
-      return "stylesheet";
-    case network::mojom::RequestDestination::kFont:
-      return "font";
-    case network::mojom::RequestDestination::kDocument:
-      return "document";
-    case network::mojom::RequestDestination::kIframe:
-      return "subdocument";
-    case network::mojom::RequestDestination::kObject:
-    case network::mojom::RequestDestination::kEmbed:
-      return "object";
-    case network::mojom::RequestDestination::kAudio:
-    case network::mojom::RequestDestination::kVideo:
-      return "media";
-    default:
-      return "other";
-  }
-}
-
-}  // namespace
 
 MahoAdBlockThrottle::MahoAdBlockThrottle(base::RepeatingClosure on_blocked)
     : on_blocked_(std::move(on_blocked)) {}
@@ -57,7 +28,7 @@ void MahoAdBlockThrottle::WillStartRequest(network::ResourceRequest* request,
       request->request_initiator.has_value()
           ? request->request_initiator->GetURL().spec()
           : "";
-  const char* type = MapRequestDestination(request->destination);
+  const char* type = maho::MapRequestToFilterType(*request);
 
   auto result =
       maho::core::CheckRequest(core, url.c_str(), source.c_str(), type);

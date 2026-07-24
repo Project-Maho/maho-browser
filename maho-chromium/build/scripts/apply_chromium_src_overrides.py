@@ -3438,6 +3438,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard='#include "maho/browser/net/maho_ad_block_throttle.h"',
         ),
+        # ── Subresource ad-block proxy include (independent guard) ─────────────
+        Replacement(
+            old='#include "maho/browser/net/maho_ad_block_throttle.h"\n',
+            new=(
+                '#include "maho/browser/net/maho_ad_block_throttle.h"\n'
+                '#include "maho/browser/net/maho_proxying_url_loader_factory.h"\n'
+            ),
+            description=(
+                "Insert Maho subresource proxying URLLoaderFactory include into "
+                "chrome_content_browser_client.cc (own guard so it applies even "
+                "when the throttle include is already present)"
+            ),
+            guard='#include "maho/browser/net/maho_proxying_url_loader_factory.h"',
+        ),
         # ── Ad-block throttle registration in CreateURLLoaderThrottles() ───────
         Replacement(
             old="  return result;\n",
@@ -3478,6 +3492,57 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "base::Unretained(helper) to eliminate UAF window (audit H1 fix)"
             ),
             guard="maho::GetCore()",
+        ),
+        # ── Subresource ad-block proxy in WillCreateURLLoaderFactory() ─────────
+        Replacement(
+            old=(
+                "  // WARNING: This must be the last interceptor in the chain as the proxying\n"
+                "  // URLLoaderFactory installed by this needs to be the one actually sending\n"
+                "  // packets over the network (to effectively target `bound_network`).\n"
+                "  MaybeProxyNetworkBoundRequest(\n"
+            ),
+            new=(
+                "  // Maho: enforce native content-blocking on renderer-initiated\n"
+                "  // subresources (script/image/iframe/xhr/font/...) and worker requests,\n"
+                "  // which the navigation-only browser-side throttle never sees. Navigation\n"
+                "  // stays on the throttle in Phase 1. Installed after the extension\n"
+                "  // WebRequest/signin proxies (so extensions still observe) but before the\n"
+                "  // network-bound proxy, which must remain the last interceptor.\n"
+                "  if (type == URLLoaderFactoryType::kDocumentSubResource ||\n"
+                "      type == URLLoaderFactoryType::kWorkerMainResource ||\n"
+                "      type == URLLoaderFactoryType::kWorkerSubResource ||\n"
+                "      type == URLLoaderFactoryType::kServiceWorkerScript ||\n"
+                "      type == URLLoaderFactoryType::kServiceWorkerSubResource ||\n"
+                "      type == URLLoaderFactoryType::kPrefetch) {\n"
+                "    MahoProxyingURLLoaderFactory::MaybeProxyRequest(frame, factory_builder);\n"
+                "  }\n"
+                "\n"
+                "  // WARNING: This must be the last interceptor in the chain as the proxying\n"
+                "  // URLLoaderFactory installed by this needs to be the one actually sending\n"
+                "  // packets over the network (to effectively target `bound_network`).\n"
+                "  MaybeProxyNetworkBoundRequest(\n"
+            ),
+            description=(
+                "Install MahoProxyingURLLoaderFactory in WillCreateURLLoaderFactory "
+                "for document-subresource, worker/service-worker, and prefetch "
+                "factory types (subresource ad-block coverage), before the "
+                "network-bound proxy"
+            ),
+            guard="MahoProxyingURLLoaderFactory::MaybeProxyRequest",
+        ),
+        # ── Extend the subresource proxy to prefetch factories (own guard) ─────
+        Replacement(
+            old="      type == URLLoaderFactoryType::kServiceWorkerSubResource) {\n",
+            new=(
+                "      type == URLLoaderFactoryType::kServiceWorkerSubResource ||\n"
+                "      type == URLLoaderFactoryType::kPrefetch) {\n"
+            ),
+            description=(
+                "Extend the Maho subresource proxy to the kPrefetch factory type "
+                "so prefetched ad/tracker resources are also blocked (own guard so "
+                "it applies when the base install is already present)"
+            ),
+            guard="URLLoaderFactoryType::kPrefetch",
         ),
         # ── ATC space-routing NavigationThrottle ───────────────────────────────
         Replacement(
