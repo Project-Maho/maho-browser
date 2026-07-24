@@ -30,19 +30,19 @@ export function ShortcutsKebabMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 bg-card border shadow-md p-1">
-        <DropdownMenuItem onClick={onShowCheatSheet} className="hover:bg-accent cursor-pointer rounded-sm px-2 py-1.5 text-sm">
+        <DropdownMenuItem onClick={onShowCheatSheet} className="hover:bg-surface-hover cursor-pointer rounded-sm px-2 py-1.5 text-sm">
           Show Cheat Sheet
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={onExport} className="hover:bg-accent cursor-pointer rounded-sm px-2 py-1.5 text-sm">
+        <DropdownMenuItem onClick={onExport} className="hover:bg-surface-hover cursor-pointer rounded-sm px-2 py-1.5 text-sm">
           Export JSON
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={onImport} className="hover:bg-accent cursor-pointer rounded-sm px-2 py-1.5 text-sm">
+        <DropdownMenuItem onClick={onImport} className="hover:bg-surface-hover cursor-pointer rounded-sm px-2 py-1.5 text-sm">
           Import JSON
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={onResetCustomized} className="hover:bg-accent cursor-pointer rounded-sm px-2 py-1.5 text-sm">
+        <DropdownMenuItem onClick={onResetCustomized} className="hover:bg-surface-hover cursor-pointer rounded-sm px-2 py-1.5 text-sm">
           Reset Customized Only
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={onResetAll} className="hover:bg-accent cursor-pointer text-destructive rounded-sm px-2 py-1.5 text-sm">
+        <DropdownMenuItem onClick={onResetAll} className="hover:bg-surface-hover cursor-pointer text-destructive rounded-sm px-2 py-1.5 text-sm">
           Reset All
         </DropdownMenuItem>
       </DropdownMenuContent>

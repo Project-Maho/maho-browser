@@ -25,7 +25,7 @@ export function ProfileSwitcher({store}: {store: MahoAiStore}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="flex items-center gap-1 px-2 h-8 rounded-full border border-border/40 hover:bg-accent/50 text-xs font-medium">
+        <Button variant="ghost" size="sm" className="flex items-center gap-1 px-2 h-8 rounded-full border border-border/40 hover:bg-surface-hover text-xs font-medium">
           <User className="size-3.5 text-muted-foreground" />
           <span className="truncate max-w-[80px]">{activeProfile ? activeProfile.name : 'Select Profile'}</span>
           <ChevronDown className="size-3 text-muted-foreground opacity-60" />
@@ -39,7 +39,7 @@ export function ProfileSwitcher({store}: {store: MahoAiStore}) {
           <DropdownMenuItem
             key={profile.id}
             onSelect={() => handleSwitch(profile.id)}
-            className="flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs cursor-pointer hover:bg-accent/80 transition-colors"
+            className="flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs cursor-pointer hover:bg-surface-hover transition-colors"
           >
             <span className={profile.id === activeProfileId ? "font-semibold text-primary" : "text-foreground"}>
               {profile.name}

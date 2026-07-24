@@ -11,14 +11,14 @@ function UserControls() {
     <div className="pointer-events-none flex gap-1 self-end px-1 opacity-0 transition-opacity duration-150 group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100 max-[520px]:pointer-events-auto max-[520px]:opacity-100">
       <Button
         aria-label="Edit your message"
-        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:-translate-y-px hover:border-border hover:bg-secondary/80 hover:text-foreground"
+        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:-translate-y-px hover:border-border hover:bg-surface-hover hover:text-foreground"
         variant="ghost"
         size="sm">
         <Edit className="size-4" />
       </Button>
       <Button
         aria-label="Delete your message"
-        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:-translate-y-px hover:border-border hover:bg-secondary/80 hover:text-foreground"
+        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:-translate-y-px hover:border-border hover:bg-surface-hover hover:text-foreground"
         variant="ghost"
         size="sm">
         <Trash2 className="size-4" />

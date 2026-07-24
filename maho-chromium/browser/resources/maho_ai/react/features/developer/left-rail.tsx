@@ -79,7 +79,7 @@ export function LeftRail(
           <Button
             key={sessionId}
             className={cn(
-                'h-auto w-full items-start justify-start gap-2 rounded-xl border border-border/80 bg-secondary/35 px-3 py-3 text-left text-foreground shadow-none hover:-translate-y-px hover:border-border hover:bg-accent/35',
+                'h-auto w-full items-start justify-start gap-2 rounded-xl border border-border/80 bg-secondary/35 px-3 py-3 text-left text-foreground shadow-none hover:-translate-y-px hover:border-border hover:bg-surface-hover',
                 sessionId === state.currentSessionId && 'border-primary/30 bg-primary/10 text-foreground')}
             variant="ghost"
             onClick={() => onResumeSession(sessionId)}>
