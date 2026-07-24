@@ -780,26 +780,32 @@ void MahoCommandModel::FireSearchPrivate() {
 
 // static
 std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
-
     const std::string& query,
     const std::string& tabs_json,
     const std::vector<CommandSuggestion>& chromium_bookmarks,
     CommandOverlayMode mode,
     bool is_incognito) {
-  std::vector<CommandSuggestion> results;
-
   MahoCore* core = maho::GetCore();
   if (!core)
-    return results;
+    return std::vector<CommandSuggestion>();
 
   char* json = maho_core_command_bar_search(core, query.c_str(),
                                             GetBackendSearchMode(mode),
                                             tabs_json.c_str(), is_incognito);
   if (!json)
-    return results;
+    return std::vector<CommandSuggestion>();
 
   std::string json_str(json);
   maho_string_free(json);
+
+  return ParseSearchResultsJson(json_str, chromium_bookmarks);
+}
+
+// static
+std::vector<CommandSuggestion> MahoCommandModel::ParseSearchResultsJson(
+    const std::string& json_str,
+    const std::vector<CommandSuggestion>& chromium_bookmarks) {
+  std::vector<CommandSuggestion> results;
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
@@ -827,6 +833,9 @@ std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
       continue;
 
     const std::string* kind = dict->FindString("kind");
+    if (kind && *kind == "aiAnswer")
+      continue;
+
     const std::string* title = dict->FindString("title");
     const std::string* key = dict->FindString("key");
     if (!kind || !title || !key)
@@ -880,6 +889,11 @@ std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
         suggestion.type == CommandSuggestionType::kTab) {
       suggestion.stable_tab_id = *stable_id_field;
     }
+
+    const std::string* tab_core_id = dict->FindString("tabCoreId");
+    if (tab_core_id)
+      suggestion.tab_core_id = *tab_core_id;
+    suggestion.is_suspended = dict->FindBool("isSuspended").value_or(false);
 
     if (key->starts_with("action:"))
       suggestion.action_id = key->substr(7);
@@ -1313,6 +1327,23 @@ const MahoCommandModel::SiteSearchEngine* MahoCommandModel::MatchSiteSearch(
   for (const auto& engine : site_search_engines_) {
     if (engine.prefix == prefix)
       return &engine;
+  }
+  return nullptr;
+}
+
+const MahoCommandModel::SiteSearchEngine* MahoCommandModel::MatchExactSiteSearchKeyword(
+    const std::string& trimmed) const {
+  std::string keyword = trimmed;
+  if (!keyword.empty() && keyword[0] == '@') {
+    keyword = keyword.substr(1);
+  }
+  if (keyword.empty() || keyword.find(' ') != std::string::npos) {
+    return nullptr;
+  }
+  for (const auto& engine : site_search_engines_) {
+    if (engine.prefix == keyword) {
+      return &engine;
+    }
   }
   return nullptr;
 }

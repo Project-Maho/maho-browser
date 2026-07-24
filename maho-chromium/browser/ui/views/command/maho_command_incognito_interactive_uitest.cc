@@ -7,7 +7,7 @@
 // public testing accessors:
 //   BrowserView::GetMahoCommandOverlayControllerForTesting()
 //   MahoCommandOverlayController::GetOverlayViewForTesting()
-//   MahoCommandOverlayView::{textfield, CurrentModeForTesting,
+//   MahoCommandOverlayView::{textfield, GetPaletteActionForTesting,
 //                            IsModeChipVisibleForTesting,
 //                            AiIngressAllowedForTesting,
 //                            GetRenderedResultCountForTesting}
@@ -142,9 +142,9 @@ IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
   }));
 }
 
-// ai+Tab (and any forged AI-mode entry) is denied before mutation in Incognito.
+// ai+Tab is denied before the Search | Ask Maho selector mutates in Incognito.
 IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
-                       AiTabReturnAndForgedModeDenied) {
+                       AskMahoTabDenied) {
   Browser* incognito = OpenIncognitoWithPage();
   maho::MahoCommandOverlayView* view = OpenOverlay(incognito);
   ASSERT_TRUE(view);
@@ -154,8 +154,9 @@ IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
   view->textfield()->SetText(u"ai");
   EXPECT_TRUE(SendKey(view, ui::VKEY_TAB));
 
-  EXPECT_NE(maho::CommandOverlayMode::kAI, view->CurrentModeForTesting())
-      << "Incognito must never enter AI mode";
+  EXPECT_EQ(maho::PaletteAction::kSearch,
+            view->GetPaletteActionForTesting())
+      << "Incognito context must block AI action toggling";
   EXPECT_FALSE(view->IsModeChipVisibleForTesting());
 
   // Dismiss overlay to prevent widget and AX node leaks.

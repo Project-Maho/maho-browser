@@ -1,16 +1,20 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
+#include "maho/browser/ui/views/command/maho_command_action_selector_view.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 
 #include <memory>
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/compositor/layer.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
-#include "ui/compositor/layer.h"
 
 namespace maho {
 
@@ -94,6 +98,14 @@ class MahoCommandOverlayControllerTest : public views::ViewsTestBase {
     return controller.widget_.get();
   }
 
+  ui::Layer* GetOverlayRootLayer(
+      const MahoCommandOverlayController& controller) {
+    views::Widget* widget = controller.widget_.get();
+    return widget && widget->GetRootView()
+               ? widget->GetRootView()->layer()
+               : nullptr;
+  }
+
   // TEST_F bodies run in a derived class that does not inherit the fixture's
   // friend grant, so private-member access must go through a fixture helper.
   void SetOpenStartTicks(MahoCommandOverlayController& controller,
@@ -107,6 +119,97 @@ namespace {
 TEST_F(MahoCommandOverlayControllerTest, IsVisibleFalseWithNoWidget) {
   auto controller = MakeController();
   EXPECT_FALSE(controller->IsVisible());
+}
+
+TEST_F(MahoCommandOverlayControllerTest,
+       ShowStartsEntranceWithIdentityRootTransform) {
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->SetBounds(gfx::Rect(0, 0, 1000, 800));
+  views::View* anchor =
+      parent->SetContentsView(std::make_unique<views::View>());
+  parent->Show();
+
+  auto controller = MakeController();
+  controller->Show(anchor);
+
+  ui::Layer* root_layer = GetOverlayRootLayer(*controller);
+  ASSERT_NE(root_layer, nullptr);
+  EXPECT_TRUE(root_layer->transform().IsIdentity())
+      << "command palette entrance must not translate its text-bearing root "
+         "layer";
+  EXPECT_LT(root_layer->opacity(), 1.0f)
+      << "command palette entrance should retain its opacity fade";
+  ASSERT_NE(controller->GetOverlayViewForTesting(), nullptr);
+  ASSERT_NE(controller->GetOverlayViewForTesting()->GetActionSelectorForTesting(),
+            nullptr);
+  EXPECT_FALSE(controller->GetOverlayViewForTesting()
+                   ->GetActionSelectorForTesting()
+                   ->bounds()
+                   .IsEmpty());
+
+  controller.reset();
+  parent.reset();
+  task_environment()->RunUntilIdle();
+}
+
+TEST_F(MahoCommandOverlayControllerTest,
+       ActivationRestoresOverlayTextfieldFocus) {
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->SetBounds(gfx::Rect(0, 0, 1000, 800));
+  views::View* anchor =
+      parent->SetContentsView(std::make_unique<views::View>());
+  parent->Show();
+
+  auto controller = MakeController();
+  controller->Show(anchor);
+  auto* overlay = controller->GetOverlayViewForTesting();
+  ASSERT_NE(overlay, nullptr);
+  ASSERT_NE(overlay->textfield(), nullptr);
+  views::FocusManager* focus_manager = overlay->textfield()->GetFocusManager();
+  ASSERT_NE(focus_manager, nullptr);
+  focus_manager->SetFocusedView(nullptr);
+  ASSERT_FALSE(overlay->textfield()->HasFocus());
+
+  CallOnWidgetActivationChanged(*controller, GetOverlayWidget(*controller),
+                                true);
+
+  EXPECT_TRUE(overlay->textfield()->HasFocus());
+
+  controller.reset();
+  parent.reset();
+  task_environment()->RunUntilIdle();
+}
+
+TEST_F(MahoCommandOverlayControllerTest,
+       ParentActivationRestoresOverlayTextfieldFocus) {
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->SetBounds(gfx::Rect(0, 0, 1000, 800));
+  views::View* anchor =
+      parent->SetContentsView(std::make_unique<views::View>());
+  parent->Show();
+
+  auto controller = MakeController();
+  controller->Show(anchor);
+  auto* overlay = controller->GetOverlayViewForTesting();
+  ASSERT_NE(overlay, nullptr);
+  ASSERT_NE(overlay->textfield(), nullptr);
+  views::FocusManager* focus_manager = overlay->textfield()->GetFocusManager();
+  ASSERT_NE(focus_manager, nullptr);
+  focus_manager->SetFocusedView(nullptr);
+  ASSERT_FALSE(overlay->textfield()->HasFocus());
+
+  CallOnWidgetActivationChanged(*controller, parent.get(), true);
+
+  EXPECT_TRUE(overlay->textfield()->HasFocus());
+
+  controller.reset();
+  parent.reset();
+  task_environment()->RunUntilIdle();
 }
 
 TEST_F(MahoCommandOverlayControllerTest,

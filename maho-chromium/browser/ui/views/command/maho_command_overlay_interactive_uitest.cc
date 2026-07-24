@@ -59,6 +59,7 @@
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
+#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/range/range.h"
@@ -1048,6 +1049,31 @@ IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
   Browser* popup = FindPopupBrowser();
   ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after little_arc";
   EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
+                       LaunchLittleArc_WithNoOpenBrowser) {
+  const size_t initial_browser_count =
+      GlobalBrowserCollection::GetInstance()->GetSize();
+
+  maho::LittleArcRequest request;
+  request.url = embedded_test_server()->GetURL("/title1.html");
+
+  // Launch with nullptr context (parentless launch)
+  maho::LaunchLittleArc(nullptr, request);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return GlobalBrowserCollection::GetInstance()->GetSize() > initial_browser_count;
+  })) << "LaunchLittleArc must open a new popup browser window";
+
+  Browser* popup = FindPopupBrowser();
+  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after LaunchLittleArc";
+  EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(request.url, popup->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL());
+
+  CloseBrowserSynchronously(popup);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,

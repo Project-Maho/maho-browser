@@ -8,6 +8,7 @@
 class Browser;
 
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
+#include "maho/browser/ui/views/command/maho_command_model.h"
 #include "ui/base/window_open_disposition.h"
 
 namespace maho {
@@ -32,6 +33,18 @@ void OpenCommandSuggestion(
     Browser* browser,
     const CommandSuggestion& suggestion,
     WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB);
+
+class MahoCommandActionHandler {
+ public:
+  // Dispatch-only Ask Maho entry point. Accepts only a regular-profile,
+  // regular-context, trimmed non-empty kAskMaho request; emits exactly one
+  // Assistant dispatch with context_intent=kNone. Returns true iff a dispatch
+  // was emitted; all other cases return false without dispatching.
+  static bool OnQuerySubmitted(Browser* browser,
+                               const std::string& query,
+                               PaletteAction action,
+                               MahoPrivateContextClass context_class);
+};
 
 }  // namespace maho
 

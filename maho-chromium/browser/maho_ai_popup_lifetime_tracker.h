@@ -39,6 +39,10 @@ class MahoAiPopupLifetimeTracker : public BrowserCollectionObserver {
   BrowserWindowInterface* GetPopupForOpener(
       BrowserWindowInterface* opener) const;
 
+  // Returns the opener tracked for |popup|, or nullptr.
+  BrowserWindowInterface* GetOpenerForPopup(
+      BrowserWindowInterface* popup) const;
+
   // BrowserCollectionObserver:
   void OnBrowserCreated(BrowserWindowInterface* browser) override;
   void OnBrowserClosed(BrowserWindowInterface* browser) override;

@@ -18,6 +18,8 @@ source_set("maho_command_overlay") {
     "maho_shortcut_interceptor.cc",
     "maho_shortcut_interceptor.h",
     "maho_command_overlay_vibrancy.h",
+    "maho_command_action_selector_view.cc",
+    "maho_command_action_selector_view.h",
   ]
 
   if (is_mac) {
@@ -79,6 +81,7 @@ source_set("unit_tests") {
     "maho_command_overlay_view_unittest.cc",
     "maho_command_result_row_view_unittest.cc",
     "maho_unified_click_path_behavior_unittest.cc",
+    "maho_command_action_selector_view_unittest.cc",
   ]
 
   deps = [

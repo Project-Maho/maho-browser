@@ -200,6 +200,19 @@ void MahoCommandOverlayController::RestoreFocusToPreShowView() {
     fm->SetFocusedView(saved);
 }
 
+void MahoCommandOverlayController::FocusOverlayTextfield() {
+  if (!overlay_view_ || !widget_ || !widget_->IsVisible()) {
+    return;
+  }
+  overlay_view_->RequestFocus();
+  if (auto* focus_manager = widget_->GetFocusManager()) {
+    if (!focus_manager->GetFocusedView()) {
+      focus_manager->SetKeyboardAccessible(true);
+      focus_manager->AdvanceFocus(false);
+    }
+  }
+}
+
 void MahoCommandOverlayController::OnWidgetDestroying(
     views::Widget* widget) {
   if (widget == parent_widget_) {
@@ -242,11 +255,19 @@ void MahoCommandOverlayController::OnWidgetBoundsChanged(
 void MahoCommandOverlayController::OnWidgetActivationChanged(
     views::Widget* widget,
     bool active) {
+  if (widget == parent_widget_) {
+    if (active && widget_ && widget_->IsVisible() && !is_hiding_) {
+      widget_->Activate();
+      FocusOverlayTextfield();
+    }
+    return;
+  }
   if (widget != widget_.get()) {
     return;
   }
 
   if (active) {
+    FocusOverlayTextfield();
     deactivation_hide_timer_.Stop();
     return;
   }
@@ -428,6 +449,7 @@ void MahoCommandOverlayController::Show(views::View* anchor,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.parent = parent_widget_->GetNativeView();
   params.context = parent_widget_->GetNativeWindow();
+  params.child = true;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.bounds = ComputePopupBounds();
   params.accept_events = true;
@@ -454,6 +476,12 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   widget_ptr->SetBounds(bounds);
   animation_start_bounds_ = bounds;
   animation_target_bounds_ = bounds;
+  if (auto* root = widget_ptr->GetRootView()) {
+    root->DeprecatedLayoutImmediately();
+  }
+
+  widget_ = std::move(widget);
+  overlay_view_ = overlay_ptr;
 
   ApplyVibrancyToCommandOverlay(widget_ptr);
   widget_ptr->Show();
@@ -465,9 +493,6 @@ void MahoCommandOverlayController::Show(views::View* anchor,
                         "latency_ms", open_latency.InMilliseconds());
     UMA_HISTOGRAM_TIMES("Maho.CommandPalette.OpenLatency", open_latency);
   }
-
-  widget_ = std::move(widget);
-  overlay_view_ = overlay_ptr;
 
   StartOutsideClickMonitor();
   RegisterParentEscAccelerator();
@@ -485,18 +510,16 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   // this, the FocusManager may set focused_view_ before the native window
   // owns OS focus, which causes the first key event dispatched via
   // SendKeyPressSync to be routed to the wrong window.
-  overlay_ptr->RequestFocus();
+  FocusOverlayTextfield();
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
-      base::BindOnce(
-          [](base::WeakPtr<MahoCommandOverlayController> self) {
-            if (!self || !self->overlay_view_ || !self->widget_ ||
-                !self->widget_->IsVisible()) {
-              return;
-            }
-            self->overlay_view_->RequestFocus();
-          },
-          weak_factory_.GetWeakPtr()));
+      base::BindOnce(&MahoCommandOverlayController::FocusOverlayTextfield,
+                     weak_factory_.GetWeakPtr()));
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&MahoCommandOverlayController::FocusOverlayTextfield,
+                     weak_factory_.GetWeakPtr()),
+      base::Milliseconds(50));
 }
 
 void MahoCommandOverlayController::OnEvent(const ui::Event& event) {

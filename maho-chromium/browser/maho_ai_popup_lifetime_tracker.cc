@@ -46,6 +46,13 @@ BrowserWindowInterface* MahoAiPopupLifetimeTracker::GetPopupForOpener(
   return it != opener_to_popup_.end() ? it->second : nullptr;
 }
 
+BrowserWindowInterface* MahoAiPopupLifetimeTracker::GetOpenerForPopup(
+    BrowserWindowInterface* popup) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto it = popup_to_opener_.find(popup);
+  return it != popup_to_opener_.end() ? it->second : nullptr;
+}
+
 void MahoAiPopupLifetimeTracker::OnBrowserCreated(
     BrowserWindowInterface* browser) {}
 

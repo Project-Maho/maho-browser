@@ -40,8 +40,12 @@ enum class CommandOverlayMode {
   kCurrentTab,   // Cmd+L: pre-fill URL, "Search or Enter URL..."
   kNewTab,       // Cmd+T: "Search in new tab..."
   kSiteSearch,   // @prefix + Tab: site-specific search.
-  kAI,           // "ai" + Tab: AI chat mode.
   kCommandsOnly, // ">" command mode.
+};
+
+enum class PaletteAction {
+  kSearch,
+  kAskMaho,
 };
 
 enum class CommandSuggestionType {
@@ -94,6 +98,11 @@ struct CommandSuggestion {
   std::string stable_tab_id;
   std::string browser_session_id;
   std::string tab_session_id;
+  // Core TabId (UUID) for a recently-opened suspended tab that lives only in
+  // the Rust core (no live WebContents). Set when |is_suspended| is true.
+  std::string tab_core_id;
+  // True for recent/suspended tab suggestions emitted on an empty query.
+  bool is_suspended = false;
   // Each pair is (start, end) character offset for match highlighting.
   std::vector<std::pair<int, int>> match_ranges;
 };
@@ -104,6 +113,7 @@ struct CommandSuggestion {
 // rebuilt lazily.
 class MahoCommandModel : public TabStripModelObserver,
                          public BrowserCollectionObserver {
+  friend class MahoCommandModelTest;
  public:
   using ResultsCallback =
       base::RepeatingCallback<void(std::vector<CommandSuggestion>)>;
@@ -128,8 +138,12 @@ class MahoCommandModel : public TabStripModelObserver,
   void SaveRecentSearch(const std::string& query);
   std::vector<CommandSuggestion> GetRecentSearches();
   const SiteSearchEngine* MatchSiteSearch(const std::string& query) const;
+  const SiteSearchEngine* MatchExactSiteSearchKeyword(const std::string& trimmed) const;
   const std::vector<SiteSearchEngine>& site_search_engines() const {
     return site_search_engines_;
+  }
+  void AddSiteSearchEngineForTest(SiteSearchEngine engine) {
+    site_search_engines_.push_back(std::move(engine));
   }
 
   const std::string& query() const { return query_; }
@@ -171,6 +185,9 @@ class MahoCommandModel : public TabStripModelObserver,
       const std::string& query,
       const std::string& search_url,
       const std::string& engine_name);
+  static std::vector<CommandSuggestion> ParseSearchResultsJson(
+      const std::string& json_str,
+      const std::vector<CommandSuggestion>& chromium_bookmarks);
 
  private:
   // Returns cached JSON (rebuilds lazily when tabs_cache_dirty_ is true).

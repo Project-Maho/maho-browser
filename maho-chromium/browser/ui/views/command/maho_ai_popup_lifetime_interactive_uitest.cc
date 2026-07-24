@@ -74,6 +74,9 @@ IN_PROC_BROWSER_TEST_F(MahoAiPopupLifetimeTrackerTest,
   EXPECT_EQ(
       maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(opener),
       popup);
+  EXPECT_EQ(
+      maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(popup),
+      opener);
 
   CloseBrowserSynchronously(opener);
 
@@ -97,10 +100,19 @@ IN_PROC_BROWSER_TEST_F(MahoAiPopupLifetimeTrackerTest,
   EXPECT_EQ(
       maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser()),
       popup);
+  EXPECT_EQ(
+      maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(popup),
+      browser());
+  EXPECT_EQ(
+      maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(nullptr),
+      nullptr);
 
   CloseBrowserSynchronously(popup);
 
   EXPECT_EQ(
       maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser()),
+      nullptr);
+  EXPECT_EQ(
+      maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(popup),
       nullptr);
 }

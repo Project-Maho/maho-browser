@@ -213,7 +213,7 @@ TEST_F(CapResultsTest, AIModeCapsAtEight) {
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kAI);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   EXPECT_EQ(8u, results.size());
 }
@@ -623,6 +623,65 @@ TEST_F(MahoCommandModelTest, PrivateSearchUsesTemplateUrlServiceReadOnly) {
   EXPECT_EQ("https://example.test/search?q=cats",
             suggestion.execution_payload);
   EXPECT_NE(std::string::npos, suggestion.title.find("ExampleSearch"));
+}
+
+TEST_F(MahoCommandModelTest, MatchExactSiteSearchKeyword) {
+  MahoCommandModel model(nullptr);
+
+  MahoCommandModel::SiteSearchEngine engine1;
+  engine1.prefix = "gh";
+  engine1.name = "GitHub";
+  engine1.url_template = "https://github.com/search?q={searchTerms}";
+  model.AddSiteSearchEngineForTest(engine1);
+
+  MahoCommandModel::SiteSearchEngine engine2;
+  engine2.prefix = "jira";
+  engine2.name = "Jira";
+  engine2.url_template = "https://jira.com/search?q={searchTerms}";
+  model.AddSiteSearchEngineForTest(engine2);
+
+  // Exact matches
+  EXPECT_EQ(&model.site_search_engines()[0], model.MatchExactSiteSearchKeyword("gh"));
+  EXPECT_EQ(&model.site_search_engines()[0], model.MatchExactSiteSearchKeyword("@gh"));
+  EXPECT_EQ(&model.site_search_engines()[1], model.MatchExactSiteSearchKeyword("jira"));
+  EXPECT_EQ(&model.site_search_engines()[1], model.MatchExactSiteSearchKeyword("@jira"));
+
+  // Non-matches
+  EXPECT_EQ(nullptr, model.MatchExactSiteSearchKeyword("gh chromium"));
+  EXPECT_EQ(nullptr, model.MatchExactSiteSearchKeyword("jira MAHO-123"));
+  EXPECT_EQ(nullptr, model.MatchExactSiteSearchKeyword("jira issue"));
+  EXPECT_EQ(nullptr, model.MatchExactSiteSearchKeyword("ghh"));
+  EXPECT_EQ(nullptr, model.MatchExactSiteSearchKeyword("@"));
+  EXPECT_EQ(nullptr, model.MatchExactSiteSearchKeyword(""));
+}
+
+TEST_F(MahoCommandModelTest, ParseSearchResultsJsonFiltersAiAnswer) {
+  std::string json_str = R"([
+    {
+      "kind": "history",
+      "title": "Google",
+      "key": "hist:google"
+    },
+    {
+      "kind": "aiAnswer",
+      "title": "Ask AI",
+      "key": "ai:ask"
+    },
+    {
+      "kind": "bookmark",
+      "title": "Maho Browser",
+      "key": "bm:maho"
+    }
+  ])";
+
+  std::vector<CommandSuggestion> bookmarks;
+  std::vector<CommandSuggestion> results =
+      MahoCommandModel::ParseSearchResultsJson(json_str, bookmarks);
+
+  ASSERT_EQ(2u, results.size())
+      << "The parsed results must skip the 'aiAnswer' item, leaving exactly 2 items.";
+  EXPECT_EQ("hist:google", results[0].key);
+  EXPECT_EQ("bm:maho", results[1].key);
 }
 
 }  // namespace

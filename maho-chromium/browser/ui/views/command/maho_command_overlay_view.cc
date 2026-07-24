@@ -701,10 +701,14 @@ void MahoCommandOverlayView::UpdateResultViewsForTesting(
 
 
 void MahoCommandOverlayView::RequestFocus() {
-  if (textfield_ && GetFocusManager()) {
-    GetFocusManager()->SetFocusedView(textfield_);
-  } else if (textfield_) {
+  if (textfield_) {
     textfield_->RequestFocus();
+    if (auto* focus_manager = textfield_->GetFocusManager()) {
+      focus_manager->SetFocusedView(textfield_);
+      if (!textfield_->HasFocus() && !focus_manager->GetFocusedView()) {
+        focus_manager->AdvanceFocus(false);
+      }
+    }
   } else {
     views::View::RequestFocus();
   }

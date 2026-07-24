@@ -86,6 +86,7 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   void AnimateBoundsToHeight(int height);
 
   void RestoreFocusToPreShowView();
+  void FocusOverlayTextfield();
 
   // Dismisses the palette when native activation moves to another Chrome window
   // while keeping it open when another application takes focus. Reschedules
