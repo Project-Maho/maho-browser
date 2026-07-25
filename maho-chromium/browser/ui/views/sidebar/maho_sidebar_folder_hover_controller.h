@@ -34,7 +34,8 @@ class MahoSidebarFolderHoverController : public views::WidgetObserver,
 
   void ScheduleShow(views::View* anchor,
                     std::string folder_id,
-                    std::u16string folder_name);
+                    std::u16string folder_name,
+                    std::vector<SidebarTreeNode> children);
 
   void OnRowMouseExited();
   void HideImmediately();

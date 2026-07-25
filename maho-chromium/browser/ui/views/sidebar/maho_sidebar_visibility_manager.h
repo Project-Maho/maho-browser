@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "base/functional/function_ref.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace maho {
@@ -45,11 +46,29 @@ class SidebarVisibilityManager {
                                    int total_row_count) const;
 
   // Variable-height counterpart to ComputeVisibleRange() for the section-local
-  // projection. |cumulative_tops| holds the top offset (dp) of each row within
-  // the section (size N); |total_height| is the section's full content height.
+  // projection. |cumulative_top_at| returns the top offset (dp) for row index
+  // within the section; |total_height| is the section's full content height.
   // Overscan buffering matches the uniform path — (drag_active_ ?
   // drag_overscan_rows : buffer_rows_below) * row_height_dp on each edge — and
   // the forced-visible index is always included.
+  VisibleRange ComputeVisibleRange(
+      const gfx::Rect& section_local_visible_rect,
+      int row_count,
+      int total_height,
+      base::FunctionRef<int(int)> cumulative_top_at) const;
+
+  template <typename CumulativeTopAt>
+  VisibleRange ComputeVisibleRange(
+      const gfx::Rect& section_local_visible_rect,
+      int row_count,
+      int total_height,
+      const CumulativeTopAt& cumulative_top_at) const {
+    return ComputeVisibleRange(
+        section_local_visible_rect, row_count, total_height,
+        base::FunctionRef<int(int)>(cumulative_top_at));
+  }
+
+  // Vector-backed compatibility wrapper for existing callers/tests.
   VisibleRange ComputeVisibleRangeForProjection(
       const gfx::Rect& section_local_visible_rect,
       const std::vector<int>& cumulative_tops,

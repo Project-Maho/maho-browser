@@ -46,11 +46,11 @@ SidebarVisibilityManager::ComputeVisibleRange(
 }
 
 SidebarVisibilityManager::VisibleRange
-SidebarVisibilityManager::ComputeVisibleRangeForProjection(
+SidebarVisibilityManager::ComputeVisibleRange(
     const gfx::Rect& section_local_visible_rect,
-    const std::vector<int>& cumulative_tops,
-    int total_height) const {
-  const int row_count = static_cast<int>(cumulative_tops.size());
+    int row_count,
+    int total_height,
+    base::FunctionRef<int(int)> cumulative_top_at) const {
   if (row_count == 0) {
     return {0, -1, 0};
   }
@@ -67,10 +67,10 @@ SidebarVisibilityManager::ComputeVisibleRangeForProjection(
   const int bottom_threshold =
       section_local_visible_rect.bottom() + bottom_buffer_px;
 
-  // Row i spans [cumulative_tops[i], row_bottom(i)); the last row runs to the
-  // section's total content height.
+  // Row i spans [cumulative_top_at(i), row_bottom(i)); the last row runs to
+  // the section's total content height.
   auto row_bottom = [&](int i) {
-    return (i + 1 < row_count) ? cumulative_tops[i + 1] : total_height;
+    return (i + 1 < row_count) ? cumulative_top_at(i + 1) : total_height;
   };
 
   // First row whose bottom edge extends past the (buffered) viewport top.
@@ -96,7 +96,7 @@ SidebarVisibilityManager::ComputeVisibleRangeForProjection(
     int hi = row_count;
     while (lo < hi) {
       const int mid = lo + (hi - lo) / 2;
-      if (cumulative_tops[mid] < bottom_threshold) {
+      if (cumulative_top_at(mid) < bottom_threshold) {
         lo = mid + 1;
       } else {
         hi = mid;
@@ -122,6 +122,19 @@ SidebarVisibilityManager::ComputeVisibleRangeForProjection(
   }
 
   return {first, last, row_count};
+}
+
+SidebarVisibilityManager::VisibleRange
+SidebarVisibilityManager::ComputeVisibleRangeForProjection(
+    const gfx::Rect& section_local_visible_rect,
+    const std::vector<int>& cumulative_tops,
+    int total_height) const {
+  const int row_count = static_cast<int>(cumulative_tops.size());
+  auto cumulative_top_at = [&cumulative_tops](int index) {
+    return cumulative_tops[index];
+  };
+  return ComputeVisibleRange(section_local_visible_rect, row_count, total_height,
+                             cumulative_top_at);
 }
 
 }  // namespace maho
