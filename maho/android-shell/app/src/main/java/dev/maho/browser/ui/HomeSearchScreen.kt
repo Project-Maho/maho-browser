@@ -62,8 +62,8 @@ fun HomeSearchScreen(
         isDarkMode = isDarkMode,
         shellColors = shellColors,
     )
-    val visibleRecentTabs = recentTabs.take(3)
-    val visibleTopSites = topSites.take(8)
+    val visibleRecentTabs = if (isIncognito) emptyList() else recentTabs.take(3)
+    val visibleTopSites = if (isIncognito) emptyList() else topSites.take(8)
     val isEmptyHome = visibleRecentTabs.isEmpty() && visibleTopSites.isEmpty()
 
     Box(

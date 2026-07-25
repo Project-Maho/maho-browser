@@ -26,6 +26,10 @@ struct HomeSearchView: View {
         isIncognito ? ShellTheme.Palette.incognitoBorder : ShellTheme.Palette.overlayBorder
     }
 
+    private var leadingIconColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoMutedForeground : ShellTheme.Palette.accent
+    }
+
     private var activeSpaceId: SpaceId? {
         bridge.getActiveSpaceId()
     }
@@ -36,16 +40,33 @@ struct HomeSearchView: View {
         }
     }
 
+    static func isSystemSurfaceURL(_ raw: String) -> Bool {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return true }
+        guard let u = URL(string: s), let scheme = u.scheme?.lowercased() else { return true }
+        if scheme == "about" { return true }
+        if scheme == "chrome" {
+            return ["newtab", "downloads", "history"].contains(u.host ?? "")
+        }
+        return false
+    }
+
+    private var homeActivityTabs: [TabViewModel] {
+        currentSpaceTabs.filter { !Self.isSystemSurfaceURL($0.url) }
+    }
+
     private var recentTabs: [TabViewModel] {
-        Array(currentSpaceTabs
+        guard !isIncognito else { return [] }
+        return Array(homeActivityTabs
             .sorted(by: { $0.lastActiveAt > $1.lastActiveAt })
             .prefix(3))
     }
 
     private var topSites: [TabViewModel] {
+        guard !isIncognito else { return [] }
         var seenUrls = Set<String>()
         var uniqueTabs = [TabViewModel]()
-        for tab in currentSpaceTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }) {
+        for tab in homeActivityTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }) {
             let url = tab.url.trimmingCharacters(in: .whitespacesAndNewlines)
             if !url.isEmpty && !seenUrls.contains(url) {
                 seenUrls.insert(url)
@@ -145,7 +166,7 @@ struct HomeSearchView: View {
                         HStack(spacing: ShellTheme.Spacing.medium) {
                             Image(lucide: Lucide.globe)
                                 .font(.body)
-                                .foregroundStyle(ShellTheme.Palette.accent)
+                                .foregroundStyle(leadingIconColor)
                             
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(tab.title.isEmpty ? "New tab" : tab.title)
@@ -202,7 +223,7 @@ struct HomeSearchView: View {
                         HStack(spacing: ShellTheme.Spacing.medium) {
                             Image(lucide: Lucide.sparkles)
                                 .font(.caption)
-                                .foregroundStyle(ShellTheme.Palette.accent)
+                                .foregroundStyle(leadingIconColor)
                             
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(tab.title.isEmpty ? displayHost(for: tab.url) : tab.title)

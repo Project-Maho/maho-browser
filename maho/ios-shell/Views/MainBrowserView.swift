@@ -126,7 +126,7 @@ struct MainBrowserView: View {
 
             VStack(spacing: 0) {
                 if showFindInPage, let activeTabId = browsingTabId {
-                    FindInPageView(tabId: activeTabId, isVisible: $showFindInPage)
+                    FindInPageView(tabId: activeTabId, isVisible: $showFindInPage, isIncognito: effectiveIsPrivate)
                         .padding(.top, ShellTheme.Spacing.small)
                 }
 
@@ -256,6 +256,7 @@ struct MainBrowserView: View {
                 PinchSummaryView(
                     title: pinchSummaryTitle,
                     sentences: pinchSummarySentences,
+                    isIncognito: effectiveIsPrivate,
                     onDismiss: {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                             showPinchSummary = false

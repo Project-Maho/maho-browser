@@ -2,7 +2,8 @@
  * copy-to-platforms.ts
  *
  * Post-build script: copies dist/* to native platform asset directories.
- * Run via `bun run postbuild` or called by vite closeBundle hook.
+ * Wired into `bun run build` (`... && bun run copy:platforms`); also runnable
+ * standalone via `bun run copy:platforms`.
  *
  * Destinations (relative to maho/web-ai/):
  *   Android: ../android-shell/app/src/main/assets/web-ai/

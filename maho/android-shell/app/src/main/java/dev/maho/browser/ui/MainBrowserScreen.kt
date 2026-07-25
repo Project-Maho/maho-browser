@@ -679,12 +679,13 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     val currentSpaceTabs = tabs.filter { tab ->
         activeSpaceId == null || tab.spaceId == activeSpaceId
     }
-    val recentTabs = currentSpaceTabs
+    val homeActivityTabs = currentSpaceTabs.filter { !isSystemSurfaceUrl(it.url) }
+    val recentTabs = homeActivityTabs
         .sortedByDescending { it.lastActiveAt }
         .take(3)
     val topSites = buildList {
         val seenUrls = linkedSetOf<String>()
-        currentSpaceTabs
+        homeActivityTabs
             .sortedByDescending { it.lastActiveAt }
             .forEach { tab ->
                 if (tab.url.isNotBlank() && seenUrls.add(tab.url)) {
@@ -1215,6 +1216,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                     FindInPageSheet(
                         visibleTabId = activeTabId,
                         onDismiss = { showFindSheet = false },
+                        isIncognito = isIncognito,
                     )
                 }
             }
@@ -1272,7 +1274,8 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                 PinchSummaryView(
                     title = currentTitle,
                     sentences = pinchSummarySentences,
-                    onDismiss = { showPinchSummary = false }
+                    onDismiss = { showPinchSummary = false },
+                    isIncognito = isIncognito
                 )
             }
 
