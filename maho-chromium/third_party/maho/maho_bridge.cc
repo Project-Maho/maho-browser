@@ -7,16 +7,257 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "base/synchronization/lock.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/containers/span.h"
 #include "maho_ffi.h"
 #include "url/gurl.h"
 
+extern "C" char* maho_normalize_site_exception_key(const char* input);
+
 namespace maho::core {
+
+namespace {
+
+struct VaultBackendFfiState {
+  base::Lock lock;
+  const VaultBackendFfiForTesting* ffi = nullptr;
+};
+
+VaultBackendFfiState& GetVaultBackendFfiState() {
+  static base::NoDestructor<VaultBackendFfiState> state;
+  return *state;
+}
+
+const VaultBackendFfiForTesting* GetVaultBackendFfiForTesting() {
+  VaultBackendFfiState& state = GetVaultBackendFfiState();
+  base::AutoLock lock(state.lock);
+  return state.ffi;
+}
+
+MahoVaultBackendSession* VaultBackendSessionNew(MahoCore* core) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) return ffi->session_new(core);
+  return maho_vault_backend_session_new(core);
+}
+void VaultBackendSessionClose(MahoVaultBackendSession* session) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) { ffi->session_close(session); return; }
+  maho_vault_backend_session_close(session);
+}
+void VaultBackendSessionFree(MahoVaultBackendSession* session) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) { ffi->session_free(session); return; }
+  maho_vault_backend_session_free(session);
+}
+MahoVaultBackendResult* VaultBackendSessionExecute(MahoVaultBackendSession* session, const char* request_json) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) return ffi->session_execute(session, request_json);
+  return maho_vault_backend_session_execute(session, request_json);
+}
+MahoVaultBackendResult* VaultBackendSessionExecuteCredentials(
+    MahoVaultBackendSession* session,
+    const char* request_json) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) {
+    return ffi->session_execute_credentials(session, request_json);
+  }
+  return maho_vault_backend_session_execute_credentials(session, request_json);
+}
+int VaultBackendFfiResultStatus(const MahoVaultBackendResult* result) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) return ffi->result_status(result);
+  return static_cast<int>(maho_vault_backend_result_status(result));
+}
+MahoVaultBackendBuffer* VaultBackendResultConsume(MahoVaultBackendResult* result) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) return ffi->result_consume(result);
+  return maho_vault_backend_result_consume(result);
+}
+void VaultBackendResultFree(MahoVaultBackendResult* result) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) { ffi->result_free(result); return; }
+  maho_vault_backend_result_free(result);
+}
+const uint8_t* VaultBackendBufferData(const MahoVaultBackendBuffer* buffer) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) return ffi->buffer_data(buffer);
+  return maho_vault_backend_buffer_data(buffer);
+}
+size_t VaultBackendBufferLen(const MahoVaultBackendBuffer* buffer) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) return ffi->buffer_len(buffer);
+  return maho_vault_backend_buffer_len(buffer);
+}
+void VaultBackendBufferFree(MahoVaultBackendBuffer* buffer) {
+  if (const auto* ffi = GetVaultBackendFfiForTesting()) { ffi->buffer_free(buffer); return; }
+  maho_vault_backend_buffer_free(buffer);
+}
+
+VaultLockCallbackForTesting& GetVaultLockCallbackForTesting() {
+  static base::NoDestructor<VaultLockCallbackForTesting> callback;
+  return *callback;
+}
+
+}  // namespace
+
+struct VaultBackendSession::State {
+  explicit State(::MahoVaultBackendSession* session) : session_(session) {}
+  ~State() { Reset(); }
+  void Close() {
+    base::AutoLock lock(lock_);
+    if (session_ && !closed_) { VaultBackendSessionClose(session_); closed_ = true; }
+  }
+  VaultBackendResult ExecuteBatch(const std::string& request_json) {
+    base::AutoLock lock(lock_);
+    if (!session_ || closed_) return VaultBackendResult();
+    return VaultBackendResult(VaultBackendSessionExecute(session_, request_json.c_str()));
+  }
+  VaultBackendResult ExecuteCredentials(const std::string& request_json) {
+    base::AutoLock lock(lock_);
+    if (!session_ || closed_) return VaultBackendResult();
+    return VaultBackendResult(
+        VaultBackendSessionExecuteCredentials(session_, request_json.c_str()));
+  }
+  bool is_valid() const {
+    base::AutoLock lock(lock_);
+    return session_ && !closed_;
+  }
+ private:
+  void Reset() {
+    base::AutoLock lock(lock_);
+    if (session_) { VaultBackendSessionFree(session_); session_ = nullptr; closed_ = true; }
+  }
+  mutable base::Lock lock_;
+  ::MahoVaultBackendSession* session_ GUARDED_BY(lock_) = nullptr;
+  bool closed_ GUARDED_BY(lock_) = false;
+};
+
+namespace {
+
+struct VaultBackendSessionRegistry {
+  base::Lock lock;
+  std::vector<std::weak_ptr<VaultBackendSession::State>> sessions
+      GUARDED_BY(lock);
+};
+
+VaultBackendSessionRegistry& GetVaultBackendSessionRegistry() {
+  static base::NoDestructor<VaultBackendSessionRegistry> registry;
+  return *registry;
+}
+
+}  // namespace
+
+VaultBackendBuffer::VaultBackendBuffer() = default;
+VaultBackendBuffer::VaultBackendBuffer(::MahoVaultBackendBuffer* buffer)
+    : buffer_(buffer) {}
+VaultBackendBuffer::~VaultBackendBuffer() {
+  VaultBackendBufferFree(buffer_);
+}
+VaultBackendBuffer::VaultBackendBuffer(VaultBackendBuffer&& other) noexcept
+    : buffer_(std::exchange(other.buffer_, nullptr)) {}
+VaultBackendBuffer& VaultBackendBuffer::operator=(
+    VaultBackendBuffer&& other) noexcept {
+  if (this != &other) {
+    VaultBackendBufferFree(buffer_);
+    buffer_ = std::exchange(other.buffer_, nullptr);
+  }
+  return *this;
+}
+bool VaultBackendBuffer::is_valid() const { return buffer_ != nullptr; }
+std::string VaultBackendBuffer::CopyBytes() const {
+  if (!buffer_) return std::string();
+  const uint8_t* data = VaultBackendBufferData(buffer_);
+  const size_t length = VaultBackendBufferLen(buffer_);
+  if (!data && length != 0) return std::string();
+  return std::string(reinterpret_cast<const char*>(data), length);
+}
+
+VaultBackendResult::VaultBackendResult() = default;
+VaultBackendResult::VaultBackendResult(::MahoVaultBackendResult* result)
+    : result_(result) {}
+VaultBackendResult::~VaultBackendResult() {
+  VaultBackendResultFree(result_);
+}
+VaultBackendResult::VaultBackendResult(VaultBackendResult&& other) noexcept
+    : result_(std::exchange(other.result_, nullptr)) {}
+VaultBackendResult& VaultBackendResult::operator=(
+    VaultBackendResult&& other) noexcept {
+  if (this != &other) {
+    VaultBackendResultFree(result_);
+    result_ = std::exchange(other.result_, nullptr);
+  }
+  return *this;
+}
+bool VaultBackendResult::is_valid() const { return result_ != nullptr; }
+VaultBackendResultStatus VaultBackendResult::status() const {
+  return result_ ? static_cast<VaultBackendResultStatus>(
+                       VaultBackendFfiResultStatus(result_))
+                 : VaultBackendResultStatus::kFailed;
+}
+std::string VaultBackendResult::ConsumeJson() {
+  VaultBackendBuffer buffer(result_ ? VaultBackendResultConsume(result_) : nullptr);
+  return buffer.CopyBytes();
+}
+
+VaultBackendSession::VaultBackendSession() = default;
+VaultBackendSession::VaultBackendSession(std::shared_ptr<State> state)
+    : state_(std::move(state)) {}
+VaultBackendSession::~VaultBackendSession() = default;
+VaultBackendSession::VaultBackendSession(VaultBackendSession&& other) noexcept =
+    default;
+VaultBackendSession& VaultBackendSession::operator=(
+    VaultBackendSession&& other) noexcept = default;
+bool VaultBackendSession::is_valid() const {
+  return state_ && state_->is_valid();
+}
+void VaultBackendSession::Close() {
+  if (state_) {
+    state_->Close();
+  }
+}
+VaultBackendResult VaultBackendSession::ExecuteBatch(const std::string& request_json) {
+  return state_ ? state_->ExecuteBatch(request_json) : VaultBackendResult();
+}
+VaultBackendResult VaultBackendSession::ExecuteCredentials(
+    const std::string& request_json) {
+  return state_ ? state_->ExecuteCredentials(request_json) : VaultBackendResult();
+}
+VaultBackendSession CreateVaultBackendSession(MahoCore* core) {
+  auto state = std::make_shared<VaultBackendSession::State>(
+      VaultBackendSessionNew(core));
+  if (!state->is_valid()) {
+    return VaultBackendSession();
+  }
+  VaultBackendSessionRegistry& registry = GetVaultBackendSessionRegistry();
+  {
+    base::AutoLock lock(registry.lock);
+    registry.sessions.emplace_back(state);
+  }
+  return VaultBackendSession(std::move(state));
+}
+void QuiesceVaultBackendSessions() {
+  std::vector<std::shared_ptr<VaultBackendSession::State>> sessions;
+  VaultBackendSessionRegistry& registry = GetVaultBackendSessionRegistry();
+  {
+    base::AutoLock lock(registry.lock);
+    auto output = registry.sessions.begin();
+    for (auto input = registry.sessions.begin(); input != registry.sessions.end();
+         ++input) {
+      if (auto session = input->lock()) {
+        sessions.push_back(session);
+        *output++ = *input;
+      }
+    }
+    registry.sessions.erase(output, registry.sessions.end());
+  }
+  for (const auto& session : sessions) {
+    session->Close();
+  }
+}
+void SetVaultBackendFfiForTesting(const VaultBackendFfiForTesting* ffi) {
+  VaultBackendFfiState& state = GetVaultBackendFfiState();
+  base::AutoLock lock(state.lock);
+  state.ffi = ffi;
+}
 
 // Platform-specific initialization (if needed in future)
 #if BUILDFLAG(IS_MAC)
@@ -87,6 +328,29 @@ bool LoadState(MahoCore* core) {
   return ok;
 }
 
+bool LockVault(MahoCore* core) {
+  if (!core) {
+    return false;
+  }
+  VaultLockCallbackForTesting& callback = GetVaultLockCallbackForTesting();
+  if (!callback.is_null()) {
+    return callback.Run(core);
+  }
+  char* result = maho_vault_lock_json(core);
+  if (!result) {
+    return false;
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(result, base::JSON_PARSE_RFC);
+  maho_string_free(result);
+  return parsed && parsed->is_dict() &&
+         parsed->GetDict().FindBool("ok").value_or(false);
+}
+
+void SetVaultLockCallbackForTesting(VaultLockCallbackForTesting callback) {
+  GetVaultLockCallbackForTesting() = std::move(callback);
+}
+
 std::string Version() {
   // TODO(maho): Add maho_core_version() to maho-ffi
   return "0.1.0";
@@ -104,24 +368,116 @@ BlockResult CheckRequest(MahoCore* core,
                          const char* source_url,
                          const char* request_type) {
   BlockResult result;
-  char* json = maho_core_check_request(core, url, source_url, request_type);
-  if (!json) {
-    return result;
+  // POD across the boundary: this runs on the UI thread for every subresource
+  // request, so the previous JSON round trip (serialize in Rust, parse in C++,
+  // two heap allocations) was pure overhead. Allowed requests — the common
+  // case — now allocate nothing; only a redirect/rewrite returns owned strings.
+  MahoBlockResult raw =
+      maho_core_check_request(core, url, source_url, request_type);
+  result.blocked = raw.blocked;
+  if (raw.redirect) {
+    result.redirect.assign(raw.redirect);
+    maho_string_free(raw.redirect);
   }
-  auto parsed = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  maho_string_free(json);
-  if (!parsed || !parsed->is_dict()) {
-    return result;
-  }
-  const auto& dict = parsed->GetDict();
-  result.blocked = dict.FindBool("blocked").value_or(false);
-  if (const std::string* redirect = dict.FindString("redirect")) {
-    result.redirect = *redirect;
-  }
-  if (const std::string* rewritten = dict.FindString("rewrittenUrl")) {
-    result.rewritten_url = *rewritten;
+  if (raw.rewritten_url) {
+    result.rewritten_url.assign(raw.rewritten_url);
+    maho_string_free(raw.rewritten_url);
   }
   return result;
+}
+
+int GetContentBlockingMode(MahoCore* core) {
+  return maho_core_get_content_blocking_mode(core);
+}
+
+bool SetContentBlockingMode(MahoCore* core, int mode) {
+  return maho_core_set_content_blocking_mode(core, mode);
+}
+
+std::string GetContentBlockerStateJson(MahoCore* core) {
+  char* result = maho_core_get_content_blocker_state_json(core);
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string AddFilterListResultJson(MahoCore* core,
+                                    const char* id,
+                                    const char* name,
+                                    const char* url) {
+  char* result = maho_core_add_filter_list_result_json(core, id, name, url);
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string ToggleFilterListResultJson(MahoCore* core,
+                                       const char* id,
+                                       bool enabled) {
+  char* result = maho_core_toggle_filter_list_result_json(core, id, enabled);
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string RemoveFilterListResultJson(MahoCore* core, const char* id) {
+  char* result = maho_core_remove_filter_list_result_json(core, id);
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string ApplyFilterListUpdateResultJson(MahoCore* core,
+                                            const char* json) {
+  char* result = maho_core_apply_filter_list_update_result_json(core, json);
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string InstallContentEngineResultJson(MahoCore* core,
+                                           OpaqueCompiledEngine* handle) {
+  char* result = maho_content_engine_install_result_json(core, handle);
+  if (!result) {
+    return R"({"success":false,"error":{"code":"bridge_result_unavailable","message":"content engine install result was unavailable"},"compileRequired":false})";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  auto parsed = base::JSONReader::Read(ret, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict() ||
+      !parsed->GetDict().FindBool("success").has_value()) {
+    return R"({"success":false,"error":{"code":"bridge_result_invalid","message":"content engine install returned an invalid result"},"compileRequired":false})";
+  }
+  return ret;
+}
+
+bool ApplyFilterListUpdateJson(MahoCore* core, const char* json) {
+  char* result = maho_core_apply_filter_list_update_result_json(core, json);
+  if (!result) {
+    return false;
+  }
+  auto parsed = base::JSONReader::Read(result, base::JSON_PARSE_RFC);
+  maho_string_free(result);
+  if (!parsed || !parsed->is_dict()) {
+    return false;
+  }
+  return parsed->GetDict().FindBool("success").value_or(false) &&
+         parsed->GetDict().FindBool("compileRequired").value_or(false);
 }
 
 void AddSiteException(MahoCore* core, const char* origin) {
@@ -139,6 +495,16 @@ std::string GetSiteExceptions(MahoCore* core) {
   }
   std::string ret(result);
   maho_string_free(result);
+  return ret;
+}
+
+std::string NormalizeSiteExceptionKey(const std::string& input) {
+  char* result = maho_normalize_site_exception_key(input.c_str());
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  FreeString(result);
   return ret;
 }
 

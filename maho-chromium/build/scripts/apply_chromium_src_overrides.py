@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,6 +191,127 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Maho Linux: compile device authenticator factory source on Linux",
         ),
     ],
+    "components/affiliations/core/browser/affiliation_prefetcher.cc": [
+        Replacement(
+            old=(
+                "AffiliationPrefetcher::~AffiliationPrefetcher() = default;\n"
+                "\n"
+                "void AffiliationPrefetcher::RegisterSource("
+            ),
+            new=(
+                "AffiliationPrefetcher::~AffiliationPrefetcher() = default;\n"
+                "\n"
+                "void AffiliationPrefetcher::Shutdown() {\n"
+                "  weak_ptr_factory_.InvalidateWeakPtrs();\n"
+                "  on_facets_received_barrier_callback_.Reset();\n"
+                "  pending_initializations_.clear();\n"
+                "  initialized_sources_.clear();\n"
+                "  is_ready_ = false;\n"
+                "}\n"
+                "\n"
+                "void AffiliationPrefetcher::RegisterSource("
+            ),
+            description="Maho: cancel affiliation source observation during password-store shutdown",
+            guard="void AffiliationPrefetcher::Shutdown()",
+        ),
+    ],
+    "components/affiliations/core/browser/affiliation_prefetcher.h": [
+        Replacement(
+            old=(
+                "  // Registers an affiliation source.\n"
+                "  void RegisterSource(std::unique_ptr<AffiliationSource> source);\n"
+                "\n"
+                " private:"
+            ),
+            new=(
+                "  // Registers an affiliation source.\n"
+                "  void RegisterSource(std::unique_ptr<AffiliationSource> source);\n"
+                "\n"
+                "  // Stops delayed initialization and releases all sources. This must run during\n"
+                "  // affiliation service shutdown, before dependent sources such as password\n"
+                "  // stores are destroyed.\n"
+                "  void Shutdown();\n"
+                "\n"
+                " private:"
+            ),
+            description="Maho: expose affiliation prefetcher shutdown hook",
+            guard="void Shutdown();",
+        ),
+    ],
+    "components/affiliations/core/browser/affiliation_service_impl.cc": [
+        Replacement(
+            old=(
+                "void AffiliationServiceImpl::Shutdown() {\n"
+                "  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);\n"
+                "  if (backend_) {"
+            ),
+            new=(
+                "void AffiliationServiceImpl::Shutdown() {\n"
+                "  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);\n"
+                "  prefetcher_.Shutdown();\n"
+                "  if (backend_) {"
+            ),
+            description="Maho: release affiliation sources before backend teardown",
+            guard="prefetcher_.Shutdown();",
+        ),
+    ],
+    "components/affiliations/core/browser/affiliation_service_impl_unittest.cc": [
+        Replacement(
+            old=(
+                "#include \"components/affiliations/core/browser/mock_affiliation_fetcher.h\"\n"
+                "#include \"components/affiliations/core/browser/mock_affiliation_fetcher_factory.h\""
+            ),
+            new=(
+                "#include \"components/affiliations/core/browser/mock_affiliation_fetcher.h\"\n"
+                "#include \"components/affiliations/core/browser/mock_affiliation_fetcher_factory.h\"\n"
+                "#include \"components/affiliations/core/browser/mock_affiliation_source.h\""
+            ),
+            description="Maho: include mock affiliation source for shutdown regression test",
+            guard="#include \"components/affiliations/core/browser/mock_affiliation_source.h\"",
+        ),
+        Replacement(
+            old=(
+                "  void RunUntilIdle() { task_environment_.RunUntilIdle(); }\n"
+                "\n"
+                "  AffiliationServiceImpl* service() { return service_.get(); }"
+            ),
+            new=(
+                "  void RunUntilIdle() { task_environment_.RunUntilIdle(); }\n"
+                "\n"
+                "  void FastForwardBy(base::TimeDelta delta) {\n"
+                "    task_environment_.FastForwardBy(delta);\n"
+                "  }\n"
+                "\n"
+                "  AffiliationServiceImpl* service() { return service_.get(); }"
+            ),
+            description="Maho: add time-forward helper for affiliation shutdown regression test",
+            guard="void FastForwardBy(base::TimeDelta delta)",
+        ),
+        Replacement(
+            old=(
+                "TEST_F(AffiliationServiceImplTest, SupportForMultipleRequests) {"
+            ),
+            new=(
+                "TEST_F(AffiliationServiceImplTest,\n"
+                "       ShutdownCancelsDelayedSourceInitialization) {\n"
+                "  auto source =\n"
+                "      std::make_unique<testing::StrictMock<MockAffiliationSource>>(nullptr);\n"
+                "  MockAffiliationSource* source_ptr = source.get();\n"
+                "\n"
+                "  EXPECT_CALL(*source_ptr, StartObserving(_)).Times(0);\n"
+                "  service()->RegisterSource(std::move(source));\n"
+                "\n"
+                "  service()->Shutdown();\n"
+                "  FastForwardBy(base::Seconds(31));\n"
+                "  RunUntilIdle();\n"
+                "}\n"
+                "\n"
+                "TEST_F(AffiliationServiceImplTest, SupportForMultipleRequests) {"
+            ),
+            description="Maho: regression-test delayed affiliation source shutdown",
+            guard="ShutdownCancelsDelayedSourceInitialization",
+        ),
+    ],
     "chrome/browser/ui/views/frame/browser_widget.cc": [
         Replacement(
             old=(
@@ -202,7 +324,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '#include "ui/native_theme/native_theme.h"\n'
             ),
             description="Maho: include maho_space_theme_state.h and native_theme.h in browser_widget.cc",
-            guard='#include "maho/browser/ui/theme/maho_space_theme_state.h"',
+            guard='#include "maho/browser/ui/theme/maho_color_mixer.h"',
         ),
         Replacement(
             old=(
@@ -225,7 +347,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '  // user_color.\n'
             ),
             description="Maho: force window color_mode to follow space theme or OS dark mode",
-            guard="MahoSpaceThemeState::ResolveSidebarDarkMode",
+            guard="key.app_controller = GetMahoOtrSentinel();",
         ),
     ],
     "chrome/browser/ui/views/frame/contents_web_view.cc": [
@@ -319,16 +441,50 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '  "commands.json",\n'
                 '  "extension.json",\n'
                 '  "top_sites.json",\n'
-                '  "//maho/browser/extensions/api/maho_split_view.json",\n'
-                '  "//maho/browser/extensions/api/maho_side_panel.json",\n'
+                '  "maho_split_view.json",\n'
+                '  "maho_side_panel.json",\n'
                 ']\n'
             ),
             description=(
                 "Register Maho extension API schemas (maho.splitView, "
-                "maho.sidePanel) in the uncompiled schema source list so the "
-                "JSON strings and function registration are generated"
+                "maho.sidePanel) in the uncompiled schema source list. The JSONs "
+                "MUST be referenced as local paths (co-located under "
+                "chrome/common/extensions/api via MAHO_SCHEMA_FILE_COPIES) so the "
+                "cpp_bundle_generator's common-source-dir resolves to "
+                "chrome/common/extensions/api and generated_schemas.cc is emitted "
+                "to the GN-declared path Chrome links (not an orphan gen/ path)."
             ),
-            guard='"//maho/browser/extensions/api/maho_split_view.json"',
+            guard='  "maho_split_view.json",',
+        ),
+    ],
+    # ── C1: register the "maho" API permission so chrome.maho.* features
+    #    resolve instead of CHECK-crashing in PermissionSet::HasAPIPermission ──
+    "extensions/common/mojom/api_permission_id.mojom": [
+        Replacement(
+            old=(
+                "  kGlicPrivateInvoke = 266,\n"
+                "\n"
+                "  // Add new entries at the end of the enum and be sure to update the\n"
+            ),
+            new=(
+                "  kGlicPrivateInvoke = 266,\n"
+                "  kMaho = 267,\n"
+                "\n"
+                "  // Add new entries at the end of the enum and be sure to update the\n"
+            ),
+            description="Maho C1: add APIPermissionID kMaho enum value",
+            guard="kMaho = 267,",
+        ),
+    ],
+    "chrome/common/extensions/permissions/chrome_api_permissions.cc": [
+        Replacement(
+            old='    {APIPermissionID::kManagement, "management"},\n',
+            new=(
+                '    {APIPermissionID::kManagement, "management"},\n'
+                '    {APIPermissionID::kMaho, "maho"},\n'
+            ),
+            description="Maho C1: register the maho API permission in the permissions table",
+            guard='{APIPermissionID::kMaho, "maho"}',
         ),
     ],
     "chrome/common/extensions/api/_api_features.override.json": [
@@ -640,6 +796,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
     ],
+
     "chrome/browser/ui/browser_command_controller.cc": [
         Replacement(
             old='#include "base/strings/utf_string_conversions.h"\n',
@@ -743,6 +900,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "    case IDC_CLOSE_TAB:\n"
                 '      base::RecordAction(base::UserMetricsAction("CloseTabByKey"));\n'
+                "      if (browser_->tab_strip_model()->empty()) {\n"
+                "        CloseWindow(browser_);\n"
+                "        break;\n"
+                "      }\n"
                 "      if (auto* maho_browser_view =\n"
                 "              BrowserView::GetBrowserViewForBrowser(browser_);\n"
                 "          maho_browser_view &&\n"
@@ -754,9 +915,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description=(
                 "Route Cmd+W through BrowserView so sidebar multi-selected tabs "
-                "close together instead of only the active tab"
+                "close together instead of only the active tab; close the window "
+                "when the strip is already empty (zero-tab Maho window)"
             ),
-            guard="maho_browser_view->MaybeHandleMultiTabClose()",
+            guard="if (browser_->tab_strip_model()->empty()) {\n        CloseWindow(browser_);",
         ),
         Replacement(
             old=(
@@ -967,6 +1129,31 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/app_controller_mac.mm": [
         Replacement(
             old=(
+                "  BrowserWindowInterface* browser =\n"
+                "      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();\n"
+                "  CHECK(browser);\n"
+                "  return browser;\n"
+            ),
+            new=(
+                "  BrowserWindowInterface* browser =\n"
+                "      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();\n"
+                "  // Maho login gate: NewEmptyWindow() can intentionally show the onboarding\n"
+                "  // gate instead of creating a browser (see browser_commands.cc override), so a\n"
+                "  // null result is legitimate. Tolerate it instead of crashing on CHECK.\n"
+                "  if (!browser) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  return browser;\n"
+            ),
+            description=(
+                "Maho login gate: CreateBrowser tolerates a null browser when "
+                "NewEmptyWindow redirects to the onboarding gate (avoids CHECK crash "
+                "on Incognito/New Window while gated)"
+            ),
+            guard="Maho login gate: NewEmptyWindow() can intentionally show the onboarding",
+        ),
+        Replacement(
+            old=(
                 "// Open the urls in the last used browser from a regular profile.\n"
                 "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
                 "                                  Profile* profile);"
@@ -989,14 +1176,14 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 '#import "chrome/browser/app_controller_mac.h"\n'
-                '#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"\n'
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n'
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
                 '#include "components/prefs/pref_service.h"\n'
                 '#include "chrome/browser/ui/browser_finder.h"\n'
                 '#include "chrome/browser/ui/browser_tabstrip.h"\n'
                 '#include "maho/browser/maho_space_profile_bridge.h"\n'
             ),
-            description="Include Little Arc and Space headers in app_controller_mac.mm",
+            description="Include Maho Mini and Space headers in app_controller_mac.mm",
             guard='#include "maho/browser/maho_space_profile_bridge.h"',
         ),
         Replacement(
@@ -1035,13 +1222,12 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "                }\n"
                 "                if (browser) {\n"
                 "                  maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
-                "                  if (bridge) {\n"
-                "                    bridge->SwitchToSpace(browser, result.space_id);\n"
+                "                  if (bridge && bridge->SwitchToSpace(browser, result.space_id)) {\n"
+                "                    chrome::AddSelectedTabWithURL(browser, url, ui::PAGE_TRANSITION_LINK);\n"
                 "                  }\n"
-                "                  chrome::AddSelectedTabWithURL(browser, url, ui::PAGE_TRANSITION_LINK);\n"
                 "                }\n"
-                "              } else if (result.type == maho::LinkDestinationType::kLittleArc) {\n"
-                "                maho::LaunchLittleArc(profile.get(), maho::LittleArcRequest{url});\n"
+                "              } else if (result.type == maho::LinkDestinationType::kMahoMini) {\n"
+                "                maho::LaunchMahoMini(profile.get(), maho::MahoMiniRequest{url});\n"
                 "              } else {\n"
                 "                std::vector<GURL> urls_fallback = {url};\n"
                 "                OpenUrlsInBrowserWithProfileNormal(urls_fallback, profile.get());\n"
@@ -1060,8 +1246,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  if (!profile)\n"
                 "    return;  // No suitable profile to open the URLs, do nothing."
             ),
-            description="Route external single URL links to ATC Space or Little Arc if configured, with global linkage",
-            guard="DecideLinkDestination(url, /*is_external=*/true",
+            description="Route external single URL links to ATC Space or Maho Mini if configured, with global linkage",
+            guard="DecideLinkDestination(\n        url, /*is_external=*/true",
         ),
         Replacement(
             old=(
@@ -1451,31 +1637,39 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.cc",\n'
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.h",\n'
+                '      "//maho/browser/ui/views/little_'
+                'arc/maho_little_'
+                'arc_window.cc",\n'
+                '      "//maho/browser/ui/views/little_'
+                'arc/maho_little_'
+                'arc_window.h",\n'
             ),
             new=(
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.cc",\n'
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_window.h",\n'
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc",\n'
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h",\n'
+                '      "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",\n'
+                '      "//maho/browser/ui/views/maho_mini/maho_mini_window.h",\n'
+                '      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.cc",\n'
+                '      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h",\n'
                 '      "//maho/browser/net/maho_atc_navigation_throttle.cc",\n'
                 '      "//maho/browser/net/maho_atc_navigation_throttle.h",\n'
             ),
             description=(
-                "Compile the MahoAtcNavigationThrottle and MahoLittleArcTopBarView into the "
+                "Compile the MahoAtcNavigationThrottle and MahoMiniTopBarView into the "
                 "chrome/browser/ui:ui target"
             ),
-            guard='"//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc"',
+            guard='"//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.cc"',
         ),
         Replacement(
             old=(
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc",\n'
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h",\n'
+                '      "//maho/browser/ui/views/little_'
+                'arc/maho_little_'
+                'arc_top_bar_view.cc",\n'
+                '      "//maho/browser/ui/views/little_'
+                'arc/maho_little_'
+                'arc_top_bar_view.h",\n'
             ),
             new=(
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.cc",\n'
-                '      "//maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h",\n'
+                '      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.cc",\n'
+                '      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h",\n'
                 '      "//maho/browser/ui/views/maho_content_gradient_view.cc",\n'
                 '      "//maho/browser/ui/views/maho_content_gradient_view.h",\n'
             ),
@@ -1561,6 +1755,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.cc",\n',
         ),
         Replacement(
+            old=(
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_card.h",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_card.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h",\n'
+            ),
+            description="Compile Maho now playing coordinator and factory in chrome/browser/ui:ui target",
+            guard='      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.cc",\n',
+        ),
+        Replacement(
             old='      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",\n',
             new=(
                 '      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",\n'
@@ -1592,24 +1800,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
                 '#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"\n'
+                '#include "maho/browser/mail_helper/maho_mail_service.h"\n'
             ),
             description=(
-                "Include maho_ctrl_tab_prefs.h in browser_prefs.cc for pref "
-                "registration of Ctrl+Tab MRU switcher settings"
+                "Include maho_ctrl_tab_prefs.h and maho_mail_service.h in browser_prefs.cc for pref "
+                "registration of Ctrl+Tab MRU switcher and Mail service settings"
             ),
-            guard='#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"',
+            guard='#include "maho/browser/mail_helper/maho_mail_service.h"',
         ),
         Replacement(
             old='  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n',
             new=(
                 '  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n'
                 '  maho::ctrl_tab_prefs::RegisterProfilePrefs(registry);\n'
+                '  maho::MahoMailService::RegisterProfilePrefs(registry);\n'
             ),
             description=(
-                "Register Ctrl+Tab MRU switcher prefs (mru_order, scope, "
-                "max_visible) alongside the other Maho profile prefs"
+                "Register Ctrl+Tab MRU switcher prefs and MahoMailService prefs "
+                "alongside the other Maho profile prefs"
             ),
-            guard="maho::ctrl_tab_prefs::RegisterProfilePrefs",
+            guard="maho::MahoMailService::RegisterProfilePrefs",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_view.h": [
@@ -1897,9 +2107,9 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    // Glasses identity and fixed private semantic colors into the\n"
                 "    // already-built sidebar. Regular/Guest/other-OTR are untouched.\n"
                 "    if (Profile* maho_private_profile = browser_->profile();\n"
-                "        maho_private_profile &&\n"
-                "        maho_private_profile->IsIncognitoProfile() &&\n"
-                "        maho_private_profile->IsPrimaryOTRProfile()) {\n"
+                "        MahoIsCapabilityAllowed(\n"
+                "            maho_private_profile,\n"
+                "            MahoPrivateCapability::kPrivateVisuals)) {\n"
                 "      if (auto* maho_private_container =\n"
                 "              views::AsViewClass<maho::MahoSidebarContainerView>(\n"
                 "                  maho_sidebar_container_)) {\n"
@@ -1929,6 +2139,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Include MahoCtrlTabSwitcherController header in browser_view.cc"
             ),
             guard='#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"',
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"\n',
+            new=(
+                '#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"\n'
+                '#include "maho/browser/maho_private_context_policy.h"\n'
+            ),
+            description=(
+                "Include MahoIsCapabilityAllowed policy header in browser_view.cc "
+                "for the kPrivateVisuals SetPrivateAppearance guard"
+            ),
+            guard='#include "maho/browser/maho_private_context_policy.h"',
         ),
         Replacement(
             old=(
@@ -2621,12 +2843,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '#include "chrome/browser/ui/browser.h"\n'
                 '#include "maho/browser/maho_browser_main_extra_parts.h"\n'
-                '#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"\n'
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n'
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
                 '#include "components/prefs/pref_service.h"\n'
                 '#include "maho/browser/maho_space_profile_bridge.h"'
             ),
             description="Include Maho headers in browser.cc",
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/maho_browser_main_extra_parts.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/maho_browser_main_extra_parts.h"\n'
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+            ),
+            description="Include Maho ATC state in browser.cc after the Maho include block is already present",
+            guard='#include "maho/browser/net/maho_atc_state.h"',
         ),
         Replacement(
             old=(
@@ -2650,9 +2884,9 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      !params.started_from_context_menu &&\n"
                 "      ui::PageTransitionCoreTypeIs(params.transition, ui::PAGE_TRANSITION_LINK)) {\n"
                 "    bool override_enabled = profile()->GetPrefs()->GetBoolean(\n"
-                "        maho::sidebar_prefs::kLittleArcClickOverrideEnabled);\n"
+                "        maho::sidebar_prefs::kMahoMiniClickOverrideEnabled);\n"
                 "    if (override_enabled) {\n"
-                "      maho::LaunchLittleArc(profile(), maho::LittleArcRequest{params.url});\n"
+                "      maho::LaunchMahoMini(profile(), maho::MahoMiniRequest{params.url});\n"
                 "      return nullptr;\n"
                 "    } else {\n"
                 "      content::OpenURLParams demoted_params = params;\n"
@@ -2680,10 +2914,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    bool is_top_level = ui::PageTransitionIsMainFrame(params.transition) &&\n"
                 "                        !ui::PageTransitionIsRedirect(params.transition);\n"
                 "    bool is_user_initiated = !params.is_renderer_initiated || params.user_gesture;\n"
-                "    bool is_little_arc_gesture = (params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&\n"
+                "    bool is_maho_mini_gesture = (params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&\n"
                 "                                  !params.started_from_context_menu &&\n"
                 "                                  ui::PageTransitionCoreTypeIs(params.transition, ui::PAGE_TRANSITION_LINK));\n"
-                "    if (is_top_level && is_user_initiated && !is_little_arc_gesture) {\n"
+                "    if (is_top_level && is_user_initiated && !is_maho_mini_gesture) {\n"
                 "      std::string current_space_id;\n"
                 "      maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
                 "      if (bridge) {\n"
@@ -2710,8 +2944,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "                    !result.space_id.empty() &&\n"
                 "                    result.space_id != current_space_id) {\n"
                 "                  maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
-                "                  if (bridge) {\n"
-                "                    bridge->SwitchToSpace(browser.get(), result.space_id);\n"
+                "                  if (bridge && bridge->SwitchToSpace(browser.get(), result.space_id)) {\n"
                 "                    // R-9: AddSelectedTabWithURL creates a new tab in the target space.\n"
                 "                    // The callback is intentionally not propagated across space boundaries as a new tab is created.\n"
                 "                    chrome::AddSelectedTabWithURL(browser.get(), params.url, params.transition);\n"
@@ -3201,7 +3434,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // through NewEmptyWindow via CreateBrowser in app_controller_mac.mm).\n"
                 "  if (Profile* gate_profile =\n"
                 "          profile ? profile->GetOriginalProfile() : nullptr;\n"
-                "      gate_profile &&\n"
+                "      gate_profile && !profile->IsOffTheRecord() &&\n"
                 "      gate_profile->GetPrefs()->GetBoolean(\"maho.auth.login_gate_active\")) {\n"
                 "    maho::MahoWelcomeWindow::Show(gate_profile);\n"
                 "    return;\n"
@@ -3438,6 +3671,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard='#include "maho/browser/net/maho_ad_block_throttle.h"',
         ),
+        # ── Ad-block request util include (independent guard) ──────────────────
+        Replacement(
+            old='#include "maho/browser/net/maho_ad_block_tab_helper.h"\n',
+            new=(
+                '#include "maho/browser/net/maho_ad_block_tab_helper.h"\n'
+                '#include "maho/browser/net/maho_ad_block_request_util.h"\n'
+            ),
+            description=(
+                "Insert Maho ad-block request util include into "
+                "chrome_content_browser_client.cc for request-aware block counts"
+            ),
+            guard='#include "maho/browser/net/maho_ad_block_request_util.h"',
+        ),
         # ── Subresource ad-block proxy include (independent guard) ─────────────
         Replacement(
             old='#include "maho/browser/net/maho_ad_block_throttle.h"\n',
@@ -3464,20 +3710,33 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // tab closes between throttle construction and the first network\n"
                 "  // request, closing the UAF window identified in audit finding H1.\n"
                 "  if (maho::GetCore()) {\n"
-                "    base::RepeatingClosure on_blocked;\n"
+                "    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;\n"
                 "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
                 "    if (wc) {\n"
                 "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
                 "      MahoAdBlockTabHelper* helper =\n"
                 "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
                 "      if (helper) {\n"
+                "        content::GlobalRenderFrameHostId page_id;\n"
+                "        // If no primary main frame is available, page_id stays invalid\n"
+                "        // and RecordBlockedRequest ignores the callback conservatively.\n"
+                "        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {\n"
+                "          page_id = main_frame->GetGlobalId();\n"
+                "        }\n"
                 "        on_blocked = base::BindRepeating(\n"
-                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak) {\n"
+                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak,\n"
+                "               content::GlobalRenderFrameHostId page_id,\n"
+                "               const network::ResourceRequest& request) {\n"
                 "              if (weak) {\n"
-                "                weak->IncrementBlockedCount();\n"
+                "                MahoBlockedRequestInfo info;\n"
+                "                info.page_id = page_id;\n"
+                "                info.destination = request.destination;\n"
+                "                info.is_outermost_main_frame = request.is_outermost_main_frame;\n"
+                "                info.request_type = maho::MapRequestToFilterType(request);\n"
+                "                weak->RecordBlockedRequest(info);\n"
                 "              }\n"
                 "            },\n"
-                "            helper->GetWeakPtr());\n"
+                "            helper->GetWeakPtr(), page_id);\n"
                 "      }\n"
                 "    }\n"
                 "    result.push_back(\n"
@@ -3492,6 +3751,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "base::Unretained(helper) to eliminate UAF window (audit H1 fix)"
             ),
             guard="maho::GetCore()",
+        ),
+        # ── Update already-applied ad-block throttle callback ──────────────────
+        Replacement(
+            old=(
+                "  if (maho::GetCore()) {\n"
+                "    base::RepeatingClosure on_blocked;\n"
+                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
+                "    if (wc) {\n"
+                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
+                "      MahoAdBlockTabHelper* helper =\n"
+                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
+                "      if (helper) {\n"
+                "        on_blocked = base::BindRepeating(\n"
+                "            &MahoAdBlockTabHelper::IncrementBlockedCount,\n"
+                "            helper->GetWeakPtr());\n"
+                "      }\n"
+                "    }\n"
+                "    result.push_back(\n"
+                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (maho::GetCore()) {\n"
+                "    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;\n"
+                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
+                "    if (wc) {\n"
+                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
+                "      MahoAdBlockTabHelper* helper =\n"
+                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
+                "      if (helper) {\n"
+                "        content::GlobalRenderFrameHostId page_id;\n"
+                "        // If no primary main frame is available, page_id stays invalid\n"
+                "        // and RecordBlockedRequest ignores the callback conservatively.\n"
+                "        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {\n"
+                "          page_id = main_frame->GetGlobalId();\n"
+                "        }\n"
+                "        on_blocked = base::BindRepeating(\n"
+                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak,\n"
+                "               content::GlobalRenderFrameHostId page_id,\n"
+                "               const network::ResourceRequest& request) {\n"
+                "              if (weak) {\n"
+                "                MahoBlockedRequestInfo info;\n"
+                "                info.page_id = page_id;\n"
+                "                info.destination = request.destination;\n"
+                "                info.is_outermost_main_frame = request.is_outermost_main_frame;\n"
+                "                info.request_type = maho::MapRequestToFilterType(request);\n"
+                "                weak->RecordBlockedRequest(info);\n"
+                "              }\n"
+                "            },\n"
+                "            helper->GetWeakPtr(), page_id);\n"
+                "      }\n"
+                "    }\n"
+                "    result.push_back(\n"
+                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
+                "  }\n"
+            ),
+            description=(
+                "Update already-applied MahoAdBlockThrottle callback to pass "
+                "request context into page-scoped blocked-count recording"
+            ),
+            guard="weak->RecordBlockedRequest(info);",
         ),
         # ── Subresource ad-block proxy in WillCreateURLLoaderFactory() ─────────
         Replacement(
@@ -3552,13 +3872,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
                 '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
-                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+                '#include "maho/browser/net/maho_atc_state.h"\n'
             ),
             description=(
                 "Insert MahoAtcNavigationThrottle and MahoAtcState includes into "
                 "chrome_content_browser_client.cc"
             ),
             guard='#include "maho/browser/net/maho_atc_navigation_throttle.h"',
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+            ),
+            description="Include Maho ATC state beside the navigation throttle after the throttle include is already present",
+            guard='#include "maho/browser/net/maho_atc_state.h"',
         ),
         Replacement(
             old=(
@@ -3660,6 +3991,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             idempotent=True,
         ),
         Replacement(
+            old='      "//maho/browser/ui/views/sidebar:interactive_tests",\n',
+            new=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+                '      "//maho/browser/ui/views/shields:interactive_tests",\n'
+            ),
+            description="Include Maho Shield bubble interactive tests in Chromium interactive_ui_tests deps",
+            guard='"//maho/browser/ui/views/shields:interactive_tests"',
+        ),
+        Replacement(
             old='      "//maho/browser/ui/views/spaces_overlay:unit_tests",\n',
             new=(
                 '      "//maho/browser/ui/views/spaces_overlay:unit_tests",\n'
@@ -3693,6 +4033,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "unit tests (task-9-ai-unit) in Chromium unit_tests"
             ),
             guard='"//maho/browser:maho_ai_runtime_router_unittests"',
+        ),
+        Replacement(
+            old='      "//maho/browser:maho_ai_llm_client_unittests",\n',
+            new=(
+                '      "//maho/browser:maho_ai_llm_client_unittests",\n'
+                '      "//maho/browser/net:maho_ad_block_tab_helper_unittests",\n'
+            ),
+            description=(
+                "Include Maho ad-block tab helper request-context unit tests "
+                "in Chromium unit_tests"
+            ),
+            guard='"//maho/browser/net:maho_ad_block_tab_helper_unittests"',
         ),
         Replacement(
             old='      "//chrome/browser/ui/views/toolbar:browser_tests",\n',
@@ -3812,6 +4164,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Add CMD+SHIFT+Y mapping for IDC_SHOW_HISTORY in hidden shortcuts",
         ),
+        Replacement(
+            old=(
+                '      {true,  false, false, true,  kVK_RightArrow,        IDC_SELECT_NEXT_TAB},\n'
+                '      {true,  false, false, true,  kVK_LeftArrow,         IDC_SELECT_PREVIOUS_TAB},\n'
+            ),
+            new="",
+            description=(
+                "Maho(mac): remove Chromium's Cmd+Option+Arrow hidden tab "
+                "shortcuts so Maho next_space/prev_space accelerators own "
+                "those key combinations"
+            ),
+            idempotent=True,
+        ),
     ],
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": [
         Replacement(
@@ -3857,6 +4222,79 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '}\n'
             ),
             description="Assert CMD+SHIFT+Y and CMD+Y both resolve to IDC_SHOW_HISTORY",
+            guard="HistoryShortcuts",
+        ),
+        Replacement(
+            old=(
+                '  EXPECT_EQ(menu_accelerator->key_code(), ui::VKEY_Y);\n'
+                '  EXPECT_EQ(menu_accelerator->modifiers(), ui::EF_COMMAND_DOWN);\n'
+                '}\n'
+            ),
+            new=(
+                '  EXPECT_EQ(menu_accelerator->key_code(), ui::VKEY_Y);\n'
+                '  EXPECT_EQ(menu_accelerator->modifiers(), ui::EF_COMMAND_DOWN);\n'
+                '}\n'
+                '\n'
+                'TEST(GlobalKeyboardShortcuts, MahoSpaceArrowShortcutsAreNotChromeTabShortcuts) {\n'
+                '  EXPECT_EQ(\n'
+                '      NO_COMMAND,\n'
+                '      CommandForKeys(kVK_RightArrow, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kDown, ControlKeyState::kUp));\n'
+                '  EXPECT_EQ(\n'
+                '      NO_COMMAND,\n'
+                '      CommandForKeys(kVK_LeftArrow, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kDown, ControlKeyState::kUp));\n'
+                '}\n'
+            ),
+            description=(
+                "Assert Cmd+Option+Arrow remains available for Maho Space "
+                "switching instead of Chromium tab switching"
+            ),
+            guard="MahoSpaceArrowShortcutsAreNotChromeTabShortcuts",
+        ),
+        Replacement(
+            old=(
+                'TEST(GlobalKeyboardShortcuts, MahoSpaceArrowShortcutsAreNotChromeTabShortcuts) {\n'
+                '  EXPECT_EQ(\n'
+                '      NO_COMMAND,\n'
+                '      CommandForKeys(kVK_RightArrow, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kDown, ControlKeyState::kUp));\n'
+                '  EXPECT_EQ(\n'
+                '      NO_COMMAND,\n'
+                '      CommandForKeys(kVK_LeftArrow, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kDown, ControlKeyState::kUp));\n'
+                '}\n'
+                '\n'
+                'TEST(GlobalKeyboardShortcuts, HistoryShortcuts) {\n'
+                '  // Test Command+Shift+Y resolves to IDC_SHOW_HISTORY (registered as a non-menu shortcut)\n'
+                '  EXPECT_EQ(\n'
+                '      IDC_SHOW_HISTORY,\n'
+                '      CommandForKeys(kVK_ANSI_Y, CommandKeyState::kDown, ShiftKeyState::kDown,\n'
+                '                     OptionKeyState::kUp, ControlKeyState::kUp));\n'
+                '\n'
+                '  // Test Command+Y is mapped to IDC_SHOW_HISTORY in AcceleratorsCocoa\n'
+                '  const ui::Accelerator* menu_accelerator =\n'
+                '      AcceleratorsCocoa::GetInstance()->GetAcceleratorForCommand(\n'
+                '          IDC_SHOW_HISTORY);\n'
+                '  ASSERT_TRUE(menu_accelerator);\n'
+                '  EXPECT_EQ(menu_accelerator->key_code(), ui::VKEY_Y);\n'
+                '  EXPECT_EQ(menu_accelerator->modifiers(), ui::EF_COMMAND_DOWN);\n'
+                '}\n'
+            ),
+            new=(
+                'TEST(GlobalKeyboardShortcuts, MahoSpaceArrowShortcutsAreNotChromeTabShortcuts) {\n'
+                '  EXPECT_EQ(\n'
+                '      NO_COMMAND,\n'
+                '      CommandForKeys(kVK_RightArrow, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kDown, ControlKeyState::kUp));\n'
+                '  EXPECT_EQ(\n'
+                '      NO_COMMAND,\n'
+                '      CommandForKeys(kVK_LeftArrow, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kDown, ControlKeyState::kUp));\n'
+                '}\n'
+            ),
+            description="Remove duplicate HistoryShortcuts block from prior combined injection",
+            idempotent=True,
         ),
     ],
     "base/trace_event/builtin_categories.h": [
@@ -4731,8 +5169,12 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '#include "chrome/browser/webdata_services/web_data_service_factory.h"\n'
                 '#include "maho/browser/mail_helper/maho_mail_service_factory.h"\n'
                 '#include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h"\n'
+                '#include "maho/browser/net/maho_content_blocker_update_service_factory.h"\n'
+                '#include "maho/browser/net/maho_shield_site_state_factory.h"\n'
             ),
             description="Include Maho service factories in profiles.cc",
+            guard='#include "maho/browser/net/maho_shield_site_state_factory.h"\n',
         ),
         Replacement(
             old='  WebDataServiceFactory::GetInstance();\n',
@@ -4740,8 +5182,12 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '  WebDataServiceFactory::GetInstance();\n'
                 '  maho::MahoMailServiceFactory::GetInstance();\n'
                 '  maho::MahoDownloadBridgeServiceFactory::GetInstance();\n'
+                '  maho::MahoNowPlayingCoordinatorFactory::GetInstance();\n'
+                '  maho::MahoContentBlockerUpdateServiceFactory::GetInstance();\n'
+                '  maho::MahoShieldSiteStateFactory::GetInstance();\n'
             ),
             description="Initialize Maho service factories in profiles.cc",
+            guard='  maho::MahoShieldSiteStateFactory::GetInstance();\n',
         ),
     ],
     "chrome/browser/ui/views/frame/contents_container_outline.h": [
@@ -4765,9 +5211,43 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/renderer_context_menu/render_view_context_menu.cc": [
         Replacement(
-            old='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_LITTLE_ARC, u"Open in Little Arc");',
-            new='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_LITTLE_ARC, u"Open in Maho Mini");',
+            old=(
+                '#include "maho/browser/ui/views/little_'
+                'arc/maho_little_'
+                'arc_window.h"\n'
+            ),
+            new='#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n',
+            description="Maho: update Maho Mini include in render_view_context_menu.cc",
+            guard='maho_mini_window.h',
+            idempotent=True,
+        ),
+        Replacement(
+            old='IDC_MAHO_LINK_OPEN_' 'LITTLE_' 'ARC',
+            new='IDC_MAHO_LINK_OPEN_MAHO_MINI',
+            description="Maho: update Maho Mini context-menu command id in render_view_context_menu.cc",
+            guard='IDC_MAHO_LINK_OPEN_MAHO_MINI',
+            idempotent=True,
+        ),
+        Replacement(
+            old='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_' 'LITTLE_' 'ARC, u"Open in Maho Mini");',
+            new='      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_MAHO_MINI, u"Open in Maho Mini");',
             description="Maho: Rename context menu item to Open in Maho Mini",
+        ),
+        Replacement(
+            old=(
+                '      maho::Launch'
+                'Little'
+                'Arc(browser_context_, maho::'
+                'Little'
+                'ArcRequest{params_.link_url});'
+            ),
+            new=(
+                '      maho::LaunchMahoMini(browser_context_, '
+                'maho::MahoMiniRequest{params_.link_url});'
+            ),
+            description="Maho: route context-menu command through Maho Mini launch API",
+            guard='maho::LaunchMahoMini(browser_context_',
+            idempotent=True,
         ),
     ],
     "chrome/browser/ui/browser.h": [
@@ -4780,10 +5260,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    // Document Picture in Picture options, specific to TYPE_PICTURE_IN_PICTURE.\n"
                 "    std::optional<blink::mojom::PictureInPictureWindowOptions> pip_options;\n"
                 "\n"
-                "    bool is_little_arc = false;\n"
+                "    bool is_maho_mini = false;\n"
             ),
-            description="Maho: Add is_little_arc to CreateParams",
-            guard="bool is_little_arc = false;",
+            description="Maho: Add is_maho_mini to CreateParams",
+            guard="bool is_maho_mini = false;",
         ),
         Replacement(
             old=(
@@ -4792,10 +5272,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  ~Browser() override;\n"
                 "\n"
-                "  bool is_little_arc() const { return is_little_arc_; }\n"
+                "  bool is_maho_mini() const { return is_maho_mini_; }\n"
             ),
-            description="Maho: Add is_little_arc getter to Browser",
-            guard="is_little_arc() const",
+            description="Maho: Add is_maho_mini getter to Browser",
+            guard="is_maho_mini() const",
         ),
         Replacement(
             old=(
@@ -4806,10 +5286,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // This Browser's type.\n"
                 "  const Type type_;\n"
                 "\n"
-                "  const bool is_little_arc_;\n"
+                "  const bool is_maho_mini_;\n"
             ),
-            description="Maho: Add is_little_arc_ member to Browser",
-            guard="const bool is_little_arc_;",
+            description="Maho: Add is_maho_mini_ member to Browser",
+            guard="const bool is_maho_mini_;",
         ),
     ],
     "chrome/browser/ui/browser.cc": [
@@ -4824,11 +5304,11 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Browser::Browser(const CreateParams& params)\n"
                 "    : create_params_(params),\n"
                 "      type_(params.type),\n"
-                "      is_little_arc_(params.is_little_arc),\n"
+                "      is_maho_mini_(params.is_maho_mini),\n"
                 "      profile_(params.profile),\n"
             ),
-            description="Maho: Initialize is_little_arc_ in Browser constructor",
-            guard="is_little_arc_(params.is_little_arc)",
+            description="Maho: Initialize is_maho_mini_ in Browser constructor",
+            guard="is_maho_mini_(params.is_maho_mini)",
         ),
         Replacement(
             old=(
@@ -4839,13 +5319,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
                 "                                        bool check_can_support) const {\n"
-                "  if (is_little_arc()) {\n"
+                "  if (is_maho_mini()) {\n"
                 "    return false;\n"
                 "  }\n"
                 "  switch (type_) {\n"
             ),
-            description="Maho: Disable window features for Little Arc windows",
-            guard="if (is_little_arc()) {",
+            description="Maho: Disable window features for Maho Mini windows",
+            guard="if (is_maho_mini()) {",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_native_widget_mac.mm": [
@@ -4868,37 +5348,37 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  } else if (browser_view_->GetIsNormalType() ||\n"
                 "             browser_view_->GetIsWebAppType() ||\n"
-                "             browser_view_->browser()->is_little_arc()) {\n"
+                "             browser_view_->browser()->is_maho_mini()) {\n"
                 "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
                 "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
                 "\n"
                 "    // Ensure tabstrip/profile button are visible.\n"
                 "    params->titlebar_appears_transparent = true;\n"
                 "\n"
-                "    if (browser_view_->browser()->is_little_arc()) {\n"
+                "    if (browser_view_->browser()->is_maho_mini()) {\n"
                 "      params->window_title_hidden = true;\n"
                 "    } else if (browser_view_->GetIsWebAppType()) {\n"
                 "      params->window_title_hidden = true;\n"
                 "    }\n"
                 "  } else {\n"
             ),
-            description="Maho: Style Little Arc window with transparent titlebar and full size content",
-            guard="browser_view_->browser()->is_little_arc()",
+            description="Maho: Style Maho Mini window with transparent titlebar and full size content",
+            guard="browser_view_->browser()->is_maho_mini()",
         ),
         Replacement(
             old=(
-                "    // height reported here; report the 38dip Little Arc top bar\n"
+                "    // height reported here; report the 38dip Maho Mini top bar\n"
                 "    // height so they center on its midline, not near the top edge.\n"
                 "    *override_titlebar_height = true;\n"
                 "    *titlebar_height = 38;\n"
             ),
             new=(
-                "    // height reported here; report the 46dip Little Arc top bar\n"
+                "    // height reported here; report the 46dip Maho Mini top bar\n"
                 "    // height so they center on its midline, not near the top edge.\n"
                 "    *override_titlebar_height = true;\n"
                 "    *titlebar_height = 46;\n"
             ),
-            description="Maho: Raise an existing Little Arc titlebar override to 46dip",
+            description="Maho: Raise an existing Maho Mini titlebar override to 46dip",
             idempotent=True,
             guard="*titlebar_height = 46;",
         ),
@@ -4914,9 +5394,9 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    bool* override_titlebar_height,\n"
                 "    float* titlebar_height) {\n"
                 "  if (browser_view_ && browser_view_->browser() &&\n"
-                "      browser_view_->browser()->is_little_arc()) {\n"
+                "      browser_view_->browser()->is_maho_mini()) {\n"
                 "    // Maho: macOS centers the traffic lights within the titlebar\n"
-                "    // height reported here; report the 46dip Little Arc top bar\n"
+                "    // height reported here; report the 46dip Maho Mini top bar\n"
                 "    // height so they center on its midline, not near the top edge.\n"
                 "    *override_titlebar_height = true;\n"
                 "    *titlebar_height = 46;\n"
@@ -4924,7 +5404,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }\n"
                 "  if (browser_view_ && browser_view_->browser_widget() &&\n"
             ),
-            description="Maho: Center traffic lights in Little Arc 46dip top bar",
+            description="Maho: Center traffic lights in Maho Mini 46dip top bar",
             guard="*titlebar_height = 46;",
         ),
     ],
@@ -4941,13 +5421,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
                 "  // of the client area.\n"
-                "  if ((GetBrowserView()->browser()->is_type_popup() && !GetBrowserView()->browser()->is_little_arc()) ||\n"
+                "  if ((GetBrowserView()->browser()->is_type_popup() && !GetBrowserView()->browser()->is_maho_mini()) ||\n"
                 "      GetBrowserView()->browser()->is_type_devtools()) {\n"
                 "    return result;\n"
                 "  }\n"
             ),
-            description="Maho: Allow caption button bounds for Little Arc popups",
-            guard="!GetBrowserView()->browser()->is_little_arc()",
+            description="Maho: Allow caption button bounds for Maho Mini popups",
+            guard="!GetBrowserView()->browser()->is_maho_mini()",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_view.h": [
@@ -4972,15 +5452,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // Maho: left sidebar host container.\n"
                 "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
                 "\n"
-                "  raw_ptr<views::View> maho_little_arc_top_bar_ = nullptr;\n"
+                "  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n"
             ),
-            description="Maho: Add maho_little_arc_top_bar_ to BrowserView",
-            guard="maho_little_arc_top_bar_",
+            description="Maho: Add maho_mini_top_bar_ to BrowserView",
+            guard="maho_mini_top_bar_",
         ),
         Replacement(
-            old="  raw_ptr<views::View> maho_little_arc_top_bar_ = nullptr;\n",
+            old="  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n",
             new=(
-                "  raw_ptr<views::View> maho_little_arc_top_bar_ = nullptr;\n"
+                "  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n"
                 "\n"
                 "  raw_ptr<maho::MahoContentGradientView>\n"
                 "      maho_content_gradient_view_ = nullptr;\n"
@@ -4998,15 +5478,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-                '#include "maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h"\n'
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n'
             ),
-            description="Maho: Include maho_little_arc_top_bar_view.h in browser_view.cc",
-            guard="maho_little_arc_top_bar_view.h",
+            description="Maho: Include maho_mini_top_bar_view.h in browser_view.cc",
+            guard="maho_mini_top_bar_view.h",
         ),
         Replacement(
-            old='#include "maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h"\n',
+            old='#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n',
             new=(
-                '#include "maho/browser/ui/views/little_arc/maho_little_arc_top_bar_view.h"\n'
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n'
                 '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
             ),
             description="Maho: Include maho_content_gradient_view.h in browser_view.cc",
@@ -5045,13 +5525,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  contents_container_ = AddChildView(std::move(contents_container));\n"
                 "  set_contents_view(contents_container_);\n"
                 "\n"
-                "  if (browser_->is_little_arc()) {\n"
-                "    maho_little_arc_top_bar_ = AddChildView(\n"
-                "        std::make_unique<maho::MahoLittleArcTopBarView>(browser_.get(), this));\n"
+                "  if (browser_->is_maho_mini()) {\n"
+                "    maho_mini_top_bar_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoMiniTopBarView>(browser_.get(), this));\n"
                 "  }\n"
             ),
-            description="Maho: Initialize maho_little_arc_top_bar_ in BrowserView::InitViews",
-            guard="maho_little_arc_top_bar_ = AddChildView",
+            description="Maho: Initialize maho_mini_top_bar_ in BrowserView::InitViews",
+            guard="maho_mini_top_bar_ = AddChildView",
         ),
         Replacement(
             old=(
@@ -5123,19 +5603,49 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
                 "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
-                "  layout_views.maho_little_arc_top_bar = maho_little_arc_top_bar_;\n"
+                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
                 "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
             ),
-            description="Maho: Populate maho_little_arc_top_bar in layout_views",
-            guard="layout_views.maho_little_arc_top_bar =",
+            description="Maho: Populate maho_mini_top_bar in layout_views",
+            guard="layout_views.maho_mini_top_bar =",
         ),
         Replacement(
             old=(
-                "  layout_views.maho_little_arc_top_bar = maho_little_arc_top_bar_;\n"
+                "  gfx::Point point_in_browser_view_coords(point);\n"
+                "  views::View::ConvertPointToTarget(parent(), this,\n"
+                "                                    &point_in_browser_view_coords);\n"
+            ),
+            new=(
+                "  gfx::Point point_in_browser_view_coords(point);\n"
+                "  views::View::ConvertPointToTarget(parent(), this,\n"
+                "                                    &point_in_browser_view_coords);\n"
+                "\n"
+                "  // Maho: the Maho Mini top bar sits inside the macOS full-size\n"
+                "  // titlebar drag region. Consult its caption hit-test so the address\n"
+                "  // field and action buttons register as client area instead of being\n"
+                "  // swallowed as window-drag caption.\n"
+                "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
+                "    gfx::Point test_point(point);\n"
+                "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
+                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
+                "              maho_mini_top_bar_)\n"
+                "              ->IsPositionInWindowCaption(test_point)) {\n"
+                "        return HTCAPTION;\n"
+                "      }\n"
+                "      return HTCLIENT;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description="Maho: Consult Maho Mini top bar caption hit-test in NonClientHitTest",
+            guard="static_cast<maho::MahoMiniTopBarView*>(",
+        ),
+        Replacement(
+            old=(
+                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
                 "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
             ),
             new=(
-                "  layout_views.maho_little_arc_top_bar = maho_little_arc_top_bar_;\n"
+                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
                 "  layout_views.maho_content_gradient_view = maho_content_gradient_view_;\n"
                 "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
             ),
@@ -5185,15 +5695,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\n"
                 "  raw_ptr<views::View> maho_create_space_blank_view = nullptr;\n"
                 "\n"
-                "  raw_ptr<views::View> maho_little_arc_top_bar = nullptr;\n"
+                "  raw_ptr<views::View> maho_mini_top_bar = nullptr;\n"
             ),
-            description="Maho: Add maho_little_arc_top_bar to BrowserViewLayoutViews",
-            guard="maho_little_arc_top_bar = nullptr;",
+            description="Maho: Add maho_mini_top_bar to BrowserViewLayoutViews",
+            guard="maho_mini_top_bar = nullptr;",
         ),
         Replacement(
-            old="  raw_ptr<views::View> maho_little_arc_top_bar = nullptr;\n",
+            old="  raw_ptr<views::View> maho_mini_top_bar = nullptr;\n",
             new=(
-                "  raw_ptr<views::View> maho_little_arc_top_bar = nullptr;\n"
+                "  raw_ptr<views::View> maho_mini_top_bar = nullptr;\n"
                 "\n"
                 "  raw_ptr<views::View> maho_content_gradient_view = nullptr;\n"
             ),
@@ -5292,14 +5802,14 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         Replacement(
             old="    return gfx::Size(400, 38 + 1);\n",
             new="    return gfx::Size(400, 46 + 1);\n",
-            description="Maho: Raise an existing Little Arc minimum height to 46dip",
+            description="Maho: Raise an existing Maho Mini minimum height to 46dip",
             idempotent=True,
             guard="return gfx::Size(400, 46 + 1);",
         ),
         Replacement(
             old="    top_bar_bounds.set_height(38);\n",
             new="    top_bar_bounds.set_height(46);\n",
-            description="Maho: Raise an existing Little Arc layout height to 46dip",
+            description="Maho: Raise an existing Maho Mini layout height to 46dip",
             idempotent=True,
             guard="top_bar_bounds.set_height(46);",
         ),
@@ -5312,7 +5822,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\n"
                 '#include "chrome/browser/ui/browser.h"\n'
             ),
-            description="Maho: Include Browser for is_little_arc() calls in popup layout",
+            description="Maho: Include Browser for is_maho_mini() calls in popup layout",
             guard='#include "chrome/browser/ui/browser.h"',
         ),
         Replacement(
@@ -5324,17 +5834,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  BrowserLayoutParams params = browser_params;\n"
                 "\n"
-                "  if (views().maho_little_arc_top_bar && views().maho_little_arc_top_bar->GetVisible()) {\n"
+                "  if (views().maho_mini_top_bar && views().maho_mini_top_bar->GetVisible()) {\n"
                 "    gfx::Rect top_bar_bounds = params.visual_client_area;\n"
                 "    top_bar_bounds.set_height(46);\n"
-                "    layout.AddChild(views().maho_little_arc_top_bar, top_bar_bounds);\n"
+                "    layout.AddChild(views().maho_mini_top_bar, top_bar_bounds);\n"
                 "    params.SetTop(top_bar_bounds.bottom());\n"
                 "  }\n"
                 "\n"
                 "  // Lay out the top container if it's in the browser (even if it's empty).\n"
             ),
-            description="Maho: Lay out maho_little_arc_top_bar in CalculateProposedLayout",
-            guard="views().maho_little_arc_top_bar &&",
+            description="Maho: Lay out maho_mini_top_bar in CalculateProposedLayout",
+            guard="views().maho_mini_top_bar &&",
         ),
         Replacement(
             old=(
@@ -5353,15 +5863,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    bool needs_exclusion) const {\n"
                 "  const int original_top = params.visual_client_area.y();\n"
                 "\n"
-                "  if (browser()->is_little_arc()) {\n"
+                "  if (browser()->is_maho_mini()) {\n"
                 "    return gfx::Rect(params.visual_client_area.x(), original_top,\n"
                 "                     params.visual_client_area.width(), 0);\n"
                 "  }\n"
                 "\n"
                 "  // Layout starts beneath the caption buttons because title is laid out by the\n"
             ),
-            description="Maho: Zero top container height for Little Arc in CalculateTopContainerLayout",
-            guard="if (browser()->is_little_arc()) {",
+            description="Maho: Zero top container height for Maho Mini in CalculateTopContainerLayout",
+            guard="if (browser()->is_maho_mini()) {",
         ),
         Replacement(
             old=(
@@ -5373,7 +5883,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "                       toolbar_size.height() + separator_height);\n"
             ),
             new=(
-                "  if (browser()->is_little_arc()) {\n"
+                "  if (browser()->is_maho_mini()) {\n"
                 "    return gfx::Size(400, 46 + 1);\n"
                 "  }\n"
                 "\n"
@@ -5384,8 +5894,134 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "                   kMinContentsSize.height() + caption_size.height() +\n"
                 "                       toolbar_size.height() + separator_height);\n"
             ),
-            description="Maho: Add custom minimum size for Little Arc windows",
-            guard="if (browser()->is_little_arc()) {\n    return gfx::Size(400",
+            description="Maho: Add custom minimum size for Maho Mini windows",
+            guard="if (browser()->is_maho_mini()) {\n    return gfx::Size(400",
+        ),
+    ],
+    "chrome/browser/password_manager/factories/password_store_backend_factory.cc": [
+        Replacement(
+            old=(
+                "#else  // BUILDFLAG(IS_ANDROID)\n"
+                "#include \"components/password_manager/core/browser/password_store/login_database.h\"\n"
+                "#include \"components/password_manager/core/browser/password_store/password_store_built_in_backend.h\"\n"
+                "#endif  // BUILDFLAG(IS_ANDROID)"
+            ),
+            new=(
+                "#else  // BUILDFLAG(IS_ANDROID)\n"
+                "#include \"components/password_manager/core/browser/password_store/login_database.h\"\n"
+                "#include \"components/password_manager/core/browser/password_store/password_store_built_in_backend.h\"\n"
+                "#include \"maho/browser/passwords/maho_password_store_backend.h\"\n"
+                "#endif  // BUILDFLAG(IS_ANDROID)"
+            ),
+            description="Maho: Include maho_password_store_backend.h in password_store_backend_factory.cc",
+            guard="maho_password_store_backend.h",
+        ),
+        Replacement(
+            old=(
+                "#else   //  BUILDFLAG(IS_ANDROID)\n"
+                "  std::unique_ptr<password_manager::LoginDatabase> login_db(\n"
+                "      password_manager::CreateLoginDatabase(is_account_store,\n"
+                "                                            login_db_directory, prefs));\n"
+                "  SetIsUserDataDirPolicySet(login_db.get());\n"
+                "  auto behavior = is_account_store\n"
+                "                      ? syncer::WipeModelUponSyncDisabledBehavior::kAlways\n"
+                "                      : syncer::WipeModelUponSyncDisabledBehavior::kNever;\n"
+                "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
+                "  return std::make_unique<password_manager::PasswordStoreBuiltInBackend>(\n"
+                "      std::move(login_db), behavior, prefs, os_crypt_async);\n"
+                "#endif  // BUILDFLAG(IS_ANDROID)"
+            ),
+            new=(
+                "#else   //  BUILDFLAG(IS_ANDROID)\n"
+                "  std::unique_ptr<password_manager::LoginDatabase> login_db(\n"
+                "      password_manager::CreateLoginDatabase(is_account_store,\n"
+                "                                            login_db_directory, prefs));\n"
+                "  SetIsUserDataDirPolicySet(login_db.get());\n"
+                "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
+                "  // and disable account store in Maho Native.\n"
+                "  if (is_account_store) {\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "  }\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();\n"
+                "#endif  // BUILDFLAG(IS_ANDROID)"
+            ),
+            description="Maho: Repair partial password backend factory override in password_store_backend_factory.cc",
+            idempotent=True,
+            guard="return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();",
+        ),
+        Replacement(
+            old=(
+                "#else   //  BUILDFLAG(IS_ANDROID)\n"
+                "  std::unique_ptr<password_manager::LoginDatabase> login_db(\n"
+                "      password_manager::CreateLoginDatabase(is_account_store,\n"
+                "                                            login_db_directory, prefs));\n"
+                "  SetIsUserDataDirPolicySet(login_db.get());\n"
+                "  auto behavior = is_account_store\n"
+                "                      ? syncer::WipeModelUponSyncDisabledBehavior::kAlways\n"
+                "                      : syncer::WipeModelUponSyncDisabledBehavior::kNever;\n"
+                "  return std::make_unique<password_manager::PasswordStoreBuiltInBackend>(\n"
+                "      std::move(login_db), behavior, prefs, os_crypt_async);\n"
+                "#endif  // BUILDFLAG(IS_ANDROID)"
+            ),
+            new=(
+                "#else   //  BUILDFLAG(IS_ANDROID)\n"
+                "  std::unique_ptr<password_manager::LoginDatabase> login_db(\n"
+                "      password_manager::CreateLoginDatabase(is_account_store,\n"
+                "                                            login_db_directory, prefs));\n"
+                "  SetIsUserDataDirPolicySet(login_db.get());\n"
+                "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
+                "  // and disable account store in Maho Native.\n"
+                "  if (is_account_store) {\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "  }\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();\n"
+                "#endif  // BUILDFLAG(IS_ANDROID)"
+            ),
+            description="Maho: Route CreatePasswordStoreBackend through Maho password store backend in password_store_backend_factory.cc",
+            guard="return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();",
+        ),
+        Replacement(
+            old=(
+                "  auto behavior = is_account_store\n"
+                "                      ? syncer::WipeModelUponSyncDisabledBehavior::kAlways\n"
+                "                      : syncer::WipeModelUponSyncDisabledBehavior::kNever;\n"
+            ),
+            new="",
+            description="Maho: Remove unused built-in backend wipe behavior after factory override",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  if (is_account_store) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();"
+            ),
+            new=(
+                "  if (is_account_store) {\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "  }\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();"
+            ),
+            description="Maho: Replace null account password backend with disabled Maho backend",
+            guard="MahoPasswordStoreBackend>(false)",
+        ),
+    ],
+    "chrome/browser/password_manager/factories/BUILD.gn": [
+        Replacement(
+            old=(
+                "  deps = [\n"
+                "    \"//components/password_manager/core/browser\",\n"
+                "    \"//components/password_manager/core/browser:password_manager_buildflags\","
+            ),
+            new=(
+                "  deps = [\n"
+                "    \"//maho/browser:maho_password_store_backend\",\n"
+                "    \"//components/password_manager/core/browser\",\n"
+                "    \"//components/password_manager/core/browser:password_manager_buildflags\","
+            ),
+            description="Maho: Link password backend factory against Maho password store backend",
+            guard="//maho/browser:maho_password_store_backend",
         ),
     ],
 }
@@ -5431,6 +6067,19 @@ def apply_replacements(target_file: Path, replacements: list[Replacement], dry_r
         target_file.write_text(text)
 
     return changed, applied
+
+
+# Co-locate maho schema JSONs under chrome/common/extensions/api. Do NOT
+# reference them via //maho/...: the json_schema_compiler bundle generator
+# derives its output dir from the common source dir, so a foreign root makes
+# generated_schemas.cc land at an orphan gen/ path Chrome never links (chrome.maho
+# silently disappears). dest (rel to chromium/src) -> source (rel to overlay root).
+MAHO_SCHEMA_FILE_COPIES: dict[str, str] = {
+    "chrome/common/extensions/api/maho_split_view.json":
+        "browser/extensions/api/maho_split_view.json",
+    "chrome/common/extensions/api/maho_side_panel.json":
+        "browser/extensions/api/maho_side_panel.json",
+}
 
 
 def main() -> int:
@@ -5494,6 +6143,24 @@ def main() -> int:
         print(relative_path)
         for line in applied:
             print(f"  - {line}")
+
+    for dest_rel, src_rel in MAHO_SCHEMA_FILE_COPIES.items():
+        src = repo_root() / src_rel
+        dest = chromium_src / dest_rel
+        print(dest_rel)
+        if not src.exists():
+            print(f"schema copy source missing: {src}", file=sys.stderr)
+            return 1
+        if dest.exists() and dest.read_bytes() == src.read_bytes():
+            print("  - already: up to date")
+            continue
+        if args.dry_run:
+            print(f"  - would copy from {src}")
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        any_changed = True
+        print(f"  - copied from {src}")
 
     print("result: changed" if any_changed else "result: no-op")
     return 0

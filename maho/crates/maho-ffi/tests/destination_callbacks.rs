@@ -3,12 +3,13 @@
 //! Proves the Rust→C++ bridge mechanism end-to-end at the FFI boundary for
 //! all 3 wired destination methods (Phase 4 verification).
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use maho_ffi::import_destination::MahoCoreDestination;
 use maho_import::orchestrator::ImportDestination;
+use serde_json::Value;
 
 struct CallbackCounters {
     cookie_calls: AtomicU32,
@@ -128,6 +129,63 @@ fn destination_returns_false_when_callbacks_unset() {
     assert!(!dest.add_cookie("a", "b", "c", "/", 0, false, false, 0));
     assert!(!dest.add_autofill("a", "b", 0, 0, 0));
     assert!(!dest.add_favicon("a", &[]));
+}
+
+#[test]
+fn destination_add_password_writes_to_vault() {
+    let key =
+        CString::new("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+    assert!(unsafe { maho_ffi::maho_storage_set_sqlcipher_key(key.as_ptr()) });
+    let dir = std::env::temp_dir().join(format!(
+        "maho-dest-password-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = CString::new(
+        dir.join("destination-password.sqlite")
+            .to_string_lossy()
+            .as_bytes(),
+    )
+    .unwrap();
+    let core = unsafe { maho_ffi::maho_core_new_with_storage(db_path.as_ptr()) };
+    assert!(!core.is_null());
+    let init = CString::new(
+        r#"{"masterPassphrase":"correct passphrase","recoverySecret":"recovery key"}"#,
+    )
+    .unwrap();
+    let init_ptr = unsafe { maho_ffi::maho_vault_initialize_json(core, init.as_ptr()) };
+    assert!(!init_ptr.is_null());
+    unsafe { maho_ffi::maho_string_free(init_ptr) };
+
+    let dest = unsafe {
+        MahoCoreDestination::new_with_callbacks(core, None, None, None, std::ptr::null_mut())
+    };
+    assert!(dest.add_password(maho_import::PasswordEntry {
+        origin_url: "https://import.example".to_string(),
+        action_url: "https://import.example/login".to_string(),
+        username: "importer@example.com".to_string(),
+        password: "import-secret".to_string(),
+    }));
+
+    let query = CString::new("import.example").unwrap();
+    let list_ptr = unsafe { maho_ffi::maho_core_search_passwords(core, query.as_ptr()) };
+    assert!(!list_ptr.is_null());
+    let list_json = unsafe { CStr::from_ptr(list_ptr).to_str().unwrap() };
+    assert!(!list_json.contains("import-secret"));
+    let list: Vec<Value> = serde_json::from_str(list_json).unwrap();
+    unsafe { maho_ffi::maho_string_free(list_ptr) };
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        list[0].get("domain").and_then(Value::as_str),
+        Some("https://import.example")
+    );
+
+    unsafe { maho_ffi::maho_core_free(core) };
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

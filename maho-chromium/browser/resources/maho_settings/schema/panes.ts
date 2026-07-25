@@ -19,6 +19,7 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
       settingKeys: [
         'appearance.theme',
         'appearance.sidebar_width',
+        'appearance.density',
       ],
       wide: true,
     }},
@@ -155,6 +156,16 @@ const IDENTITY_PANES: PaneDefinition[] = [
     contentKind: 'passwords',
   },
   {
+    key: 'saved-passwords',
+    symbol: 'SP',
+    navTitle: 'Saved Passwords',
+    title: 'Saved Passwords',
+    kind: 'live',
+    domain: 'identity',
+    contentKind: 'saved-passwords',
+  },
+
+  {
     key: 'autofill',
     symbol: 'A',
     navTitle: 'Autofill',
@@ -182,7 +193,16 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     title: 'Extensions',
     kind: 'live',
     domain: 'productivity',
-    contentKind: 'extensions',
+    externalAction: 'openExtensions',
+  },
+  {
+    key: 'maho-mini',
+    symbol: 'LA',
+    navTitle: 'Maho Mini & routing',
+    title: 'Maho Mini & routing',
+    kind: 'live',
+    domain: 'productivity',
+    contentKind: 'maho-mini',
   },
   {
     key: 'maho-ai',
@@ -215,15 +235,6 @@ const PROTECTION_PANES: PaneDefinition[] = [
     contentKind: 'content-blocker',
   },
   {
-    key: 'atc',
-    symbol: 'AT',
-    navTitle: 'Air traffic control',
-    title: 'Air traffic control',
-    kind: 'live',
-    domain: 'protection',
-    contentKind: 'atc',
-  },
-  {
     key: 'chromium-settings',
     symbol: 'CR',
     navTitle: 'Chromium settings',
@@ -234,18 +245,82 @@ const PROTECTION_PANES: PaneDefinition[] = [
   },
 ];
 
+const MAIL_PANES: PaneDefinition[] = [
+  {
+    key: 'mail-accounts',
+    symbol: 'MA',
+    navTitle: 'Mail accounts',
+    title: 'Mail accounts',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail',
+  },
+  {
+    key: 'mail-signatures',
+    symbol: 'MS',
+    navTitle: 'Signatures',
+    title: 'Email signatures',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail-signatures',
+  },
+  {
+    key: 'mail-rules',
+    symbol: 'MR',
+    navTitle: 'Rules & filters',
+    title: 'Mail rules & filters',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail-rules',
+  },
+  {
+    key: 'mail-calendar',
+    symbol: 'MC',
+    navTitle: 'Calendar',
+    title: 'Mail calendar settings',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail-calendar',
+  },
+  {
+    key: 'mail-behavior',
+    symbol: 'MB',
+    navTitle: 'Mail behavior',
+    title: 'Mail behavior & layout',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail-behavior',
+  },
+  {
+    key: 'mail-ai',
+    symbol: 'MAI',
+    navTitle: 'Mail AI',
+    title: 'Mail AI behavior',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail-ai',
+  },
+  {
+    key: 'mail-security',
+    symbol: 'MSY',
+    navTitle: 'Mail security',
+    title: 'PGP & S/MIME security',
+    kind: 'live',
+    domain: 'mail',
+    contentKind: 'mail-security',
+  },
+];
+
 export const ALL_PANE_DEFINITIONS: PaneDefinition[] = [
   ...BROWSING_PANES,
   ...LOOK_AND_FEEL_PANES,
   ...IDENTITY_PANES,
   ...PRODUCTIVITY_PANES,
   ...PROTECTION_PANES,
+  ...MAIL_PANES,
 ];
 
-export const VISIBLE_PANE_DEFINITIONS: PaneDefinition[] =
-    ALL_PANE_DEFINITIONS.filter(p => p.kind !== 'hidden');
-
-export const PANE_DEFINITIONS = VISIBLE_PANE_DEFINITIONS;
+export const PANE_DEFINITIONS = ALL_PANE_DEFINITIONS;
 
 export const PANE_DEFINITION_MAP: Record<string, PaneDefinition> =
     Object.fromEntries(ALL_PANE_DEFINITIONS.map(d => [d.key, d])) as

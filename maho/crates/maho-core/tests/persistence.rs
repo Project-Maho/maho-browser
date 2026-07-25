@@ -1,9 +1,12 @@
+use maho_core::content_blocker::compile_engine_snapshot;
 use maho_core::maho_core::MahoCore;
 use maho_core::sync_models::{SyncEntity, SyncEntityType, SyncStatus};
 use maho_types::common::{DateTime, ScrollPosition, Url};
+use maho_types::content_blocking::{ContentBlockingMode, FilterListUpdateResponse};
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{SpaceId, TabId};
+use maho_types::settings::{PrivacySettingsUpdate, SettingsUpdate};
 use maho_types::space::{RootItem, Space, SpaceColor};
 use maho_types::tab::{Tab, TabLifecycleState, TabRole};
 
@@ -95,7 +98,9 @@ fn lmdb_persists_space_create_immediately() {
 
     let space_id = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-        let profile = core.create_profile_persisted("Work Profile".to_string());
+        let profile = core
+            .create_profile_persisted("Work Profile".to_string())
+            .unwrap();
         let color = SpaceColor {
             hue: 120.0,
             saturation: 0.5,
@@ -122,7 +127,9 @@ fn lmdb_persists_active_space_change_immediately() {
 
     let new_space_id = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-        let profile = core.create_profile_persisted("Work Profile".to_string());
+        let profile = core
+            .create_profile_persisted("Work Profile".to_string())
+            .unwrap();
         let color = SpaceColor {
             hue: 120.0,
             saturation: 0.5,
@@ -170,7 +177,9 @@ fn lmdb_persists_move_tab_immediately() {
             .id
             .clone();
 
-        let profile = core.create_profile_persisted("Work Profile".to_string());
+        let profile = core
+            .create_profile_persisted("Work Profile".to_string())
+            .unwrap();
         let color = SpaceColor {
             hue: 120.0,
             saturation: 0.5,
@@ -787,9 +796,8 @@ fn lmdb_persists_set_folder_pinned_true_and_false() {
 }
 
 #[test]
-#[should_panic(expected = "Outgoing message is not encrypted!")]
-fn test_plain_outgoing_blocked_without_encryption_key() {
-    let mut source = MahoCore::new();
+fn keyless_outgoing_emits_nothing_and_preserves_pending() {
+    let mut source = MahoCore::new().with_storage(":memory:");
     let space_id = source.get_active_space_id();
     let normal_id = create_tab_for_test(
         &mut source,
@@ -797,21 +805,27 @@ fn test_plain_outgoing_blocked_without_encryption_key() {
         "https://normal-sync.example.com",
         false,
     );
-    // start sync without setting encryption key (the old/broken way)
+    // Active session with NO encryption key installed (the old/broken keyless way).
     source.start_sync("ws://127.0.0.1:9", "0123456789abcdef0123456789abcdef");
     source.set_sync_status(SyncStatus::Syncing);
     source.push_tab_sync(&normal_id);
-    
+
+    // Fail-closed: keyless push must emit nothing and must not mark the queue row
+    // sent; the entity stays pending for retry after a key is installed.
     let outgoing = source.drain_sync_outgoing();
-    assert!(!outgoing.is_empty());
-    // Without setting the encryption key, messages go out as plaintext.
-    // We assert they must be Encrypted, which fails (panics) because E2EE is not configured.
-    for msg in outgoing {
-        assert!(
-            matches!(msg, maho_core::sync_models::SyncMessage::Encrypted { .. }),
-            "Outgoing message is not encrypted!"
-        );
-    }
+    assert!(
+        outgoing.is_empty(),
+        "keyless session must not emit any outgoing sync message"
+    );
+    let pending = source
+        .storage_ref()
+        .unwrap()
+        .load_pending_sync_entities()
+        .unwrap();
+    assert!(
+        !pending.is_empty(),
+        "keyless push must leave the queue row pending for later encrypted retry"
+    );
 }
 
 #[test]
@@ -825,31 +839,35 @@ fn test_configure_sync_encryption_roundtrip() {
         false,
     );
     let phrase = recovery_phrase(&source);
-    
+
     // Configure encryption (creates and configures key)
     source
         .configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
         .unwrap();
     source.set_sync_status(SyncStatus::Syncing);
     source.push_tab_sync(&normal_id);
-    
+
     let outgoing = source.drain_sync_outgoing();
     assert!(!outgoing.is_empty());
-    
+
     // Outgoing messages must only be Encrypted
     for msg in &outgoing {
-        assert!(matches!(msg, maho_core::sync_models::SyncMessage::Encrypted { .. }));
+        assert!(matches!(
+            msg,
+            maho_core::sync_models::SyncMessage::Encrypted { .. }
+        ));
     }
-    
+
     // Now decode and verify with destination
     let mut dest = MahoCore::new();
     dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
         .unwrap();
-    
+
     // Build snapshot from source and apply to destination
     let encrypted_snapshot = source.build_snapshot().expect("snapshot");
-    dest.apply_snapshot(&encrypted_snapshot).expect("apply snapshot");
-    
+    dest.apply_snapshot(&encrypted_snapshot)
+        .expect("apply snapshot");
+
     let dest_tabs = dest.get_tab_view_models();
     assert!(dest_tabs
         .iter()
@@ -863,12 +881,685 @@ fn test_room_id_and_key_derivation_parity() {
     let key_info: serde_json::Value = serde_json::from_str(&key_info_json).unwrap();
     let phrase = key_info["recoveryPhrase"].as_str().unwrap();
     let room_id = key_info["roomId"].as_str().unwrap();
-    
+
     // Let's decode recovery phrase
     let seed = maho_core::sync_crypto::decode_recovery_phrase(phrase).unwrap();
     let derived_room_id = maho_core::sync_crypto::derive_room_id(&seed).unwrap();
-    
+
     // Assert room_id matches derived_room_id
     assert_eq!(room_id, derived_room_id);
     assert_eq!(room_id.len(), 32);
+}
+
+// Regression (ATC routing dead after restart): a settings-created glob traffic
+// rule must keep its match type across persist → restart → load. Before the
+// atc_rules.match_type column existed, the rule came back as Contains and the
+// literal "*.github.com" substring never matched any URL.
+#[test]
+fn sqlite_traffic_rule_glob_match_type_survives_restart() {
+    use maho_types::air_traffic::{LinkDestination, MatchType, TrafficRule};
+
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("atc-roundtrip.db")
+        .to_string_lossy()
+        .to_string();
+    let work = SpaceId::new("space-work");
+
+    {
+        let mut core = MahoCore::new().with_storage(&db_path);
+        core.create_traffic_rule_persisted(TrafficRule {
+            id: "glob-rule-1".to_string(),
+            url_pattern: "*.github.com".to_string(),
+            match_type: MatchType::Glob,
+            target_space_id: work.clone(),
+            enabled: true,
+        });
+        assert_eq!(
+            core.decide_link_destination("https://github.com/signup", false, &[]),
+            LinkDestination::Space(work.clone()),
+            "freshly created glob rule must route"
+        );
+    }
+
+    let mut restored = MahoCore::new().with_storage(&db_path);
+    // ATC rules persist to SQLite, so restore goes through load_persisted_data()
+    // (the SQLite path), not load_state() (which is the LMDB path).
+    restored
+        .load_persisted_data()
+        .expect("state should restore");
+    assert_eq!(
+        restored.decide_link_destination("https://github.com/signup", false, &[]),
+        LinkDestination::Space(work.clone()),
+        "restored glob rule must still route after restart"
+    );
+    assert_eq!(
+        restored.decide_link_destination("https://api.github.com/x", false, &[]),
+        LinkDestination::Space(work),
+        "subdomain must still match after restart"
+    );
+    assert_eq!(
+        restored.decide_link_destination("https://evilgithub.com", false, &[]),
+        LinkDestination::Normal,
+        "boundary guard must survive restart"
+    );
+}
+
+#[test]
+fn archive_tab_by_id_persists_archived_state_after_reload() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let storage_path = temp_dir.path().join("maho-core.lmdb");
+
+    let (tab_id, space_id) = {
+        let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
+        let space_id = core.get_active_space_id();
+        let tab_id = create_tab_for_test(
+            &mut core,
+            space_id.clone(),
+            "https://archive-persist.example.com",
+            false,
+        );
+
+        // Dispatch ArchiveTabById ShellEvent
+        core.handle_event(ShellEvent::ArchiveTabById {
+            tab_id: tab_id.clone(),
+        });
+
+        core.handle_event(ShellEvent::AppWillTerminate);
+        (tab_id, space_id)
+    };
+
+    // Load in a fresh instance
+    let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
+    restored.load_state().expect("state should restore");
+
+    // The tab must NOT appear in normal sidebar view models
+    let tabs = restored.get_tab_view_models();
+    assert!(!tabs.iter().any(|t| t.id == tab_id));
+
+    // The tab MUST appear in archived tabs results
+    let archived_tabs = restored.get_archived_tabs(&space_id);
+    assert!(archived_tabs.iter().any(|t| t.id == tab_id));
+    assert_eq!(archived_tabs[0].space_id, space_id);
+}
+
+#[test]
+fn restore_archived_tab_transitions_back_to_active_and_is_idempotent() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let storage_path = temp_dir.path().join("maho-core.lmdb");
+
+    let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
+    let space_id = core.get_active_space_id();
+    let tab_id = create_tab_for_test(
+        &mut core,
+        space_id.clone(),
+        "https://archive-persist.example.com",
+        false,
+    );
+
+    // Archive the tab
+    core.handle_event(ShellEvent::ArchiveTabById {
+        tab_id: tab_id.clone(),
+    });
+
+    // Verify it is archived
+    let archived_tabs = core.get_archived_tabs(&space_id);
+    assert!(archived_tabs.iter().any(|t| t.id == tab_id));
+
+    // Restore the tab
+    core.handle_event(ShellEvent::RestoreArchivedTab {
+        tab_id: tab_id.clone(),
+    });
+
+    // Verify it is no longer returned by get_archived_tabs
+    let archived_tabs_after = core.get_archived_tabs(&space_id);
+    assert!(!archived_tabs_after.iter().any(|t| t.id == tab_id));
+
+    // Verify it is in the normal view models again
+    let tabs = core.get_tab_view_models();
+    assert!(tabs.iter().any(|t| t.id == tab_id));
+
+    // Idempotency check: Restore again on already active tab is a no-op
+    core.handle_event(ShellEvent::RestoreArchivedTab {
+        tab_id: tab_id.clone(),
+    });
+    let tabs_after_second = core.get_tab_view_models();
+    assert!(tabs_after_second.iter().any(|t| t.id == tab_id));
+
+    // Check that restoring a non-existent or non-archived tab doesn't crash / is a no-op
+    let random_id = maho_types::identifiers::TabId::new("random-id");
+    core.handle_event(ShellEvent::RestoreArchivedTab { tab_id: random_id });
+}
+
+#[test]
+fn credential_sync_refuses_keyless_transport() {
+    let mut manager =
+        maho_core::sync_manager::SyncManager::new(maho_core::sync_models::SyncConfig {
+            device_id: "test-device".to_string(),
+            server_url: "wss://relay.example.com".to_string(),
+            sync_key: None,
+            device_name: "test-device".to_string(),
+            auto_sync: true,
+            sync_interval_secs: 30,
+            disabled_entity_types: std::collections::HashSet::new(),
+        });
+    manager.set_status(SyncStatus::Synced);
+
+    let entity = SyncEntity {
+        entity_id: "test-entity-1".to_string(),
+        entity_type: SyncEntityType::AutofillAddress,
+        schema_version: 1,
+        version: 1,
+        modified_at: 1000,
+        device_id: 1,
+        payload_json: "{\"test\":\"data\"}".to_string(),
+        fields_hlc_json: None,
+        deleted: false,
+        queue_row_id: Some(42),
+    };
+
+    manager.push_entity(entity);
+
+    assert!(
+        manager.drain_outgoing_messages().is_empty(),
+        "Outgoing messages must be empty when keyless"
+    );
+    assert!(
+        manager.last_error().is_some(),
+        "last_error must be populated on keyless push"
+    );
+}
+
+// ===== Content-blocking L3+L4 lifecycle persistence (owned by the core repair lane) =====
+
+const CB_KEY: &str = "test_key";
+
+fn cb_db_path(dir: &tempfile::TempDir, name: &str) -> String {
+    dir.path().join(name).to_string_lossy().to_string()
+}
+
+#[test]
+fn content_blocker_custom_list_metadata_and_exception_created_at_survive_restart() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-meta.db");
+
+    let persisted_created_at;
+    {
+        let mut core = MahoCore::new().with_storage(&db);
+        assert!(core.add_filter_list(
+            "custom".into(),
+            "Custom List".into(),
+            "https://filters.example/custom.txt".into(),
+        ));
+        core.update_filter_list_content("custom", "||tracker.example^\n! a comment\n".into());
+        assert!(
+            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
+                core.create_content_blocker_compile_snapshot(),
+            ))
+        );
+        core.add_content_blocker_site_exception("https://www.paused.example:8443");
+        core.set_content_blocking_mode(ContentBlockingMode::Native);
+        assert!(core.should_block_request(
+            "https://tracker.example/x",
+            "https://site.test",
+            "script"
+        ));
+        persisted_created_at = core
+            .get_content_blocker_site_exceptions()
+            .into_iter()
+            .find(|e| e.key == "paused.example")
+            .expect("exception exists in first session")
+            .created_at;
+    }
+
+    let core = MahoCore::new().with_storage(&db);
+    let dto = core.get_content_blocker_state_dto();
+    let custom = dto
+        .lists
+        .iter()
+        .find(|l| l.id == "custom")
+        .expect("custom list must survive restart");
+    assert_eq!(custom.name, "Custom List");
+    assert_eq!(custom.url, "https://filters.example/custom.txt");
+    assert!(custom.enabled);
+    assert_eq!(
+        custom.rule_count, 1,
+        "rule-count metadata must survive restart"
+    );
+    assert!(
+        custom.last_success_timestamp.is_some(),
+        "validator timestamps must survive restart"
+    );
+
+    assert!(
+        core.should_block_request("https://tracker.example/x", "https://site.test", "script"),
+        "last-known-good raw content must survive restart and still block"
+    );
+
+    let exc = core
+        .get_content_blocker_site_exceptions()
+        .into_iter()
+        .find(|e| e.key == "paused.example")
+        .expect("canonical exception key must survive restart");
+    assert_eq!(
+        exc.created_at, persisted_created_at,
+        "original created_at must survive unchanged, not be regenerated at restart"
+    );
+    assert_eq!(core.get_content_blocker_mode(), ContentBlockingMode::Native);
+}
+
+#[test]
+fn content_blocker_deleted_seed_does_not_reappear_and_seeds_only_when_empty() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-seed.db");
+
+    {
+        let mut core = MahoCore::new().with_storage(&db);
+        let dto = core.get_content_blocker_state_dto();
+        assert!(
+            dto.lists.iter().any(|l| l.id == "easylist"),
+            "fresh DB seeds EasyList"
+        );
+        assert!(
+            dto.lists.iter().any(|l| l.id == "easyprivacy"),
+            "fresh DB seeds EasyPrivacy"
+        );
+        core.remove_filter_list("easyprivacy");
+    }
+
+    let core = MahoCore::new().with_storage(&db);
+    let dto = core.get_content_blocker_state_dto();
+    assert!(
+        dto.lists.iter().any(|l| l.id == "easylist"),
+        "surviving seed must remain"
+    );
+    assert!(
+        dto.lists.iter().all(|l| l.id != "easyprivacy"),
+        "a deleted seed must not reappear after restart (seeding happens only when no persisted rows exist)"
+    );
+}
+
+#[test]
+fn content_blocker_valid_cache_reopen_and_invalid_version_rebuilds_from_raw() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-cache.db");
+
+    let (generation, hash) = {
+        let mut core = MahoCore::new().with_storage(&db);
+        core.update_filter_list_content("easylist", "||adcache.example^\n".into());
+        assert!(
+            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
+                core.create_content_blocker_compile_snapshot(),
+            ))
+        );
+        core.set_content_blocking_mode(ContentBlockingMode::Native);
+        let dto = core.get_content_blocker_state_dto();
+        (dto.engine_generation, dto.engine_hash.clone())
+    };
+    assert!(
+        hash.is_some(),
+        "a valid session must persist an engine hash"
+    );
+
+    {
+        let core = MahoCore::new().with_storage(&db);
+        let dto = core.get_content_blocker_state_dto();
+        assert_eq!(
+            dto.engine_generation, generation,
+            "valid cache reopen keeps persisted generation"
+        );
+        assert_eq!(
+            dto.engine_hash, hash,
+            "valid cache reopen keeps persisted hash"
+        );
+        assert!(core.should_block_request("https://adcache.example/x", "https://s.test", "script"));
+    }
+
+    {
+        let core = MahoCore::new().with_storage(&db);
+        let storage = core.storage_ref().expect("storage handle");
+        let (mode, g, cache, _ver, h) = storage
+            .load_content_blocker_state()
+            .unwrap()
+            .expect("state row present");
+        storage
+            .save_content_blocker_state(
+                mode,
+                g,
+                cache.as_deref(),
+                Some("adblock-WRONG-VERSION"),
+                h.as_deref(),
+            )
+            .expect("poison engine version");
+    }
+
+    let core = MahoCore::new().with_storage(&db);
+    assert!(
+        core.should_block_request("https://adcache.example/x", "https://s.test", "script"),
+        "an invalid engine cache must rebuild from persisted raw content and still block"
+    );
+    let dto = core.get_content_blocker_state_dto();
+    assert_eq!(
+        core.get_content_blocker_mode(),
+        ContentBlockingMode::Native,
+        "mode config preserved on rebuild"
+    );
+    assert!(
+        dto.lists.iter().any(|l| l.id == "easylist"),
+        "lists config preserved on rebuild"
+    );
+}
+
+#[test]
+fn content_blocker_mode_converges_across_settings_shellevent_and_direct_api() {
+    let mut core = MahoCore::new().with_storage(":memory:");
+
+    core.set_content_blocking_mode(ContentBlockingMode::Disabled);
+    assert_eq!(
+        core.get_content_blocker_mode(),
+        ContentBlockingMode::Disabled
+    );
+    assert_eq!(
+        core.get_settings().privacy.content_blocking_mode,
+        ContentBlockingMode::Disabled
+    );
+
+    core.handle_event(ShellEvent::SetContentBlockingMode {
+        mode: ContentBlockingMode::Extension,
+    });
+    assert_eq!(
+        core.get_content_blocker_mode(),
+        ContentBlockingMode::Extension
+    );
+    assert_eq!(
+        core.get_settings().privacy.content_blocking_mode,
+        ContentBlockingMode::Extension
+    );
+
+    core.handle_event(ShellEvent::UpdateSettings {
+        changes: SettingsUpdate {
+            privacy: Some(PrivacySettingsUpdate {
+                content_blocking_mode: Some(ContentBlockingMode::Native),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    });
+    assert_eq!(
+        core.get_content_blocker_mode(),
+        ContentBlockingMode::Native,
+        "a settings-driven mode change must converge onto the authoritative blocker mode"
+    );
+    assert_eq!(
+        core.get_settings().privacy.content_blocking_mode,
+        ContentBlockingMode::Native
+    );
+}
+
+#[test]
+fn content_blocker_state_change_payload_carries_authoritative_mode_and_popup() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut core = MahoCore::new().with_storage(":memory:");
+    let captured: Rc<RefCell<Vec<(ContentBlockingMode, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = captured.clone();
+    core.on_update(Box::new(move |update| {
+        if let CoreUpdate::ContentBlockerStateChanged(state) = update {
+            sink.borrow_mut().push((state.mode, state.popup_blocking));
+        }
+    }));
+
+    core.set_content_blocking_mode(ContentBlockingMode::Extension);
+    let last = captured
+        .borrow()
+        .last()
+        .copied()
+        .expect("a content-blocker state change must be emitted");
+    assert_eq!(
+        last.0,
+        ContentBlockingMode::Extension,
+        "payload carries the authoritative mode"
+    );
+    assert!(last.1, "payload carries popup_blocking state");
+}
+
+#[test]
+fn content_blocker_effective_block_behavior_identical_across_restart() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-e2e.db");
+
+    let before_blocked;
+    let before_excepted;
+    {
+        let mut core = MahoCore::new().with_storage(&db);
+        assert!(core.add_filter_list(
+            "custom".into(),
+            "Custom".into(),
+            "https://f.example/c.txt".into(),
+        ));
+        let outcome = core.apply_filter_list_update_response(FilterListUpdateResponse {
+            list_id: "custom".into(),
+            status_code: 200,
+            body: Some("||ads.evil.example^\n".into()),
+            etag: Some("\"e1\"".into()),
+            last_modified: None,
+            sha256: None,
+        });
+        assert_eq!(outcome, Ok(true), "a 200 candidate signals rebuild-needed");
+        // Real sequence: compile the candidate-aware snapshot once, then install to promote.
+        let snapshot = core.create_content_blocker_compile_snapshot();
+        let compiled = compile_engine_snapshot(snapshot);
+        assert!(
+            core.install_content_blocker_compiled_engine(compiled),
+            "install must promote the candidate"
+        );
+        core.add_content_blocker_site_exception("https://trusted.example");
+        core.set_content_blocking_mode(ContentBlockingMode::Native);
+
+        before_blocked =
+            core.should_block_request("https://ads.evil.example/x", "https://news.test", "script");
+        before_excepted = core.should_block_request(
+            "https://ads.evil.example/x",
+            "https://trusted.example",
+            "script",
+        );
+        assert!(before_blocked, "installed candidate rule must block");
+        assert!(
+            !before_excepted,
+            "exception must suppress blocking on the trusted site"
+        );
+    }
+
+    let core = MahoCore::new().with_storage(&db);
+    let after_blocked =
+        core.should_block_request("https://ads.evil.example/x", "https://news.test", "script");
+    let after_excepted = core.should_block_request(
+        "https://ads.evil.example/x",
+        "https://trusted.example",
+        "script",
+    );
+    assert_eq!(
+        after_blocked, before_blocked,
+        "effective block behavior must be identical after restart"
+    );
+    assert_eq!(
+        after_excepted, before_excepted,
+        "exception behavior must be identical after restart"
+    );
+    assert!(
+        after_blocked && !after_excepted,
+        "restart must preserve the full effective policy"
+    );
+}
+
+#[test]
+fn content_blocker_apply_update_records_candidate_without_synchronous_engine_change() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let mut core = MahoCore::new().with_storage(":memory:");
+    core.update_filter_list_content("easylist", "||good.example^\n".into());
+    assert!(
+        core.install_content_blocker_compiled_engine(compile_engine_snapshot(
+            core.create_content_blocker_compile_snapshot(),
+        ))
+    );
+    core.set_content_blocking_mode(ContentBlockingMode::Native);
+    assert!(core.should_block_request("https://good.example/x", "https://s.test", "script"));
+
+    let outcome = core.apply_filter_list_update_response(FilterListUpdateResponse {
+        list_id: "easylist".into(),
+        status_code: 200,
+        body: Some("||candidate.example^\n".into()),
+        etag: None,
+        last_modified: None,
+        sha256: None,
+    });
+    assert_eq!(
+        outcome,
+        Ok(true),
+        "a 200 must return the existing rebuild-needed outcome"
+    );
+
+    // No synchronous engine change: the candidate must NOT be active after apply alone;
+    // promotion happens only on the off-thread compile + UI install.
+    assert!(
+        core.should_block_request("https://good.example/x", "https://s.test", "script"),
+        "the last-known-good rule must stay active until compile+install"
+    );
+    assert!(
+        !core.should_block_request("https://candidate.example/x", "https://s.test", "script"),
+        "apply alone must not compile/install the candidate rule"
+    );
+}
+
+#[test]
+fn content_blocker_offthread_compile_install_promotes_and_persists_candidate_once() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-offthread.db");
+
+    {
+        let mut core = MahoCore::new().with_storage(&db);
+        core.update_filter_list_content("easylist", "||good.example^\n".into());
+        assert!(
+            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
+                core.create_content_blocker_compile_snapshot(),
+            ))
+        );
+        core.set_content_blocking_mode(ContentBlockingMode::Native);
+
+        // 1. apply 200 -> records candidate only.
+        assert_eq!(
+            core.apply_filter_list_update_response(FilterListUpdateResponse {
+                list_id: "easylist".into(),
+                status_code: 200,
+                body: Some("||candidate.example^\n".into()),
+                etag: None,
+                last_modified: None,
+                sha256: None,
+            }),
+            Ok(true)
+        );
+        assert!(!core.should_block_request(
+            "https://candidate.example/x",
+            "https://s.test",
+            "script"
+        ));
+
+        // 2. off-thread compile input must contain the pending candidate body.
+        let snapshot = core.create_content_blocker_compile_snapshot();
+        assert!(
+            snapshot
+                .raw_contents
+                .iter()
+                .any(|c| c.contains("candidate.example")),
+            "the compile snapshot must include the pending candidate body"
+        );
+        let compiled = compile_engine_snapshot(snapshot);
+
+        // 3. UI install promotes + persists exactly the matching candidate.
+        assert!(
+            core.install_content_blocker_compiled_engine(compiled),
+            "install must promote the candidate"
+        );
+        assert!(core.should_block_request(
+            "https://candidate.example/x",
+            "https://s.test",
+            "script"
+        ));
+        assert!(!core.should_block_request("https://good.example/x", "https://s.test", "script"));
+
+        // 4. a second active snapshot is unchanged; recompile+install => no duplicate promotion.
+        let snap2 = core.create_content_blocker_compile_snapshot();
+        assert!(snap2
+            .raw_contents
+            .iter()
+            .any(|c| c.contains("candidate.example")));
+        assert!(
+            !snap2
+                .raw_contents
+                .iter()
+                .any(|c| c.contains("good.example")),
+            "the promoted body replaced the old one; no stale duplication remains"
+        );
+        let compiled2 = compile_engine_snapshot(snap2);
+        assert!(core.install_content_blocker_compiled_engine(compiled2));
+        assert!(
+            core.should_block_request("https://candidate.example/x", "https://s.test", "script"),
+            "a second compile+install keeps the same active policy (no duplicate promotion)"
+        );
+    }
+
+    let core = MahoCore::new().with_storage(&db);
+    assert!(
+        core.should_block_request("https://candidate.example/x", "https://s.test", "script"),
+        "the promoted candidate must survive restart"
+    );
+    assert!(
+        !core.should_block_request("https://good.example/x", "https://s.test", "script"),
+        "the superseded body must not survive restart"
+    );
+}
+
+#[test]
+fn content_blocker_first_candidate_install_is_durable_after_exactly_one_install() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-first-install.db");
+
+    {
+        let mut core = MahoCore::new().with_storage(&db);
+        assert_eq!(
+            core.apply_filter_list_update_response(FilterListUpdateResponse {
+                list_id: "easylist".into(),
+                status_code: 200,
+                body: Some("||first-install.example^\n".into()),
+                etag: None,
+                last_modified: None,
+                sha256: None,
+            }),
+            Ok(true)
+        );
+        assert!(
+            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
+                core.create_content_blocker_compile_snapshot(),
+            ))
+        );
+    }
+
+    let restored = MahoCore::new().with_storage(&db);
+    assert!(
+        restored.should_block_request(
+            "https://first-install.example/x",
+            "https://site.test",
+            "script"
+        ),
+        "the first successful candidate promotion must be the durable snapshot"
+    );
 }

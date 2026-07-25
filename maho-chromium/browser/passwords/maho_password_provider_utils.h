@@ -16,6 +16,9 @@ bool IsBitwardenExtensionAvailable();
 bool IsOnePasswordExtensionAvailable();
 bool IsPasswordProviderAvailable(std::string_view mode);
 
+bool IsChromiumAccountStoreDisabled();
+bool IsGooglePasswordsSyncDisabled();
+
 }  // namespace maho::passwords
 
 #endif  // MAHO_BROWSER_PASSWORDS_MAHO_PASSWORD_PROVIDER_UTILS_H_

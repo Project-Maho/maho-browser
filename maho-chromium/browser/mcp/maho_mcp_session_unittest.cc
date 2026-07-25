@@ -6,12 +6,15 @@
 
 #include <deque>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/json/json_reader.h"
+#include "base/json/string_escape.h"
 #include "base/values.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
@@ -744,6 +747,10 @@ class FakeAsyncNetworkDelegate : public MahoMcpBrowserDelegate {
     return canceled_capture_ids_;
   }
 
+  void SetTabsForTesting(std::vector<MahoMcpSession::TabInfo> tabs) {
+    tabs_ = std::move(tabs);
+  }
+
  private:
   static MahoMcpSession::TabInfo MakeTab(int id, bool active) {
     MahoMcpSession::TabInfo tab;
@@ -771,6 +778,75 @@ class FakeAsyncNetworkDelegate : public MahoMcpBrowserDelegate {
   std::string last_search_history_query_;
   size_t last_search_history_max_results_ = 0;
 };
+
+TEST_F(MahoMcpSessionTest, BrowserTabListSerializesVisibleSidebarInventory) {
+  auto delegate = std::make_unique<FakeAsyncNetworkDelegate>();
+
+  MahoMcpSession::TabInfo live_tab;
+  live_tab.id = 7;
+  live_tab.stable_id = "stable-live";
+  live_tab.title = "Live tab";
+  live_tab.url = "https://example.com/live";
+  live_tab.is_active = true;
+  live_tab.targetable = true;
+  live_tab.tab_strip_index = 0;
+
+  MahoMcpSession::TabInfo suspended_tab;
+  suspended_tab.id = 0;
+  suspended_tab.stable_id = "stable-suspended";
+  suspended_tab.title = "Suspended sidebar tab";
+  suspended_tab.url = "https://example.com/suspended";
+  suspended_tab.is_active = false;
+  suspended_tab.targetable = false;
+  suspended_tab.tab_strip_index = -1;
+
+  MahoMcpSession::TabInfo sidebar_only_tab;
+  sidebar_only_tab.id = 0;
+  sidebar_only_tab.stable_id = "stable-sidebar-only";
+  sidebar_only_tab.title = "Sidebar-only tab";
+  sidebar_only_tab.url = "https://example.com/sidebar-only";
+  sidebar_only_tab.is_active = false;
+  sidebar_only_tab.targetable = false;
+  sidebar_only_tab.tab_strip_index = -1;
+
+  delegate->SetTabsForTesting(
+      {live_tab, suspended_tab, sidebar_only_tab});
+  MahoMcpSession::SetBrowserDelegate(delegate.get());
+
+  session_->ProcessData(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+      R"("params":{"protocolVersion":"2025-03-26",)"
+      R"("clientInfo":{"name":"test-client","version":"0.1.0"}}})"
+      "\n");
+  ASSERT_EQ(session_->state(), MahoMcpSession::State::kActive);
+
+  auto responses = CallToolRaw("browser_tab_list", "{}", 2);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value parsed = ParseLine(responses[0]);
+  const auto* result = parsed.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const auto* tabs = result->FindList("tabs");
+  ASSERT_TRUE(tabs);
+  ASSERT_EQ(tabs->size(), 3u);
+
+  const auto& live = (*tabs)[0].GetDict();
+  EXPECT_EQ(live.FindInt("id").value(), 7);
+  EXPECT_EQ(*live.FindString("stable_id"), "stable-live");
+  EXPECT_EQ(live.FindBool("targetable").value(), true);
+  EXPECT_EQ(live.FindInt("tab_strip_index").value(), 0);
+
+  const auto& suspended = (*tabs)[1].GetDict();
+  EXPECT_EQ(suspended.FindInt("id").value(), 0);
+  EXPECT_EQ(*suspended.FindString("stable_id"), "stable-suspended");
+  EXPECT_EQ(suspended.FindBool("targetable").value(), false);
+  EXPECT_EQ(suspended.FindInt("tab_strip_index").value(), -1);
+
+  const auto& sidebar_only = (*tabs)[2].GetDict();
+  EXPECT_EQ(sidebar_only.FindInt("id").value(), 0);
+  EXPECT_EQ(*sidebar_only.FindString("stable_id"), "stable-sidebar-only");
+  EXPECT_EQ(sidebar_only.FindBool("targetable").value(), false);
+  EXPECT_EQ(sidebar_only.FindInt("tab_strip_index").value(), -1);
+}
 
 class FakeMailReadDelegate : public FakeAsyncNetworkDelegate {
  public:
@@ -1825,6 +1901,17 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
       "mail_search_emails",
       "mail_list_thread",
       "mail_extract_otp",
+      "mail_add_account",
+      "mail_test_connection",
+      "mail_delete_account",
+      "mail_start_oauth",
+      "mail_complete_oauth",
+      "mail_reconnect_account",
+      "mail_import_migration_archive",
+      "mail_send",
+      "mail_save_draft",
+      "mail_update_draft",
+      "mail_queue_email",
       "browser_acquire_lease",
       "browser_heartbeat_lease",
       "browser_release_lease",
@@ -1844,6 +1931,10 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
       "browser_key_press",
       "browser_tab_switch",
       "browser_set_viewport_size",
+      "vault_list_credentials_for_active_page",
+      "vault_request_credential_use",
+      "vault_fill_credential",
+      "vault_fill_totp",
   };
   EXPECT_EQ(advertised, expected);
 
@@ -1908,6 +1999,10 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
       "browser_acquire_lease",
       "browser_heartbeat_lease",
       "browser_release_lease",
+      "vault_list_credentials_for_active_page",
+      "vault_request_credential_use",
+      "vault_fill_credential",
+      "vault_fill_totp",
   };
 
   int id = 100;
@@ -1931,6 +2026,58 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
   CallToolRaw("browser_get_allowed_domains", "{}", id++);
   EXPECT_EQ(delegate_->resolve_tab_calls, tab_before);
   EXPECT_EQ(delegate_->resolve_profile_calls, prof_before);
+}
+
+// Todo 6: input/navigation mutators require an active tab lease held by this
+// session. Without a lease the mutation is denied (-32007) before any delegate
+// dispatch; after acquiring the lease the gate no longer blocks it.
+TEST_F(MahoMcpSessionTest, MutationRequiresActiveLease) {
+  InitResolvingSession();
+
+  {
+    auto responses =
+        CallToolRaw("browser_scroll",
+                    R"({"direction":"down","pixels":100,"tab_id":7})", 300);
+    ASSERT_EQ(responses.size(), 1u);
+    base::Value r = ParseLine(responses[0]);
+    const auto* error = r.GetDict().FindDict("error");
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->FindInt("code").value(), kMahoMcpErrorLeaseRequired);
+  }
+
+  {
+    auto responses = CallToolRaw("browser_acquire_lease", R"({"tab_id":7})", 301);
+    ASSERT_EQ(responses.size(), 1u);
+    base::Value r = ParseLine(responses[0]);
+    ASSERT_FALSE(r.GetDict().FindDict("error"))
+        << "lease acquisition unexpectedly failed";
+  }
+
+  {
+    auto responses =
+        CallToolRaw("browser_scroll",
+                    R"({"direction":"down","pixels":100,"tab_id":7})", 302);
+    ASSERT_EQ(responses.size(), 1u);
+    base::Value r = ParseLine(responses[0]);
+    const auto* error = r.GetDict().FindDict("error");
+    if (error) {
+      EXPECT_NE(error->FindInt("code").value(), kMahoMcpErrorLeaseRequired)
+          << "held lease must let the mutation past the gate";
+    }
+  }
+}
+
+// Todo 6: read-only tools remain available with no lease held.
+TEST_F(MahoMcpSessionTest, ReadOnlyToolAllowedWithoutLease) {
+  InitResolvingSession();
+
+  auto responses = CallToolRaw("browser_page_text", R"({"tab_id":7})", 310);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value r = ParseLine(responses[0]);
+  const auto* error = r.GetDict().FindDict("error");
+  if (error) {
+    EXPECT_NE(error->FindInt("code").value(), kMahoMcpErrorLeaseRequired);
+  }
 }
 
 TEST_F(MahoMcpSessionTest, NoCachedOrZeroActiveFallback) {
@@ -2080,6 +2227,312 @@ TEST_F(MahoMcpSessionTest, CaptureAndLeaseRemainBoundToGeneration) {
   const auto* hb_error = hb.GetDict().FindDict("error");
   ASSERT_TRUE(hb_error);
   EXPECT_EQ(hb_error->FindInt("code").value(), -32004);
+}
+
+// ---------------------------------------------------------------------------
+// Todo-4: browser_type credential-field guard + no-echo response.
+// Sentinel: S3NTINEL-maho-vault-9F4C
+// ---------------------------------------------------------------------------
+
+// Extends the resolving delegate to (a) record every Type() call so a test can
+// prove secret text never reached the page, and (b) return trusted AX field
+// metadata keyed by AXNodeID so the session's classifier decides per-field.
+class TypeGuardFakeDelegate : public ResolvingFakeDelegate {
+ public:
+  std::unordered_map<ui::AXNodeID, MahoMcpFieldMetadata> field_metadata;
+  int type_call_count = 0;
+  std::string last_typed_text;
+  int vault_fill_count = 0;
+  int vault_totp_fill_count = 0;
+  ui::AXNodeID last_vault_ax_id = 0;
+  std::string last_vault_grant_handle;
+  std::vector<VaultCredentialSummary> vault_credentials;
+  std::unordered_map<std::string, std::string> grant_by_handle;
+
+  bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) override {
+    ++type_call_count;
+    last_typed_text = text;
+    return true;
+  }
+
+  MahoMcpFieldMetadata GetFieldMetadata(int tab_id,
+                                        ui::AXNodeID ax_id) override {
+    auto it = field_metadata.find(ax_id);
+    return it == field_metadata.end() ? MahoMcpFieldMetadata() : it->second;
+  }
+
+  std::vector<VaultCredentialSummary> VaultListCredentialsForActivePage(
+      int tab_id) override {
+    return vault_credentials;
+  }
+
+  std::optional<std::string> VaultRequestCredentialUse(
+      int tab_id,
+      const std::string& handle,
+      const std::string& origin) override {
+    for (const auto& credential : vault_credentials) {
+      if (credential.handle == handle && credential.origin == origin) {
+        auto it = grant_by_handle.find(handle);
+        if (it == grant_by_handle.end()) {
+          return std::nullopt;
+        }
+        return it->second;
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool VaultFillCredential(int tab_id,
+                           const std::string& grant_handle,
+                           ui::AXNodeID ax_id) override {
+    ++vault_fill_count;
+    last_vault_grant_handle = grant_handle;
+    last_vault_ax_id = ax_id;
+    return true;
+  }
+
+  bool VaultFillTotp(int tab_id,
+                     const std::string& grant_handle,
+                     ui::AXNodeID ax_id) override {
+    ++vault_totp_fill_count;
+    last_vault_grant_handle = grant_handle;
+    last_vault_ax_id = ax_id;
+    return true;
+  }
+};
+
+class MahoMcpSessionTypeGuardTest : public testing::Test {
+ protected:
+  static constexpr char kSentinel[] = "S3NTINEL-maho-vault-9F4C";
+
+  void SetUp() override {
+    delegate_ = std::make_unique<TypeGuardFakeDelegate>();
+    MahoMcpSession::SetBrowserDelegate(delegate_.get());
+    lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
+    session_ = std::make_unique<MahoMcpSession>(getuid(), lease_registry_.get());
+    auto responses = session_->ProcessData(
+        R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+        R"("params":{"protocolVersion":"2025-03-26",)"
+        R"("clientInfo":{"name":"t","version":"0.1.0"}}})"
+        "\n");
+    ASSERT_EQ(responses.size(), 1u);
+    ASSERT_EQ(session_->state(), MahoMcpSession::State::kActive);
+    // Todo 6: browser_type is a lease-gated mutator. Hold a lease on the
+    // resolving delegate's active tab (7) so these credential-guard tests reach
+    // the field classifier that they actually exercise.
+    auto lease = session_->ProcessData(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+        R"("params":{"name":"browser_acquire_lease",)"
+        R"("arguments":{"tab_id":7}}})"
+        "\n");
+    ASSERT_EQ(lease.size(), 1u);
+  }
+
+  void TearDown() override {
+    session_.reset();
+    MahoMcpSession::SetBrowserDelegate(nullptr);
+    delegate_.reset();
+  }
+
+  base::Value CallType(int ref, const std::string& text, int id) {
+    auto responses = session_->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+        R"("params":{"name":"browser_type","arguments":)"
+        R"({"ref":%d,"text":%s}}})"
+        "\n",
+        id, ref, base::GetQuotedJSONString(text).c_str()));
+    EXPECT_EQ(responses.size(), 1u);
+    std::optional<base::Value> parsed =
+        responses.empty() ? std::nullopt
+                          : base::JSONReader::Read(responses[0],
+                                                   base::JSON_PARSE_RFC);
+    return parsed.has_value() ? std::move(*parsed) : base::Value();
+  }
+
+  base::Value CallTool(const std::string& name,
+                       const std::string& arguments,
+                       int id) {
+    auto responses = session_->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+        R"("params":{"name":"%s","arguments":%s}})"
+        "\n",
+        id, name.c_str(), arguments.c_str()));
+    EXPECT_EQ(responses.size(), 1u);
+    std::optional<base::Value> parsed =
+        responses.empty() ? std::nullopt
+                          : base::JSONReader::Read(responses[0],
+                                                   base::JSON_PARSE_RFC);
+    return parsed.has_value() ? std::move(*parsed) : base::Value();
+  }
+
+  base::test::TaskEnvironment task_environment_;
+  std::unique_ptr<MahoMcpLeaseRegistry> lease_registry_;
+  std::unique_ptr<TypeGuardFakeDelegate> delegate_;
+  std::unique_ptr<MahoMcpSession> session_;
+};
+
+TEST_F(MahoMcpSessionTypeGuardTest, OrdinaryTextFieldTypesThroughWithoutEcho) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  ordinary.accessible_name = "search";
+  delegate_->field_metadata[101] = ordinary;
+  session_->ref_table()[1] = 101;
+
+  base::Value resp = CallType(1, "hello world", 10);
+
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(delegate_->type_call_count, 1);
+  EXPECT_EQ(delegate_->last_typed_text, "hello world");
+  // Response must confirm the action without echoing the typed text back.
+  EXPECT_FALSE(result->FindString("text"));
+  EXPECT_EQ(resp.DebugString().find("hello world"), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       VaultCredentialToolsReturnHandlesAndFillWithoutEchoingSecret) {
+  MahoMcpBrowserDelegate::VaultCredentialSummary credential;
+  credential.handle = "vh_sentinel_handle";
+  credential.username_hint = "tester@example.com";
+  credential.origin = "https://example.com";
+  delegate_->vault_credentials.push_back(credential);
+  delegate_->grant_by_handle[credential.handle] = "vg_sentinel_grant";
+  session_->ref_table()[9] = 909;
+
+  base::Value list = CallTool(
+      "vault_list_credentials_for_active_page", R"({"tab_id":7})", 20);
+  const auto* list_result = list.GetDict().FindDict("result");
+  ASSERT_TRUE(list_result) << list.DebugString();
+  const auto* items = list_result->FindList("items");
+  ASSERT_TRUE(items);
+  ASSERT_EQ(items->size(), 1u);
+  EXPECT_EQ(*items->front().GetDict().FindString("handle"),
+            "vh_sentinel_handle");
+  EXPECT_FALSE(items->front().GetDict().FindString("password"));
+  EXPECT_FALSE(items->front().GetDict().FindString("secret"));
+  EXPECT_FALSE(items->front().GetDict().FindString("item_id"));
+  EXPECT_EQ(list.DebugString().find(kSentinel), std::string::npos);
+
+  base::Value grant = CallTool(
+      "vault_request_credential_use",
+      R"({"tab_id":7,"handle":"vh_sentinel_handle","origin":"https://example.com"})",
+      21);
+  const auto* grant_result = grant.GetDict().FindDict("result");
+  ASSERT_TRUE(grant_result);
+  EXPECT_EQ(*grant_result->FindString("grant_handle"), "vg_sentinel_grant");
+  EXPECT_EQ(grant.DebugString().find(kSentinel), std::string::npos);
+  EXPECT_FALSE(grant_result->FindString("password"));
+
+  base::Value fill = CallTool(
+      "vault_fill_credential",
+      R"({"tab_id":7,"grant_handle":"vg_sentinel_grant","ref":9})", 22);
+  const auto* fill_result = fill.GetDict().FindDict("result");
+  ASSERT_TRUE(fill_result);
+  EXPECT_TRUE(fill_result->FindBool("filled").value());
+  EXPECT_EQ(delegate_->vault_fill_count, 1);
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(delegate_->last_vault_ax_id, 909);
+  EXPECT_EQ(delegate_->last_vault_grant_handle, "vg_sentinel_grant");
+  EXPECT_FALSE(fill_result->FindString("grant_handle"));
+  EXPECT_FALSE(fill_result->FindString("password"));
+  EXPECT_EQ(fill.DebugString().find(kSentinel), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, PasswordFieldRejectsBeforeType) {
+  MahoMcpFieldMetadata pw;
+  pw.classified = true;
+  pw.is_protected = true;
+  delegate_->field_metadata[202] = pw;
+  session_->ref_table()[2] = 202;
+
+  base::Value resp = CallType(2, kSentinel, 11);
+
+  EXPECT_TRUE(resp.GetDict().FindDict("error"));
+  EXPECT_FALSE(resp.GetDict().FindDict("result"));
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(resp.DebugString().find(kSentinel), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, CurrentPasswordAutocompleteRejects) {
+  MahoMcpFieldMetadata meta;
+  meta.classified = true;
+  meta.autocomplete = "current-password";
+  delegate_->field_metadata[303] = meta;
+  session_->ref_table()[3] = 303;
+
+  base::Value resp = CallType(3, kSentinel, 12);
+
+  EXPECT_TRUE(resp.GetDict().FindDict("error"));
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(resp.DebugString().find(kSentinel), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, OneTimeCodeAutocompleteRejects) {
+  MahoMcpFieldMetadata meta;
+  meta.classified = true;
+  meta.autocomplete = "one-time-code";
+  delegate_->field_metadata[404] = meta;
+  session_->ref_table()[4] = 404;
+
+  base::Value resp = CallType(4, kSentinel, 13);
+
+  EXPECT_TRUE(resp.GetDict().FindDict("error"));
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(resp.DebugString().find(kSentinel), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, RecoveryCodeNameRejects) {
+  MahoMcpFieldMetadata meta;
+  meta.classified = true;
+  meta.accessible_name = "recovery code";
+  delegate_->field_metadata[505] = meta;
+  session_->ref_table()[5] = 505;
+
+  base::Value resp = CallType(5, kSentinel, 14);
+
+  EXPECT_TRUE(resp.GetDict().FindDict("error"));
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(resp.DebugString().find(kSentinel), std::string::npos);
+}
+
+// A delegate that never classified the field (default/omitted GetFieldMetadata)
+// must not be able to type into it: unknown metadata fails closed.
+TEST_F(MahoMcpSessionTypeGuardTest, UnclassifiedFieldFailsClosed) {
+  session_->ref_table()[6] = 606;  // ax_id 606 absent from field_metadata
+
+  base::Value resp = CallType(6, kSentinel, 15);
+
+  EXPECT_TRUE(resp.GetDict().FindDict("error"));
+  EXPECT_FALSE(resp.GetDict().FindDict("result"));
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(resp.DebugString().find(kSentinel), std::string::npos);
+}
+
+TEST(MahoMcpCredentialClassifierTest, ClassifiesTrustedSignals) {
+  MahoMcpFieldMetadata protected_field;
+  protected_field.classified = true;
+  protected_field.is_protected = true;
+  EXPECT_TRUE(MahoMcpSession::IsCredentialField(protected_field));
+
+  MahoMcpFieldMetadata otp;
+  otp.classified = true;
+  otp.autocomplete = "one-time-code";
+  EXPECT_TRUE(MahoMcpSession::IsCredentialField(otp));
+
+  MahoMcpFieldMetadata recovery;
+  recovery.classified = true;
+  recovery.accessible_name = "recovery code";
+  EXPECT_TRUE(MahoMcpSession::IsCredentialField(recovery));
+
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  ordinary.autocomplete = "email";
+  ordinary.accessible_name = "search the site";
+  EXPECT_FALSE(MahoMcpSession::IsCredentialField(ordinary));
+
+  // Unknown/unclassified metadata is treated as a credential (fail closed).
+  MahoMcpFieldMetadata unclassified;
+  EXPECT_TRUE(MahoMcpSession::IsCredentialField(unclassified));
 }
 
 }  // namespace

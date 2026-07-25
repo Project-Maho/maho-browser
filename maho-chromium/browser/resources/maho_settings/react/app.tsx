@@ -9,6 +9,7 @@ import React, {
 import {createRoot} from 'react-dom/client';
 
 import type {SettingValue} from '../mojo.js';
+import {BrowserUpdateState} from '../mojo.js';
 import type {PaneDefinition, SettingMetadata} from '../models.js';
 import {DOMAIN_DEFINITIONS} from '../schema/domains.js';
 import {
@@ -31,12 +32,11 @@ import {
 } from '@ui/select';
 import {ToggleGroup, ToggleGroupItem} from '@ui/toggle-group';
 import {Toaster} from '@ui/sonner';
+import {ArrowLeft, ArrowUpRight} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
 import {DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
 import {MahoSettingsStore} from './store.js';
-
-const LIVE_SETTINGS_PANE_KEYS = new Set(['notifications','tabs','advanced','privacy','general','appearance']);
 
 function cloneSetting(setting: SettingValue): SettingValue {
   return {
@@ -47,7 +47,7 @@ function cloneSetting(setting: SettingValue): SettingValue {
 }
 
 function isMigratedLivePane(pane: PaneDefinition): boolean {
-  return LIVE_SETTINGS_PANE_KEYS.has(pane.key);
+  return pane.kind === 'live' && !pane.contentKind;
 }
 
 function groupSettings(settings: SettingValue[]): Record<string, SettingValue[]> {
@@ -78,42 +78,33 @@ function getSettingMetadata(item: SettingValue): SettingMetadata | null {
   return SETTING_METADATA[item.key] ?? null;
 }
 
-function normalizeInputValue(
-    value: string, fallback: string, meta: SettingMetadata): string {
-  if (meta.control !== 'number') {
-    const trimmed = value.trim();
-    return trimmed || fallback;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed)) {
-    return fallback;
-  }
-
-  const min = meta.min ?? parsed;
-  const max = meta.max ?? parsed;
-  return String(Math.min(max, Math.max(min, parsed)));
+function normalizeInputValue(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  return trimmed || fallback;
 }
 
 const SETTINGS_SHELL_CLASS = 'min-h-screen w-full bg-background text-foreground';
 const SETTINGS_WINDOW_CLASS = 'h-screen w-full';
-const SETTINGS_WORKSPACE_CLASS = 'grid h-full min-h-0 min-w-0';
-const SETTINGS_WORKSPACE_COLUMNS_CLASS = 'grid-cols-[240px_minmax(0,1fr)]';
-const SETTINGS_SIDEBAR_CLASS = 'border-r border-border bg-card';
-const SETTINGS_SIDEBAR_SCROLL_CLASS = 'flex h-full flex-col overflow-y-auto p-4';
+const SETTINGS_WORKSPACE_CLASS = 'grid h-full min-h-0 min-w-0 overflow-hidden';
+const SETTINGS_WORKSPACE_COLUMNS_CLASS = 'grid-cols-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[240px_minmax(0,1fr)] sm:grid-rows-[minmax(0,1fr)]';
+const SETTINGS_SIDEBAR_CLASS = 'border-b border-border/60 glass sm:border-r sm:border-b-0';
+const SETTINGS_SIDEBAR_SCROLL_CLASS = 'flex max-h-56 flex-col overflow-y-auto p-4 sm:h-full sm:max-h-none';
 const SETTINGS_BRAND_CLASS = 'mb-4 grid gap-1 px-2 pt-2';
 const SETTINGS_SIDEBAR_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
 const SETTINGS_NAV_CLASS = 'flex flex-col gap-1 pb-3';
 const SETTINGS_DOMAIN_LABEL_CLASS =
     'mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground first:mt-0';
-const SETTINGS_CONTENT_CLASS = 'h-full min-w-0 overflow-hidden bg-background';
-const SETTINGS_CONTENT_SCROLL_CLASS = 'h-full overflow-y-auto p-6 lg:p-7';
+const SETTINGS_CONTENT_CLASS = 'h-full min-w-0 overflow-hidden';
+const SETTINGS_CONTENT_SCROLL_CLASS = 'h-full overflow-y-auto p-4 sm:p-6 lg:p-7';
 const SIDEBAR_BUTTON_CLASS =
-    'h-auto w-full justify-start border border-transparent px-3 py-2.5 text-left text-sm font-medium text-foreground shadow-none [&:not([aria-current=page])]:hover:border-border/60 [&:not([aria-current=page])]:hover:bg-background/80 [&:not([aria-current=page])]:hover:text-foreground aria-[current=page]:translate-x-px aria-[current=page]:border-border aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground aria-[current=page]:shadow-sm';
+    'h-auto w-full justify-start border border-transparent px-3 py-2.5 text-left text-sm font-medium text-foreground shadow-none [&:not([aria-current=page])]:hover:border-border/60 [&:not([aria-current=page])]:hover:bg-surface-hover [&:not([aria-current=page])]:hover:text-foreground aria-[current=page]:translate-x-px aria-[current=page]:border-border aria-[current=page]:bg-surface-selected aria-[current=page]:text-foreground aria-[current=page]:shadow-sm';
 const SIDEBAR_BUTTON_TEXT_CLASS = 'flex min-w-0 flex-1';
 const SIDEBAR_BUTTON_LABEL_CLASS = 'truncate';
-const BROWSER_SHELL_CLASS = 'min-w-0 overflow-hidden rounded-xl border border-border bg-background/50 shadow-inner';
-const BROWSER_FRAME_CLASS = 'block h-[78vh] min-h-[720px] w-full border-0 bg-background';
+const BROWSER_CONTENT_CLASS = 'h-full overflow-hidden';
+const BROWSER_PANE_CLASS = 'flex h-full min-h-0 min-w-0 flex-col';
+const BROWSER_TOOLBAR_CLASS = 'flex shrink-0 items-center border-b border-border/60 glass px-4 py-2';
+const BROWSER_SHELL_CLASS = 'min-h-0 min-w-0 flex-1 overflow-hidden bg-background';
+const BROWSER_FRAME_CLASS = 'block h-full w-full border-0 bg-background';
 const SETTING_ROW_CLASS =
     'grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-center';
 const SETTING_COPY_CLASS = 'min-w-0 flex-1';
@@ -134,7 +125,16 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
   useEffect(() => {
     void store.bootstrap();
     applyTheme("auto");
-    return watchAutoTheme((resolved) => applyTheme(resolved));
+    const cleanupAutoTheme = watchAutoTheme((resolved) => applyTheme(resolved));
+    const handleBeforeUnload = () => {
+      store.dispose();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      cleanupAutoTheme();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      store.dispose();
+    };
   }, [store]);
 
   const currentPane = useMemo(() => {
@@ -182,7 +182,13 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
                             key={pane.key}
                             isActive={pane.key === currentPane.key}
                             pane={pane}
-                            onSelect={() => store.selectPane(pane.key)}
+                            onSelect={() => {
+                              if (pane.externalAction === 'openExtensions') {
+                                store.getHandler().openExtensionsPage();
+                              } else {
+                                store.selectPane(pane.key);
+                              }
+                            }}
                           />
                         ))}
                       </React.Fragment>
@@ -193,7 +199,7 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
             </aside>
           )}
           <main className={SETTINGS_CONTENT_CLASS}>
-            <div className={SETTINGS_CONTENT_SCROLL_CLASS}>
+            <div className={currentPane.kind === 'embed' ? BROWSER_CONTENT_CLASS : SETTINGS_CONTENT_SCROLL_CLASS}>
               {currentPane.kind === 'embed' ? (
                 <EmbedPane pane={currentPane} onExit={() => store.selectPane('general')} />
               ) : isMigratedLivePane(currentPane) ? (
@@ -220,30 +226,29 @@ function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
   const embedUrl = pane.embedUrl || 'chrome://settings/';
 
   return (
-    <PaneShell pane={pane}>
-      <SectionCard
-        title={pane.title}
-        action={(
-          <Button
-            className="w-fit justify-start rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground hover:bg-accent hover:text-accent-foreground"
-            type="button"
-            variant="ghost"
-            onClick={onExit}>
-            <img alt="" aria-hidden="true" className={SETTING_ICON_CLASS} src="chrome://maho-settings/icons/arrow-right.svg" style={{transform: 'rotate(180deg)'}} />
-            Back to Maho settings
-          </Button>
-        )}
-        padded>
-        <div className={BROWSER_SHELL_CLASS}>
-          <iframe
-            className={BROWSER_FRAME_CLASS}
-            role="document"
-            src={embedUrl}
-            title={pane.title}
-          />
-        </div>
-      </SectionCard>
-    </PaneShell>
+    <section
+      className={BROWSER_PANE_CLASS}
+      data-pane={pane.key}
+      id={`section-${pane.key}`}>
+      <header className={BROWSER_TOOLBAR_CLASS}>
+        <Button
+          className="w-fit justify-start rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground hover:bg-surface-hover"
+          type="button"
+          variant="ghost"
+          onClick={onExit}>
+          <ArrowLeft aria-hidden="true" className={SETTING_ICON_CLASS} />
+          Back to Maho settings
+        </Button>
+      </header>
+      <div className={BROWSER_SHELL_CLASS}>
+        <iframe
+          className={BROWSER_FRAME_CLASS}
+          role="document"
+          src={embedUrl}
+          title={pane.title}
+        />
+      </div>
+    </section>
   );
 }
 
@@ -264,7 +269,67 @@ function PaneButton(
       <span className={SIDEBAR_BUTTON_TEXT_CLASS}>
         <span className={SIDEBAR_BUTTON_LABEL_CLASS}>{pane.navTitle}</span>
       </span>
+      {pane.externalAction && (
+        <ArrowUpRight className="ml-auto size-4 shrink-0 opacity-60" />
+      )}
     </Button>
+  );
+}
+
+const UPDATE_STATE_LABELS: Record<number, string> = {
+  [BrowserUpdateState.kIdle]: 'Up to date',
+  [BrowserUpdateState.kChecking]: 'Checking for updates…',
+  [BrowserUpdateState.kUpdateAvailable]: 'Update available',
+  [BrowserUpdateState.kDownloading]: 'Downloading update…',
+  [BrowserUpdateState.kVerifying]: 'Verifying update…',
+  [BrowserUpdateState.kReadyToInstall]: 'Update ready — restart to install',
+  [BrowserUpdateState.kUpToDate]: 'Up to date',
+  [BrowserUpdateState.kError]: 'Update check failed',
+};
+
+function BrowserVersionCard({store}: {store: MahoSettingsStore}) {
+  const state = useSyncExternalStore(
+      listener => store.subscribe(listener), () => store.getSnapshot());
+  const isDev = !state.updateSupported;
+  const checking = state.updateState === BrowserUpdateState.kChecking;
+  const readyToInstall =
+      state.updateState === BrowserUpdateState.kReadyToInstall;
+  const versionLine = `Maho ${state.browserVersion || '…'}${
+      state.browserChannel ? ` · ${state.browserChannel}` : ''}`;
+
+  return (
+    <div className="mb-6">
+      <SectionCard title="About Maho" description="Version and update status.">
+        <div className="grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-foreground">{versionLine}</div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {isDev
+                ? 'Developer build — automatic updates are disabled.'
+                : UPDATE_STATE_LABELS[state.updateState] ?? ''}
+            </div>
+          </div>
+          {!isDev ? (
+            <div className="flex shrink-0 gap-2">
+              {readyToInstall ? (
+                <Button
+                  variant="default"
+                  onClick={() => store.applyBrowserUpdateAndRestart()}>
+                  Restart to update
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  disabled={checking}
+                  onClick={() => store.checkForBrowserUpdates()}>
+                  {checking ? 'Checking…' : 'Check for updates'}
+                </Button>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </SectionCard>
+    </div>
   );
 }
 
@@ -308,6 +373,7 @@ function LivePaneSection(
       {!bootstrapError && lastActionError ? (
         <p className="mb-4 text-sm leading-6 text-muted-foreground">{lastActionError}</p>
       ) : null}
+      {pane.key === 'general' ? <BrowserVersionCard store={store} /> : null}
       {cards.map((card, cardIndex) => (
         <div key={`${pane.key}-${card.title}`} className={cardIndex < cards.length - 1 ? 'mb-6' : undefined}>
           <SectionCard title={card.title} description={card.description}>
@@ -391,7 +457,6 @@ function SettingControl(
       return <SliderControl item={item} meta={meta} store={store} />;
     case 'textarea':
       return <TextareaControl item={item} meta={meta} store={store} />;
-    case 'number':
     case 'text':
     default:
       return <InputControl item={item} meta={meta} store={store} />;
@@ -412,22 +477,18 @@ function InputControl(
   }, [item.key, item.value]);
 
   const commitValue = useCallback(async () => {
-    const nextValue = normalizeInputValue(draftValue, item.value, meta);
+    const nextValue = normalizeInputValue(draftValue, item.value);
     setDraftValue(nextValue);
     await store.commitSettingValue(item.key, nextValue);
-  }, [draftValue, item.key, item.value, meta, store]);
+  }, [draftValue, item.key, item.value, store]);
 
   return (
     <div className="flex items-center gap-2">
       <Input
         aria-label={meta.label}
         disabled={isSaving}
-        inputMode={meta.control === 'number' ? 'numeric' : undefined}
-        max={meta.control === 'number' && meta.max !== undefined ? String(meta.max) : undefined}
-        min={meta.control === 'number' && meta.min !== undefined ? String(meta.min) : undefined}
         placeholder={meta.placeholder || ''}
-        step={meta.control === 'number' && meta.step !== undefined ? String(meta.step) : undefined}
-        type={meta.control === 'number' ? 'number' : 'text'}
+        type="text"
         value={draftValue}
         className="w-24 h-9"
         onBlur={() => {
@@ -440,8 +501,8 @@ function InputControl(
           }
         }}
       />
-      {meta.control === 'number' ? (
-        <span className="text-sm text-muted-foreground">px</span>
+      {meta.unit ? (
+        <span className="text-sm text-muted-foreground">{meta.unit}</span>
       ) : null}
     </div>
   );
@@ -569,7 +630,6 @@ function SliderControl(
       <input
         aria-label={meta.label}
         className={SLIDER_CLASS}
-        disabled={isSaving}
         max={meta.max !== undefined ? String(meta.max) : undefined}
         min={meta.min !== undefined ? String(meta.min) : undefined}
         step={meta.step !== undefined ? String(meta.step) : undefined}
@@ -581,7 +641,9 @@ function SliderControl(
           scheduleCommit(nextValue);
         }}
       />
-      <span className={SLIDER_VALUE_CLASS}>{`${draftValue}px`}</span>
+      <span className={SLIDER_VALUE_CLASS}>
+        {meta.unit ? `${draftValue}${meta.unit}` : draftValue}
+      </span>
     </div>
   );
 }

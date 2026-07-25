@@ -6,6 +6,7 @@ export const DOMAIN_DEFINITIONS: DomainDefinition[] = [
   {id: 'identity', label: 'Identity', order: 2},
   {id: 'productivity', label: 'Productivity', order: 3},
   {id: 'protection', label: 'Protection', order: 4},
+  {id: 'mail', label: 'Maho Mail', order: 5},
 ];
 
 export const DOMAIN_MAP: Record<DomainId, DomainDefinition> =

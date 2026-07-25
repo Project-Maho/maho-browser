@@ -3,16 +3,142 @@
 pub mod import;
 pub mod import_destination;
 pub(crate) mod import_gate;
+pub mod vault_backend;
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::Path;
 use std::ptr;
+use std::str::FromStr;
+use zeroize::{Zeroize, Zeroizing};
 
+use maho_core::content_blocker::normalize_site_exception_key;
 use maho_core::maho_core::MahoCore;
 use maho_core::workspace_manager::WorkspaceManager;
 
 use maho_types::keyboard::KeyCombo;
-use maho_types::passwords::SavedPassword;
+use maho_types::vault::{
+    CredentialOrigin, VaultItemId, VaultItemKind, VaultItemListRequest, VaultItemPublicDto,
+    VaultItemPublicMetadata, VaultSchemaVersion,
+};
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ContentBlockerMutationError {
+    code: String,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentBlockerMutationResult {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<ContentBlockerMutationError>,
+    state: Option<maho_types::content_blocking::ContentBlockerStateDto>,
+    compile_required: bool,
+}
+
+fn content_blocker_result(
+    core: Option<&MahoCore>,
+    success: bool,
+    error: Option<ContentBlockerMutationError>,
+    compile_required: bool,
+) -> ContentBlockerMutationResult {
+    ContentBlockerMutationResult {
+        success,
+        error,
+        state: core.map(MahoCore::get_content_blocker_state_dto),
+        compile_required,
+    }
+}
+
+fn content_blocker_error(code: &str, message: impl Into<String>) -> ContentBlockerMutationError {
+    ContentBlockerMutationError {
+        code: code.to_string(),
+        message: message.into(),
+    }
+}
+
+fn content_blocker_error_from_core(
+    error: &maho_types::content_blocking::ContentBlockingError,
+) -> ContentBlockerMutationError {
+    content_blocker_error(error.code(), error.to_string())
+}
+
+fn content_blocker_error_from_update(error: String) -> ContentBlockerMutationError {
+    let code = if error.starts_with("invalid update body:") {
+        "invalid_update_body"
+    } else if error.starts_with("filter body too large:") {
+        "filter_body_too_large"
+    } else if error.starts_with("HTTP status ") {
+        "update_http_status"
+    } else {
+        "update_rejected"
+    };
+    content_blocker_error(code, error)
+}
+
+fn add_filter_list_result(
+    core: &mut MahoCore,
+    id: String,
+    name: String,
+    url: String,
+) -> ContentBlockerMutationResult {
+    let updates = core.handle_event(maho_types::events::shell_event::ShellEvent::AddFilterList {
+        id,
+        name,
+        url,
+    });
+    let error = updates.iter().find_map(|update| match update {
+        maho_types::events::core_update::CoreUpdate::ContentBlockerStateChanged(change) => change
+            .last_error
+            .as_ref()
+            .map(content_blocker_error_from_core),
+        _ => None,
+    });
+    content_blocker_result(Some(core), error.is_none(), error.clone(), error.is_none())
+}
+
+fn toggle_filter_list_result(
+    core: &mut MahoCore,
+    id: String,
+    enabled: bool,
+) -> ContentBlockerMutationResult {
+    let state = core.get_content_blocker_state_dto();
+    let Some(list) = state.lists.iter().find(|list| list.id == id) else {
+        return content_blocker_result(
+            Some(core),
+            false,
+            Some(content_blocker_error(
+                "filter_list_not_found",
+                "filter list was not found",
+            )),
+            false,
+        );
+    };
+    let changed = list.enabled != enabled;
+    core.handle_event(
+        maho_types::events::shell_event::ShellEvent::ToggleFilterList { id, enabled },
+    );
+    content_blocker_result(Some(core), true, None, changed)
+}
+
+fn remove_filter_list_result(core: &mut MahoCore, id: String) -> ContentBlockerMutationResult {
+    let state = core.get_content_blocker_state_dto();
+    if !state.lists.iter().any(|list| list.id == id) {
+        return content_blocker_result(
+            Some(core),
+            false,
+            Some(content_blocker_error(
+                "filter_list_not_found",
+                "filter list was not found",
+            )),
+            false,
+        );
+    }
+    core.handle_event(maho_types::events::shell_event::ShellEvent::RemoveFilterList { id });
+    content_blocker_result(Some(core), true, None, true)
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,25 +159,58 @@ fn to_json_cstring<T: serde::Serialize + ?Sized>(value: &T) -> *mut c_char {
         Err(_) => ptr::null_mut(),
     }
 }
-
 fn cstring_or_fallback(value: &str, fallback: &'static str) -> Option<CString> {
     CString::new(value)
         .ok()
         .or_else(|| CString::new(fallback).ok())
 }
 
-fn to_password_entries(passwords: Vec<&SavedPassword>) -> *mut c_char {
-    let views: Vec<PasswordEntryView> = passwords
-        .into_iter()
-        .map(|password| PasswordEntryView {
-            id: password.id.clone(),
-            domain: password.domain.clone(),
-            username: password.username.clone(),
-            created_at: password.created_at.clone(),
-            last_used: password.last_used.clone(),
-        })
+fn credential_origin_from_domain(domain: &str) -> Option<CredentialOrigin> {
+    let origin = if domain.starts_with("http://") || domain.starts_with("https://") {
+        domain.to_string()
+    } else {
+        format!("https://{domain}")
+    };
+    CredentialOrigin::try_from(origin).ok()
+}
+
+fn saved_password_from_vault_item(item: &VaultItemPublicDto) -> Option<PasswordEntryView> {
+    if item.item_kind != VaultItemKind::Login {
+        return None;
+    }
+    let domain = item.origins.first()?.as_str().to_string();
+    Some(PasswordEntryView {
+        id: item.id.to_string(),
+        domain,
+        username: item.username_hint.clone(),
+        created_at: item.created_at.to_rfc3339(),
+        last_used: item.last_used_at.map(|value| value.to_rfc3339()),
+    })
+}
+
+fn to_vault_password_entries(items: Vec<VaultItemPublicDto>) -> *mut c_char {
+    let views: Vec<PasswordEntryView> = items
+        .iter()
+        .filter_map(saved_password_from_vault_item)
         .collect();
     to_json_cstring(&views)
+}
+
+fn vault_login_items(core: &MahoCore) -> Vec<VaultItemPublicDto> {
+    let request = VaultItemListRequest {
+        schema_version: VaultSchemaVersion::CURRENT,
+        provider: Some(maho_types::passwords::PasswordProviderKind::MahoNative),
+        kinds: vec![VaultItemKind::Login],
+        cursor: None,
+        limit: 0,
+    };
+    core.vault_list_items(&request).unwrap_or_default()
+}
+
+fn vault_login_item_by_id(core: &MahoCore, id: VaultItemId) -> Option<VaultItemPublicDto> {
+    vault_login_items(core)
+        .into_iter()
+        .find(|item| item.id == id)
 }
 
 #[no_mangle]
@@ -139,7 +298,7 @@ pub unsafe extern "C" fn maho_core_get_tab_view_models(ptr: *mut MahoCore) -> *m
             if import_gate::is_active() {
                 return ptr::null_mut();
             }
-            let core = &*ptr;
+            let core = &mut *ptr;
             to_json_cstring(&core.get_tab_view_models())
         },
         ptr::null_mut()
@@ -163,10 +322,12 @@ pub unsafe extern "C" fn maho_core_get_tab_snapshot_by_id(
             if import_gate::is_active() {
                 return ptr::null_mut();
             }
-            let core = &*ptr;
+            let core = &mut *ptr;
             let tab_id_str = CStr::from_ptr(tab_id).to_str().unwrap_or("");
             match core.get_tab_snapshot_json(&maho_types::identifiers::TabId::new(tab_id_str)) {
-                Some(json) => CString::new(json).unwrap().into_raw(),
+                Some(json) => CString::new(json)
+                    .map(|c| c.into_raw())
+                    .unwrap_or(ptr::null_mut()),
                 None => ptr::null_mut(),
             }
         },
@@ -196,7 +357,7 @@ pub unsafe extern "C" fn maho_core_is_tab_pinned(
                 Ok(s) => s,
                 Err(_) => return false,
             };
-            let core = &*ptr;
+            let core = &mut *ptr;
             core.is_tab_pinned(tab_id_str)
         },
         false
@@ -260,8 +421,6 @@ pub unsafe extern "C" fn maho_core_get_space_view_models(ptr: *mut MahoCore) -> 
 /// # Safety
 /// `ptr` must be a valid `*mut MahoCore`; `space_id_json` must be valid NUL-terminated UTF-8
 /// containing a JSON-serialized SpaceId. Caller must free the returned string via
-/// `maho_string_free`. Returns null on error or if import is active.
-// TODO: regenerate via cbindgen
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_sidebar_state_v2(
     ptr: *mut MahoCore,
@@ -780,7 +939,10 @@ pub unsafe extern "C" fn maho_core_set_installed_extensions(
             };
             let extensions = match maho_core::extension_bridge::parse_extension_payload(json_str) {
                 Ok(exts) => exts,
-                Err(_) => return,
+                Err(e) => {
+                    eprintln!("[ffi] set_installed_extensions: invalid extension payload: {e}");
+                    return;
+                }
             };
             core.set_installed_extensions(extensions);
         },
@@ -806,12 +968,23 @@ pub unsafe extern "C" fn maho_core_register_extension_sync_callback(
             if ptr.is_null() {
                 return;
             }
+            // SAFETY(H8): gate on import to avoid a data race on MahoCore, matching
+            // the other &mut *ptr FFIs.
+            if import_gate::is_active() {
+                return;
+            }
             let core = &mut *ptr;
             if let Some(cb) = callback {
                 let ud_raw = user_data as usize;
                 core.register_extension_sync_callback(Some(Box::new(
                     move |id, enabled, deleted| {
-                        let id_c = CString::new(id).unwrap();
+                        // SAFETY(H8): the sync callback is invoked on the UI/sync
+                        // sequence that owns `user_data`; it must not run after the
+                        // C++ owner is destroyed. Skip (never panic across FFI) if the
+                        // id contains an interior NUL.
+                        let Ok(id_c) = CString::new(id) else {
+                            return;
+                        };
                         let ud = ud_raw as *mut c_void;
                         cb(ud, id_c.as_ptr(), enabled, deleted);
                     },
@@ -894,16 +1067,18 @@ pub unsafe extern "C" fn maho_core_get_side_panel_options(
             let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
             if let Some(opt) = core.get_side_panel_options(ext_id.as_ref()) {
                 if !out_path.is_null() {
-                    let p_cstr = CString::new(opt.path.clone()).unwrap();
-                    *out_path = p_cstr.into_raw();
+                    if let Ok(p_cstr) = CString::new(opt.path.clone()) {
+                        *out_path = p_cstr.into_raw();
+                    }
                 }
                 if !out_layout.is_null() {
                     let lay_str = match opt.layout {
                         maho_core::extension_bridge::SidePanelLayout::Left => "left",
                         maho_core::extension_bridge::SidePanelLayout::Right => "right",
                     };
-                    let lay_cstr = CString::new(lay_str).unwrap();
-                    *out_layout = lay_cstr.into_raw();
+                    if let Ok(lay_cstr) = CString::new(lay_str) {
+                        *out_layout = lay_cstr.into_raw();
+                    }
                 }
                 if !out_default_width.is_null() {
                     *out_default_width = opt.default_width;
@@ -992,11 +1167,19 @@ pub unsafe extern "C" fn maho_core_search_passwords(
                 Err(_) => return ptr::null_mut(),
             };
 
-            if query_str.is_empty() {
-                return to_password_entries(core.list_passwords().iter().collect());
+            let mut items = vault_login_items(core);
+            if !query_str.is_empty() {
+                let query_lower = query_str.to_lowercase();
+                items.retain(|item| {
+                    item.title.to_lowercase().contains(&query_lower)
+                        || item.username_hint.to_lowercase().contains(&query_lower)
+                        || item
+                            .origins
+                            .iter()
+                            .any(|origin| origin.as_str().to_lowercase().contains(&query_lower))
+                });
             }
-
-            to_password_entries(core.search_passwords(query_str))
+            to_vault_password_entries(items)
         },
         ptr::null_mut()
     )
@@ -1035,7 +1218,13 @@ pub unsafe extern "C" fn maho_core_delete_password(
                 Ok(s) => s,
                 Err(_) => return false,
             };
-            core.delete_password_persisted(password_id)
+            let Ok(item_id) = VaultItemId::from_str(password_id) else {
+                return false;
+            };
+            let Some(item) = vault_login_item_by_id(core, item_id) else {
+                return false;
+            };
+            core.vault_delete_item(item_id, item.revision).is_ok()
         },
         false
     )
@@ -1058,19 +1247,20 @@ pub unsafe extern "C" fn maho_core_reveal_password(
             if import_gate::is_active() {
                 return ptr::null_mut();
             }
-            let core = &*ptr;
+            let core = &mut *ptr;
             let password_id = match CStr::from_ptr(password_id).to_str() {
                 Ok(s) => s,
                 Err(_) => return ptr::null_mut(),
             };
-            if let Some(p) = core.password_by_id(password_id) {
-                if let Some(ref pw) = p.password {
-                    return CString::new(pw.clone())
-                        .map(CString::into_raw)
-                        .unwrap_or(ptr::null_mut());
-                }
+            let Ok(item_id) = VaultItemId::from_str(password_id) else {
+                return ptr::null_mut();
+            };
+            match core.vault_use_login_password(item_id) {
+                Ok(password) => CString::new(password.as_str())
+                    .map(CString::into_raw)
+                    .unwrap_or(ptr::null_mut()),
+                Err(_) => ptr::null_mut(),
             }
-            ptr::null_mut()
         },
         ptr::null_mut()
     )
@@ -1114,8 +1304,24 @@ pub unsafe extern "C" fn maho_core_add_password(
                     Err(_) => return false,
                 }
             };
-            let _ = core.add_password_persisted(domain.to_string(), username.to_string(), password);
-            true
+            let pass = password.unwrap_or_default();
+            if let Some(origin) = credential_origin_from_domain(domain) {
+                let input = maho_core::vault_manager::VaultLoginInput {
+                    metadata: maho_types::vault::VaultItemPublicMetadata {
+                        title: domain.to_string(),
+                        origins: vec![origin],
+                        username_hint: username.to_string(),
+                        item_kind: maho_types::vault::VaultItemKind::Login,
+                        totp: None,
+                        passkey: None,
+                    },
+                    username: username.to_string(),
+                    password: zeroize::Zeroizing::new(pass),
+                };
+                core.vault_add_login(input).is_ok()
+            } else {
+                false
+            }
         },
         false
     )
@@ -1148,7 +1354,27 @@ pub unsafe extern "C" fn maho_core_update_password_username(
                 Ok(s) => s,
                 Err(_) => return false,
             };
-            core.update_password_username_persisted(password_id, username.to_string())
+            let Ok(item_id) = VaultItemId::from_str(password_id) else {
+                return false;
+            };
+            let Some(item) = vault_login_item_by_id(core, item_id) else {
+                return false;
+            };
+            let metadata = VaultItemPublicMetadata {
+                title: item.title,
+                origins: item.origins,
+                username_hint: username.to_string(),
+                item_kind: VaultItemKind::Login,
+                totp: item.totp,
+                passkey: item.passkey,
+            };
+            let update = maho_core::vault_manager::VaultLoginUpdate {
+                metadata,
+                username: username.to_string(),
+                password: None,
+            };
+            core.vault_update_login(item_id, item.revision, update)
+                .is_ok()
         },
         false
     )
@@ -2007,43 +2233,108 @@ pub unsafe extern "C" fn maho_core_should_block_request(
     )
 }
 
-/// Returns a JSON string with the block check result:
-/// `{"blocked":bool,"redirect":string|null,"rewrittenUrl":string|null}`
+/// Outcome of a content-blocking check, returned by value.
 ///
+/// `redirect` and `rewritten_url` are null when absent or empty. When non-null
+/// the caller owns them and must release each with `maho_string_free`.
+///
+/// Deliberately a POD struct rather than JSON: this check runs on the browser
+/// UI thread for EVERY subresource request, and a JSON round trip there cost a
+/// serialize in Rust, a heap `CString`, a `base::JSONReader` parse in C++ and a
+/// free — per request. The overwhelmingly common outcome (allowed, no rewrite)
+/// now allocates nothing at all.
+#[repr(C)]
+pub struct MahoBlockResult {
+    pub blocked: bool,
+    pub redirect: *mut c_char,
+    pub rewritten_url: *mut c_char,
+}
+
+impl MahoBlockResult {
+    /// Allow-with-no-rewrite. Also the fail-open value for every error path, so
+    /// a malformed request or an in-progress import never blocks a page load.
+    fn allow() -> Self {
+        Self {
+            blocked: false,
+            redirect: ptr::null_mut(),
+            rewritten_url: ptr::null_mut(),
+        }
+    }
+}
+
+/// `None` and empty strings both become null; a NUL-containing string degrades
+/// to null rather than failing the request.
+fn optional_cstring_raw(value: Option<&str>) -> *mut c_char {
+    match value {
+        Some(s) if !s.is_empty() => CString::new(s)
+            .map(CString::into_raw)
+            .unwrap_or(ptr::null_mut()),
+        _ => ptr::null_mut(),
+    }
+}
+
 /// # Safety
 /// All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
-/// Caller must free the returned string with `maho_string_free`.
+/// See `MahoBlockResult` for ownership of the returned strings.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_check_request(
     ptr: *mut MahoCore,
     url: *const c_char,
     source_url: *const c_char,
     request_type: *const c_char,
-) -> *mut c_char {
+) -> MahoBlockResult {
     ffi_safe!(
         {
             if ptr.is_null() || url.is_null() || source_url.is_null() || request_type.is_null() {
-                return ptr::null_mut();
+                return MahoBlockResult::allow();
             }
             // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
             if import_gate::is_active() {
-                return ptr::null_mut();
+                return MahoBlockResult::allow();
             }
             let core = &*ptr;
             let url_str = match CStr::from_ptr(url).to_str() {
                 Ok(s) => s,
-                Err(_) => return ptr::null_mut(),
+                Err(_) => return MahoBlockResult::allow(),
             };
             let source_str = match CStr::from_ptr(source_url).to_str() {
                 Ok(s) => s,
-                Err(_) => return ptr::null_mut(),
+                Err(_) => return MahoBlockResult::allow(),
             };
             let type_str = match CStr::from_ptr(request_type).to_str() {
                 Ok(s) => s,
-                Err(_) => return ptr::null_mut(),
+                Err(_) => return MahoBlockResult::allow(),
             };
             let result = core.check_request(url_str, source_str, type_str);
-            to_json_cstring(&result)
+            MahoBlockResult {
+                blocked: result.blocked,
+                redirect: optional_cstring_raw(result.redirect.as_deref()),
+                rewritten_url: optional_cstring_raw(result.rewritten_url.as_deref()),
+            }
+        },
+        MahoBlockResult::allow()
+    )
+}
+
+/// # Safety
+/// `input` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_normalize_site_exception_key(input: *const c_char) -> *mut c_char {
+    ffi_safe!(
+        {
+            if input.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY: the public FFI entrypoint requires `input` to be a live C string.
+            let input_str = match unsafe { CStr::from_ptr(input) }.to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            match CString::new(normalize_site_exception_key(input_str)) {
+                Ok(value) => value.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
         },
         ptr::null_mut()
     )
@@ -2232,6 +2523,369 @@ pub unsafe extern "C" fn maho_core_load_content_engine_cache(
             core.load_content_engine_cache(path_str).is_ok()
         },
         false
+    )
+}
+
+/// Returns current content blocking mode:
+/// `0` = Native, `1` = Extension, `2` = Disabled,
+/// `3` = Unknown (an unrecognized/forward-incompatible persisted mode; treated
+/// as non-native so native blocking is never silently enabled),
+/// `-1` = Error (null core or import in progress).
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_content_blocking_mode(ptr: *mut MahoCore) -> i32 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            let core = &*ptr;
+            match core.get_content_blocker_mode() {
+                maho_types::content_blocking::ContentBlockingMode::Native => 0,
+                maho_types::content_blocking::ContentBlockingMode::Extension => 1,
+                maho_types::content_blocking::ContentBlockingMode::Disabled => 2,
+                maho_types::content_blocking::ContentBlockingMode::Unknown => 3,
+            }
+        },
+        -1
+    )
+}
+
+/// Sets content blocking mode: 0 = Native, 1 = Extension, 2 = Disabled.
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_content_blocking_mode(
+    ptr: *mut MahoCore,
+    mode_code: i32,
+) -> bool {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return false;
+            }
+            let mode = match mode_code {
+                0 => maho_types::content_blocking::ContentBlockingMode::Native,
+                1 => maho_types::content_blocking::ContentBlockingMode::Extension,
+                2 => maho_types::content_blocking::ContentBlockingMode::Disabled,
+                _ => return false,
+            };
+            let core = &mut *ptr;
+            core.set_content_blocking_mode(mode);
+            true
+        },
+        false
+    )
+}
+
+/// Returns full ContentBlockerStateDto JSON.
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_content_blocker_state_json(
+    ptr: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let dto = core.get_content_blocker_state_dto();
+            to_json_cstring(&dto)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Applies a FilterListUpdateResponse JSON to the content blocker.
+///
+/// Returns `true` when a rebuild/compile is needed: a 200 response produced a
+/// pending candidate that the caller must compile and install via
+/// `maho_core_create_compile_snapshot` + `maho_compile_engine_from_snapshot` +
+/// `maho_content_engine_install`. Returns `false` for a 304/unchanged poll (no
+/// work to do) and on any rejection (null args, import active, invalid UTF-8,
+/// invalid JSON, oversized/failed update). A pending candidate is never active
+/// until a matching compiled engine installs.
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `update_json` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_apply_filter_list_update_json(
+    ptr: *mut MahoCore,
+    update_json: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            let result = apply_filter_list_update_result(ptr, update_json);
+            result.success && result.compile_required
+        },
+        false
+    )
+}
+
+fn apply_filter_list_update_result(
+    ptr: *mut MahoCore,
+    update_json: *const c_char,
+) -> ContentBlockerMutationResult {
+    if ptr.is_null() || update_json.is_null() {
+        return content_blocker_result(
+            None,
+            false,
+            Some(content_blocker_error(
+                "invalid_argument",
+                "core and update must be non-null",
+            )),
+            false,
+        );
+    }
+    if import_gate::is_active() {
+        return content_blocker_result(
+            None,
+            false,
+            Some(content_blocker_error(
+                "import_in_progress",
+                "content blocker is unavailable during import",
+            )),
+            false,
+        );
+    }
+    // SAFETY: the public FFI entrypoint requires `update_json` to be a live C string.
+    let json_str = match unsafe { CStr::from_ptr(update_json) }.to_str() {
+        Ok(value) => value,
+        Err(_) => {
+            // SAFETY: `ptr` was checked non-null and is borrowed only for this result.
+            let core = unsafe { &*ptr };
+            return content_blocker_result(
+                Some(core),
+                false,
+                Some(content_blocker_error(
+                    "invalid_utf8",
+                    "update payload is not valid UTF-8",
+                )),
+                false,
+            );
+        }
+    };
+    let response: maho_types::content_blocking::FilterListUpdateResponse =
+        match serde_json::from_str(json_str) {
+            Ok(value) => value,
+            Err(error) => {
+                // SAFETY: `ptr` was checked non-null and is borrowed only for this result.
+                let core = unsafe { &*ptr };
+                return content_blocker_result(
+                    Some(core),
+                    false,
+                    Some(content_blocker_error("invalid_json", error.to_string())),
+                    false,
+                );
+            }
+        };
+    // SAFETY: the FFI contract requires exclusive ownership of the live core handle.
+    let core = unsafe { &mut *ptr };
+    match core.apply_filter_list_update_response(response) {
+        Ok(compile_required) => content_blocker_result(Some(core), true, None, compile_required),
+        Err(error) => content_blocker_result(
+            Some(core),
+            false,
+            Some(content_blocker_error_from_update(error)),
+            false,
+        ),
+    }
+}
+
+/// Applies a candidate update and returns the authoritative content-blocker state.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `update_json` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_apply_filter_list_update_result_json(
+    ptr: *mut MahoCore,
+    update_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        { to_json_cstring(&apply_filter_list_update_result(ptr, update_json)) },
+        ptr::null_mut()
+    )
+}
+
+pub type OpaqueCompiledEngineHandle = maho_core::content_blocker::OpaqueCompiledEngine;
+pub type OpaqueCompileSnapshotHandle = maho_core::content_blocker::CompileInputSnapshot;
+
+/// Creates a light compile snapshot on UI thread.
+/// # Safety
+/// `ptr` must be from `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_create_compile_snapshot(
+    ptr: *mut MahoCore,
+) -> *mut OpaqueCompileSnapshotHandle {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let snapshot = core.create_content_blocker_compile_snapshot();
+            Box::into_raw(Box::new(snapshot))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Compiles an OpaqueCompiledEngine handle off-thread from a snapshot. Frees snapshot handle.
+/// # Safety
+/// `snapshot` must be from `maho_core_create_compile_snapshot`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_compile_engine_from_snapshot(
+    snapshot: *mut OpaqueCompileSnapshotHandle,
+) -> *mut OpaqueCompiledEngineHandle {
+    ffi_safe!(
+        {
+            if snapshot.is_null() {
+                return ptr::null_mut();
+            }
+            let snap = *Box::from_raw(snapshot);
+            let compiled = maho_core::content_blocker::compile_engine_snapshot(snap);
+            Box::into_raw(Box::new(compiled))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Frees an uncompiled snapshot handle.
+/// # Safety
+/// `snapshot` must be from `maho_core_create_compile_snapshot` or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_compile_snapshot_free(snapshot: *mut OpaqueCompileSnapshotHandle) {
+    ffi_safe!(
+        {
+            if !snapshot.is_null() {
+                let _ = Box::from_raw(snapshot);
+            }
+        },
+        ()
+    )
+}
+
+/// Creates a snapshot on UI and compiles an OpaqueCompiledEngine handle.
+/// # Safety
+/// `ptr` must be from `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_content_engine_compile_snapshot(
+    ptr: *mut MahoCore,
+) -> *mut OpaqueCompiledEngineHandle {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let snapshot = core.create_content_blocker_compile_snapshot();
+            let compiled = maho_core::content_blocker::compile_engine_snapshot(snapshot);
+            Box::into_raw(Box::new(compiled))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Installs an OpaqueCompiledEngine handle into MahoCore if generation and hash match. Frees handle.
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `handle` must be from `maho_content_engine_compile_snapshot`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_content_engine_install(
+    ptr: *mut MahoCore,
+    handle: *mut OpaqueCompiledEngineHandle,
+) -> bool {
+    ffi_safe!(
+        { install_content_engine_result(ptr, handle).success },
+        false
+    )
+}
+
+fn install_content_engine_result(
+    ptr: *mut MahoCore,
+    handle: *mut OpaqueCompiledEngineHandle,
+) -> ContentBlockerMutationResult {
+    if handle.is_null() {
+        return content_blocker_result(
+            None,
+            false,
+            Some(content_blocker_error(
+                "invalid_argument",
+                "compiled engine handle must be non-null",
+            )),
+            false,
+        );
+    }
+    // SAFETY: ownership of the non-null opaque handle is transferred to this call.
+    let compiled = unsafe { *Box::from_raw(handle) };
+    if ptr.is_null() {
+        return content_blocker_result(
+            None,
+            false,
+            Some(content_blocker_error(
+                "invalid_argument",
+                "core must be non-null",
+            )),
+            false,
+        );
+    }
+    if import_gate::is_active() {
+        // SAFETY: `ptr` was checked non-null and is borrowed only for this result.
+        let core = unsafe { &*ptr };
+        return content_blocker_result(
+            Some(core),
+            false,
+            Some(content_blocker_error(
+                "import_in_progress",
+                "content blocker is unavailable during import",
+            )),
+            false,
+        );
+    }
+    // SAFETY: the FFI contract requires exclusive ownership of the live core handle.
+    let core = unsafe { &mut *ptr };
+    let installed = core.install_content_blocker_compiled_engine(compiled);
+    let error = (!installed).then(|| {
+        content_blocker_error(
+            "install_rejected",
+            "compiled engine was stale or could not be persisted",
+        )
+    });
+    content_blocker_result(Some(core), installed, error, false)
+}
+
+/// Installs an opaque compiled engine and returns the authoritative promotion result.
+/// The handle is consumed exactly once even when install is rejected.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `handle` must be a live compiled-engine handle.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_content_engine_install_result_json(
+    ptr: *mut MahoCore,
+    handle: *mut OpaqueCompiledEngineHandle,
+) -> *mut c_char {
+    ffi_safe!(
+        { to_json_cstring(&install_content_engine_result(ptr, handle)) },
+        ptr::null_mut()
+    )
+}
+
+/// Frees an uninstalled OpaqueCompiledEngine handle.
+/// # Safety
+/// `handle` must be from `maho_content_engine_compile_snapshot` or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_content_engine_free(handle: *mut OpaqueCompiledEngineHandle) {
+    ffi_safe!(
+        {
+            if !handle.is_null() {
+                let _ = Box::from_raw(handle);
+            }
+        },
+        ()
     )
 }
 
@@ -3380,13 +4034,21 @@ pub unsafe extern "C" fn maho_core_start_download(
                 Some(s) => s,
                 None => return ptr::null_mut(),
             };
-            let total_bytes = parsed["total_bytes"].as_u64()
+            let total_bytes = parsed["total_bytes"]
+                .as_u64()
                 .or_else(|| parsed["total_bytes"].as_f64().map(|f| f as u64))
                 .unwrap_or(0);
             let file_path = parsed["file_path"].as_str();
             let mime_type = parsed["mime_type"].as_str();
             let chromium_guid = parsed["chromium_guid"].as_str();
-            let download_id = core.start_download(filename, url, total_bytes, file_path, mime_type, chromium_guid);
+            let download_id = core.start_download(
+                filename,
+                url,
+                total_bytes,
+                file_path,
+                mime_type,
+                chromium_guid,
+            );
             to_json_cstring(&download_id)
         },
         ptr::null_mut()
@@ -3453,7 +4115,8 @@ pub unsafe extern "C" fn maho_core_update_download_metadata(
                 Ok(v) => v,
                 Err(_) => return,
             };
-            let total_bytes = parsed["total_bytes"].as_u64()
+            let total_bytes = parsed["total_bytes"]
+                .as_u64()
                 .or_else(|| parsed["total_bytes"].as_f64().map(|f| f as u64));
             core.update_download_metadata(
                 download_id_str,
@@ -3604,7 +4267,6 @@ pub unsafe extern "C" fn maho_core_add_filter_list(
             if import_gate::is_active() {
                 return;
             }
-            let core = &mut *ptr;
             let id_str = match CStr::from_ptr(id).to_str() {
                 Ok(s) => s.to_string(),
                 Err(_) => return,
@@ -3617,9 +4279,65 @@ pub unsafe extern "C" fn maho_core_add_filter_list(
                 Ok(s) => s.to_string(),
                 Err(_) => return,
             };
-            core.add_filter_list(id_str, name_str, url_str);
+            let core = &mut *ptr;
+            let _ = add_filter_list_result(core, id_str, name_str, url_str);
         },
         ()
+    )
+}
+
+/// Adds a filter list through the authoritative core mutation path.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`; strings must be valid null-terminated UTF-8.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_filter_list_result_json(
+    ptr: *mut MahoCore,
+    id: *const c_char,
+    name: *const c_char,
+    url: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || id.is_null() || name.is_null() || url.is_null() {
+                return to_json_cstring(&content_blocker_result(
+                    None,
+                    false,
+                    Some(content_blocker_error(
+                        "invalid_argument",
+                        "core and list fields must be non-null",
+                    )),
+                    false,
+                ));
+            }
+            if import_gate::is_active() {
+                return to_json_cstring(&content_blocker_result(
+                    None,
+                    false,
+                    Some(content_blocker_error(
+                        "import_in_progress",
+                        "content blocker is unavailable during import",
+                    )),
+                    false,
+                ));
+            }
+            let id = match CStr::from_ptr(id).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let name = match CStr::from_ptr(name).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let url = match CStr::from_ptr(url).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let core = &mut *ptr;
+            to_json_cstring(&add_filter_list_result(core, id, name, url))
+        },
+        ptr::null_mut()
     )
 }
 
@@ -3641,14 +4359,39 @@ pub unsafe extern "C" fn maho_core_toggle_filter_list(
             if import_gate::is_active() {
                 return;
             }
-            let core = &mut *ptr;
             let id_str = match CStr::from_ptr(id).to_str() {
-                Ok(s) => s,
+                Ok(s) => s.to_string(),
                 Err(_) => return,
             };
-            core.toggle_filter_list(id_str, enabled);
+            let core = &mut *ptr;
+            let _ = toggle_filter_list_result(core, id_str, enabled);
         },
         ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `id` must be a valid null-terminated UTF-8 string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_toggle_filter_list_result_json(
+    ptr: *mut MahoCore,
+    id: *const c_char,
+    enabled: bool,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || id.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let id = match CStr::from_ptr(id).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let core = &mut *ptr;
+            to_json_cstring(&toggle_filter_list_result(core, id, enabled))
+        },
+        ptr::null_mut()
     )
 }
 
@@ -3666,14 +4409,38 @@ pub unsafe extern "C" fn maho_core_remove_filter_list(ptr: *mut MahoCore, id: *c
             if import_gate::is_active() {
                 return;
             }
-            let core = &mut *ptr;
             let id_str = match CStr::from_ptr(id).to_str() {
-                Ok(s) => s,
+                Ok(s) => s.to_string(),
                 Err(_) => return,
             };
-            core.remove_filter_list(id_str);
+            let core = &mut *ptr;
+            let _ = remove_filter_list_result(core, id_str);
         },
         ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `id` must be a valid null-terminated UTF-8 string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_remove_filter_list_result_json(
+    ptr: *mut MahoCore,
+    id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || id.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let id = match CStr::from_ptr(id).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let core = &mut *ptr;
+            to_json_cstring(&remove_filter_list_result(core, id))
+        },
+        ptr::null_mut()
     )
 }
 
@@ -3695,16 +4462,9 @@ pub unsafe extern "C" fn maho_core_update_filter_list_content(
             if import_gate::is_active() {
                 return;
             }
-            let core = &mut *ptr;
-            let id_str = match CStr::from_ptr(id).to_str() {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            let content_str = match CStr::from_ptr(content).to_str() {
-                Ok(s) => s.to_string(),
-                Err(_) => return,
-            };
-            core.update_filter_list_content(id_str, content_str);
+            // Legacy ABI only. Raw content replacement cannot preserve the
+            // candidate/promotion contract, so callers must use the typed
+            // update-response API and schedule worker compilation from its result.
         },
         ()
     )
@@ -3724,8 +4484,8 @@ pub unsafe extern "C" fn maho_core_rebuild_content_rules(ptr: *mut MahoCore) {
             if import_gate::is_active() {
                 return;
             }
-            let core = &mut *ptr;
-            core.rebuild_content_rules();
+            // Legacy ABI only. Synchronous rebuild would bypass candidate
+            // promotion and must remain a no-op.
         },
         ()
     )
@@ -5860,7 +6620,10 @@ pub unsafe extern "C" fn maho_core_decide_link_destination(
                     Ok(p) => p,
                     Err(_) => return ptr::null_mut(),
                 };
-                parsed.into_iter().map(|item| (item.space_id, item.rules)).collect()
+                parsed
+                    .into_iter()
+                    .map(|item| (item.space_id, item.rules))
+                    .collect()
             };
 
             let destination = core.decide_link_destination(url_str, is_external, &space_rules);
@@ -5873,7 +6636,7 @@ pub unsafe extern "C" fn maho_core_decide_link_destination(
 /// # Safety
 /// `core` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
-pub unsafe extern "C" fn maho_core_set_open_external_links_in_little_arc(
+pub unsafe extern "C" fn maho_core_set_open_external_links_in_maho_mini(
     core: *mut MahoCore,
     enabled: bool,
 ) {
@@ -5886,7 +6649,7 @@ pub unsafe extern "C" fn maho_core_set_open_external_links_in_little_arc(
                 return;
             }
             let core = &mut *core;
-            core.set_open_external_links_in_little_arc_persisted(enabled);
+            core.set_open_external_links_in_maho_mini_persisted(enabled);
         },
         ()
     )
@@ -5895,7 +6658,7 @@ pub unsafe extern "C" fn maho_core_set_open_external_links_in_little_arc(
 /// # Safety
 /// `core` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
-pub unsafe extern "C" fn maho_core_get_open_external_links_in_little_arc(
+pub unsafe extern "C" fn maho_core_get_open_external_links_in_maho_mini(
     core: *mut MahoCore,
 ) -> bool {
     ffi_safe!(
@@ -5907,7 +6670,7 @@ pub unsafe extern "C" fn maho_core_get_open_external_links_in_little_arc(
                 return false;
             }
             let core = &*core;
-            core.get_open_external_links_in_little_arc()
+            core.get_open_external_links_in_maho_mini()
         },
         false
     )
@@ -6743,11 +7506,13 @@ pub unsafe extern "C" fn maho_core_configure_sync_encryption(
                 Ok(()) => serde_json::json!({
                     "success": true,
                     "deviceId": core.sync_device_id()
-                }).to_string(),
+                })
+                .to_string(),
                 Err(e) => serde_json::json!({
                     "success": false,
                     "error": e
-                }).to_string(),
+                })
+                .to_string(),
             };
             CString::new(json)
                 .map(CString::into_raw)
@@ -9178,7 +9943,9 @@ pub unsafe extern "C" fn maho_agent_send_message(
     session: *mut MahoAgentSession,
     message: *const c_char,
     on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
-    on_thinking: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char)>,
+    on_thinking: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
+    >,
     on_tool_call: Option<
         unsafe extern "C" fn(
             user_data: *mut std::ffi::c_void,
@@ -9246,7 +10013,10 @@ pub unsafe extern "C" fn maho_agent_send_message(
                 callback
             });
 
-            let on_event_cb = if on_tool_call.is_some() || on_tool_result.is_some() || on_thinking.is_some() {
+            let on_event_cb = if on_tool_call.is_some()
+                || on_tool_result.is_some()
+                || on_thinking.is_some()
+            {
                 let on_tool_call_sendable = SendableCallback(on_tool_call);
                 let on_tool_result_sendable = SendableCallback(on_tool_result);
                 let on_thinking_sendable = SendableCallback(on_thinking);
@@ -9265,11 +10035,9 @@ pub unsafe extern "C" fn maho_agent_send_message(
                         }
                         maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
                             if let Some(cb) = on_tool_call_sendable.0 {
-                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) = (
-                                    CString::new(id),
-                                    CString::new(name),
-                                    CString::new(args),
-                                ) {
+                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) =
+                                    (CString::new(id), CString::new(name), CString::new(args))
+                                {
                                     unsafe {
                                         cb(udata, id_c.as_ptr(), name_c.as_ptr(), args_c.as_ptr());
                                     }
@@ -9278,13 +10046,16 @@ pub unsafe extern "C" fn maho_agent_send_message(
                         }
                         maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
                             if let Some(cb) = on_tool_result_sendable.0 {
-                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) = (
-                                    CString::new(id),
-                                    CString::new(name),
-                                    CString::new(result),
-                                ) {
+                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) =
+                                    (CString::new(id), CString::new(name), CString::new(result))
+                                {
                                     unsafe {
-                                        cb(udata, id_c.as_ptr(), name_c.as_ptr(), result_c.as_ptr());
+                                        cb(
+                                            udata,
+                                            id_c.as_ptr(),
+                                            name_c.as_ptr(),
+                                            result_c.as_ptr(),
+                                        );
                                     }
                                 }
                             }
@@ -9292,7 +10063,10 @@ pub unsafe extern "C" fn maho_agent_send_message(
                         _ => {}
                     }
                 };
-                Some(Arc::new(callback) as Arc<dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static>)
+                Some(Arc::new(callback)
+                    as Arc<
+                        dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static,
+                    >)
             } else {
                 None
             };
@@ -9360,7 +10134,9 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
     session: *mut MahoAgentSession,
     message: *const c_char,
     on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
-    on_thinking: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char)>,
+    on_thinking: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
+    >,
     on_complete: Option<
         unsafe extern "C" fn(
             user_data: *mut std::ffi::c_void,
@@ -9420,7 +10196,10 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
                         _ => {}
                     }
                 };
-                Some(Arc::new(callback) as Arc<dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static>)
+                Some(Arc::new(callback)
+                    as Arc<
+                        dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static,
+                    >)
             } else {
                 None
             };
@@ -10452,10 +11231,11 @@ pub unsafe extern "C" fn maho_routines_run(
                         }
                     };
 
-                    let result = maho_core::routines::run_routine_resolved(
+                    let result = maho_core::routines::run_routine_and_record(
                         &id_str,
                         tier,
                         &resolve_storage,
+                        maho_core::routines::RoutineRunSource::Manual,
                         |prompt| async move {
                             backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
                         },
@@ -10507,6 +11287,8 @@ struct FireRoutineEventInput {
     kind: String,
     #[serde(default)]
     count: Option<u32>,
+    #[serde(default)]
+    channel: Option<String>,
 }
 
 /// Returns JSON array of ALL routines (built-in + user-defined custom), each an
@@ -10700,6 +11482,14 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                 "on_many_tabs" => maho_core::routines::RoutineEvent::OnManyTabs {
                     threshold: input.count.unwrap_or(0),
                 },
+                // Deferred-wiring parity triggers: reachable here so an emitter can
+                // fire them once wired, but no browser/mail adapter emits them yet.
+                "on_notification" => maho_core::routines::RoutineEvent::OnNotification {
+                    channel: input.channel.unwrap_or_default(),
+                },
+                "on_inbox_heartbeat" => maho_core::routines::RoutineEvent::OnInboxHeartbeat {
+                    min_unread: input.count.unwrap_or(0),
+                },
                 _ => return,
             };
             let db_path = match core_ref.sqlite_db_path() {
@@ -10842,39 +11632,73 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                     // NO ambient tokio runtime; a bare `tokio::spawn` there panics and the
                     // scheduled routine silently never fires. `Runtime::spawn` spawns onto
                     // its own runtime, so no panic can cross the FFI boundary.
-                    maho_core::memory_manager::get_runtime().spawn(async move {
-                        let storage =
-                            match maho_storage::sqlite::SqliteStorage::open(&db_path_clone) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    eprintln!(
+                    // Spawn onto the shared, owned maho-core runtime. `maho_routines_tick`
+                    // is called once/minute from the Chromium C++ browser thread which has
+                    // NO ambient tokio runtime; a bare `tokio::spawn` there panics and the
+                    // scheduled routine silently never fires. `run_routine_and_record`
+                    // borrows a `!Send` SqliteStorage across an await, so drive it on a
+                    // current-thread runtime pinned to a `spawn_blocking` thread (the future
+                    // never migrates) — mirroring `maho_routines_run`.
+                    maho_core::memory_manager::get_runtime().spawn_blocking(move || {
+                        let rt = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                eprintln!("[routines scheduled] failed to build runtime: {e}");
+                                return;
+                            }
+                        };
+                        rt.block_on(async move {
+                            let storage =
+                                match maho_storage::sqlite::SqliteStorage::open(&db_path_clone) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        eprintln!(
                                         "[routines scheduled] failed to open sqlite storage: {:?}",
                                         e
                                     );
-                                    return;
-                                }
-                            };
-                        let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
-                        let backend = SwiftideBackend::new(
-                            Arc::new(agent_storage),
-                            None,
-                            std::env::current_dir()
-                                .unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                            true,
-                        );
+                                        return;
+                                    }
+                                };
+                            // Separate handle for resolving the routine and recording its
+                            // result into the durable inbox; the agent moves its own handle.
+                            let record_storage =
+                                match maho_storage::sqlite::SqliteStorage::open(&db_path_clone) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        eprintln!(
+                                        "[routines scheduled] failed to open record storage: {:?}",
+                                        e
+                                    );
+                                        return;
+                                    }
+                                };
+                            let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+                            let backend = SwiftideBackend::new(
+                                Arc::new(agent_storage),
+                                None,
+                                std::env::current_dir()
+                                    .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                                true,
+                            );
 
-                        let result = maho_core::routines::run_routine(
-                            &id_str,
-                            maho_core::routines::UserTier::Max,
-                            |prompt| async move {
-                                backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
-                            },
-                        )
-                        .await;
+                            let result = maho_core::routines::run_routine_and_record(
+                                &id_str,
+                                maho_core::routines::UserTier::Max,
+                                &record_storage,
+                                maho_core::routines::RoutineRunSource::Scheduled,
+                                |prompt| async move {
+                                    backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
+                                },
+                            )
+                            .await;
 
-                        if let Err(e) = result {
-                            eprintln!("[RoutineScheduler] routine {} failed: {}", id_str, e);
-                        }
+                            if let Err(e) = result {
+                                eprintln!("[RoutineScheduler] routine {} failed: {}", id_str, e);
+                            }
+                        });
                     });
 
                     // Update last_run timestamp
@@ -10888,6 +11712,100 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
     )
 }
 
+// ============================================================
+// Routine Inbox FFI (durable run-result history)
+// ============================================================
+
+/// Returns JSON array of recorded routine results (the routine inbox), newest
+/// first. If `routine_id` is non-null, only that routine's history is returned;
+/// pass null for all routines. `limit` caps the number of rows (0 is treated as
+/// a sane default of 50). Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`. `routine_id`, if
+/// non-null, must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_history(
+    core: *mut MahoCore,
+    routine_id: *const c_char,
+    limit: u32,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let db_path = match (&*core).sqlite_db_path() {
+                Some(p) => p.to_string(),
+                None => return ptr::null_mut(),
+            };
+            let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let capped = if limit == 0 { 50 } else { limit };
+            let results = if routine_id.is_null() {
+                storage.list_routine_results(capped)
+            } else {
+                let id_str = match CStr::from_ptr(routine_id).to_str() {
+                    Ok(s) => s,
+                    Err(_) => return ptr::null_mut(),
+                };
+                storage.list_routine_results_for(id_str, capped)
+            };
+            match results {
+                Ok(records) => to_json_cstring(&records),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns the single most recent routine result for `routine_id` as JSON, or
+/// null if the routine has never run. Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`. `routine_id`
+/// must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_latest(
+    core: *mut MahoCore,
+    routine_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || routine_id.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let db_path = match (&*core).sqlite_db_path() {
+                Some(p) => p.to_string(),
+                None => return ptr::null_mut(),
+            };
+            let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let id_str = match CStr::from_ptr(routine_id).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            match storage.latest_routine_result(id_str) {
+                Ok(Some(record)) => to_json_cstring(&record),
+                Ok(None) => ptr::null_mut(),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static SPLIT_CALLBACKS: OnceLock<Mutex<Vec<(u64, extern "C" fn(*const c_char))>>> = OnceLock::new();
@@ -10896,12 +11814,20 @@ static NEXT_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
 type ToolAvailCb = unsafe extern "C" fn(*mut c_void, *const c_char);
 static TOOL_AVAIL_CALLBACKS: OnceLock<Mutex<Vec<(u64, usize, ToolAvailCb)>>> = OnceLock::new();
 
+type SettingsChangeCb = unsafe extern "C" fn(*mut c_void, *const c_char);
+static SETTINGS_CHANGE_CALLBACKS: OnceLock<Mutex<Vec<(u64, usize, SettingsChangeCb)>>> =
+    OnceLock::new();
+
 fn get_split_callbacks() -> &'static Mutex<Vec<(u64, extern "C" fn(*const c_char))>> {
     SPLIT_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn get_tool_avail_callbacks() -> &'static Mutex<Vec<(u64, usize, ToolAvailCb)>> {
     TOOL_AVAIL_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn get_settings_change_callbacks() -> &'static Mutex<Vec<(u64, usize, SettingsChangeCb)>> {
+    SETTINGS_CHANGE_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn process_split_callbacks_for_updates(updates: &[maho_types::events::core_update::CoreUpdate]) {
@@ -10923,6 +11849,29 @@ fn process_split_callbacks_for_updates(updates: &[maho_types::events::core_updat
                     for (_, ud, cb) in cbs.iter() {
                         unsafe {
                             cb(*ud as *mut c_void, c_json.as_ptr());
+                        }
+                    }
+                }
+            }
+            maho_types::events::core_update::CoreUpdate::SettingsChanged { settings } => {
+                if let Ok(cbs) = get_settings_change_callbacks().lock() {
+                    if cbs.is_empty() {
+                        continue;
+                    }
+                    // Contract C2: marshal the `settings` payload (not the update wrapper);
+                    // pass null on failure since the C side is documented null-tolerant.
+                    let c_json = serde_json::to_string(settings)
+                        .ok()
+                        .and_then(|json| CString::new(json).ok());
+                    let json_ptr = c_json.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+                    for (_, ud, cb) in cbs.iter() {
+                        // SAFETY: `cb` is a caller-provided C function pointer registered via
+                        // `maho_core_register_settings_change_callback`; `*ud` is the matching
+                        // `user_data`. `json_ptr` is a valid NUL-terminated string (or null)
+                        // that outlives every call in this loop. The registry mutex is held,
+                        // so no concurrent unregister can free an entry mid-dispatch.
+                        unsafe {
+                            cb(*ud as *mut c_void, json_ptr);
                         }
                     }
                 }
@@ -11070,6 +12019,55 @@ pub unsafe extern "C" fn maho_core_unregister_tool_availability_callback(
                 return;
             }
             if let Ok(mut cbs) = get_tool_avail_callbacks().lock() {
+                cbs.retain(|(t, _, _)| *t != token);
+            }
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `user_data` may be null; if non-null it must outlive the callback registration.
+/// `callback` must not panic and must be safe to call from arbitrary threads. It receives
+/// the current settings JSON (`*const c_char`), which may be null; callers must tolerate null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_settings_change_callback(
+    core: *mut MahoCore,
+    user_data: *mut c_void,
+    callback: unsafe extern "C" fn(*mut c_void, *const c_char),
+) -> u64 {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return 0;
+            }
+            maho_types::events::core_update::set_core_update_callback(|update| {
+                process_split_callbacks_for_updates(&[update]);
+            });
+            let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
+            if let Ok(mut cbs) = get_settings_change_callbacks().lock() {
+                cbs.push((token, user_data as usize, callback));
+            }
+            token
+        },
+        0
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_unregister_settings_change_callback(
+    core: *mut MahoCore,
+    token: u64,
+) {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return;
+            }
+            if let Ok(mut cbs) = get_settings_change_callbacks().lock() {
                 cbs.retain(|(t, _, _)| *t != token);
             }
         },
@@ -11556,5 +12554,1080 @@ mod tests {
         unsafe { maho_routines_fire_event(core_ptr, bad.as_ptr()) };
 
         let _ = std::fs::remove_file(&db);
+    }
+
+    /// Routine inbox query FFI: `maho_routines_history` and
+    /// `maho_routines_latest` must return recorded runs (persisted via the
+    /// durable ledger) as JSON, including a failed run whose error text is
+    /// preserved. Seeds the same sqlite the core is backed by, then queries
+    /// through the FFI.
+    #[test]
+    fn routines_history_and_latest_query_recorded_runs() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::{CStr, CString};
+
+        let db = std::env::temp_dir().join(format!(
+            "maho_routines_inbox_query_{}.sqlite",
+            std::process::id()
+        ));
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+
+        // Seed two runs (one success, one failure) on the same db the FFI reads.
+        {
+            let storage = maho_storage::sqlite::SqliteStorage::open(&db_path).unwrap();
+            storage
+                .record_routine_result("weekly_tab_tidy", 100, true, "tidied 12 tabs", "scheduled")
+                .unwrap();
+            storage
+                .record_routine_result("weekly_tab_tidy", 200, false, "agent error", "manual")
+                .unwrap();
+        }
+
+        // history for the routine: newest-first, both rows present.
+        let rid = CString::new("weekly_tab_tidy").unwrap();
+        let hist_ptr = unsafe { maho_routines_history(core_ptr, rid.as_ptr(), 10) };
+        assert!(!hist_ptr.is_null(), "history must return JSON");
+        let hist_json = unsafe { CStr::from_ptr(hist_ptr).to_str().unwrap().to_string() };
+        unsafe { maho_string_free(hist_ptr) };
+        let records: Vec<serde_json::Value> = serde_json::from_str(&hist_json).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["content"], "agent error", "newest first");
+        assert_eq!(records[0]["success"], false);
+        assert_eq!(records[0]["source"], "manual");
+
+        // history for all routines (null id) also returns rows.
+        let all_ptr = unsafe { maho_routines_history(core_ptr, std::ptr::null(), 0) };
+        let all_json = unsafe { CStr::from_ptr(all_ptr).to_str().unwrap().to_string() };
+        unsafe { maho_string_free(all_ptr) };
+        let all: Vec<serde_json::Value> = serde_json::from_str(&all_json).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // latest returns the single most recent run.
+        let latest_ptr = unsafe { maho_routines_latest(core_ptr, rid.as_ptr()) };
+        assert!(!latest_ptr.is_null(), "latest must return JSON");
+        let latest_json = unsafe { CStr::from_ptr(latest_ptr).to_str().unwrap().to_string() };
+        unsafe { maho_string_free(latest_ptr) };
+        let latest: serde_json::Value = serde_json::from_str(&latest_json).unwrap();
+        assert_eq!(latest["content"], "agent error");
+        assert_eq!(latest["ranAt"], 200);
+
+        // A routine that never ran returns null from latest.
+        let ghost = CString::new("never_ran").unwrap();
+        let none_ptr = unsafe { maho_routines_latest(core_ptr, ghost.as_ptr()) };
+        assert!(none_ptr.is_null(), "latest of a never-run routine is null");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// C2: registering a settings-change callback and then calling `maho_core_set_density`
+    /// must invoke the callback with the current settings JSON. Proves the emit
+    /// (maho-core global bus) + dispatch (FFI SettingsChanged arm) wiring end to end.
+    #[test]
+    fn set_density_fires_settings_change_callback() {
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::CString;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+
+        unsafe extern "C" fn on_settings_change(user_data: *mut c_void, json: *const c_char) {
+            if user_data.is_null() {
+                return;
+            }
+            // SAFETY: `user_data` is the AtomicU32 pointer supplied at registration and is
+            // kept alive by the test until after unregistration.
+            let counter = unsafe { &*(user_data as *const AtomicU32) };
+            counter.fetch_add(1, AtomicOrdering::SeqCst);
+            if !json.is_null() {
+                // SAFETY: `json` is a valid NUL-terminated C string owned by the dispatcher
+                // for the duration of this call.
+                let parsed = unsafe { CStr::from_ptr(json) }.to_str();
+                assert!(parsed.is_ok(), "settings JSON must be valid UTF-8");
+            }
+        }
+
+        let counter = Box::into_raw(Box::new(AtomicU32::new(0)));
+        let mut core = MahoCore::new();
+        let core_ptr: *mut MahoCore = &mut core;
+
+        // SAFETY: `core_ptr` is valid; `counter` outlives the registration below.
+        let token = unsafe {
+            maho_core_register_settings_change_callback(
+                core_ptr,
+                counter as *mut c_void,
+                on_settings_change,
+            )
+        };
+
+        let density = CString::new("compact").unwrap();
+        // SAFETY: `core_ptr` and `density` are valid for the duration of this call.
+        unsafe { maho_core_set_density(core_ptr, density.as_ptr()) };
+
+        // SAFETY: `counter` is still alive (not yet reclaimed).
+        let fired = unsafe { &*counter }.load(AtomicOrdering::SeqCst);
+        assert!(
+            fired >= 1,
+            "settings-change callback must fire on set_density"
+        );
+
+        // SAFETY: unregister before reclaiming `counter` so no dispatch can dereference it.
+        unsafe { maho_core_unregister_settings_change_callback(core_ptr, token) };
+        // SAFETY: no registered callback references `counter` after unregistration.
+        unsafe { drop(Box::from_raw(counter)) };
+    }
+}
+
+// === Vault FFI C ABI ===
+
+use maho_core::vault_manager::{
+    OriginMatchPolicy, VaultCrudError, VaultLoginInput, VaultLoginUpdate, VaultManagerError,
+};
+use maho_types::vault::{
+    VaultAuditPageRequest, VaultErrorCode, VaultItemSearchRequest, VaultPolicy, VaultRevision,
+};
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultFfiError {
+    code: VaultErrorCode,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultFfiResponse<T> {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<VaultFfiError>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultInitializeRequest {
+    master_passphrase: String,
+    recovery_secret: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultUnlockRequest {
+    master_passphrase: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultRecoveryUnlockRequest {
+    recovery_secret: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultLoginRequest {
+    metadata: VaultItemPublicMetadata,
+    username: String,
+    password: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultLoginUpdateRequest {
+    id: VaultItemId,
+    #[serde(default, alias = "expected_revision")]
+    expected_revision: VaultRevision,
+    metadata: VaultItemPublicMetadata,
+    username: String,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultDeleteRequest {
+    id: VaultItemId,
+    #[serde(default, alias = "expected_revision")]
+    expected_revision: VaultRevision,
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum VaultSecretActionRequest {
+    Copy,
+    Fill,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultUseSecretRequest {
+    item_id: VaultItemId,
+    #[serde(alias = "expected_revision")]
+    expected_revision: VaultRevision,
+    action: VaultSecretActionRequest,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultUseSecretResponse {}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum VaultMatchPolicyRequest {
+    Exact,
+    Subdomain,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultMatchItemsRequest {
+    request: VaultItemSearchRequest,
+    policy: VaultMatchPolicyRequest,
+}
+
+fn vault_ok<T: serde::Serialize>(data: T) -> *mut c_char {
+    to_json_cstring(&VaultFfiResponse {
+        ok: true,
+        data: Some(data),
+        error: None,
+    })
+}
+
+fn vault_error(code: VaultErrorCode, message: impl Into<String>) -> *mut c_char {
+    to_json_cstring(&VaultFfiResponse::<()> {
+        ok: false,
+        data: None,
+        error: Some(VaultFfiError {
+            code,
+            message: message.into(),
+        }),
+    })
+}
+
+fn vault_lifecycle_error(error: VaultManagerError) -> *mut c_char {
+    let code = match error {
+        VaultManagerError::VaultLocked => VaultErrorCode::Locked,
+        VaultManagerError::Uninitialized => VaultErrorCode::Uninitialized,
+        VaultManagerError::AlreadyInitialized => VaultErrorCode::InvalidCredentials,
+        VaultManagerError::RateLimited => VaultErrorCode::RateLimited,
+        VaultManagerError::InvalidCredentials => VaultErrorCode::InvalidCredentials,
+        VaultManagerError::CorruptedVaultData => VaultErrorCode::UnsupportedSchemaVersion,
+        VaultManagerError::Storage(_) => VaultErrorCode::StorageFailure,
+        VaultManagerError::DeviceProtector(_) => VaultErrorCode::ProviderUnavailable,
+        VaultManagerError::DeviceWrapper(_) => VaultErrorCode::StorageFailure,
+        VaultManagerError::DeviceBindingMismatch => VaultErrorCode::InvalidCredentials,
+        VaultManagerError::Crypto(_) => VaultErrorCode::InvalidCredentials,
+    };
+    vault_error(code, error.to_string())
+}
+
+fn vault_crud_error(error: VaultCrudError) -> *mut c_char {
+    let code = match error {
+        VaultCrudError::Locked => VaultErrorCode::Locked,
+        VaultCrudError::ItemNotFound => VaultErrorCode::NotFound,
+        VaultCrudError::RevisionConflict { .. } => VaultErrorCode::RevisionConflict,
+        VaultCrudError::Duplicate { .. } => VaultErrorCode::RevisionConflict,
+        VaultCrudError::InvalidOrigin { .. } => VaultErrorCode::InvalidOrigin,
+        VaultCrudError::ItemKindMismatch | VaultCrudError::FieldMismatch => {
+            VaultErrorCode::SecretFieldForbidden
+        }
+        VaultCrudError::MalformedPayload | VaultCrudError::Crypto => {
+            VaultErrorCode::UnsupportedSchemaVersion
+        }
+        VaultCrudError::Storage(_) => VaultErrorCode::StorageFailure,
+        _ => VaultErrorCode::StorageFailure,
+    };
+    vault_error(code, error.to_string())
+}
+
+fn vault_secret_buffer(secret: &Zeroizing<String>) -> *mut c_char {
+    if secret.as_bytes().contains(&0) {
+        return ptr::null_mut();
+    }
+    CString::new(secret.as_str())
+        .map(CString::into_raw)
+        .unwrap_or(ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be null or a valid, uniquely borrowed `MahoCore` pointer and
+/// `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+unsafe fn vault_use_login_secret(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> Result<Zeroizing<String>, *mut c_char> {
+    // SAFETY: Category 8 (FFI boundary): the caller contract for this helper
+    // requires a null or live uniquely borrowed `MahoCore` pointer.
+    let Some(core) = (unsafe { vault_core(core) }) else {
+        return Err(ptr::null_mut());
+    };
+    // SAFETY: Category 8 (FFI boundary): the caller contract requires a valid
+    // NUL-terminated UTF-8 JSON request pointer for the duration of this call.
+    let request = match unsafe { vault_parse_json::<VaultUseSecretRequest>(request_json) } {
+        Ok(request) => request,
+        Err(response) => return Err(response),
+    };
+    match request.action {
+        VaultSecretActionRequest::Copy | VaultSecretActionRequest::Fill => core
+            .vault_use_login_password_at_revision(request.item_id, request.expected_revision)
+            .map_err(vault_crud_error),
+    }
+}
+
+/// # Safety
+/// `response` must be null or a string returned by `to_json_cstring`.
+unsafe fn free_vault_error_response(response: *mut c_char) {
+    if response.is_null() {
+        return;
+    }
+    // SAFETY: Category 12 (invalid free): `response` comes from this crate's
+    // JSON error allocation path and is consumed exactly once here.
+    unsafe { maho_string_free(response) };
+}
+
+/// # Safety
+/// `request_json` must be null or a valid NUL-terminated C string readable for its full length.
+unsafe fn vault_parse_json<T: serde::de::DeserializeOwned>(
+    request_json: *const c_char,
+) -> Result<T, *mut c_char> {
+    if request_json.is_null() {
+        return Err(vault_error(
+            VaultErrorCode::StorageFailure,
+            "request JSON is required",
+        ));
+    }
+    // SAFETY: Category 8 (FFI boundary): the public caller contract guarantees a live,
+    // NUL-terminated pointer; this helper rejects null and validates UTF-8 before parsing.
+    let request = match unsafe { CStr::from_ptr(request_json) }.to_str() {
+        Ok(value) => value,
+        Err(_) => return Err(vault_error(VaultErrorCode::StorageFailure, "invalid_utf8")),
+    };
+    serde_json::from_str(request).map_err(|error| {
+        vault_error(
+            VaultErrorCode::StorageFailure,
+            format!("invalid JSON: {error}"),
+        )
+    })
+}
+
+/// # Safety
+/// `core` must be null or a valid, uniquely borrowed `MahoCore` pointer owned by the caller.
+unsafe fn vault_core(core: *mut MahoCore) -> Option<&'static mut MahoCore> {
+    // SAFETY: Category 8 (FFI boundary): the public caller contract guarantees that a non-null
+    // `core` points to a live, uniquely borrowed MahoCore for the duration of the call.
+    unsafe { core.as_mut() }
+}
+
+/// Returns the secret-free Vault status owned by `core`.
+///
+/// # Safety
+/// `core` must be a valid MahoCore pointer. The returned string is freed with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_status_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            vault_ok(core.vault_status())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns the effective default agent Vault policy from durable storage.
+///
+/// # Safety
+/// `core` must be a valid MahoCore pointer. The returned string is freed with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_get_policy_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            match core.vault_agent_policy_status() {
+                Ok(policy) => vault_ok(policy),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Persists an agent Vault policy override and records a policy-change audit row.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_set_policy_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultPolicy>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.vault_set_agent_policy(request) {
+                Ok(policy) => vault_ok(policy),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns a paged, public, secret-free Vault audit view.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_audit_page_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultAuditPageRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.vault_audit_page(&request) {
+                Ok(page) => vault_ok(page),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Initializes the profile-owned Vault with independent user and recovery secrets.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_initialize_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultInitializeRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.initialize_vault(
+                request.master_passphrase.as_bytes(),
+                request.recovery_secret.as_bytes(),
+            ) {
+                Ok(()) => vault_ok(core.vault_status()),
+                Err(error) => vault_lifecycle_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Unlocks the profile-owned Vault.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_unlock_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultUnlockRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.unlock_vault(request.master_passphrase.as_bytes()) {
+                Ok(()) => vault_ok(core.vault_status()),
+                Err(error) => vault_lifecycle_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Unlocks the profile-owned Vault with its independent recovery secret.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_unlock_with_recovery_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultRecoveryUnlockRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.unlock_vault_with_recovery(request.recovery_secret.as_bytes()) {
+                Ok(()) => vault_ok(core.vault_status()),
+                Err(error) => vault_lifecycle_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Locks the profile-owned Vault and revokes active grants.
+///
+/// # Safety
+/// `core` must be a valid MahoCore pointer.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_lock_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            match core.lock_vault() {
+                Ok(()) => vault_ok(core.vault_status()),
+                Err(error) => vault_lifecycle_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Adds a durable login record and returns only its public metadata.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_add_login_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultLoginRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            let input = VaultLoginInput {
+                metadata: request.metadata,
+                username: request.username,
+                password: zeroize::Zeroizing::new(request.password),
+            };
+            match core.vault_add_login(input) {
+                Ok(item) => vault_ok(item),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Lists public metadata for items in the profile-owned Vault.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_list_items_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultItemListRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.vault_list_items(&request) {
+                Ok(items) => vault_ok(items),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Searches exact-origin public item metadata.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_search_items_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultItemSearchRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.vault_search_items(&request) {
+                Ok(items) => vault_ok(items),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Matches public item metadata using an explicit origin policy.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_match_items_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultMatchItemsRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            let policy = match request.policy {
+                VaultMatchPolicyRequest::Exact => OriginMatchPolicy::Exact,
+                VaultMatchPolicyRequest::Subdomain => OriginMatchPolicy::Subdomain,
+            };
+            match core.vault_match_items(&request.request, policy) {
+                Ok(items) => vault_ok(items),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Updates a durable login record and returns its public metadata.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_update_login_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultLoginUpdateRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            let update = VaultLoginUpdate {
+                metadata: request.metadata,
+                username: request.username,
+                password: request.password.map(zeroize::Zeroizing::new),
+            };
+            match core.vault_update_login(request.id, request.expected_revision, update) {
+                Ok(item) => vault_ok(item),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Tombstones a durable Vault item and returns its public metadata.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_delete_item_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            let request = match vault_parse_json::<VaultDeleteRequest>(request_json) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            match core.vault_delete_item(request.id, request.expected_revision) {
+                Ok(item) => vault_ok(item),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Consumes a login secret for a browser-process action and returns no plaintext.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_use_secret_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            // SAFETY: Category 8 (FFI boundary): this public ABI forwards its
+            // documented pointer contracts to the checked helper.
+            match unsafe { vault_use_login_secret(core, request_json) } {
+                Ok(_secret) => vault_ok(VaultUseSecretResponse {}),
+                Err(response) => response,
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns a short-lived login secret buffer for browser-process copy/fill use.
+///
+/// The returned buffer is never suitable for WebUI/Mojo responses. The browser
+/// process must consume it immediately and release it with
+/// [`maho_vault_free_secret_buffer`], which zeroizes before deallocation.
+///
+/// # Safety
+/// `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_use_secret_buffer_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            // SAFETY: Category 8 (FFI boundary): this public ABI forwards its
+            // documented pointer contracts to the checked helper.
+            match unsafe { vault_use_login_secret(core, request_json) } {
+                Ok(secret) => vault_secret_buffer(&secret),
+                Err(response) => {
+                    // SAFETY: Category 12 (invalid free): this path discards a
+                    // structured error string allocated by `vault_use_login_secret`
+                    // exactly once because this raw-buffer ABI reports errors as null.
+                    unsafe { free_vault_error_response(response) };
+                    ptr::null_mut()
+                }
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Frees a secret buffer created by FFI functions, ensuring memory is zeroized before deallocation.
+///
+/// # Safety
+/// `buffer` must be a valid pointer created by Vault secret FFI functions or NUL.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_free_secret_buffer(buffer: *mut c_char) {
+    if buffer.is_null() {
+        return;
+    }
+    // SAFETY: Category 12 (invalid free): callers may only pass a pointer
+    // returned by Vault secret-buffer FFI functions, transferring ownership
+    // back exactly once for zeroization and deallocation.
+    unsafe {
+        let mut vec = CString::from_raw(buffer).into_bytes();
+        vec.zeroize();
+    }
+}
+
+#[cfg(test)]
+mod vault_ffi_tests {
+    use super::*;
+    use std::fs;
+
+    const MASTER: &str = "correct horse battery staple";
+    const RECOVERY: &str = "test-only independent recovery material";
+    const SECRET: &str = "S3NTINEL-vault-ffi-secret";
+
+    fn request(value: serde_json::Value) -> CString {
+        CString::new(value.to_string()).expect("test JSON contains no NUL")
+    }
+
+    fn read_owned_json(pointer: *mut c_char) -> serde_json::Value {
+        assert!(!pointer.is_null(), "Vault JSON ABI returned null");
+        // SAFETY: the Vault FFI returns a CString allocated by Rust and owned by this test.
+        let value = unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .expect("Vault JSON ABI returns UTF-8")
+            .to_owned();
+        // SAFETY: this test consumes the returned allocation exactly once.
+        unsafe { maho_string_free(pointer) };
+        serde_json::from_str(&value).expect("Vault JSON ABI returns JSON")
+    }
+
+    fn core_with_storage() -> (*mut MahoCore, std::path::PathBuf) {
+        maho_storage::sqlite::set_sqlcipher_key("vault-ffi-test-key")
+            .expect("test SQLCipher key configures");
+        let path = std::env::temp_dir().join(format!("maho-vault-ffi-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&path).expect("test profile directory creates");
+        let db_path = path.join("vault.sqlite");
+        let db = db_path.to_str().expect("temporary path is UTF-8");
+        (
+            Box::into_raw(Box::new(MahoCore::new().with_storage(db))),
+            path,
+        )
+    }
+
+    fn free_core(core: *mut MahoCore, path: &std::path::Path) {
+        // SAFETY: `core` is uniquely owned by this test and has not been freed.
+        unsafe { maho_core_free(core) };
+        fs::remove_dir_all(path).expect("test profile directory removes");
+    }
+
+    fn initialize_request() -> CString {
+        request(serde_json::json!({
+            "masterPassphrase": MASTER,
+            "recoverySecret": RECOVERY,
+        }))
+    }
+
+    fn add_login_request() -> CString {
+        request(serde_json::json!({
+            "metadata": {
+                "title": "Example",
+                "origins": ["https://example.com"],
+                "usernameHint": "ignored-by-core",
+                "itemKind": "login",
+                "totp": null,
+                "passkey": null,
+            },
+            "username": "person@example.com",
+            "password": SECRET,
+        }))
+    }
+
+    #[test]
+    fn vault_secret_buffer_free_accepts_owned_secret_buffer() {
+        let secret = CString::new("miri-secret-buffer").expect("test secret has no NUL");
+        let raw = secret.into_raw();
+
+        // SAFETY: this test transfers one CString allocation to the Vault secret
+        // buffer free function and never uses the pointer again.
+        unsafe { maho_vault_free_secret_buffer(raw) };
+    }
+
+    #[test]
+    fn vault_ffi_contract_removes_process_global_five_function_abi() {
+        let source = include_str!("lib.rs");
+
+        assert!(!source.contains(concat!("GLOBAL_", "VAULT_MANAGER")));
+        assert!(!source.contains(concat!("fn with_", "vault")));
+        assert!(!source.contains(concat!("fn maho_vault_", "initialize(")));
+        assert!(!source.contains(concat!("fn maho_vault_", "unlock(")));
+        assert!(!source.contains(concat!("fn maho_vault_", "lock()")));
+        assert!(!source.contains(concat!("fn maho_vault_", "encrypt_item(")));
+    }
+
+    #[test]
+    fn vault_ffi_returns_explicit_boundary_failures_for_null_and_invalid_utf8() {
+        let init = initialize_request();
+        let invalid_utf8 = [0xff_u8 as c_char, 0];
+
+        // SAFETY: null core is an explicitly supported boundary input.
+        assert!(unsafe { maho_vault_initialize_json(ptr::null_mut(), init.as_ptr()) }.is_null());
+
+        let (core, path) = core_with_storage();
+        // SAFETY: `core` is live and the invalid bytes are NUL-terminated.
+        let response =
+            read_owned_json(unsafe { maho_vault_initialize_json(core, invalid_utf8.as_ptr()) });
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "storage_failure");
+        assert_eq!(response["error"]["message"], "invalid_utf8");
+        free_core(core, &path);
+    }
+
+    #[test]
+    fn vault_ffi_initialization_fails_closed_without_profile_storage() {
+        let core = maho_core_new();
+        let init = initialize_request();
+
+        // SAFETY: `core` is a live FFI-created core and `init` is NUL-terminated JSON.
+        let response = read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) });
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "storage_failure");
+        // SAFETY: `core` is uniquely owned by this test.
+        unsafe { maho_core_free(core) };
+    }
+
+    #[test]
+    fn vault_ffi_uses_profile_owned_durable_lifecycle() {
+        let (core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["data"]["lockState"],
+            "locked"
+        );
+        let unlock = request(serde_json::json!({"masterPassphrase": MASTER}));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_unlock_json(core, unlock.as_ptr()) })["data"]
+                ["lockState"],
+            "unlocked"
+        );
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_status_json(core) })["data"]["lockState"],
+            "unlocked"
+        );
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["ok"],
+            true
+        );
+        let recovery = request(serde_json::json!({"recoverySecret": RECOVERY}));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe {
+                maho_vault_unlock_with_recovery_json(core, recovery.as_ptr())
+            })["data"]["lockState"],
+            "unlocked"
+        );
+        free_core(core, &path);
+    }
+
+    #[test]
+    fn vault_ffi_crud_returns_metadata_and_keeps_secret_out_of_queries() {
+        let (core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+        let add = add_login_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        let added = read_owned_json(unsafe { maho_vault_add_login_json(core, add.as_ptr()) });
+        let id = added["data"]["id"]
+            .as_str()
+            .expect("add returns ID")
+            .to_string();
+        let list = request(
+            serde_json::json!({"schemaVersion": 1, "provider": null, "kinds": [], "cursor": null, "limit": 50}),
+        );
+        // SAFETY: the core and request are valid for the duration of this call.
+        let listed = read_owned_json(unsafe { maho_vault_list_items_json(core, list.as_ptr()) });
+        let search = request(
+            serde_json::json!({"schemaVersion": 1, "origin": "https://example.com", "provider": null, "kinds": []}),
+        );
+        // SAFETY: the core and request are valid for the duration of this call.
+        let searched =
+            read_owned_json(unsafe { maho_vault_search_items_json(core, search.as_ptr()) });
+        let matched = request(
+            serde_json::json!({"request": {"schemaVersion": 1, "origin": "https://login.example.com", "provider": null, "kinds": []}, "policy": "subdomain"}),
+        );
+        // SAFETY: the core and request are valid for the duration of this call.
+        let matched =
+            read_owned_json(unsafe { maho_vault_match_items_json(core, matched.as_ptr()) });
+        assert_eq!(
+            listed["data"].as_array().expect("list data is array").len(),
+            1
+        );
+        assert_eq!(
+            searched["data"]
+                .as_array()
+                .expect("search data is array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            matched["data"]
+                .as_array()
+                .expect("match data is array")
+                .len(),
+            1
+        );
+        assert!(!listed.to_string().contains(SECRET));
+        assert!(!searched.to_string().contains(SECRET));
+
+        // SAFETY: the core is valid and the explicit lock transitions it to a denied state.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["ok"],
+            true
+        );
+        // SAFETY: the core and request are valid for the duration of this call.
+        let locked = read_owned_json(unsafe { maho_vault_list_items_json(core, list.as_ptr()) });
+        assert_eq!(locked["ok"], false);
+        assert_eq!(locked["error"]["code"], "locked");
+        let unlock = request(serde_json::json!({"masterPassphrase": MASTER}));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_unlock_json(core, unlock.as_ptr()) })["ok"],
+            true
+        );
+
+        assert!(!include_str!("lib.rs").contains(concat!("maho_vault_", "agent_reveal")));
+        assert!(!include_str!("lib.rs").contains(concat!("maho_vault_", "use_login_password_json")));
+
+        let used_revision =
+            read_owned_json(unsafe { maho_vault_list_items_json(core, list.as_ptr()) })["data"][0]
+                ["revision"]
+                .as_u64()
+                .expect("use records a revision");
+        let update = request(serde_json::json!({
+            "id": id,
+            "expectedRevision": used_revision,
+            "metadata": {
+                "title": "Renamed Example",
+                "origins": ["https://example.com"],
+                "usernameHint": "ignored-by-core",
+                "itemKind": "login",
+                "totp": null,
+                "passkey": null,
+            },
+            "username": "renamed@example.com",
+            "password": null,
+        }));
+        // SAFETY: the core and request are valid for the duration of this call.
+        let updated =
+            read_owned_json(unsafe { maho_vault_update_login_json(core, update.as_ptr()) });
+        assert_eq!(updated["data"]["title"], "Renamed Example");
+        let delete = request(serde_json::json!({
+            "id": updated["data"]["id"],
+            "expectedRevision": updated["data"]["revision"],
+        }));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_delete_item_json(core, delete.as_ptr()) })["ok"],
+            true
+        );
+
+        free_core(core, &path);
     }
 }

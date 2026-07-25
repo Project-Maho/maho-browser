@@ -4,6 +4,15 @@ import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
 import {Badge} from '@ui/badge';
 import {Button} from '@ui/button';
 import {ShortcutsPane} from './shortcuts/index.js';
+import {PasswordsPane} from './passwords_settings.js';
+import {SavedPasswordsPane} from './passwords_library.js';
+import {MailAccountsPane} from './mail_accounts.js';
+import {MailSignaturesPane} from './mail_signatures.js';
+import {MailRulesPane} from './mail_rules.js';
+import {MailCalendarPane} from './mail_calendar.js';
+import {MailBehaviorPane} from './mail_behavior.js';
+import {MailAiPane} from './mail_ai.js';
+import {MailSecurityPane} from './mail_security.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {Input} from '@ui/input';
 import {
@@ -16,7 +25,6 @@ import {
 import {Switch} from '@ui/switch';
 import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2} from '@icons/lucide';
 import {cn} from '@lib/utils';
-import {PasswordProviderKind} from '../mojo.js';
 import type {AccountStatus, BillingInfo, PageHandlerRemote} from '../maho_settings.mojom-webui.js';
 import type {
   AISettings,
@@ -25,11 +33,7 @@ import type {
   AutofillPayment,
   ContentBlockerStats,
   FilterListInfo,
-  InstalledExtension,
-  PasswordProviderStatus,
-  PasswordProviderOption,
   ProfileInfo,
-  SavedPassword,
   SettingValue,
   SpaceBasicInfo,
   SyncDeviceInfo,
@@ -37,7 +41,7 @@ import type {
   SyncStatus,
 } from '../mojo.js';
 import type {PaneDefinition} from '../models.js';
-import type {MahoSettingsStore} from './store.js';
+import type {MahoSettingsStore, SettingsState} from './store.js';
 
 type LoadState<T> =
     | {status: 'loading'}
@@ -52,12 +56,6 @@ interface SyncPaneData {
   status: SyncStatus;
 }
 
-interface PasswordsPaneData {
-  passwords: SavedPassword[];
-  providerStatus: PasswordProviderStatus;
-  providerOptions: PasswordProviderOption[];
-}
-
 interface AutofillPaneData {
   addresses: AutofillAddress[];
   payments: AutofillPayment[];
@@ -66,6 +64,45 @@ interface AutofillPaneData {
 interface ContentBlockerPaneData {
   lists: FilterListInfo[];
   stats: ContentBlockerStats;
+}
+
+type ContentBlockerMutationAction =
+    'mode' | 'update' | 'rebuild' | 'add' | 'toggle' | 'remove';
+
+interface ContentBlockerMutationContext {
+  readonly action: ContentBlockerMutationAction;
+  readonly targetId: string | null;
+  readonly targetLabel: string | null;
+}
+
+interface ContentBlockerActionError extends ContentBlockerMutationContext {
+  readonly message: string;
+}
+
+function createContentBlockerActionError(
+    context: ContentBlockerMutationContext): ContentBlockerActionError {
+  let message: string;
+  switch (context.action) {
+    case 'mode':
+      message = 'Failed to change content blocking mode.';
+      break;
+    case 'update':
+      message = 'Failed to check for filter updates.';
+      break;
+    case 'rebuild':
+      message = 'Failed to rebuild the content blocker engine.';
+      break;
+    case 'add':
+      message = 'Failed to add filter list. The URL might be invalid.';
+      break;
+    case 'toggle':
+      message = `Failed to update ${context.targetLabel || 'filter list'}.`;
+      break;
+    case 'remove':
+      message = `Failed to remove ${context.targetLabel || 'filter list'}.`;
+      break;
+  }
+  return {...context, message};
 }
 
 function createLoadingState<T>(): LoadState<T> {
@@ -171,55 +208,26 @@ function useSettingsStoreState(store: MahoSettingsStore) {
       listener => store.subscribe(listener), () => store.getSnapshot());
 }
 
-function getPasswordsEnabled(settings: SettingValue[]): boolean {
-  const item = settings.find(setting => setting.key === 'autofill.passwords_enabled');
-  return item?.value !== 'false';
-}
-
-function isMahoNativeProvider(provider: PasswordProviderStatus['provider']): boolean {
-  return provider === PasswordProviderKind.kMahoNative;
-}
-
-type PasswordProviderBackendValue = 'maho_native' | 'bitwarden' | 'onepassword';
-
-const PASSWORD_PROVIDER_BACKEND_VALUES = {
-  [PasswordProviderKind.kMahoNative]: 'maho_native',
-  [PasswordProviderKind.kBitwarden]: 'bitwarden',
-  [PasswordProviderKind.kOnePassword]: 'onepassword',
-} as const satisfies Record<PasswordProviderKind, PasswordProviderBackendValue>;
-
-function getPasswordProviderBackendValue(provider: PasswordProviderKind): PasswordProviderBackendValue {
-  return PASSWORD_PROVIDER_BACKEND_VALUES[provider];
-}
-
-function normalizeSavedPasswords(passwords: SavedPassword[]): SavedPassword[] {
-  return passwords.map(password => ({
-    ...password,
-    lastUsed: password.lastUsed || null,
-  }));
-}
-
-
 const STANDALONE_MESSAGE_CLASS = 'rounded-xl border border-border/70 bg-background/20 px-6 py-4 text-sm leading-6 text-muted-foreground';
 const RETRY_ROW_CLASS =
-    'grid gap-4 rounded-xl border border-border/70 bg-background/20 px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-start';
+    'grid gap-4 rounded-xl border border-border/70 bg-background/20 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:px-6 sm:items-start';
 const SETTING_ROW_CLASS =
-    'grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-start';
+    'grid gap-4 border-t border-border px-4 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:px-6 sm:items-start';
 const SETTING_COPY_CLASS = 'min-w-0';
 const SETTING_TITLE_CLASS = 'text-sm font-medium text-foreground';
-const SETTING_DESCRIPTION_CLASS = 'mt-1 text-xs leading-5 text-muted-foreground';
+export const SETTING_DESCRIPTION_CLASS = 'mt-1 text-xs leading-5 text-muted-foreground';
 const EMPTY_DESCRIPTION_CLASS = 'border-b border-border px-6 py-4 text-sm leading-6 text-muted-foreground';
 const SETTING_CONTROL_CLASS = 'flex w-full items-center justify-start gap-2 sm:justify-end';
-const SETTING_ACTIONS_CLASS = 'flex w-full flex-wrap items-center gap-2 sm:justify-end';
-const SETTING_CONTROL_STACKED_CLASS = 'flex-col items-stretch sm:justify-start';
-const SETTING_CONTROL_STACK_CLASS = 'flex w-full flex-col gap-2';
+export const SETTING_ACTIONS_CLASS = 'flex w-full flex-wrap items-center gap-2 sm:justify-end';
+export const SETTING_CONTROL_STACKED_CLASS = 'flex-col items-stretch sm:justify-start';
+export const SETTING_CONTROL_STACK_CLASS = 'flex w-full flex-col gap-2';
 const INPUT_SHELL_CLASS = 'w-full min-w-0';
 const INPUT_FIELD_CLASS = 'bg-background/70';
 const SELECT_SHELL_CLASS = 'w-full min-w-0';
 const SELECT_TRIGGER_CLASS = 'bg-background/70';
 const ACTION_BUTTON_CLASS =
-    'h-9 min-w-fit rounded-lg border-border bg-background/70 px-4 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground';
-const INLINE_STATUS_CLASS = 'inline-flex min-h-9 items-center rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground';
+    'h-9 min-w-fit rounded-lg border-border bg-background/70 px-4 text-sm font-medium text-foreground shadow-sm hover:bg-surface-hover';
+export const INLINE_STATUS_CLASS = 'inline-flex min-h-9 items-center rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground';
 const ICON_CLASS = 'inline-block size-4 shrink-0 align-middle';
 
 interface PaneShellProps {
@@ -230,7 +238,7 @@ interface PaneShellProps {
 export function PaneShell({pane, children}: PaneShellProps) {
   return (
     <section
-      className="mx-auto w-full max-w-3xl px-6 py-8"
+      className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8"
       data-pane={pane.key}
       id={`section-${pane.key}`}
     >
@@ -260,7 +268,7 @@ export function SectionCard({title, description, action, children, className, pa
         </div>
         {action || null}
       </div>
-      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className="overflow-hidden rounded-xl border border-border/60 glass">
         {headerBanner || null}
         <div className={cn(padded ? "p-6" : "[&>section:first-child]:border-t-0")}>
           {children}
@@ -285,6 +293,10 @@ export function DomainPaneContent(
       return <SyncPane pane={pane} store={store} />;
     case 'passwords':
       return <PasswordsPane pane={pane} settings={settings} store={store} />;
+    case 'saved-passwords':
+      return <SavedPasswordsPane pane={pane} settings={settings} store={store} />;
+    case 'mail':
+      return <MailAccountsPane pane={pane} store={store} />;
     case 'autofill':
       return <AutofillPane pane={pane} store={store} />;
     case 'shortcuts':
@@ -295,10 +307,20 @@ export function DomainPaneContent(
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
       return <ContentBlockerPane pane={pane} store={store} />;
-    case 'extensions':
-      return <ExtensionsPane pane={pane} store={store} />;
-    case 'atc':
-      return <ATCPane pane={pane} store={store} />;
+    case 'maho-mini':
+      return <MahoMiniPane pane={pane} store={store} />;
+    case 'mail-signatures':
+      return <MailSignaturesPane pane={pane} store={store} />;
+    case 'mail-rules':
+      return <MailRulesPane pane={pane} store={store} />;
+    case 'mail-calendar':
+      return <MailCalendarPane pane={pane} store={store} />;
+    case 'mail-behavior':
+      return <MailBehaviorPane pane={pane} store={store} />;
+    case 'mail-ai':
+      return <MailAiPane pane={pane} store={store} />;
+    case 'mail-security':
+      return <MailSecurityPane pane={pane} store={store} />;
     default:
       return (
         <PaneShell pane={pane}>
@@ -428,11 +450,11 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
 
 
 
-function PaneLoading({message}: {message: string}) {
+export function PaneLoading({message}: {message: string}) {
   return <p className={STANDALONE_MESSAGE_CLASS}>{message}</p>;
 }
 
-function PaneRetry(
+export function PaneRetry(
     {message, onRetry, title}: {
       message: string;
       onRetry: () => void;
@@ -451,13 +473,13 @@ function PaneRetry(
   );
 }
 
-function EmptyDescription({message}: {message: string}) {
+export function EmptyDescription({message}: {message: string}) {
   return <p className={EMPTY_DESCRIPTION_CLASS}>{message}</p>;
 }
 
 
 
-function ActionButton(
+export function ActionButton(
     {ariaLabel, className, disabled, label, onClick, style}: {
       ariaLabel?: string;
       className?: string;
@@ -495,7 +517,8 @@ function ActionButton(
 }
 
 export function Toggle(
-    {enabled, label, onToggle}: {
+    {disabled, enabled, label, onToggle}: {
+      disabled?: boolean;
       enabled: boolean;
       label: string;
       onToggle: (nextEnabled: boolean) => Promise<void> | void;
@@ -507,7 +530,7 @@ export function Toggle(
     <div className="flex items-center space-x-2">
       <Switch
         checked={enabled}
-        disabled={isBusy}
+        disabled={disabled || isBusy}
         aria-label={label}
         onCheckedChange={async (checked) => {
           if (isBusy) return;
@@ -528,15 +551,16 @@ export function Toggle(
   );
 }
 
-function ManagedSettingRow(
-    {children, controlClassName, description, title}: {
+export function ManagedSettingRow(
+    {children, className, controlClassName, description, title}: {
       children?: React.ReactNode;
+      className?: string;
       controlClassName?: string;
       description: React.ReactNode;
       title: string;
     }) {
   return (
-    <section className={SETTING_ROW_CLASS}>
+    <section className={cn(SETTING_ROW_CLASS, className)}>
       <div className={SETTING_COPY_CLASS}>
         <h4 className={SETTING_TITLE_CLASS}>{title}</h4>
         <p className={SETTING_DESCRIPTION_CLASS}>{description}</p>
@@ -561,9 +585,10 @@ function ReadOnlySettingRow(
   );
 }
 
-function TextFieldShell(
-    {ariaLabel, onChange, onKeyDown, placeholder, type = 'text', value}: {
+export function TextFieldShell(
+    {ariaLabel, disabled, onChange, onKeyDown, placeholder, type = 'text', value}: {
       ariaLabel: string;
+      disabled?: boolean;
       onChange: (value: string) => void;
       onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
       placeholder: string;
@@ -575,6 +600,7 @@ function TextFieldShell(
       <Input
         aria-label={ariaLabel}
         className={INPUT_FIELD_CLASS}
+        disabled={disabled}
         placeholder={placeholder}
         type={type}
         value={value}
@@ -585,7 +611,7 @@ function TextFieldShell(
   );
 }
 
-function SelectShell<T extends string>(
+export function SelectShell<T extends string>(
     {ariaLabel, onChange, options, value}: {
       ariaLabel: string;
       onChange: (value: T) => void;
@@ -620,6 +646,7 @@ function SelectShell<T extends string>(
 function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const [createName, setCreateName] = useState('');
+  const [createError, setCreateError] = useState('');
   const [state, setState] = useState<LoadState<ProfileInfo[]>>(createLoadingState());
 
   const loadProfiles = useCallback(async () => {
@@ -650,7 +677,12 @@ function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
           ))}
           <ManagedSettingRow
             controlClassName={SETTING_ACTIONS_CLASS}
-            description="Create a new browser profile."
+            description={
+              <div>
+                <div>Create a new browser profile.</div>
+                {createError && <ActionError message={createError} />}
+              </div>
+            }
             title="Add profile">
             <TextFieldShell
               ariaLabel="New profile name"
@@ -668,6 +700,9 @@ function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 const {profile} = await handler.createProfile(name);
                 if (profile) {
                   setCreateName('');
+                  setCreateError('');
+                } else {
+                  setCreateError('Failed to create profile. The name may be taken or invalid.');
                 }
                 await loadProfiles();
               }}
@@ -686,6 +721,7 @@ function ProfileRow(
       store: MahoSettingsStore;
     }) {
   const handler = store.getHandler();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const parts: string[] = [`ID: ${profile.id}`];
   if (profile.isDefault) {
     parts.push('Default');
@@ -695,6 +731,28 @@ function ProfileRow(
   }
   if (profile.spaceIds.length > 0) {
     parts.push(`Spaces: ${profile.spaceIds.join(', ')}`);
+  }
+
+  if (confirmingDelete) {
+    return (
+      <ManagedSettingRow
+        controlClassName={SETTING_ACTIONS_CLASS}
+        description="Are you sure you want to delete this profile? This action cannot be undone."
+        title={`Delete profile ${profile.name}?`}
+      >
+        <ActionButton
+          label="Confirm"
+          onClick={async () => {
+            await handler.deleteProfile(profile.id);
+            await onReload();
+          }}
+        />
+        <ActionButton
+          label="Cancel"
+          onClick={() => setConfirmingDelete(false)}
+        />
+      </ManagedSettingRow>
+    );
   }
 
   return (
@@ -715,22 +773,22 @@ function ProfileRow(
         <ActionButton
           ariaLabel="Delete profile"
           label={<img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/x.svg" />}
-          onClick={async () => {
-            await handler.deleteProfile(profile.id);
-            await onReload();
-          }}
+          onClick={() => setConfirmingDelete(true)}
         />
       ) : null}
     </ManagedSettingRow>
   );
 }
 
-function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
+function MahoMiniPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
+  const settingsState = useSettingsStoreState(store);
+  const settings = settingsState.settings;
   const [pattern, setPattern] = useState('');
   const [rulesState, setRulesState] = useState<LoadState<ATCRule[]>>(createLoadingState());
   const [spacesState, setSpacesState] = useState<LoadState<SpaceBasicInfo[]>>(createLoadingState());
   const [spaceId, setSpaceId] = useState('');
+  const [addError, setAddError] = useState('');
 
   const loadRules = useCallback(async () => {
     setRulesState(createLoadingState());
@@ -778,70 +836,125 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
         <PaneRetry message={spacesState.message} title="Spaces unavailable" onRetry={() => void loadSpaces()} />
       ) : null}
       {isLoaded ? (
-        <SectionCard title="URL routing rules">
-          {rulesState.status === 'loaded' && spacesState.status === 'loaded' && rulesState.data.map(rule => (
-            <ATCRuleRow
-              key={rule.id}
-              rule={rule}
-              spaces={spacesState.data}
-              onRemove={async () => {
-                await handler.removeATCRule(rule.id);
-                setRulesState(current => current.status === 'loaded' ?
-                    createLoadedState(current.data.filter(item => item.id !== rule.id)) :
-                    current);
-              }}
-              onToggle={async nextEnabled => {
-                await handler.toggleATCRule(rule.id, nextEnabled);
-                setRulesState(current => current.status === 'loaded' ?
-                    createLoadedState(current.data.map(item => item.id === rule.id ? {...item, enabled: nextEnabled} : item)) :
-                    current);
-              }}
-            />
-          ))}
-          {spacesState.status === 'loaded' && spacesState.data.length === 0 && (
-            <div className="text-sm text-destructive px-6 py-2">
-              No spaces available. You must create at least one space to add routing rules.
+        <>
+          <SectionCard
+            title="Maho Mini"
+            description="Maho Mini is a smaller, simpler window — perfect for quick lookups and reading links friends send you."
+            padded
+          >
+            <div className="divide-y divide-border -mx-6 -my-6">
+              <ManagedSettingRow
+                description="Open a blank Maho Mini window with Option+Command+N."
+                title="Option+Command+N shortcut"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.maho_mini_global_shortcut_enabled')?.value !== 'false'}
+                  label="Option+Command+N shortcut"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.maho_mini_global_shortcut_enabled', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
+              <ManagedSettingRow
+                description="Open external links in Maho Mini from other applications."
+                title="Open external links in Maho Mini"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.open_external_links_in_maho_mini')?.value === 'true'}
+                  label="Open external links in Maho Mini"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.open_external_links_in_maho_mini', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
+              <ManagedSettingRow
+                description="Command+Option+Click on links to open them in Maho Mini instead of a new tab."
+                title="Command+Option+Click override"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.maho_mini_click_override_enabled')?.value !== 'false'}
+                  label="Command+Option+Click override"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.maho_mini_click_override_enabled', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
             </div>
-          )}
-          <ManagedSettingRow
-            controlClassName={SETTING_ACTIONS_CLASS}
-            description="Route matching URLs into a target space."
-            title="Add rule">
-            <TextFieldShell
-              ariaLabel="URL pattern"
-              placeholder="URL pattern (e.g. *.example.com)"
-              value={pattern}
-              onChange={setPattern}
-            />
-            {spacesState.status === 'loaded' && (
-              <SelectShell
-                ariaLabel="Target space"
-                options={spacesState.data.length > 0 ? spacesState.data.map(s => ({
-                  label: s.name || `Unnamed Space (${s.id})`,
-                  value: s.id,
-                })) : [{label: 'No spaces available', value: ''}]}
-                value={spaceId}
-                onChange={setSpaceId}
-              />
-            )}
-            <ActionButton
-              disabled={isAddDisabled}
-              label="Add"
-              onClick={async () => {
-                if (!pattern || !spaceId) {
-                  return;
-                }
-                const {rule} = await handler.addATCRule(pattern, spaceId);
-                if (rule) {
+          </SectionCard>
+
+          <SectionCard title="URL routing rules">
+            {rulesState.status === 'loaded' && spacesState.status === 'loaded' && rulesState.data.map(rule => (
+              <ATCRuleRow
+                key={rule.id}
+                rule={rule}
+                spaces={spacesState.data}
+                onRemove={async () => {
+                  await handler.removeATCRule(rule.id);
                   setRulesState(current => current.status === 'loaded' ?
-                      createLoadedState([...current.data, rule]) :
+                      createLoadedState(current.data.filter(item => item.id !== rule.id)) :
                       current);
-                  setPattern('');
-                }
-              }}
-            />
-          </ManagedSettingRow>
-        </SectionCard>
+                }}
+                onToggle={async nextEnabled => {
+                  await handler.toggleATCRule(rule.id, nextEnabled);
+                  setRulesState(current => current.status === 'loaded' ?
+                      createLoadedState(current.data.map(item => item.id === rule.id ? {...item, enabled: nextEnabled} : item)) :
+                      current);
+                }}
+              />
+            ))}
+            {spacesState.status === 'loaded' && spacesState.data.length === 0 && (
+              <div className="text-sm text-destructive px-6 py-2">
+                No spaces available. You must create at least one space to add routing rules.
+              </div>
+            )}
+            <ManagedSettingRow
+              controlClassName={SETTING_ACTIONS_CLASS}
+              description={
+                <div>
+                  <div>Route matching URLs into a target space. Use * as a wildcard (e.g. *.example.com).</div>
+                  {addError && <ActionError message={addError} />}
+                </div>
+              }
+              title="Add rule">
+              <TextFieldShell
+                ariaLabel="URL pattern"
+                placeholder="URL pattern (e.g. *.example.com)"
+                value={pattern}
+                onChange={setPattern}
+              />
+              {spacesState.status === 'loaded' && (
+                <SelectShell
+                  ariaLabel="Target space"
+                  options={spacesState.data.length > 0 ? spacesState.data.map(s => ({
+                    label: s.name || `Unnamed Space (${s.id})`,
+                    value: s.id,
+                  })) : [{label: 'No spaces available', value: ''}]}
+                  value={spaceId}
+                  onChange={setSpaceId}
+                />
+              )}
+              <ActionButton
+                disabled={isAddDisabled}
+                label="Add"
+                onClick={async () => {
+                  if (!pattern || !spaceId) {
+                    return;
+                  }
+                  const {rule} = await handler.addATCRule(pattern, spaceId);
+                  if (rule) {
+                    setRulesState(current => current.status === 'loaded' ?
+                        createLoadedState([...current.data, rule]) :
+                        current);
+                    setPattern('');
+                    setAddError('');
+                  } else {
+                    setAddError('Failed to add rule. The pattern may be invalid or already exist.');
+                  }
+                }}
+              />
+            </ManagedSettingRow>
+          </SectionCard>
+        </>
       ) : null}
     </PaneShell>
   );
@@ -1385,9 +1498,17 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
     void loadSettings();
   }, [loadSettings]);
 
+  const lastState = useRef<SettingsState>(store.getSnapshot());
   useEffect(() => {
     const unsub = store.subscribe(() => {
-      void loadSettings();
+      const current = store.getSnapshot();
+      const prev = lastState.current;
+      lastState.current = current;
+      const accountChanged = prev.accountStatus !== current.accountStatus;
+      const settingsChanged = prev.settings !== current.settings;
+      if (accountChanged || settingsChanged) {
+        void loadSettings();
+      }
     });
     return unsub;
   }, [store, loadSettings]);
@@ -1476,7 +1597,7 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
               action={state.data.provider !== 'maho-managed' && state.data.provider !== '' ? (
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background/70 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background/70 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-surface-hover disabled:opacity-50"
                   disabled={modelsRefreshing}
                   onClick={() => void refreshModels()}
                   aria-label="Refresh model list"
@@ -2441,399 +2562,78 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
   );
 }
 
-function PasswordsPane(
-    {pane, settings, store}: {
-      pane: PaneDefinition;
-      settings: SettingValue[];
-      store: MahoSettingsStore;
-    }) {
-  const handler = store.getHandler();
-  const [loadState, setLoadState] = useState<LoadState<PasswordsPaneData>>(createLoadingState());
-  const [passwordsEnabledOverride, setPasswordsEnabledOverride] = useState<boolean | null>(null);
-  const [searchInputValue, setSearchInputValue] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
-  const hasLoadedOnceRef = useRef(false);
-  const passwordsRequestIdRef = useRef(0);
-  const passwordsEnabled = passwordsEnabledOverride ?? getPasswordsEnabled(settings);
-
-  useEffect(() => {
-    setPasswordsEnabledOverride(null);
-  }, [settings]);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      setSearchQuery(searchInputValue.trim());
-    }, 200);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [searchInputValue]);
-
-  const loadPasswords = useCallback(async (nextSearchQuery: string, showLoading = true) => {
-    const requestId = ++passwordsRequestIdRef.current;
-    if (showLoading) {
-      setLoadState(createLoadingState());
-    }
-
-    try {
-      const [providerResult, optionsResult, passwordsResult] = await Promise.all([
-        handler.getPasswordProviderStatus(),
-        handler.getPasswordProviderOptions(),
-        nextSearchQuery ? handler.searchPasswords(nextSearchQuery) : handler.getSavedPasswords(),
-      ]);
-
-      if (requestId !== passwordsRequestIdRef.current) {
-        return;
-      }
-
-      hasLoadedOnceRef.current = true;
-      setLoadState(createLoadedState({
-        passwords: normalizeSavedPasswords(passwordsResult.passwords),
-        providerStatus: providerResult.status,
-        providerOptions: optionsResult.options,
-      }));
-    } catch {
-      if (requestId !== passwordsRequestIdRef.current) {
-        return;
-      }
-
-      hasLoadedOnceRef.current = true;
-      setLoadState(createErrorState('Failed to load passwords.'));
-    }
-  }, [handler]);
-
-  useEffect(() => {
-    void loadPasswords(searchQuery, !hasLoadedOnceRef.current);
-  }, [loadPasswords, searchQuery]);
-
-  return (
-    <PaneShell pane={pane}>
-      {loadState.status === 'loading' ? <PaneLoading message="Loading password provider…" /> : null}
-      {loadState.status === 'error' ? (
-        <PaneRetry message={loadState.message} title="Passwords unavailable" onRetry={() => void loadPasswords(searchQuery)} />
-      ) : null}
-      {loadState.status === 'loaded' ? (
-        <>
-          <SectionCard
-            title="Saved passwords"
-            description={`Passwords provider: ${loadState.data.providerStatus.displayName}.`}
-            className="mb-6"
-          >
-            <ManagedSettingRow
-              description="Enable password management to show saved passwords."
-              title="Passwords">
-              <Toggle
-                enabled={passwordsEnabled}
-                label="Passwords"
-                onToggle={async nextEnabled => {
-                  const success = await store.commitSettingValue(
-                      'autofill.passwords_enabled', nextEnabled ? 'true' : 'false');
-                  if (success) {
-                    setPasswordsEnabledOverride(nextEnabled);
-                  }
-                }}
-              />
-            </ManagedSettingRow>
-            <ManagedSettingRow
-              description={loadState.data.providerStatus.description}
-              title="Password provider">
-              <SelectShell
-                ariaLabel="Password provider"
-                options={loadState.data.providerOptions.map(opt => ({
-                  label: opt.displayName,
-                  value: getPasswordProviderBackendValue(opt.provider),
-                  disabled: !opt.isAvailable,
-                  description: opt.description,
-                }))}
-                value={getPasswordProviderBackendValue(loadState.data.providerStatus.provider)}
-                onChange={async nextVal => {
-                  const success = await store.commitSettingValue('autofill.password_provider', nextVal);
-                  if (success) {
-                    void loadPasswords(searchQuery, false);
-                  }
-                }}
-              />
-            </ManagedSettingRow>
-            {loadState.data.providerStatus.provider !== PasswordProviderKind.kMahoNative &&
-            !loadState.data.providerStatus.isAvailable ? (
-              <div className="mx-6 my-4 p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive flex flex-col gap-2">
-                <div className="text-sm font-medium">
-                  Selected provider extension ({loadState.data.providerStatus.displayName}) is not installed or disabled.
-                </div>
-                <div className="flex gap-2">
-                  <ActionButton
-                    label="Manage Extensions"
-                    onClick={() => {
-                      void handler.openExtensionsPage();
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
-            <div className="px-6 py-4 text-xs leading-5 text-muted-foreground border-t border-border">
-              {`Capabilities: ${loadState.data.providerStatus.capabilities.canListSavedPasswords ? 'list' : 'no list'}, ${loadState.data.providerStatus.capabilities.canSearchSavedPasswords ? 'search' : 'no search'}, ${loadState.data.providerStatus.capabilities.canAddSavedPasswords ? 'add' : 'no add'}, ${loadState.data.providerStatus.capabilities.canEditSavedPasswords ? 'edit' : 'no edit'}, ${loadState.data.providerStatus.capabilities.canRevealPasswords ? 'reveal' : 'no reveal'}, ${loadState.data.providerStatus.capabilities.canDeleteSavedPasswords ? 'delete' : 'no delete'}.`}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Credentials">
-            {!isMahoNativeProvider(loadState.data.providerStatus.provider) ? (
-              <>
-                <ManagedSettingRow
-                  description={`${loadState.data.providerStatus.displayName} handles save, fill, and autosave through its extension. Chromium's built-in password manager is suppressed in this mode, and Maho Native passwords are not manageable here.`}
-                  title={`${loadState.data.providerStatus.displayName} is managing passwords`}>
-                  <span className={INLINE_STATUS_CLASS}>Extension-managed</span>
-                </ManagedSettingRow>
-                {loadState.data.passwords.length > 0 ? (
-                  <EmptyDescription
-                    message={`${loadState.data.passwords.length} Maho Native password${loadState.data.passwords.length === 1 ? '' : 's'} remain stored locally and can only be managed after switching back to Maho Native.`}
-                  />
-                ) : null}
-              </>
-            ) : !passwordsEnabled ? (
-              <EmptyDescription message="Passwords is turned off. Turn it on to show saved passwords." />
-            ) : (
-              <NativePasswordsContent
-                data={loadState.data}
-                loadPasswords={loadPasswords}
-                revealedIds={revealedIds}
-                searchInputValue={searchInputValue}
-                searchQuery={searchQuery}
-                setRevealedIds={setRevealedIds}
-                setSearchInputValue={setSearchInputValue}
-                store={store}
-              />
-            )}
-          </SectionCard>
-        </>
-      ) : null}
-    </PaneShell>
-  );
-}
-
-function NativePasswordsContent(
-    {data, loadPasswords, revealedIds, searchInputValue, searchQuery, setRevealedIds, setSearchInputValue, store}: {
-      data: PasswordsPaneData;
-      loadPasswords: (searchQuery: string, showLoading?: boolean) => Promise<void>;
-      revealedIds: Set<string>;
-      searchInputValue: string;
-      searchQuery: string;
-      setRevealedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-      setSearchInputValue: (value: string) => void;
-      store: MahoSettingsStore;
-    }) {
-
-  const providerStatus = data.providerStatus;
-
-  return (
-    <>
-      <ManagedSettingRow description="Filter the native password list below." title="Search saved passwords">
-        <TextFieldShell
-          ariaLabel="Search passwords"
-          placeholder="Search passwords"
-          type="search"
-          value={searchInputValue}
-          onChange={setSearchInputValue}
-        />
-      </ManagedSettingRow>
-      {providerStatus.capabilities.canAddSavedPasswords ? (
-        <AddPasswordRow loadPasswords={loadPasswords} query={searchQuery} store={store} />
-      ) : null}
-      {data.passwords.length === 0 ? <EmptyDescription message="No saved passwords." /> : null}
-      {data.passwords.map(savedPassword => (
-        <PasswordRow
-          key={savedPassword.id}
-          isRevealed={revealedIds.has(savedPassword.id)}
-          loadPasswords={loadPasswords}
-          password={savedPassword}
-          providerStatus={providerStatus}
-          query={searchQuery}
-          setRevealedIds={setRevealedIds}
-          store={store}
-        />
-      ))}
-    </>
-  );
-}
-
-function AddPasswordRow(
-    {loadPasswords, query, store}: {
-      loadPasswords: (searchQuery: string) => Promise<void>;
-      query: string;
-      store: MahoSettingsStore;
-    }) {
-  const handler = store.getHandler();
-  const [domain, setDomain] = useState('');
-  const [password, setPassword] = useState('');
-  const [username, setUsername] = useState('');
-
-  return (
-    <ManagedSettingRow
-      controlClassName={SETTING_CONTROL_STACKED_CLASS}
-      description="Store a new native password entry."
-      title="Add password">
-      <div className={SETTING_CONTROL_STACK_CLASS}>
-        <TextFieldShell ariaLabel="Password domain" placeholder="Domain" value={domain} onChange={setDomain} />
-        <TextFieldShell ariaLabel="Password username" placeholder="Username" value={username} onChange={setUsername} />
-        <TextFieldShell ariaLabel="Password value" placeholder="Password" type="password" value={password} onChange={setPassword} />
-      </div>
-      <div className={SETTING_ACTIONS_CLASS}>
-        <ActionButton label="Add password" onClick={async () => {
-          const trimmedDomain = domain.trim();
-          const trimmedUsername = username.trim();
-          if (!trimmedDomain) {
-            return;
-          }
-          const success = await handler.addPassword(trimmedDomain, trimmedUsername, password);
-          if (!success.success) {
-            return;
-          }
-          setDomain('');
-          setUsername('');
-          setPassword('');
-          await loadPasswords(query.trim());
-        }} />
-      </div>
-    </ManagedSettingRow>
-  );
-}
-
-function PasswordRow(
-    {isRevealed, loadPasswords, password, providerStatus, query, setRevealedIds, store}: {
-      isRevealed: boolean;
-      loadPasswords: (searchQuery: string) => Promise<void>;
-      password: SavedPassword;
-      providerStatus: PasswordProviderStatus;
-      query: string;
-      setRevealedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-      store: MahoSettingsStore;
-    }) {
-  const handler = store.getHandler();
-  const [draftUsername, setDraftUsername] = useState(password.username);
-  const [revealState, setRevealState] = useState<
-      {status: 'failed'} | {password: string; status: 'revealed'} | {status: 'revealing'} | null>(null);
-
-  useEffect(() => {
-    setDraftUsername(password.username);
-  }, [password.username]);
-
-  useEffect(() => {
-    if (!isRevealed) {
-      setRevealState(null);
-      return;
-    }
-    let cancelled = false;
-    const fetchPassword = async () => {
-      setRevealState({status: 'revealing'});
-      try {
-        const {password: val} = await handler.revealPassword(password.id);
-        if (cancelled) return;
-        if (val === null) {
-          setRevealState({status: 'failed'});
-          return;
-        }
-        setRevealState({password: val, status: 'revealed'});
-      } catch {
-        if (!cancelled) {
-          setRevealState({status: 'failed'});
-        }
-      }
-    };
-    void fetchPassword();
-    return () => {
-      cancelled = true;
-    };
-  }, [isRevealed, password.id, handler]);
-
-  const description = [
-    password.createdAt ? `Created ${password.createdAt}` : '',
-    password.lastUsed ? `Last used ${password.lastUsed}` : '',
-  ].filter(Boolean).join(' · ');
-  const passwordStatusText = isRevealed ?
-      revealState?.status === 'revealed' ?
-        `Password: ${revealState.password || '(empty)'}` :
-        revealState?.status === 'failed' ?
-          "Password: Couldn't reveal" :
-          'Password: (revealing...)' :
-      'Password: ••••••••';
-
-  return (
-    <ManagedSettingRow
-      controlClassName={SETTING_CONTROL_STACKED_CLASS}
-      description={description || 'No usage history'}
-       title={`${password.username || 'Unknown user'} @ ${password.domain || 'Unknown domain'}`}>
-      <p className={SETTING_DESCRIPTION_CLASS}>
-        {passwordStatusText}
-      </p>
-      <div className={SETTING_ACTIONS_CLASS}>
-        {providerStatus.capabilities.canEditSavedPasswords ? (
-          <>
-            <TextFieldShell
-              ariaLabel={`Username for ${password.domain}`}
-              placeholder="Username"
-              value={draftUsername}
-              onChange={setDraftUsername}
-            />
-            <ActionButton label="Save Username" onClick={async () => {
-              const success = await handler.updatePasswordUsername(password.id, draftUsername.trim());
-              if (!success.success) {
-                return;
-              }
-              await loadPasswords(query.trim());
-            }} />
-          </>
-        ) : null}
-        {providerStatus.capabilities.canRevealPasswords ? (
-          <ActionButton label={isRevealed ? 'Hide' : 'Reveal'} onClick={async () => {
-            setRevealedIds(current => {
-              const next = new Set(current);
-              if (next.has(password.id)) {
-                next.delete(password.id);
-              } else {
-                next.add(password.id);
-              }
-              return next;
-            });
-          }} />
-        ) : null}
-        <ActionButton label="Delete" onClick={async () => {
-          const success = await handler.deletePassword(password.id);
-          if (!success.success) {
-            return;
-          }
-          setRevealedIds(current => {
-            const next = new Set(current);
-            next.delete(password.id);
-            return next;
-          });
-          await loadPasswords(query.trim());
-        }} />
-      </div>
-    </ManagedSettingRow>
-  );
-}
-
 function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
+  const mountedRef = useMountedRef();
   const [form, setForm] = useState({name: '', url: ''});
+  const [actionError, setActionError] = useState<ContentBlockerActionError | null>(null);
+  const [busyActions, setBusyActions] = useState<ReadonlySet<ContentBlockerMutationAction>>(
+      new Set());
+  const busyActionsRef = useRef(new Set<ContentBlockerMutationAction>());
   const [state, setState] = useState<LoadState<ContentBlockerPaneData>>(createLoadingState());
+  const reqSeqRef = useRef(0);
 
   const loadContentBlocker = useCallback(async () => {
-    setState(createLoadingState());
+    const currentReq = ++reqSeqRef.current;
+    if (mountedRef.current) {
+      setState(createLoadingState());
+    }
     try {
       const [{lists}, {stats}] = await Promise.all([
         handler.getFilterLists(),
         handler.getContentBlockerStats(),
       ]);
-      setState(createLoadedState({lists, stats}));
+      if (mountedRef.current && reqSeqRef.current === currentReq) {
+        setState(createLoadedState({lists, stats}));
+      }
     } catch {
-      setState(createErrorState('Failed to load content blocker.'));
+      if (mountedRef.current && reqSeqRef.current === currentReq) {
+        setState(createErrorState('Failed to load content blocker.'));
+      }
     }
-  }, [handler]);
+  }, [handler, mountedRef]);
+
+  const runMutation = useCallback(async (
+      context: ContentBlockerMutationContext,
+      mutation: () => Promise<boolean>): Promise<boolean> => {
+    if (busyActionsRef.current.has(context.action)) {
+      return false;
+    }
+
+    busyActionsRef.current.add(context.action);
+    if (mountedRef.current) {
+      setBusyActions(new Set(busyActionsRef.current));
+      setActionError(null);
+    }
+
+    try {
+      const success = await mutation();
+      if (!success) {
+        if (mountedRef.current) {
+          setActionError(createContentBlockerActionError(context));
+        }
+        return false;
+      }
+      await loadContentBlocker();
+      return true;
+    } catch {
+      if (mountedRef.current) {
+        setActionError(createContentBlockerActionError(context));
+      }
+      return false;
+    } finally {
+      busyActionsRef.current.delete(context.action);
+      if (mountedRef.current) {
+        setBusyActions(new Set(busyActionsRef.current));
+      }
+    }
+  }, [loadContentBlocker, mountedRef]);
 
   useEffect(() => {
     void loadContentBlocker();
+    return () => {
+      reqSeqRef.current++;
+    };
   }, [loadContentBlocker]);
 
   return (
@@ -2844,62 +2644,187 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
       ) : null}
       {state.status === 'loaded' ? (
         <>
-          <SectionCard title="Status" className="mb-6">
+          <SectionCard title="Content Blocking Mode" className="mb-6">
+            <ManagedSettingRow
+              controlClassName={SETTING_CONTROL_STACKED_CLASS}
+              description={
+                <div>
+                  <div>Select how ad blocking and privacy protection are handled in Maho.</div>
+                  {actionError?.action === 'mode' ? <ActionError message={actionError.message} /> : null}
+                </div>
+              }
+              title="Blocking Mode">
+              <div className="flex flex-col gap-2 mt-2">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="contentBlockingMode"
+                    value="native"
+                    checked={state.data.stats.mode === 0}
+                    disabled={busyActions.has('mode')}
+                    onChange={() => {
+                      void runMutation(
+                          {action: 'mode', targetId: null, targetLabel: null},
+                          async () => (await handler.setContentBlockingMode(0)).success);
+                    }}
+                  />
+                  <span className="font-medium">Native Mode</span> — High-performance built-in Rust adblock engine
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="contentBlockingMode"
+                    value="extension"
+                    checked={state.data.stats.mode === 1}
+                    disabled={busyActions.has('mode')}
+                    onChange={() => {
+                      void runMutation(
+                          {action: 'mode', targetId: null, targetLabel: null},
+                          async () => (await handler.setContentBlockingMode(1)).success);
+                    }}
+                  />
+                  <span className="font-medium">Extension Mode</span> — Third-party extension DNR blocking (e.g. uBlock Origin Lite)
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="contentBlockingMode"
+                    value="disabled"
+                    checked={state.data.stats.mode === 2}
+                    disabled={busyActions.has('mode')}
+                    onChange={() => {
+                      void runMutation(
+                          {action: 'mode', targetId: null, targetLabel: null},
+                          async () => (await handler.setContentBlockingMode(2)).success);
+                    }}
+                  />
+                  <span className="font-medium">Disabled</span> — Content blocking turned off completely
+                </label>
+              </div>
+              {state.data.stats.mode === 1 ? (
+                <div className="mt-3 p-3 bg-muted/40 rounded-md border text-xs text-muted-foreground">
+                  <p className="mb-2">Extensions manage content blocking via Declarative Net Request. Open extension management to configure installed blockers.</p>
+                  <ActionButton label="Manage Extensions" onClick={() => handler.openExtensionsPage()} />
+                </div>
+              ) : null}
+              {state.data.stats.mode === 2 ? (
+                <div className="mt-3 p-3 bg-muted/40 rounded-md border text-xs text-muted-foreground">
+                  <p>Native content blocking is disabled. Web requests and cosmetic resources pass through unfiltered.</p>
+                </div>
+              ) : null}
+            </ManagedSettingRow>
+          </SectionCard>
+
+          <SectionCard title="Engine Health & Status" className="mb-6">
             <ManagedSettingRow
               controlClassName={SETTING_ACTIONS_CLASS}
-              description={`${state.data.stats.totalRuleCount.toLocaleString()} rules active · ${state.data.stats.filterListCount} filter list(s)`}
+              description={
+                <div>
+                  <div>{state.data.stats.totalRuleCount.toLocaleString()} rules active · {state.data.stats.filterListCount} filter list(s) · Gen #{state.data.stats.engineGeneration}</div>
+                  {state.data.stats.healthStatus ? (
+                    <div className="text-xs text-muted-foreground mt-1">Health: {state.data.stats.healthStatus}</div>
+                  ) : null}
+                  {state.data.stats.overallError ? (
+                    <div className="text-xs text-destructive mt-1">Error: {state.data.stats.overallError}</div>
+                  ) : null}
+                  {actionError?.action === 'update' || actionError?.action === 'rebuild' ? (
+                    <ActionError message={actionError.message} />
+                  ) : null}
+                </div>
+              }
               title="Engine status">
-              <ActionButton label="Rebuild" onClick={async () => {
-                await handler.rebuildContentRules();
-                await loadContentBlocker();
-              }} />
+              <div className="flex gap-2">
+                <ActionButton
+                  label={busyActions.has('update') ? "Updating..." : "Check for Updates"}
+                  disabled={state.data.stats.mode !== 0 || busyActions.has('update')}
+                  onClick={() => runMutation(
+                      {action: 'update', targetId: null, targetLabel: null},
+                      async () => (await handler.triggerFilterUpdate(null)).success)
+                      .then(() => undefined)}
+                />
+                <ActionButton
+                  label="Rebuild Engine"
+                   disabled={state.data.stats.mode !== 0 || busyActions.has('rebuild')}
+                   onClick={() => runMutation(
+                       {action: 'rebuild', targetId: null, targetLabel: null},
+                       async () => (await handler.rebuildContentRules()).success)
+                       .then(() => undefined)}
+                />
+              </div>
             </ManagedSettingRow>
           </SectionCard>
 
           <SectionCard title="Filter lists">
+            {state.data.stats.mode !== 0 ? (
+              <div className="p-3 mb-3 bg-muted/30 rounded border text-xs text-muted-foreground">
+                Filter list management is disabled outside Native Mode. Select Native Mode above to enable list controls.
+              </div>
+            ) : null}
             {state.data.lists.length === 0 ? <EmptyDescription message="No filter lists configured." /> : null}
-            {state.data.lists.map((filterList) => (
-              <ManagedSettingRow
-                key={filterList.id}
-                controlClassName={SETTING_ACTIONS_CLASS}
-                description={[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}
-                title={filterList.name || filterList.id}>
-                <Toggle
-                  enabled={filterList.enabled}
-                  label={`Enable ${filterList.name || filterList.id}`}
-                  onToggle={async nextEnabled => {
-                    await handler.toggleFilterList(filterList.id, nextEnabled);
-                    await loadContentBlocker();
-                  }}
-                />
-                <ActionButton
-                  ariaLabel={`Remove filter list ${filterList.name || filterList.id}`}
-                  label="Remove"
-                  onClick={async () => {
-                    await handler.removeFilterList(filterList.id);
-                    await loadContentBlocker();
-                  }}
-                />
-              </ManagedSettingRow>
-            ))}
+            {state.data.lists.map((filterList) => {
+              const filterListLabel = filterList.name || filterList.id;
+              const hasListError = actionError?.targetId === filterList.id &&
+                  (actionError.action === 'toggle' || actionError.action === 'remove');
+              return (
+                <ManagedSettingRow
+                  key={filterList.id}
+                  controlClassName={SETTING_ACTIONS_CLASS}
+                  description={
+                    <div>
+                      <div>{[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}</div>
+                      {hasListError ? <ActionError message={actionError.message} /> : null}
+                    </div>
+                  }
+                  title={filterListLabel}>
+                  <Toggle
+                    disabled={state.data.stats.mode !== 0 || busyActions.has('toggle')}
+                    enabled={filterList.enabled}
+                     label={`Enable ${filterListLabel}`}
+                     onToggle={nextEnabled => runMutation(
+                         {action: 'toggle', targetId: filterList.id, targetLabel: filterListLabel},
+                         async () => (await handler.toggleFilterList(
+                             filterList.id, nextEnabled)).success)
+                         .then(() => undefined)}
+                  />
+                  <ActionButton
+                    ariaLabel={`Remove filter list ${filterListLabel}`}
+                    disabled={state.data.stats.mode !== 0 || busyActions.has('remove')}
+                     label="Remove"
+                     onClick={() => runMutation(
+                         {action: 'remove', targetId: filterList.id, targetLabel: filterListLabel},
+                         async () => (await handler.removeFilterList(filterList.id)).success)
+                         .then(() => undefined)}
+                  />
+                </ManagedSettingRow>
+              );
+            })}
             <ManagedSettingRow
               controlClassName={SETTING_CONTROL_STACKED_CLASS}
-              description="Add a custom filter list by name and source URL."
+              description={
+                  <div>
+                    <div>Add a custom filter list by name and source URL.</div>
+                    {actionError?.action === 'add' ? <ActionError message={actionError.message} /> : null}
+                  </div>
+              }
               title="Add filter list">
               <div className={SETTING_CONTROL_STACK_CLASS}>
-                <TextFieldShell ariaLabel="Filter list name" placeholder="Filter list name" value={form.name} onChange={value => setForm(current => ({...current, name: value}))} />
-                <TextFieldShell ariaLabel="Filter list URL" placeholder="https://example.com/filters.txt" value={form.url} onChange={value => setForm(current => ({...current, url: value}))} />
+                <TextFieldShell ariaLabel="Filter list name" disabled={state.data.stats.mode !== 0} placeholder="Filter list name" value={form.name} onChange={value => setForm(current => ({...current, name: value}))} />
+                <TextFieldShell ariaLabel="Filter list URL" disabled={state.data.stats.mode !== 0} placeholder="https://example.com/filters.txt" value={form.url} onChange={value => setForm(current => ({...current, url: value}))} />
               </div>
               <div className={SETTING_ACTIONS_CLASS}>
-                <ActionButton label="Add filter list" onClick={async () => {
+                <ActionButton disabled={state.data.stats.mode !== 0 || busyActions.has('add')} label="Add filter list" onClick={async () => {
                   const name = form.name.trim();
                   const url = form.url.trim();
                   if (!name || !url) {
                     return;
                   }
-                  await handler.addFilterList(createTransientId('filter-list'), name, url);
-                  setForm({name: '', url: ''});
-                  await loadContentBlocker();
+                  const success = await runMutation(
+                      {action: 'add', targetId: null, targetLabel: name},
+                      async () => (await handler.addFilterList(
+                          createTransientId('filter-list'), name, url)).success);
+                  if (success) {
+                    setForm({name: '', url: ''});
+                  }
                 }} />
               </div>
             </ManagedSettingRow>
@@ -2910,140 +2835,11 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
   );
 }
 
-function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
-  const handler = store.getHandler();
-  const callbackRouter = store.getCallbackRouter();
-  const [state, setState] = useState<LoadState<InstalledExtension[]>>(createLoadingState());
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-
-  const loadExtensions = useCallback(async () => {
-    setState(createLoadingState());
-    try {
-      const {extensions} = await handler.getInstalledExtensions();
-      setState(createLoadedState(extensions));
-    } catch {
-      setState(createErrorState('Failed to load extensions.'));
-    }
-  }, [handler]);
-
-  useEffect(() => {
-    void loadExtensions();
-  }, [loadExtensions]);
-
-  useEffect(() => {
-    const onExtensionsChanged = (extensions: InstalledExtension[]) => {
-      setState(createLoadedState(extensions));
-    };
-    const listenerId = callbackRouter.installedExtensionsChanged.addListener(onExtensionsChanged);
-    return () => {
-      callbackRouter.removeListener(listenerId);
-    };
-  }, [callbackRouter]);
-
-  const hasMv2Extensions = state.status === 'loaded' && state.data.some(e => e.manifestVersion === 2);
-
+function ActionError({message}: {message: string}) {
   return (
-    <PaneShell pane={pane}>
-      {state.status === 'loading' ? <PaneLoading message="Loading extensions…" /> : null}
-      {state.status === 'error' ? (
-        <PaneRetry message={state.message} title="Extensions unavailable" onRetry={() => void loadExtensions()} />
-      ) : null}
-      {state.status === 'loaded' ? (
-        <SectionCard
-          title="Installed extensions"
-          headerBanner={
-            hasMv2Extensions && !bannerDismissed ? (
-              <div className="p-4 border-b border-border">
-                <Alert className="flex items-start gap-3 border-amber-200/50 bg-amber-500/5 text-amber-900 dark:text-amber-200">
-                  <AlertCircle className="h-5 w-5 mt-0.5 text-amber-500" />
-                  <div className="flex-1">
-                    <AlertTitle className="font-semibold text-amber-800 dark:text-amber-300">Manifest V2 Support Ending</AlertTitle>
-                    <AlertDescription className="text-sm mt-1 leading-relaxed opacity-90">
-                      Some of your installed extensions are using Manifest V2, which will soon be deprecated. Please migrate to Manifest V3 versions to ensure they continue working.{' '}
-                      <a
-                        href="https://developer.chrome.com/docs/extensions/develop/migrate"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline font-semibold hover:opacity-80 inline-flex items-center gap-0.5"
-                      >
-                        Learn more <ExternalLink className="h-3 w-3 inline" />
-                      </a>
-                    </AlertDescription>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-500/10"
-                    onClick={() => setBannerDismissed(true)}
-                  >
-                    Dismiss
-                  </Button>
-                </Alert>
-              </div>
-            ) : null
-          }
-        >
-          {state.data.length === 0 ? <EmptyDescription message="No extensions installed." /> : null}
-          {state.data.map((extension) => {
-            const isMv2 = extension.manifestVersion === 2;
-            const descriptionParts = [
-              extension.version ? `v${extension.version}` : '',
-              extension.enabled ? 'Enabled' : 'Disabled',
-              extension.description || '',
-            ].filter(Boolean);
-
-            const descriptionNode = (
-              <span className="flex flex-col gap-1.5">
-                <span>{descriptionParts.join(' · ')}</span>
-                {isMv2 ? (
-                  <span className="inline-flex">
-                    <Badge variant="warning" className="text-[10px] py-0 px-1.5 h-4 font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                      Manifest V2 (deprecated)
-                    </Badge>
-                  </span>
-                ) : null}
-              </span>
-            );
-
-            return (
-              <ManagedSettingRow
-                key={extension.id}
-                controlClassName={SETTING_ACTIONS_CLASS}
-                description={descriptionNode}
-                title={extension.name || extension.id}>
-                <Toggle
-                  enabled={extension.enabled}
-                  label={`Enable ${extension.name || extension.id}`}
-                  onToggle={async () => {
-                    await handler.toggleExtension(extension.id);
-                    await loadExtensions();
-                  }}
-                />
-                <ActionButton
-                  ariaLabel={`Remove extension ${extension.name || extension.id}`}
-                  label="Remove"
-                  onClick={async () => {
-                    await handler.removeExtension(extension.id);
-                    await loadExtensions();
-                  }}
-                />
-              </ManagedSettingRow>
-            );
-          })}
-          <ManagedSettingRow
-            controlClassName={SETTING_ACTIONS_CLASS}
-            title="Advanced extension controls"
-            description="Access full extension settings and developer features.">
-            <ActionButton
-              ariaLabel="Open extensions page"
-              label="Manage"
-              onClick={() => {
-                handler.openExtensionsPage();
-              }}
-            />
-          </ManagedSettingRow>
-        </SectionCard>
-      ) : null}
-    </PaneShell>
+    <div className="flex items-center gap-1.5 text-destructive mt-1.5 text-xs">
+      <AlertCircle className="h-3.5 w-3.5" />
+      <span>{message}</span>
+    </div>
   );
 }

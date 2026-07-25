@@ -25,7 +25,7 @@ if (!sourceDirArg || !outputFileArg) {
 const sourceDir = path.resolve(process.cwd(), sourceDirArg);
 const outputFile = path.resolve(process.cwd(), outputFileArg);
 
-await build({
+const result = await build({
   absWorkingDir: sourceDir,
   banner: {
     js: "(()=>{if(window.trustedTypes&&typeof window.trustedTypes.createPolicy==='function'){try{window.trustedTypes.createPolicy('default',{createHTML:s=>s,createScript:s=>s,createScriptURL:s=>s});}catch(e){}}})();",
@@ -54,3 +54,55 @@ await build({
     'chrome://resources/js/*',
   ],
 });
+
+if (result.metafile) {
+  const fs = await import('node:fs');
+  const buildGnPath = path.join(sourceDir, 'BUILD.gn');
+  if (fs.existsSync(buildGnPath)) {
+    const buildGnContent = fs.readFileSync(buildGnPath, 'utf8');
+    const bundleReactIdx = buildGnContent.indexOf('action("bundle_react")');
+    if (bundleReactIdx !== -1) {
+      const bundleReactContent = buildGnContent.substring(bundleReactIdx);
+      const inputsMatch = bundleReactContent.match(/inputs\s*=\s*\[([\s\S]*?)\]/);
+      if (inputsMatch) {
+        const inputsBlock = inputsMatch[1];
+        const gnInputs = [];
+        const regex = /"([^"]+)"/g;
+        let match;
+        while ((match = regex.exec(inputsBlock)) !== null) {
+          gnInputs.push(match[1]);
+        }
+
+        let workspaceRoot = sourceDir;
+        while (workspaceRoot && workspaceRoot !== '/' && !fs.existsSync(path.join(workspaceRoot, 'maho-chromium'))) {
+          workspaceRoot = path.dirname(workspaceRoot);
+        }
+        if (!fs.existsSync(path.join(workspaceRoot, 'maho-chromium'))) {
+          workspaceRoot = path.resolve(sourceDir, '../../../..');
+        }
+        const chromiumSrc = path.join(workspaceRoot, 'chromium/src');
+
+        const absGnInputs = new Set(gnInputs.map(p => {
+          if (p.startsWith('//')) {
+            return path.resolve(chromiumSrc, p.slice(2));
+          }
+          return path.resolve(sourceDir, p);
+        }));
+
+        for (const inputPath of Object.keys(result.metafile.inputs)) {
+          if (inputPath.includes('node_modules')) continue;
+          if (inputPath.startsWith('chrome://')) continue;
+
+          const absolutePath = path.resolve(sourceDir, inputPath);
+          if (!fs.existsSync(absolutePath)) continue;
+
+          if (!absGnInputs.has(absolutePath)) {
+            console.error(`[Guard Error] Source file "${inputPath}" is bundled by esbuild but missing from action("bundle_react") inputs in BUILD.gn.`);
+            console.error(`Please add "${path.relative(sourceDir, absolutePath)}" to inputs in BUILD.gn.`);
+            process.exit(1);
+          }
+        }
+      }
+    }
+  }
+}

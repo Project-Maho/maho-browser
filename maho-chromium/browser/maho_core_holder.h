@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_MAHO_CORE_HOLDER_H_
 #define MAHO_BROWSER_MAHO_CORE_HOLDER_H_
 
+#include <string>
 #include <utility>
 
 #include "base/functional/callback.h"
@@ -10,6 +11,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "maho/third_party/maho/maho_bridge.h"
 
 struct MahoCore;
 
@@ -19,11 +21,14 @@ namespace maho {
 
 void SetCore(::MahoCore* core);
 
+maho::core::VaultBackendSession CreateVaultBackendSession();
+void QuiesceVaultBackendSessions();
+bool IsVaultBackendSessionWorkQuiesced();
+
 inline void PostCoreClosure(const base::Location& from_here,
                             base::OnceClosure closure) {
   base::ThreadPool::PostTask(
-      from_here,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      from_here, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       std::move(closure));
 }
 
@@ -31,10 +36,8 @@ inline void PostCoreTaskAndReply(const base::Location& from_here,
                                  base::OnceClosure task,
                                  base::OnceClosure reply) {
   base::ThreadPool::PostTaskAndReply(
-      from_here,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      std::move(task),
-      std::move(reply));
+      from_here, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      std::move(task), std::move(reply));
 }
 
 template <typename R>
@@ -42,10 +45,8 @@ void PostCoreTaskAndReplyWithResult(const base::Location& from_here,
                                     base::OnceCallback<R()> task,
                                     base::OnceCallback<void(R)> reply) {
   base::ThreadPool::PostTaskAndReplyWithResult(
-      from_here,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      std::move(task),
-      std::move(reply));
+      from_here, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      std::move(task), std::move(reply));
 }
 
 template <typename R>
@@ -55,6 +56,15 @@ void PostCoreTask(const base::Location& from_here,
   PostCoreTaskAndReplyWithResult<R>(from_here, std::move(core_work),
                                     std::move(reply));
 }
+
+// Blocker-work quiesce contract: once quiesced, no new content-blocker
+// compile/install work is accepted and late replies must not touch the core.
+// Must be invoked during shutdown BEFORE SetCore(nullptr)/core destruction.
+void QuiesceBlockerWork();
+bool IsBlockerWorkQuiesced();
+bool IsContentBlockerInstallResultSuccess(const std::string& result_json);
+
+void PostBlockerEngineCompileAndInstall(const base::Location& from_here);
 
 }  // namespace maho
 

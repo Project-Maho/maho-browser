@@ -32,6 +32,7 @@
 
 use std::path::Path;
 
+use crate::parsers::csv::parse_csv_records;
 use crate::{ImportError, ImportResult, PasswordEntry};
 
 /// Parse a Safari-exported passwords CSV into [`PasswordEntry`] values.
@@ -59,7 +60,7 @@ pub fn parse_safari_passwords_csv(csv_path: &Path) -> ImportResult<Vec<PasswordE
 /// Split out from [`parse_safari_passwords_csv`] so tests exercise the parser
 /// without touching the filesystem.
 fn parse_safari_passwords_csv_str(content: &str) -> ImportResult<Vec<PasswordEntry>> {
-    let records = parse_csv(content);
+    let records = parse_csv_records(content)?;
 
     let Some((header, rows)) = records.split_first() else {
         return Err(ImportError::Parse("passwords CSV is empty".into()));
@@ -140,77 +141,6 @@ impl ColumnIndices {
     fn get<'a>(&self, row: &'a [String], idx: usize) -> &'a str {
         row.get(idx).map(String::as_str).unwrap_or("")
     }
-}
-
-/// Parse RFC-4180 CSV text into records of fields.
-///
-/// Handles quoted fields, embedded commas, embedded newlines, and escaped
-/// double-quotes (`""`). Accepts both `\n` and `\r\n` record terminators. A
-/// final trailing newline does not produce a spurious empty record.
-fn parse_csv(input: &str) -> Vec<Vec<String>> {
-    let mut records: Vec<Vec<String>> = Vec::new();
-    let mut record: Vec<String> = Vec::new();
-    let mut field = String::new();
-    let mut in_quotes = false;
-    // Tracks whether the current record has seen any content/separators, so a
-    // lone trailing newline is not emitted as an empty record.
-    let mut record_has_data = false;
-
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if in_quotes {
-            match c {
-                '"' => {
-                    if chars.peek() == Some(&'"') {
-                        // Escaped quote inside a quoted field.
-                        chars.next();
-                        field.push('"');
-                    } else {
-                        in_quotes = false;
-                    }
-                }
-                _ => field.push(c),
-            }
-            continue;
-        }
-
-        match c {
-            '"' => {
-                in_quotes = true;
-                record_has_data = true;
-            }
-            ',' => {
-                record.push(std::mem::take(&mut field));
-                record_has_data = true;
-            }
-            '\r' => {
-                // Swallow the \n of a \r\n pair; treat \r as a terminator.
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
-                record.push(std::mem::take(&mut field));
-                records.push(std::mem::take(&mut record));
-                record_has_data = false;
-            }
-            '\n' => {
-                record.push(std::mem::take(&mut field));
-                records.push(std::mem::take(&mut record));
-                record_has_data = false;
-            }
-            _ => {
-                field.push(c);
-                record_has_data = true;
-            }
-        }
-    }
-
-    // Flush a final record that was not newline-terminated.
-    if record_has_data || !field.is_empty() {
-        record.push(field);
-        records.push(record);
-    }
-
-    records
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@
 #include "base/uuid.h"
 #include "base/values.h"
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
+#include "maho/browser/mcp/maho_mcp_browser_action_handler.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "base/run_loop.h"
@@ -43,12 +44,9 @@ constexpr char kMcpProtocolVersion[] = "2025-03-26";
 constexpr char kServerName[] = "maho-browser";
 constexpr char kServerVersion[] = "0.4.1";
 constexpr char kMailReadBrokerUnavailable[] = "Mail read broker unavailable";
-constexpr char kMailExtractOtpUnavailable[] =
-    "mail_extract_otp is not served by the mail read broker in this build; "
-    "one-time passwords are delivered through the browser OTP push/arbitration "
-    "path.";
 
 MahoMcpBrowserDelegate* g_browser_delegate = nullptr;
+MahoMcpLeaseRegistry* g_browser_action_lease_registry = nullptr;
 
 std::string BuildJsonRpcSuccessLine(std::optional<base::Value> id,
                                     base::Value result) {
@@ -262,6 +260,10 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "browser_acquire_lease",
       "browser_heartbeat_lease",
       "browser_release_lease",
+      "vault_list_credentials_for_active_page",
+      "vault_request_credential_use",
+      "vault_fill_credential",
+      "vault_fill_totp",
   };
   for (std::string_view name : kTabTargetTools) {
     if (name == tool_name) return true;
@@ -273,6 +275,30 @@ bool IsTabTargetTool(std::string_view tool_name) {
 // tab. They require an eligible regular browser (-32006 otherwise).
 bool IsProfileTargetTool(std::string_view tool_name) {
   return tool_name == "browser_tab_new";
+}
+
+base::DictValue SerializeTabInfo(const MahoMcpSession::TabInfo& tab_info) {
+  base::DictValue tab;
+  tab.Set("id", tab_info.id);
+  tab.Set("title", tab_info.title);
+  tab.Set("url", tab_info.url);
+  tab.Set("is_active", tab_info.is_active);
+  if (!tab_info.stable_id.empty()) {
+    tab.Set("stable_id", tab_info.stable_id);
+  }
+  tab.Set("targetable", tab_info.targetable);
+  tab.Set("tab_strip_index", tab_info.tab_strip_index);
+  return tab;
+}
+
+// Todo 6: input/navigation mutators that require an active tab lease held by
+// this session before any delegate dispatch. Lease-control and read-only tools
+// are intentionally excluded so they remain available without a lease.
+bool IsLeaseGatedMutation(std::string_view tool_name) {
+  return tool_name == "browser_click" || tool_name == "browser_type" ||
+         tool_name == "browser_select" || tool_name == "browser_scroll" ||
+         tool_name == "browser_key_press" || tool_name == "browser_navigate" ||
+         tool_name == "vault_fill_credential" || tool_name == "vault_fill_totp";
 }
 
 int TargetErrorCode(MahoMcpTargetError error) {
@@ -312,6 +338,19 @@ void MahoMcpSession::SetBrowserDelegate(MahoMcpBrowserDelegate* delegate) {
   g_browser_delegate = delegate;
 }
 
+MahoMcpBrowserDelegate* MahoMcpSession::GetBrowserDelegateForBrowserActions() {
+  return g_browser_delegate;
+}
+
+void MahoMcpSession::SetLeaseRegistryForBrowserActions(
+    MahoMcpLeaseRegistry* lease_registry) {
+  g_browser_action_lease_registry = lease_registry;
+}
+
+MahoMcpLeaseRegistry* MahoMcpSession::GetLeaseRegistryForBrowserActions() {
+  return g_browser_action_lease_registry;
+}
+
 #if BUILDFLAG(IS_WIN)
 MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token,
                                MahoMcpLeaseRegistry* lease_registry)
@@ -326,6 +365,8 @@ MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token,
   default_tab.title = "New Tab";
   default_tab.url = "about:blank";
   default_tab.is_active = true;
+  default_tab.targetable = true;
+  default_tab.tab_strip_index = 0;
   tabs_.push_back(std::move(default_tab));
   active_tab_id_ = 0;
 }
@@ -343,6 +384,8 @@ MahoMcpSession::MahoMcpSession(uid_t peer_uid,
   default_tab.title = "New Tab";
   default_tab.url = "about:blank";
   default_tab.is_active = true;
+  default_tab.targetable = true;
+  default_tab.tab_strip_index = 0;
   tabs_.push_back(std::move(default_tab));
   active_tab_id_ = 0;
 }
@@ -852,6 +895,72 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
     }
     {
       base::DictValue t;
+      t.Set("name", "mail_add_account");
+      t.Set("description", "Connect a new mail account manually. Args: request_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_test_connection");
+      t.Set("description", "Test connection settings for a mail account. Args: params_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_delete_account");
+      t.Set("description", "Delete a mail account by ID. Args: account_id (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_start_oauth");
+      t.Set("description", "Generate a start URL for OAuth flow. Args: provider (string), client_id (string), redirect_uri (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_complete_oauth");
+      t.Set("description", "Complete OAuth flow using state and authorization code. Args: state (string), code (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_reconnect_account");
+      t.Set("description", "Reconnect/refresh an expired session for a mail account. Args: account_id (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_import_migration_archive");
+      t.Set("description", "Import mail database migration archive. Args: archive_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_send");
+      t.Set("description", "Send an email. Args: request_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_save_draft");
+      t.Set("description", "Save a mail draft. Args: request_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_update_draft");
+      t.Set("description", "Update an existing mail draft. Args: request_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_queue_email");
+      t.Set("description", "Queue an email in outbox to send later. Args: request_json (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
       t.Set("name", "browser_acquire_lease");
       t.Set("description",
             "Acquire exclusive lease on a tab. Args: tab_id (int), "
@@ -873,6 +982,40 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
       t.Set("name", "browser_release_lease");
       t.Set("description",
             "Release a lease held by this session. Args: tab_id (int).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "vault_list_credentials_for_active_page");
+      t.Set("description",
+            "List password-vault credential handles for the active page. "
+            "Returns opaque handles only; never password material.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "vault_request_credential_use");
+      t.Set("description",
+            "Exchange a credential handle for a short-lived fill grant. "
+            "Args: handle (string), origin (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "vault_fill_credential");
+      t.Set("description",
+            "Fill a credential field from a short-lived grant. Args: "
+            "grant_handle (string), ref (int), tab_id (int, optional). "
+            "The secret is injected browser-side and is never returned.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "vault_fill_totp");
+      t.Set("description",
+            "Fill a one-time-code field from a short-lived grant. Args: "
+            "grant_handle (string), ref (int), tab_id (int, optional). "
+            "The code is injected browser-side and is never returned.");
       tools.Append(base::Value(std::move(t)));
     }
 
@@ -1106,6 +1249,27 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   const int resolved_tab_id =
       use_resolved_target ? last_resolved_target_.tab_id : 0;
 
+  // Todo 6: single mutation gate. After stable concrete target resolution and
+  // before any delegate dispatch, input/navigation mutators require an active
+  // lease held by THIS session on the resolved tab. A session without a lease
+  // registry (test wiring) is not gated; lease-control and read-only tools are
+  // never classified as mutations, so they remain available.
+  if (lease_registry_ && IsLeaseGatedMutation(*tool_name)) {
+    const int gate_tab_id =
+        use_resolved_target
+            ? resolved_tab_id
+            : (arguments && arguments->FindInt("tab_id")
+                   ? arguments->FindInt("tab_id").value()
+                   : active_tab_id_);
+    if (!lease_registry_->IsHeldBy(static_cast<int64_t>(gate_tab_id),
+                                   session_id_)) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, kMahoMcpErrorLeaseRequired,
+          "active tab lease required for this mutation"));
+      return;
+    }
+  }
+
   auto reject_invalid_mail_params = [&](std::string message) {
     responses.push_back(framer_.BuildErrorResponse(msg.id, -32602, message));
   };
@@ -1124,6 +1288,21 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     DeferredResponseSender sender = deferred_response_sender_;
     return MakeMailReadCompletion(CloneMessageId(msg.id), std::move(sender));
   };
+  auto append_browser_action_response = [this, &msg, &responses](
+                                            MahoMcpBrowserActionHandler::Result
+                                                action_result) {
+    if (action_result.error.has_value()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, action_result.error->code, action_result.error->message));
+      return;
+    }
+
+    auto redacted =
+        MahoMcpFirewall::Wrap(base::Value(std::move(action_result.value)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+  };
 
   if (*tool_name == "ping") {
     base::DictValue result;
@@ -1139,21 +1318,11 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     base::ListValue list;
     if (g_browser_delegate) {
       for (const auto& t : g_browser_delegate->GetTabList()) {
-        base::DictValue tab;
-        tab.Set("id", t.id);
-        tab.Set("title", t.title);
-        tab.Set("url", t.url);
-        tab.Set("is_active", t.is_active);
-        list.Append(std::move(tab));
+        list.Append(SerializeTabInfo(t));
       }
     } else {
       for (const auto& t : tabs_) {
-        base::DictValue tab;
-        tab.Set("id", t.id);
-        tab.Set("title", t.title);
-        tab.Set("url", t.url);
-        tab.Set("is_active", t.is_active);
-        list.Append(std::move(tab));
+        list.Append(SerializeTabInfo(t));
       }
     }
     base::DictValue result;
@@ -1178,10 +1347,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     if (g_browser_delegate) {
       for (const auto& t : g_browser_delegate->GetTabList()) {
         if (t.id == target_id) {
-          result.Set("id", t.id);
-          result.Set("title", t.title);
-          result.Set("url", t.url);
-          result.Set("is_active", t.is_active);
+          result = SerializeTabInfo(t);
           found_real = true;
           break;
         }
@@ -1207,10 +1373,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         responses.push_back(std::move(err));
         return;
       }
-      result.Set("id", found->id);
-      result.Set("title", found->title);
-      result.Set("url", found->url);
-      result.Set("is_active", found->is_active);
+      result = SerializeTabInfo(*found);
     }
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
@@ -1402,8 +1565,30 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "mail_extract_otp") {
-    responses.push_back(framer_.BuildErrorResponse(
-        msg.id, -32000, kMailExtractOtpUnavailable));
+    std::string account_id = "";
+    std::string folder_id = "";
+    std::string query = "";
+    int64_t max_age = 300;
+    if (arguments) {
+      if (const std::string* val = arguments->FindString("account_id")) {
+        account_id = *val;
+      }
+      if (const std::string* val = arguments->FindString("folder_id")) {
+        folder_id = *val;
+      }
+      if (const std::string* val = arguments->FindString("query")) {
+        query = *val;
+      }
+      if (std::optional<int> val = arguments->FindInt("max_age_seconds")) {
+        max_age = *val;
+      }
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailExtractOtp(
+        account_id, folder_id, query, max_age,
+        make_mail_read_completion());
     return;
   }
 
@@ -1513,6 +1698,295 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     g_browser_delegate->MailListThread(*account_id, *message_id,
                                        make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_add_account") {
+    const std::string* request_json =
+        FindRequiredStringArgument(arguments, "request_json");
+    if (!request_json) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("request_json"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailAddAccount(*request_json,
+                                       make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_test_connection") {
+    const std::string* params_json =
+        FindRequiredStringArgument(arguments, "params_json");
+    if (!params_json) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("params_json"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailTestConnection(*params_json,
+                                           make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_delete_account") {
+    const std::string* account_id =
+        FindRequiredStringArgument(arguments, "account_id");
+    if (!account_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("account_id"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailDeleteAccount(*account_id,
+                                          make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_start_oauth") {
+    const std::string* provider =
+        FindRequiredStringArgument(arguments, "provider");
+    const std::string* client_id =
+        FindRequiredStringArgument(arguments, "client_id");
+    const std::string* redirect_uri =
+        FindRequiredStringArgument(arguments, "redirect_uri");
+    if (!provider) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("provider"));
+      return;
+    }
+    if (!client_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("client_id"));
+      return;
+    }
+    if (!redirect_uri) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("redirect_uri"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailOAuthStartUrl(*provider, *client_id, *redirect_uri,
+                                          make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_complete_oauth") {
+    const std::string* state =
+        FindRequiredStringArgument(arguments, "state");
+    const std::string* code =
+        FindRequiredStringArgument(arguments, "code");
+    if (!state) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("state"));
+      return;
+    }
+    if (!code) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("code"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailOAuthComplete(*state, *code,
+                                          make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_reconnect_account") {
+    const std::string* account_id =
+        FindRequiredStringArgument(arguments, "account_id");
+    if (!account_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("account_id"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailReconnectAccount(*account_id,
+                                             make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_import_migration_archive") {
+    const std::string* archive_json =
+        FindRequiredStringArgument(arguments, "archive_json");
+    if (!archive_json) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("archive_json"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailImportMigrationArchive(*archive_json,
+                                                   make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_send") {
+    const std::string* request_json =
+        FindRequiredStringArgument(arguments, "request_json");
+    if (!request_json) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("request_json"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailSendEmail(*request_json,
+                                      make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_save_draft") {
+    const std::string* request_json =
+        FindRequiredStringArgument(arguments, "request_json");
+    if (!request_json) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("request_json"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailSaveDraft(*request_json,
+                                      make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_update_draft") {
+    const std::string* draft_id =
+        FindRequiredStringArgument(arguments, "draft_id");
+    const std::string* request_json =
+        FindRequiredStringArgument(arguments, "request_json");
+    if (!draft_id || !request_json) {
+      reject_invalid_mail_params("Invalid params: draft_id and request_json required");
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailUpdateDraft(*draft_id, *request_json,
+                                        make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_queue_email") {
+    const std::string* request_json =
+        FindRequiredStringArgument(arguments, "request_json");
+    if (!request_json) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("request_json"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailQueueEmail(*request_json,
+                                       make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "vault_list_credentials_for_active_page") {
+    int tab_id = use_resolved_target ? resolved_tab_id
+                                     : (arguments && arguments->FindInt("tab_id")
+                                            ? arguments->FindInt("tab_id").value()
+                                            : active_tab_id_);
+    base::ListValue items;
+    if (g_browser_delegate) {
+      for (const auto& credential :
+           g_browser_delegate->VaultListCredentialsForActivePage(tab_id)) {
+        base::DictValue item;
+        item.Set("handle", credential.handle);
+        item.Set("username_hint", credential.username_hint);
+        item.Set("origin", credential.origin);
+        items.Append(std::move(item));
+      }
+    }
+    base::DictValue result;
+    result.Set("items", std::move(items));
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone()));
+    return;
+  }
+
+  if (*tool_name == "vault_request_credential_use") {
+    const std::string* handle = FindRequiredStringArgument(arguments, "handle");
+    const std::string* origin = FindRequiredStringArgument(arguments, "origin");
+    if (!handle) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, RequiredStringArgumentMessage("handle")));
+      return;
+    }
+    if (!origin) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, RequiredStringArgumentMessage("origin")));
+      return;
+    }
+    int tab_id = use_resolved_target ? resolved_tab_id
+                                     : (arguments && arguments->FindInt("tab_id")
+                                            ? arguments->FindInt("tab_id").value()
+                                            : active_tab_id_);
+    std::optional<std::string> grant_handle =
+        g_browser_delegate ? g_browser_delegate->VaultRequestCredentialUse(
+                                 tab_id, *handle, *origin)
+                           : std::nullopt;
+    if (!grant_handle) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Credential grant unavailable"));
+      return;
+    }
+    base::DictValue result;
+    result.Set("grant_handle", *grant_handle);
+    result.Set("status", "granted");
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone()));
+    return;
+  }
+
+  if (*tool_name == "vault_fill_credential" || *tool_name == "vault_fill_totp") {
+    const std::string* grant_handle =
+        FindRequiredStringArgument(arguments, "grant_handle");
+    if (!grant_handle) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, RequiredStringArgumentMessage("grant_handle")));
+      return;
+    }
+    if (!arguments || !arguments->FindInt("ref")) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: ref required"));
+      return;
+    }
+    int ref = arguments->FindInt("ref").value();
+    auto it = ref_to_ax_id_.find(ref);
+    if (it == ref_to_ax_id_.end()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Unknown ref: call browser_accessibility_snapshot first"));
+      return;
+    }
+    int tab_id = use_resolved_target ? resolved_tab_id
+                                     : arguments->FindInt("tab_id").value_or(active_tab_id_);
+    bool filled = false;
+    if (g_browser_delegate) {
+      filled = (*tool_name == "vault_fill_totp")
+                   ? g_browser_delegate->VaultFillTotp(tab_id, *grant_handle,
+                                                       it->second)
+                   : g_browser_delegate->VaultFillCredential(
+                         tab_id, *grant_handle, it->second);
+    }
+    if (!filled) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Credential fill failed"));
+      return;
+    }
+    base::DictValue result;
+    result.Set("filled", true);
+    result.Set("ref", ref);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone()));
     return;
   }
 
@@ -1945,109 +2419,32 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_click") {
-    if (!arguments || !arguments->FindInt("ref")) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: ref required");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int ref = arguments->FindInt("ref").value();
-    auto it = ref_to_ax_id_.find(ref);
-    if (it == ref_to_ax_id_.end()) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int tab_id = use_resolved_target ? resolved_tab_id : arguments->FindInt("tab_id").value_or(active_tab_id_);
-    bool clicked = g_browser_delegate && g_browser_delegate->Click(tab_id, it->second);
-    if (!clicked) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Action failed: click could not be dispatched");
-      responses.push_back(std::move(err));
-      return;
-    }
-    base::DictValue result;
-    result.Set("clicked", clicked);
-    result.Set("ref", ref);
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                                  : active_tab_id_);
+    append_browser_action_response(MahoMcpBrowserActionHandler::HandleClick(
+        g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
   }
 
   if (*tool_name == "browser_type") {
-    if (!arguments || !arguments->FindInt("ref") ||
-        !arguments->FindString("text")) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: ref and text required");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int ref = arguments->FindInt("ref").value();
-    auto it = ref_to_ax_id_.find(ref);
-    if (it == ref_to_ax_id_.end()) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int tab_id = use_resolved_target ? resolved_tab_id : arguments->FindInt("tab_id").value_or(active_tab_id_);
-    const std::string& text = *arguments->FindString("text");
-    bool typed = g_browser_delegate &&
-                 g_browser_delegate->Type(tab_id, it->second, text);
-    if (!typed) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Action failed: type could not be dispatched");
-      responses.push_back(std::move(err));
-      return;
-    }
-    base::DictValue result;
-    result.Set("typed", typed);
-    result.Set("ref", ref);
-    result.Set("text", text);
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                                  : active_tab_id_);
+    append_browser_action_response(MahoMcpBrowserActionHandler::HandleType(
+        g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
   }
 
   if (*tool_name == "browser_select") {
-    if (!arguments || !arguments->FindInt("ref") ||
-        !arguments->FindString("value")) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: ref and value required");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int ref = arguments->FindInt("ref").value();
-    auto it = ref_to_ax_id_.find(ref);
-    if (it == ref_to_ax_id_.end()) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int tab_id = use_resolved_target ? resolved_tab_id : arguments->FindInt("tab_id").value_or(active_tab_id_);
-    const std::string& value = *arguments->FindString("value");
-    bool selected = g_browser_delegate &&
-                    g_browser_delegate->Select(tab_id, it->second, value);
-    if (!selected) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Action failed: select could not be dispatched");
-      responses.push_back(std::move(err));
-      return;
-    }
-    base::DictValue result;
-    result.Set("selected", selected);
-    result.Set("ref", ref);
-    result.Set("value", value);
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                                  : active_tab_id_);
+    append_browser_action_response(MahoMcpBrowserActionHandler::HandleSelect(
+        g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
   }
 
@@ -2583,142 +2980,33 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_scroll") {
-    if (!arguments || !arguments->FindString("direction")) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: direction required");
-      responses.push_back(std::move(err));
-      return;
-    }
-    std::string direction = *arguments->FindString("direction");
-    int pixels = arguments->FindInt("pixels").value_or(300);
-    std::optional<int> ref = arguments->FindInt("ref");
-
-    if (direction != "up" && direction != "down" && direction != "left" && direction != "right") {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: unknown direction");
-      responses.push_back(std::move(err));
-      return;
-    }
-
-    int tab_id = use_resolved_target ? resolved_tab_id : arguments->FindInt("tab_id").value_or(active_tab_id_);
-    std::optional<ui::AXNodeID> ax_id;
-    if (ref.has_value()) {
-      auto it = ref_to_ax_id_.find(ref.value());
-      if (it == ref_to_ax_id_.end()) {
-        std::string err = framer_.BuildErrorResponse(
-            msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
-        responses.push_back(std::move(err));
-        return;
-      }
-      ax_id = it->second;
-    }
-
-    if (g_browser_delegate) {
-      g_browser_delegate->Scroll(tab_id, direction, pixels, ax_id);
-    }
-
-    int& current_scroll_y = scroll_y_positions_[tab_id];
-    if (direction == "down") {
-      current_scroll_y += pixels;
-    } else if (direction == "up") {
-      current_scroll_y = std::max(0, current_scroll_y - pixels);
-    }
-
-    base::DictValue result;
-    result.Set("scrolled", true);
-    result.Set("new_scroll_y", current_scroll_y);
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                                  : active_tab_id_);
+    append_browser_action_response(MahoMcpBrowserActionHandler::HandleScroll(
+        g_browser_delegate, ref_to_ax_id_, scroll_y_positions_, tab_id,
+        arguments));
     return;
   }
 
   if (*tool_name == "browser_hover") {
-    if (!arguments || !arguments->FindInt("ref")) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: ref required");
-      responses.push_back(std::move(err));
-      return;
-    }
-    int ref = arguments->FindInt("ref").value();
-    auto it = ref_to_ax_id_.find(ref);
-    if (it == ref_to_ax_id_.end()) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
-      responses.push_back(std::move(err));
-      return;
-    }
-
-    int tab_id = use_resolved_target ? resolved_tab_id : arguments->FindInt("tab_id").value_or(active_tab_id_);
-    if (g_browser_delegate) {
-      g_browser_delegate->Hover(tab_id, it->second);
-    }
-
-    base::DictValue result;
-    result.Set("hovered", true);
-    result.Set("ref", ref);
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                                  : active_tab_id_);
+    append_browser_action_response(MahoMcpBrowserActionHandler::HandleHover(
+        g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
   }
 
   if (*tool_name == "browser_key_press") {
-    if (!arguments || !arguments->FindString("key")) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: key required");
-      responses.push_back(std::move(err));
-      return;
-    }
-    std::string key = *arguments->FindString("key");
-    const base::ListValue* modifiers = arguments->FindList("modifiers");
-
-    bool valid_key = (key.size() == 1) ||
-                     (key == "Enter" || key == "Tab" || key == "Escape" || key == "Backspace" ||
-                      key == "Delete" || key == "ArrowUp" || key == "ArrowDown" || key == "ArrowLeft" ||
-                      key == "ArrowRight" || key == "Home" || key == "End" || key == "PageUp" ||
-                      key == "PageDown" || (key[0] == 'F' && key.size() > 1 && key.size() <= 3));
-    if (!valid_key) {
-      std::string err = framer_.BuildErrorResponse(
-          msg.id, -32602, "Invalid params: unknown key");
-      responses.push_back(std::move(err));
-      return;
-    }
-
-    std::vector<std::string> mod_list;
-    if (modifiers) {
-      for (const auto& mod : *modifiers) {
-        if (!mod.is_string()) {
-          std::string err = framer_.BuildErrorResponse(
-              msg.id, -32602, "Invalid params: modifiers must be list of strings");
-          responses.push_back(std::move(err));
-          return;
-        }
-        std::string mod_str = mod.GetString();
-        if (mod_str != "shift" && mod_str != "ctrl" && mod_str != "alt" && mod_str != "meta") {
-          std::string err = framer_.BuildErrorResponse(
-              msg.id, -32602, "Invalid params: unknown modifier: " + mod_str);
-          responses.push_back(std::move(err));
-          return;
-        }
-        mod_list.push_back(mod_str);
-      }
-    }
-
-    int tab_id = use_resolved_target ? resolved_tab_id : arguments->FindInt("tab_id").value_or(active_tab_id_);
-    if (g_browser_delegate) {
-      g_browser_delegate->KeyPress(tab_id, key, mod_list);
-    }
-
-    base::DictValue result;
-    result.Set("key_pressed", true);
-    result.Set("key", key);
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                                  : active_tab_id_);
+    append_browser_action_response(MahoMcpBrowserActionHandler::HandleKeyPress(
+        g_browser_delegate, tab_id, arguments));
     return;
   }
 
@@ -2769,6 +3057,98 @@ void MahoMcpBrowserDelegate::MailListThread(const std::string& account_id,
   std::move(callback).Run(false, "Mail read broker unavailable");
 }
 
+void MahoMcpBrowserDelegate::MailAddAccount(const std::string& request_json,
+                                            MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailTestConnection(const std::string& params_json,
+                                                MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailDeleteAccount(const std::string& account_id,
+                                               MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailOAuthStartUrl(const std::string& provider,
+                                               const std::string& client_id,
+                                               const std::string& redirect_uri,
+                                               MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailOAuthComplete(const std::string& state,
+                                               const std::string& code,
+                                               MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailReconnectAccount(const std::string& account_id,
+                                                  MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailImportMigrationArchive(const std::string& archive_json,
+                                                        MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailExtractOtp(const std::string& account_id,
+                                            const std::string& folder_id,
+                                            const std::string& query,
+                                            int64_t max_age_seconds,
+                                            MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail onboarding broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailSendEmail(const std::string& request_json,
+                                           MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail write broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailSaveDraft(const std::string& request_json,
+                                           MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail write broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailUpdateDraft(const std::string& draft_id,
+                                             const std::string& request_json,
+                                             MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail write broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailQueueEmail(const std::string& request_json,
+                                            MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail write broker unavailable");
+}
+
+std::vector<MahoMcpBrowserDelegate::VaultCredentialSummary>
+MahoMcpBrowserDelegate::VaultListCredentialsForActivePage(int tab_id) {
+  return {};
+}
+
+std::optional<std::string> MahoMcpBrowserDelegate::VaultRequestCredentialUse(
+    int tab_id,
+    const std::string& handle,
+    const std::string& origin) {
+  return std::nullopt;
+}
+
+bool MahoMcpBrowserDelegate::VaultFillCredential(
+    int tab_id,
+    const std::string& grant_handle,
+    ui::AXNodeID ax_id) {
+  return false;
+}
+
+bool MahoMcpBrowserDelegate::VaultFillTotp(int tab_id,
+                                           const std::string& grant_handle,
+                                           ui::AXNodeID ax_id) {
+  return false;
+}
+
 MahoMcpTargetResolution MahoMcpBrowserDelegate::ResolveTabTarget(
     int requested_tab_id) {
   MahoMcpTargetResolution resolution;
@@ -2786,6 +3166,17 @@ MahoMcpTargetResolution MahoMcpBrowserDelegate::ResolveProfileTarget() {
 bool MahoMcpBrowserDelegate::RevalidateTarget(
     const ResolvedMahoMcpTarget& target) {
   return true;
+}
+
+MahoMcpFieldMetadata MahoMcpBrowserDelegate::GetFieldMetadata(
+    int tab_id,
+    ui::AXNodeID ax_id) {
+  return MahoMcpFieldMetadata();
+}
+
+// static
+bool MahoMcpSession::IsCredentialField(const MahoMcpFieldMetadata& meta) {
+  return MahoMcpBrowserActionHandler::IsCredentialField(meta);
 }
 
 }  // namespace maho

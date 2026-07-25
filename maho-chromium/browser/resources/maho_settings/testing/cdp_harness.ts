@@ -72,6 +72,69 @@ export class CDP {
   }
 }
 
+type ElementCenter = {
+  readonly x: number;
+  readonly y: number;
+};
+
+export async function clickElementByText(
+  cdp: CDP,
+  selector: string,
+  exactText: string
+): Promise<boolean> {
+  const center = await cdp.eval<ElementCenter>(`(function(){
+    var elements = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
+    var element = elements.find(function(candidate){
+      return (candidate.textContent || '').trim() === ${JSON.stringify(exactText)};
+    });
+    if (!element) return undefined;
+    var rect = element.getBoundingClientRect();
+    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+  })()`);
+  if (!center) return false;
+
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: center.x,
+    y: center.y,
+    button: "left",
+    clickCount: 1
+  });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: center.x,
+    y: center.y,
+    button: "left",
+    clickCount: 1
+  });
+  return true;
+}
+
+export async function waitForCondition(
+  cdp: CDP,
+  expression: string,
+  timeoutMs = 10_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await cdp.eval<boolean>(expression)) return true;
+    await Bun.sleep(100);
+  }
+  return false;
+}
+
+export async function waitForSettingsPane(
+  cdp: CDP,
+  paneKey: string,
+  timeoutMs = 5_000
+): Promise<boolean> {
+  return waitForCondition(cdp, `(function(){
+    var active = document.querySelector('nav[aria-label="Settings panes"] [aria-current="page"]');
+    var section = document.querySelector('main [data-pane=${JSON.stringify(paneKey)}]');
+    return !!active && active.getAttribute('data-pane') === ${JSON.stringify(paneKey)} && !!section;
+  })()`, timeoutMs);
+}
+
 export async function checkRelayOrExit(): Promise<void> {
   const healthOk = await fetch(`${RELAY}/health`).then(r => r.text()).catch(() => "");
   if (healthOk.trim() !== "ok") {

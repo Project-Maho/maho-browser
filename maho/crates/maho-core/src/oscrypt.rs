@@ -7,6 +7,19 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+mod vault_device;
+
+#[cfg(target_os = "linux")]
+pub use vault_device::LinuxVaultDeviceProtector;
+#[cfg(target_os = "macos")]
+pub use vault_device::MacOsVaultDeviceProtector;
+#[cfg(target_os = "windows")]
+pub use vault_device::WindowsVaultDeviceProtector;
+pub use vault_device::{
+    VaultDeviceBinding, VaultDevicePlatform, VaultDeviceProtector, VaultDeviceProtectorError,
+    VaultDeviceWrapBundle, VaultDeviceWrapBundleError,
+};
+
 pub fn derive_key(password_file_path: &str, out_key: &mut [u8; 16], out_status: &mut u32) -> bool {
     let path = Path::new(password_file_path);
     let password;

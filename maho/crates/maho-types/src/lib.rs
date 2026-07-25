@@ -6,6 +6,7 @@ pub mod autofill;
 pub mod boost;
 pub mod chat;
 pub mod common;
+pub mod content_blocking;
 pub mod css_mod;
 pub mod easel;
 pub mod events;
@@ -27,5 +28,6 @@ pub mod split_view;
 pub mod tab;
 pub mod tool;
 pub mod traits;
+pub mod vault;
 
 pub use events::shell_event_kind::ShellEventKind;

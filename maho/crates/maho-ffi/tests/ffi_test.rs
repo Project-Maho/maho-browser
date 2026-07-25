@@ -15,6 +15,62 @@ fn free_null_is_safe() {
     unsafe { maho_ffi::maho_core_free(std::ptr::null_mut()) };
 }
 
+// Regression for G-DL6: C++ BuildStartJson writes total_bytes as a double, so
+// base::JSONWriter emits "5000.0". serde_json parses that as f64, and as_u64()
+// returns None -> total_bytes was stored as 0. The FFI now falls back to as_f64().
+#[test]
+fn download_total_bytes_double_json_parses_as_integer() {
+    let ptr = maho_ffi::maho_core_new();
+    let start_json = r#"{"filename":"a.avif","url":"https://example.com/a.avif","total_bytes":5000.0,"file_path":"/tmp/a.avif","chromium_guid":"guid-abc"}"#;
+    let c = CString::new(start_json).unwrap();
+    let id_res = unsafe { maho_ffi::maho_core_start_download(ptr, c.as_ptr()) };
+    assert!(!id_res.is_null());
+    unsafe { maho_ffi::maho_string_free(id_res) };
+
+    let vm_res = unsafe { maho_ffi::maho_core_get_download_view_models(ptr) };
+    assert!(!vm_res.is_null());
+    let vm_str = unsafe { CStr::from_ptr(vm_res) }.to_str().unwrap();
+    let list: Vec<Value> = serde_json::from_str(vm_str).unwrap();
+    unsafe { maho_ffi::maho_string_free(vm_res) };
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        list[0].get("totalBytes").and_then(|v| v.as_u64()),
+        Some(5000),
+        "total_bytes double must round-trip to 5000, not 0 (G-DL6)"
+    );
+    unsafe { maho_ffi::maho_core_free(ptr) };
+}
+
+// D0: chromium_guid mapping lets the bridge re-attach a Chromium DownloadItem to
+// its persisted Maho row after restart. find_download_by_chromium_guid must return
+// the maho_id for a known guid and null for an unknown one.
+#[test]
+fn find_download_by_chromium_guid_roundtrip() {
+    let ptr = maho_ffi::maho_core_new();
+    let start_json = r#"{"filename":"b.zip","url":"https://example.com/b.zip","total_bytes":10,"chromium_guid":"guid-xyz"}"#;
+    let c = CString::new(start_json).unwrap();
+    let id_res = unsafe { maho_ffi::maho_core_start_download(ptr, c.as_ptr()) };
+    assert!(!id_res.is_null());
+    let maho_id: String =
+        serde_json::from_str(unsafe { CStr::from_ptr(id_res) }.to_str().unwrap()).unwrap();
+    unsafe { maho_ffi::maho_string_free(id_res) };
+
+    let guid_c = CString::new("guid-xyz").unwrap();
+    let found = unsafe { maho_ffi::maho_core_find_download_by_chromium_guid(ptr, guid_c.as_ptr()) };
+    assert!(!found.is_null(), "known guid must resolve to a maho_id");
+    let found_id: String =
+        serde_json::from_str(unsafe { CStr::from_ptr(found) }.to_str().unwrap()).unwrap();
+    unsafe { maho_ffi::maho_string_free(found) };
+    assert_eq!(found_id, maho_id);
+
+    let unknown = CString::new("no-such-guid").unwrap();
+    let none_res =
+        unsafe { maho_ffi::maho_core_find_download_by_chromium_guid(ptr, unknown.as_ptr()) };
+    assert!(none_res.is_null(), "unknown guid must return null");
+    unsafe { maho_ffi::maho_core_free(ptr) };
+}
+
 #[test]
 fn handle_create_tab_event() {
     let ptr = maho_ffi::maho_core_new();
@@ -332,7 +388,7 @@ fn null_length_utf8_boundaries_do_not_unwind() {
 }
 
 #[test]
-fn test_password_list_omits_plaintext_and_reveal_succeeds() {
+fn test_password_list_omits_plaintext_and_unauthenticated_reveal_fails_closed() {
     let ptr = unsafe { maho_ffi::maho_core_new() };
     assert!(!ptr.is_null());
 
@@ -343,7 +399,10 @@ fn test_password_list_omits_plaintext_and_reveal_succeeds() {
     let added = unsafe {
         maho_ffi::maho_core_add_password(ptr, domain.as_ptr(), username.as_ptr(), secret.as_ptr())
     };
-    assert!(added);
+    assert!(
+        !added,
+        "legacy unauthenticated add_password must fail closed when Vault is uninitialized"
+    );
 
     // List passwords via search
     let empty_query = CString::new("").unwrap();
@@ -355,27 +414,113 @@ fn test_password_list_omits_plaintext_and_reveal_succeeds() {
     assert!(!json_str.contains("my-super-secret-password"));
     assert!(!json_str.contains("\"password\""));
 
-    // Parse the JSON to find the password ID
-    let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
-    let id = parsed.as_array().unwrap()[0]
-        .get("id")
-        .unwrap()
-        .as_str()
-        .unwrap();
-    let id_c = CString::new(id).unwrap();
-
-    // Reveal password by ID should return the secret
+    // Legacy un-authenticated reveal fails closed and returns null / empty
+    let id_c = CString::new("legacy-test-id").unwrap();
     let revealed_ptr = unsafe { maho_ffi::maho_core_reveal_password(ptr, id_c.as_ptr()) };
-    assert!(!revealed_ptr.is_null());
-    let revealed_str = unsafe { CStr::from_ptr(revealed_ptr).to_str().unwrap() };
-    assert_eq!(revealed_str, "my-super-secret-password");
+    assert!(revealed_ptr.is_null());
 
     // Clean up
     unsafe {
         maho_ffi::maho_string_free(json_ptr);
-        maho_ffi::maho_string_free(revealed_ptr);
         maho_ffi::maho_core_free(ptr);
     }
+}
+
+#[test]
+fn test_legacy_password_ffi_routes_to_vault_when_initialized() {
+    let key =
+        CString::new("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+    assert!(unsafe { maho_ffi::maho_storage_set_sqlcipher_key(key.as_ptr()) });
+    let dir = std::env::temp_dir().join(format!(
+        "maho-ffi-legacy-password-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = CString::new(
+        dir.join("legacy-password-ffi.sqlite")
+            .to_string_lossy()
+            .as_bytes(),
+    )
+    .unwrap();
+    let ptr = unsafe { maho_ffi::maho_core_new_with_storage(db_path.as_ptr()) };
+    assert!(!ptr.is_null());
+
+    let init = CString::new(
+        r#"{"masterPassphrase":"correct passphrase","recoverySecret":"recovery key"}"#,
+    )
+    .unwrap();
+    let init_ptr = unsafe { maho_ffi::maho_vault_initialize_json(ptr, init.as_ptr()) };
+    assert!(!init_ptr.is_null());
+    let init_json = unsafe { CStr::from_ptr(init_ptr).to_str().unwrap() };
+    let init_value: Value = serde_json::from_str(init_json).unwrap();
+    assert_eq!(init_value.get("ok").and_then(Value::as_bool), Some(true));
+    unsafe { maho_ffi::maho_string_free(init_ptr) };
+
+    let domain = CString::new("https://example.com").unwrap();
+    let username = CString::new("user@example.com").unwrap();
+    let secret = CString::new("my-super-secret-password").unwrap();
+    assert!(unsafe {
+        maho_ffi::maho_core_add_password(ptr, domain.as_ptr(), username.as_ptr(), secret.as_ptr())
+    });
+
+    let empty_query = CString::new("").unwrap();
+    let list_ptr = unsafe { maho_ffi::maho_core_search_passwords(ptr, empty_query.as_ptr()) };
+    assert!(!list_ptr.is_null());
+    let list_json = unsafe { CStr::from_ptr(list_ptr).to_str().unwrap() };
+    assert!(!list_json.contains("my-super-secret-password"));
+    let list: Vec<Value> = serde_json::from_str(list_json).unwrap();
+    unsafe { maho_ffi::maho_string_free(list_ptr) };
+    assert_eq!(list.len(), 1);
+    let password_id = list[0].get("id").and_then(Value::as_str).unwrap();
+    assert_eq!(
+        list[0].get("domain").and_then(Value::as_str),
+        Some("https://example.com")
+    );
+    let listed_username = list[0].get("username").and_then(Value::as_str).unwrap();
+    assert!(!listed_username.is_empty());
+    assert_ne!(listed_username, "user@example.com");
+
+    let id_c = CString::new(password_id).unwrap();
+    let revealed_ptr = unsafe { maho_ffi::maho_core_reveal_password(ptr, id_c.as_ptr()) };
+    assert!(!revealed_ptr.is_null());
+    let revealed = unsafe { CStr::from_ptr(revealed_ptr).to_str().unwrap() };
+    assert_eq!(revealed, "my-super-secret-password");
+    unsafe { maho_ffi::maho_string_free(revealed_ptr) };
+
+    let renamed = CString::new("renamed@example.com").unwrap();
+    assert!(unsafe {
+        maho_ffi::maho_core_update_password_username(ptr, id_c.as_ptr(), renamed.as_ptr())
+    });
+    let renamed_query = CString::new("example.com").unwrap();
+    let renamed_ptr = unsafe { maho_ffi::maho_core_search_passwords(ptr, renamed_query.as_ptr()) };
+    assert!(!renamed_ptr.is_null());
+    let renamed_json = unsafe { CStr::from_ptr(renamed_ptr).to_str().unwrap() };
+    let renamed_list: Vec<Value> = serde_json::from_str(renamed_json).unwrap();
+    unsafe { maho_ffi::maho_string_free(renamed_ptr) };
+    assert_eq!(renamed_list.len(), 1);
+    let renamed_username = renamed_list[0]
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(!renamed_username.is_empty());
+    assert_ne!(renamed_username, listed_username);
+    assert_ne!(renamed_username, "renamed@example.com");
+
+    assert!(unsafe { maho_ffi::maho_core_delete_password(ptr, id_c.as_ptr()) });
+    let after_delete_ptr =
+        unsafe { maho_ffi::maho_core_search_passwords(ptr, empty_query.as_ptr()) };
+    assert!(!after_delete_ptr.is_null());
+    let after_delete_json = unsafe { CStr::from_ptr(after_delete_ptr).to_str().unwrap() };
+    let after_delete: Vec<Value> = serde_json::from_str(after_delete_json).unwrap();
+    unsafe { maho_ffi::maho_string_free(after_delete_ptr) };
+    assert!(after_delete.is_empty());
+
+    unsafe { maho_ffi::maho_core_free(ptr) };
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

@@ -79,13 +79,21 @@ fn configure_sync_encryption_is_deterministic_across_cores() {
     let origin_res = take_json(unsafe {
         maho_ffi::maho_core_configure_sync_encryption(origin, url.as_ptr(), c_phrase.as_ptr())
     });
-    assert_eq!(origin_res["success"], Value::Bool(true), "origin: {origin_res}");
+    assert_eq!(
+        origin_res["success"],
+        Value::Bool(true),
+        "origin: {origin_res}"
+    );
 
     let joiner = maho_ffi::maho_core_new();
     let joiner_res = take_json(unsafe {
         maho_ffi::maho_core_configure_sync_encryption(joiner, url.as_ptr(), c_phrase.as_ptr())
     });
-    assert_eq!(joiner_res["success"], Value::Bool(true), "joiner: {joiner_res}");
+    assert_eq!(
+        joiner_res["success"],
+        Value::Bool(true),
+        "joiner: {joiner_res}"
+    );
 
     unsafe {
         maho_ffi::maho_core_free(origin);
@@ -141,7 +149,10 @@ fn configure_sync_encryption_null_inputs_return_null() {
     let r_null_phrase = unsafe {
         maho_ffi::maho_core_configure_sync_encryption(core, url.as_ptr(), std::ptr::null())
     };
-    assert!(r_null_phrase.is_null(), "null recovery_phrase must return null");
+    assert!(
+        r_null_phrase.is_null(),
+        "null recovery_phrase must return null"
+    );
 
     unsafe { maho_ffi::maho_core_free(core) };
 }

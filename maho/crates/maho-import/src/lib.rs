@@ -8,7 +8,24 @@ pub mod decrypt;
 pub mod detect;
 pub mod orchestrator;
 pub mod parsers;
+pub mod password_import_job;
 pub mod workers;
+
+pub use parsers::password_import_sources::{
+    parse_password_import_source_file, parse_password_import_source_preview,
+    PasswordImportCredential, PasswordImportFileFormat, PasswordImportParsedFile,
+    PasswordImportPreview, PasswordImportSource, PasswordImportSourceFormat,
+};
+pub use password_import_job::{
+    PasswordImportCancelSummary, PasswordImportCommitDestination, PasswordImportCommitError,
+    PasswordImportCommitSummary, PasswordImportInput, PasswordImportJob, PasswordImportJobConfig,
+    PasswordImportJobError, PasswordImportPreviewReceipt,
+};
+
+#[cfg(test)]
+mod password_import_job_tests;
+#[cfg(test)]
+mod password_import_sources_contract_tests;
 
 use std::path::PathBuf;
 

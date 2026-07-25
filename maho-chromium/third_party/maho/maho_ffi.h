@@ -12,7 +12,20 @@ typedef enum MahoAgentPermissionDecision {
   MahoAgentPermissionDecision_Deny = 1,
 } MahoAgentPermissionDecision;
 
+/**
+ * Typed status for a backend operation result.
+ */
+typedef enum MahoVaultBackendResultStatus {
+  MahoVaultBackendResultStatus_Success = 0,
+  MahoVaultBackendResultStatus_InvalidRequest = 1,
+  MahoVaultBackendResultStatus_RuntimeUnavailable = 2,
+  MahoVaultBackendResultStatus_Locked = 3,
+  MahoVaultBackendResultStatus_Failed = 4,
+} MahoVaultBackendResultStatus;
+
 typedef struct ChatSession ChatSession;
+
+typedef struct CompileInputSnapshot CompileInputSnapshot;
 
 typedef struct MahoAgentSession MahoAgentSession;
 
@@ -25,6 +38,49 @@ typedef struct MahoCore MahoCore;
  * (`AllComplete` or `Error`).
  */
 typedef struct MahoImportSession MahoImportSession;
+
+typedef struct MahoPasswordImportJob MahoPasswordImportJob;
+
+/**
+ * Opaque owned JSON bytes returned from a consumed backend result.
+ */
+typedef struct MahoVaultBackendBuffer MahoVaultBackendBuffer;
+
+/**
+ * Opaque result returned by a backend session operation.
+ */
+typedef struct MahoVaultBackendResult MahoVaultBackendResult;
+
+/**
+ * Opaque backend session created from a one-time MahoCore snapshot.
+ */
+typedef struct MahoVaultBackendSession MahoVaultBackendSession;
+
+typedef struct OpaqueCompiledEngine OpaqueCompiledEngine;
+
+typedef struct VaultSchemaVersion VaultSchemaVersion;
+
+/**
+ * Outcome of a content-blocking check, returned by value.
+ *
+ * `redirect` and `rewritten_url` are null when absent or empty. When non-null
+ * the caller owns them and must release each with `maho_string_free`.
+ *
+ * Deliberately a POD struct rather than JSON: this check runs on the browser
+ * UI thread for EVERY subresource request, and a JSON round trip there cost a
+ * serialize in Rust, a heap `CString`, a `base::JSONReader` parse in C++ and a
+ * free — per request. The overwhelmingly common outcome (allowed, no rewrite)
+ * now allocates nothing at all.
+ */
+typedef struct MahoBlockResult {
+  bool blocked;
+  char *redirect;
+  char *rewritten_url;
+} MahoBlockResult;
+
+typedef struct CompileInputSnapshot OpaqueCompileSnapshotHandle;
+
+typedef struct OpaqueCompiledEngine OpaqueCompiledEngineHandle;
 
 typedef struct MahoChatConfig {
   const char *api_key;
@@ -68,6 +124,8 @@ typedef void (*MahoImportProgressCallback)(uint32_t kind,
                                            int32_t count,
                                            const char *message,
                                            void *user_data);
+
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -135,7 +193,6 @@ char *maho_core_get_space_view_models(struct MahoCore *ptr);
  * # Safety
  * `ptr` must be a valid `*mut MahoCore`; `space_id_json` must be valid NUL-terminated UTF-8
  * containing a JSON-serialized SpaceId. Caller must free the returned string via
- * `maho_string_free`. Returns null on error or if import is active.
  */
 char *maho_core_get_sidebar_state_v2(struct MahoCore *ptr, const char *space_id_json);
 
@@ -587,17 +644,21 @@ bool maho_core_should_block_request(struct MahoCore *ptr,
                                     const char *request_type);
 
 /**
- * Returns a JSON string with the block check result:
- * `{"blocked":bool,"redirect":string|null,"rewrittenUrl":string|null}`
- *
  * # Safety
  * All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
+ * See `MahoBlockResult` for ownership of the returned strings.
+ */
+struct MahoBlockResult maho_core_check_request(struct MahoCore *ptr,
+                                               const char *url,
+                                               const char *source_url,
+                                               const char *request_type);
+
+/**
+ * # Safety
+ * `input` must be a valid null-terminated C string.
  * Caller must free the returned string with `maho_string_free`.
  */
-char *maho_core_check_request(struct MahoCore *ptr,
-                              const char *url,
-                              const char *source_url,
-                              const char *request_type);
+char *maho_normalize_site_exception_key(const char *input);
 
 /**
  * # Safety
@@ -648,6 +709,109 @@ bool maho_core_save_content_engine_cache(struct MahoCore *ptr, const char *path)
  * `ptr` must be from `maho_core_new`. `path` must be a valid null-terminated C string.
  */
 bool maho_core_load_content_engine_cache(struct MahoCore *ptr, const char *path);
+
+/**
+ * Returns current content blocking mode:
+ * `0` = Native, `1` = Extension, `2` = Disabled,
+ * `3` = Unknown (an unrecognized/forward-incompatible persisted mode; treated
+ * as non-native so native blocking is never silently enabled),
+ * `-1` = Error (null core or import in progress).
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_core_get_content_blocking_mode(struct MahoCore *ptr);
+
+/**
+ * Sets content blocking mode: 0 = Native, 1 = Extension, 2 = Disabled.
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+bool maho_core_set_content_blocking_mode(struct MahoCore *ptr, int32_t mode_code);
+
+/**
+ * Returns full ContentBlockerStateDto JSON.
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free returned string with `maho_string_free`.
+ */
+char *maho_core_get_content_blocker_state_json(struct MahoCore *ptr);
+
+/**
+ * Applies a FilterListUpdateResponse JSON to the content blocker.
+ *
+ * Returns `true` when a rebuild/compile is needed: a 200 response produced a
+ * pending candidate that the caller must compile and install via
+ * `maho_core_create_compile_snapshot` + `maho_compile_engine_from_snapshot` +
+ * `maho_content_engine_install`. Returns `false` for a 304/unchanged poll (no
+ * work to do) and on any rejection (null args, import active, invalid UTF-8,
+ * invalid JSON, oversized/failed update). A pending candidate is never active
+ * until a matching compiled engine installs.
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `update_json` must be a valid null-terminated C string.
+ */
+bool maho_core_apply_filter_list_update_json(struct MahoCore *ptr, const char *update_json);
+
+/**
+ * Applies a candidate update and returns the authoritative content-blocker state.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `update_json` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_apply_filter_list_update_result_json(struct MahoCore *ptr, const char *update_json);
+
+/**
+ * Creates a light compile snapshot on UI thread.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+OpaqueCompileSnapshotHandle *maho_core_create_compile_snapshot(struct MahoCore *ptr);
+
+/**
+ * Compiles an OpaqueCompiledEngine handle off-thread from a snapshot. Frees snapshot handle.
+ * # Safety
+ * `snapshot` must be from `maho_core_create_compile_snapshot`.
+ */
+OpaqueCompiledEngineHandle *maho_compile_engine_from_snapshot(OpaqueCompileSnapshotHandle *snapshot);
+
+/**
+ * Frees an uncompiled snapshot handle.
+ * # Safety
+ * `snapshot` must be from `maho_core_create_compile_snapshot` or null.
+ */
+void maho_compile_snapshot_free(OpaqueCompileSnapshotHandle *snapshot);
+
+/**
+ * Creates a snapshot on UI and compiles an OpaqueCompiledEngine handle.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+OpaqueCompiledEngineHandle *maho_content_engine_compile_snapshot(struct MahoCore *ptr);
+
+/**
+ * Installs an OpaqueCompiledEngine handle into MahoCore if generation and hash match. Frees handle.
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `handle` must be from `maho_content_engine_compile_snapshot`.
+ */
+bool maho_content_engine_install(struct MahoCore *ptr, OpaqueCompiledEngineHandle *handle);
+
+/**
+ * Installs an opaque compiled engine and returns the authoritative promotion result.
+ * The handle is consumed exactly once even when install is rejected.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `handle` must be a live compiled-engine handle.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_content_engine_install_result_json(struct MahoCore *ptr,
+                                              OpaqueCompiledEngineHandle *handle);
+
+/**
+ * Frees an uninstalled OpaqueCompiledEngine handle.
+ * # Safety
+ * `handle` must be from `maho_content_engine_compile_snapshot` or null.
+ */
+void maho_content_engine_free(OpaqueCompiledEngineHandle *handle);
 
 /**
  * # Safety
@@ -990,6 +1154,18 @@ void maho_core_add_filter_list(struct MahoCore *ptr,
                                const char *url);
 
 /**
+ * Adds a filter list through the authoritative core mutation path.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; strings must be valid null-terminated UTF-8.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_add_filter_list_result_json(struct MahoCore *ptr,
+                                            const char *id,
+                                            const char *name,
+                                            const char *url);
+
+/**
  * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
  * NUL-terminated C string. No-op on null input or if import is active.
@@ -998,10 +1174,24 @@ void maho_core_toggle_filter_list(struct MahoCore *ptr, const char *id, bool ena
 
 /**
  * # Safety
+ * `ptr` must be from `maho_core_new`; `id` must be a valid null-terminated UTF-8 string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_toggle_filter_list_result_json(struct MahoCore *ptr, const char *id, bool enabled);
+
+/**
+ * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
  * NUL-terminated C string. No-op on null input or if import is active.
  */
 void maho_core_remove_filter_list(struct MahoCore *ptr, const char *id);
+
+/**
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `id` must be a valid null-terminated UTF-8 string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_remove_filter_list_result_json(struct MahoCore *ptr, const char *id);
 
 /**
  * # Safety
@@ -1532,13 +1722,13 @@ char *maho_core_decide_link_destination(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_set_open_external_links_in_little_arc(struct MahoCore *core, bool enabled);
+void maho_core_set_open_external_links_in_maho_mini(struct MahoCore *core, bool enabled);
 
 /**
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-bool maho_core_get_open_external_links_in_little_arc(struct MahoCore *core);
+bool maho_core_get_open_external_links_in_maho_mini(struct MahoCore *core);
 
 /**
  * # Safety
@@ -1629,6 +1819,9 @@ char *maho_core_get_activation_target_for_space(struct MahoCore *ptr, const char
 char *maho_core_create_profile(struct MahoCore *ptr, const char *name);
 
 /**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_id` must be a valid null-terminated C string.
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_delete_profile(struct MahoCore *ptr, const char *profile_id);
@@ -2600,6 +2793,28 @@ void maho_routines_fire_event(struct MahoCore *core, const char *event_json);
 int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
 
 /**
+ * Returns JSON array of recorded routine results (the routine inbox), newest
+ * first. If `routine_id` is non-null, only that routine's history is returned;
+ * pass null for all routines. `limit` caps the number of rows (0 is treated as
+ * a sane default of 50). Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`. `routine_id`, if
+ * non-null, must be a valid null-terminated C string.
+ */
+char *maho_routines_history(struct MahoCore *core, const char *routine_id, uint32_t limit);
+
+/**
+ * Returns the single most recent routine result for `routine_id` as JSON, or
+ * null if the routine has never run. Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`. `routine_id`
+ * must be a valid null-terminated C string.
+ */
+char *maho_routines_latest(struct MahoCore *core, const char *routine_id);
+
+/**
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  * `window_id` must be a valid null-terminated C string.
@@ -2644,6 +2859,163 @@ uint64_t maho_core_register_tool_availability_callback(struct MahoCore *core,
 void maho_core_unregister_tool_availability_callback(struct MahoCore *core, uint64_t token);
 
 /**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `user_data` may be null; if non-null it must outlive the callback registration.
+ * `callback` must not panic and must be safe to call from arbitrary threads. It receives
+ * the current settings JSON (`*const c_char`), which may be null; callers must tolerate null.
+ */
+uint64_t maho_core_register_settings_change_callback(struct MahoCore *core,
+                                                     void *user_data,
+                                                     void (*callback)(void*, const char*));
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+void maho_core_unregister_settings_change_callback(struct MahoCore *core, uint64_t token);
+
+/**
+ * Returns the secret-free Vault status owned by `core`.
+ *
+ * # Safety
+ * `core` must be a valid MahoCore pointer. The returned string is freed with `maho_string_free`.
+ */
+char *maho_vault_status_json(struct MahoCore *core);
+
+/**
+ * Returns the effective default agent Vault policy from durable storage.
+ *
+ * # Safety
+ * `core` must be a valid MahoCore pointer. The returned string is freed with `maho_string_free`.
+ */
+char *maho_vault_get_policy_json(struct MahoCore *core);
+
+/**
+ * Persists an agent Vault policy override and records a policy-change audit row.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_set_policy_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Returns a paged, public, secret-free Vault audit view.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_audit_page_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Initializes the profile-owned Vault with independent user and recovery secrets.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_initialize_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Unlocks the profile-owned Vault.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_unlock_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Unlocks the profile-owned Vault with its independent recovery secret.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_unlock_with_recovery_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Locks the profile-owned Vault and revokes active grants.
+ *
+ * # Safety
+ * `core` must be a valid MahoCore pointer.
+ */
+char *maho_vault_lock_json(struct MahoCore *core);
+
+/**
+ * Adds a durable login record and returns only its public metadata.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_add_login_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Lists public metadata for items in the profile-owned Vault.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_list_items_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Searches exact-origin public item metadata.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_search_items_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Matches public item metadata using an explicit origin policy.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_match_items_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Updates a durable login record and returns its public metadata.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_update_login_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Tombstones a durable Vault item and returns its public metadata.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_delete_item_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Consumes a login secret for a browser-process action and returns no plaintext.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_use_secret_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Returns a short-lived login secret buffer for browser-process copy/fill use.
+ *
+ * The returned buffer is never suitable for WebUI/Mojo responses. The browser
+ * process must consume it immediately and release it with
+ * [`maho_vault_free_secret_buffer`], which zeroizes before deallocation.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
+char *maho_vault_use_secret_buffer_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Frees a secret buffer created by FFI functions, ensuring memory is zeroized before deallocation.
+ *
+ * # Safety
+ * `buffer` must be a valid pointer created by Vault secret FFI functions or NUL.
+ */
+void maho_vault_free_secret_buffer(char *buffer);
+
+/**
  * Detect installed browsers on the system. Returns a JSON array; caller MUST
  * free the returned string via `maho_import_string_free`.
  *
@@ -2661,6 +3033,19 @@ char *maho_import_detect_browsers(void);
  * be called more than once per pointer.
  */
 void maho_import_string_free(char *s);
+
+struct MahoPasswordImportJob *maho_password_import_job_new(void);
+
+void maho_password_import_job_free(struct MahoPasswordImportJob *handle);
+
+char *maho_password_import_job_cancel(struct MahoPasswordImportJob *handle);
+
+char *maho_password_import_job_preview_path_json(struct MahoPasswordImportJob *handle,
+                                                 const char *request_json);
+
+char *maho_password_import_job_commit_json(struct MahoPasswordImportJob *handle,
+                                           struct MahoCore *core,
+                                           const char *request_json);
 
 /**
  * Start an import orchestrator session on a background thread.
@@ -2739,6 +3124,96 @@ void maho_import_orchestrator_free(struct MahoImportSession *handle);
  * `path` must be a valid null-terminated UTF-8 C string, or NULL (clears).
  */
 void maho_import_orchestrator_set_password_csv(const char *path);
+
+/**
+ * Creates an opaque backend session by borrowing `MahoCore` exactly once.
+ *
+ * # Safety
+ * `core` must be null or a valid MahoCore pointer for this call.
+ */
+struct MahoVaultBackendSession *maho_vault_backend_session_new(struct MahoCore *core);
+
+/**
+ * Closes a backend session and invalidates every unconsumed result from it.
+ *
+ * # Safety
+ * `session` must be null or a valid backend session handle.
+ */
+void maho_vault_backend_session_close(struct MahoVaultBackendSession *session);
+
+/**
+ * Releases a backend session handle. This also closes the session.
+ *
+ * # Safety
+ * `session` must be null or a backend session handle returned by `session_new`.
+ */
+void maho_vault_backend_session_free(struct MahoVaultBackendSession *session);
+
+/**
+ * Executes a typed Vault batch-read request without accessing `MahoCore`.
+ *
+ * # Safety
+ * `session` must be valid and `request_json` must be a valid NUL-terminated UTF-8 string.
+ */
+struct MahoVaultBackendResult *maho_vault_backend_session_execute(struct MahoVaultBackendSession *session,
+                                                                  const char *request_json);
+
+/**
+ * Executes a typed backend-only credential request that may return short-lived login secrets.
+ *
+ * # Safety
+ * `session` must be valid and `request_json` must be a valid NUL-terminated UTF-8 string.
+ */
+struct MahoVaultBackendResult *maho_vault_backend_session_execute_credentials(struct MahoVaultBackendSession *session,
+                                                                              const char *request_json);
+
+/**
+ * Returns a typed status for a backend result without consuming it.
+ *
+ * # Safety
+ * `result` must be null or a valid backend result handle.
+ */
+enum MahoVaultBackendResultStatus maho_vault_backend_result_status(const struct MahoVaultBackendResult *result);
+
+/**
+ * Consumes a successful result into dedicated backend-owned JSON bytes.
+ *
+ * # Safety
+ * `result` must be null or a backend result handle returned by `session_execute`.
+ */
+struct MahoVaultBackendBuffer *maho_vault_backend_result_consume(struct MahoVaultBackendResult *result);
+
+/**
+ * Releases an unconsumed backend result.
+ *
+ * # Safety
+ * `result` must be null or a backend result handle returned by `session_execute`.
+ */
+void maho_vault_backend_result_free(struct MahoVaultBackendResult *result);
+
+/**
+ * Returns the byte pointer for a dedicated backend buffer.
+ *
+ * # Safety
+ * `buffer` must be null or a valid backend buffer handle.
+ */
+const uint8_t *maho_vault_backend_buffer_data(const struct MahoVaultBackendBuffer *buffer);
+
+/**
+ * Returns the byte length for a dedicated backend buffer.
+ *
+ * # Safety
+ * `buffer` must be null or a valid backend buffer handle.
+ */
+uintptr_t maho_vault_backend_buffer_len(const struct MahoVaultBackendBuffer *buffer);
+
+/**
+ * Releases a dedicated backend buffer. Never use `maho_string_free` for this allocation.
+ *
+ * # Safety
+ * `buffer` must be null or a backend buffer handle returned by `result_consume`.
+ */
+void maho_vault_backend_buffer_free(struct MahoVaultBackendBuffer *buffer);
 
 #ifdef __cplusplus
 }  // extern "C"

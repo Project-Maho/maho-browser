@@ -87,13 +87,168 @@ enum PasswordProviderKind {
   kOnePassword,
 };
 
+enum VaultLockState {
+  kUninitialized,
+  kLocked,
+  kUnlocked,
+  kAutoLocked,
+};
+
+enum VaultAgentPolicy {
+  kDeny,
+  kAskEveryUse,
+  kAllowForTask,
+  kWhileUnlocked,
+  kAlwaysAllow,
+};
+
+enum VaultItemKind {
+  kLogin,
+  kTotp,
+  kPasskey,
+  kSecureItem,
+  kUnknown,
+};
+
+// Public status only. This intentionally contains no Vault key material,
+// passphrases, recovery secrets, or decrypted credential fields.
+struct VaultStatus {
+  VaultLockState lock_state;
+  PasswordProviderKind selected_provider;
+  PasswordProviderKind effective_provider;
+  uint64 item_count;
+  VaultAgentPolicy agent_policy_default;
+  uint32 auto_lock_minutes;
+  uint32 failed_unlock_count;
+  int64? retry_at_timestamp;
+};
+
+// Public item metadata only. Passwords, OTP seeds, passkey credential IDs, and
+// ciphertext envelopes deliberately do not cross this Mojo boundary.
+struct VaultItem {
+  string id;
+  uint64 revision;
+  PasswordProviderKind provider;
+  VaultItemKind item_kind;
+  string title;
+  array<string> origins;
+  string username_hint;
+  string created_at;
+  string updated_at;
+  string? last_used_at;
+  bool has_totp;
+  bool has_passkey;
+};
+
+enum SecretAction {
+  kCopy = 0,
+  kFill = 1,
+};
+
+struct VaultOperationResult {
+  bool success;
+  string? error_code;
+  string? error_message;
+  VaultStatus? status;
+  VaultItem? item;
+};
+
+struct VaultItemListResult {
+  bool success;
+  array<VaultItem> items;
+  string? next_cursor;
+  string? error_code;
+  string? error_message;
+};
+
 struct PasswordProviderCapabilities {
   bool can_list_saved_passwords;
   bool can_search_saved_passwords;
   bool can_add_saved_passwords;
   bool can_delete_saved_passwords;
   bool can_edit_saved_passwords;
-  bool can_reveal_passwords;
+};
+
+struct VaultProviderOption {
+  PasswordProviderKind provider;
+  string display_name;
+  bool is_available;
+  PasswordProviderCapabilities capabilities;
+};
+
+// The selected provider remains visible when it is unavailable. Effective
+// provider is the fail-closed operational fallback used by Vault metadata APIs.
+struct VaultProviderStatus {
+  PasswordProviderKind selected_provider;
+  PasswordProviderKind effective_provider;
+  bool selected_provider_is_available;
+  array<VaultProviderOption> providers;
+};
+
+// Todo14 exposes the policy contract before policy persistence arrives. The
+// unavailable state is explicit rather than represented as an implicit allow.
+struct VaultPolicyStatus {
+  bool is_available;
+  VaultAgentPolicy policy;
+  string? item_id;
+  string? origin;
+  string? expires_at;
+  string? unavailable_reason;
+};
+
+// Audit records never expose a Vault item ID or any credential value.
+struct VaultAuditEntry {
+  string timestamp;
+  string? task_id;
+  string? origin;
+  string? item_alias;
+  string operation;
+  VaultAgentPolicy? policy;
+  string decision;
+  string? reason;
+  string device_name;
+};
+
+struct VaultAuditPage {
+  bool is_available;
+  array<VaultAuditEntry> entries;
+  string? next_cursor;
+  string? error_code;
+  string? unavailable_reason;
+};
+
+enum PasswordImportSourceFormat {
+  kOnePasswordCsv,
+  kOnePasswordPux,
+  kBitwardenIndividualCsv,
+  kBitwardenOrganizationCsv,
+  kBitwardenJson,
+  kApplePasswordsCsv,
+  kKeePassXcCsv,
+  kKeePassClassicCsv,
+};
+
+struct PasswordImportPreview {
+  string preview_token;
+  PasswordImportSourceFormat source_format;
+  string source_label;
+  uint32 imported;
+  uint32 skipped;
+  uint32 duplicates;
+  uint32 blank_passwords;
+  uint32 unsupported_fields;
+  array<string> safe_messages;
+  array<string> safe_errors;
+};
+
+struct PasswordImportOperationResult {
+  bool success;
+  string? error_code;
+  string? error_message;
+  PasswordImportPreview? preview;
+  uint32 committed;
+  uint32 failed;
+  uint32 terminal_result_count;
 };
 
 struct PasswordProviderStatus {
@@ -147,35 +302,52 @@ struct AutofillPayment {
   string cardholder_name;
 };
 
+enum ContentBlockingMode {
+  kNative = 0,
+  kExtension = 1,
+  kDisabled = 2,
+  // Display-only fallback for unavailable or unrecognized authoritative state.
+  // PageHandler rejects this value for mutations; it must never select native.
+  kUnknown = 3,
+};
+
 struct FilterListInfo {
   string id;
   string name;
   string url;
   bool enabled;
   uint32 rule_count;
+  string? etag;
+  string? last_modified;
+  string? sha256;
+  int64? last_attempt_timestamp;
+  int64? last_success_timestamp;
+  uint32 failure_count;
+  uint16? last_status;
+  string? last_error;
+  int64? next_retry_timestamp;
 };
 
 struct ContentBlockerStats {
+  ContentBlockingMode mode;
   uint32 total_rule_count;
   uint32 filter_list_count;
+  uint64 engine_generation;
+  string? health_status;
+  string? overall_error;
+  int64 last_update_timestamp;
 };
 
-enum RemoveExtensionResult {
-  kSuccess,
-  kCancelled,
-  kBlockedByPolicy,
-  kNotFound,
-  kBusy,
-  kUninstallFailed,
-};
-
-struct InstalledExtension {
-  string id;
-  string name;
-  string version;
-  string description;
-  bool enabled;
-  uint32 manifest_version;
+struct ContentBlockerMutationResult {
+  bool success;
+  string? error_code;
+  string? error_message;
+  bool compile_required;
+  // True means compile/install work was accepted or coalesced, not completed.
+  bool compile_scheduled;
+  // Authoritative state projected after the synchronous mutation or scheduling
+  // decision. Async update/rebuild completion requires a later stats reload.
+  ContentBlockerStats? stats;
 };
 
 struct AccountStatus {
@@ -209,6 +381,27 @@ struct Invoice {
   string pdf_url;
 };
 
+// Mirrors maho::UpdateState (maho/browser/updates/maho_update_manager.h).
+enum BrowserUpdateState {
+  kIdle,
+  kChecking,
+  kUpdateAvailable,
+  kDownloading,
+  kVerifying,
+  kReadyToInstall,
+  kUpToDate,
+  kError,
+};
+
+struct BrowserVersionInfo {
+  string version;
+  string channel;
+  BrowserUpdateState update_state;
+  // False on platforms whose updater delegate is a no-op (e.g. Linux package
+  // managers own updates), so the UI can hide the check/apply controls.
+  bool update_supported;
+};
+
 interface PageHandlerFactory {
   CreatePageHandler(pending_remote<Page> page,
                     pending_receiver<PageHandler> handler);
@@ -217,6 +410,11 @@ interface PageHandlerFactory {
 interface PageHandler {
   GetSettings() => (array<SettingValue> settings);
   SetSetting(string key, string value) => (bool success);
+
+  // Current browser version + auto-update status (General / About surface).
+  GetBrowserVersionInfo() => (BrowserVersionInfo info);
+  CheckForBrowserUpdates();
+  ApplyBrowserUpdateAndRestart();
 
   GetProfiles() => (array<ProfileInfo> profiles);
   CreateProfile(string name) => (ProfileInfo? profile);
@@ -267,7 +465,54 @@ interface PageHandler {
   AddPassword(string domain, string username, string password) => (bool success);
   UpdatePasswordUsername(string password_id, string username) => (bool success);
   DeletePassword(string password_id) => (bool success);
-  RevealPassword(string password_id) => (string? password);
+
+  // Vault lifecycle, metadata, and browser-process secret-use operations.
+  // Inbound passphrases/passwords and consumed secrets are never included in
+  // any response DTO; row actions observe only VaultOperationResult status.
+  GetVaultStatus() => (VaultOperationResult result);
+  GetVaultProviderStatus() => (VaultProviderStatus status);
+  InitializeVault(string master_passphrase, string recovery_secret)
+      => (VaultOperationResult result);
+  UnlockVault(string master_passphrase) => (VaultOperationResult result);
+  UnlockVaultWithRecovery(string recovery_secret)
+      => (VaultOperationResult result);
+  LockVault() => (VaultOperationResult result);
+  ListVaultItems(PasswordProviderKind? provider,
+                 array<VaultItemKind> kinds,
+                 string? cursor,
+                 uint32 limit) => (VaultItemListResult result);
+  SearchVaultItems(string origin,
+                   PasswordProviderKind? provider,
+                   array<VaultItemKind> kinds) => (VaultItemListResult result);
+  AddVaultLogin(string title,
+                array<string> origins,
+                string username,
+                string password) => (VaultOperationResult result);
+  UpdateVaultLogin(string item_id,
+                   uint64 expected_revision,
+                   string title,
+                   array<string> origins,
+                   string username,
+                   string? password) => (VaultOperationResult result);
+  DeleteVaultItem(string item_id, uint64 expected_revision)
+      => (VaultOperationResult result);
+  UseVaultSecret(string item_id,
+                 uint64 expected_revision,
+                 SecretAction action) => (VaultOperationResult result);
+  GetVaultPolicyStatus() => (VaultPolicyStatus status);
+  SetVaultPolicy(VaultAgentPolicy policy,
+                 string? item_id,
+                 string? origin,
+                 string? expires_at) => (VaultPolicyStatus status);
+  GetVaultAuditPage(string? cursor, uint32 limit) => (VaultAuditPage page);
+  SelectPasswordImportFile(PasswordImportSourceFormat source_format)
+      => (string? file_path);
+  PreviewPasswordImport(PasswordImportSourceFormat source_format,
+                        string file_path)
+      => (PasswordImportOperationResult result);
+  CancelPasswordImport() => (PasswordImportOperationResult result);
+  CommitPasswordImport(string preview_token)
+      => (PasswordImportOperationResult result);
 
   GetAutofillAddresses() => (array<AutofillAddress> addresses);
   AddAutofillAddress(string id,
@@ -290,15 +535,34 @@ interface PageHandler {
   DeleteAutofillPayment(string id) => (bool success);
 
   GetFilterLists() => (array<FilterListInfo> lists);
-  AddFilterList(string id, string name, string url) => (bool success);
-  ToggleFilterList(string id, bool enabled);
-  RemoveFilterList(string id);
-  RebuildContentRules() => (ContentBlockerStats stats);
+  // `success` mirrors mutation.success for existing JS callers. The structured
+  // result carries the bridge error and scheduling truth without optimistic
+  // fallback behavior.
+  AddFilterList(string id, string name, string url)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  ToggleFilterList(string id, bool enabled)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  RemoveFilterList(string id)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Success means compile/install was accepted or coalesced. `stats` is the
+  // authoritative state at scheduling time, not proof installation completed.
+  RebuildContentRules() => (bool success,
+                            ContentBlockerStats stats,
+                            ContentBlockerMutationResult mutation);
+
   GetContentBlockerStats() => (ContentBlockerStats stats);
 
-  GetInstalledExtensions() => (array<InstalledExtension> extensions);
-  ToggleExtension(string id) => (bool enabled);
-  RemoveExtension(string id) => (RemoveExtensionResult result);
+  SetContentBlockingMode(ContentBlockingMode mode)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Success means the designated updater accepted network work. It does not
+  // mean an update downloaded, validated, compiled, or installed.
+  TriggerFilterUpdate(string? list_id)
+      => (bool success, ContentBlockerMutationResult mutation);
+
   OpenExtensionsPage();
 
   SetBYOKKey(string provider, string key) => (bool success);
@@ -320,7 +584,7 @@ interface PageHandler {
   // GetBillingInfo calls /auth/subscription on the relay using the stored access token.
   // On 401: attempts a single refresh via /auth/refresh, then retries once.
   // Returns an empty BillingInfo (tier="", all zeros, has_payment_method=false) when signed out.
-  GetBillingInfo() => (BillingInfo info);
+  GetBillingInfo() => (BillingInfo? info, string error);
 
   // GetInvoices retrieves the user's order history from the relay.
   GetInvoices() => (array<Invoice> invoices);
@@ -332,11 +596,85 @@ interface PageHandler {
   // pack_size_usd must be 10, 50, or 100 (matches ADR 0010 variants 4001/4002/4003).
   // Returns empty string for unsupported pack sizes.
   GetBuyCreditsUrl(int32 pack_size_usd) => (string checkout_url);
+
+  // Mail accounts
+  // Ongoing management of connected mail accounts (Settings is the account
+  // management home; first-run onboarding lives in the welcome wizard). Each
+  // method is a thin proxy to the profile-keyed MahoMailService, returning
+  // (ok, result_json) and reporting (false, "Mail service unavailable") when
+  // the service is missing for this profile.
+  MailListAccounts() => (bool ok, string result_json);
+  MailAddAccount(string request_json) => (bool ok, string result_json);
+  MailDeleteAccount(string account_id) => (bool ok, string result_json);
+  MailOAuthStartUrl(string provider, string client_id, string redirect_uri) => (bool ok, string result_json);
+  MailOAuthComplete(string state, string code) => (bool ok, string result_json);
+  MailReconnectAccount(string account_id) => (bool ok, string result_json);
+  MailOAuthCancel(string state) => (bool accepted);
+
+  // === [mail-settings] ===
+  // Signatures
+  MailListSignatures(string? account_id) => (bool ok, string result_json);
+  MailUpsertSignature(string request_json) => (bool ok, string? error);
+  MailDeleteSignature(string id) => (bool ok);
+
+  // Templates
+  MailListTemplates() => (bool ok, string result_json);
+  MailUpsertTemplate(string request_json) => (bool ok, string? error);
+  MailDeleteTemplate(string id) => (bool ok);
+
+  // Labels
+  MailListLabels(string account_id) => (bool ok, string result_json);
+  MailCreateLabel(string account_id, string name, string color) => (bool ok, string? error);
+  MailDeleteLabel(string id) => (bool ok);
+
+  // Rules
+  MailListRules(string account_id) => (bool ok, string result_json);
+  MailUpsertRule(string request_json) => (bool ok, string? error);
+  MailDeleteRule(string id) => (bool ok);
+  MailReorderRules(string account_id, string rule_ids_json) => (bool ok);
+
+  // Calendar
+  MailGetCalendarPrefs() => (bool ok, string result_json);
+  MailSetCalendarPrefs(string prefs_json) => (bool ok);
+  MailListCalendarCategories(string account_id) => (bool ok, string result_json);
+  MailCreateCalendarCategory(string account_id, string name, string color) => (bool ok, string? error);
+  MailUpdateCalendarCategory(string id, string name, string color) => (bool ok, string? error);
+  MailDeleteCalendarCategory(string id) => (bool ok);
+  MailListAccountCalendars(string account_id) => (bool ok, string result_json);
+  MailSetCalendarVisibility(string calendar_row_id, bool visible) => (bool ok);
+
+  // Behavior
+  MailGetBehaviorPrefs() => (bool ok, string result_json);
+  MailSetBehaviorPref(string key, string value) => (bool ok);
+
+  // AI
+  MailGetAIConfig(string feature) => (bool ok, string result_json);
+  MailSetAIConfig(string feature, string config_json) => (bool ok);
+  MailSetAIKey(string provider, string api_key) => (bool ok);
+
+  // Security (PGP/S-MIME)
+  // PGP/S-MIME material is account-scoped: account_id selects which connected
+  // mail account the key/identity belongs to. Import methods take secret
+  // material (passphrase, p12 blob) as INBOUND params only; list/get never
+  // return decrypted secrets.
+  MailGeneratePgpKey(string account_id, string email, string passphrase) => (bool ok, string? error);
+  MailImportPgpKey(string account_id, string key_block, string? passphrase) => (bool ok, string? error);
+  MailListPgpKeys(string account_id) => (bool ok, string result_json);
+  MailDeletePgpKey(string key_id) => (bool ok);
+  MailSetDefaultPgpKey(string account_id, string key_id) => (bool ok);
+  MailImportSmimeIdentity(string account_id, string p12_data_base64, string passphrase) => (bool ok, string? error);
+  MailListSmimeIdentities(string account_id) => (bool ok, string result_json);
+  MailDeleteSmimeIdentity(string id) => (bool ok);
+  MailSetDefaultSmimeIdentity(string account_id, string identity_id) => (bool ok);
 };
 
 interface Page {
   SettingsChanged(array<SettingValue> settings);
-  InstalledExtensionsChanged(array<InstalledExtension> extensions);
+
+  // Pushed when the auto-updater state machine advances (checking → up to date
+  // / update available / downloading / ready), so the General surface reflects
+  // check progress without polling.
+  OnBrowserUpdateStateChanged(BrowserUpdateState state);
 
   // Pushed when account state changes (e.g., post-login, post-logout).
   // Page can re-render Account and Billing surfaces without polling.
@@ -347,4 +685,16 @@ interface Page {
 
   // Pushed when background model-list refresh completes.
   ProviderModelsRefreshed(string provider_id, array<string> model_ids);
+
+  OnMailAccountsChanged();
+
+  // === [mail-settings] ===
+  OnMailSignaturesChanged();
+  OnMailTemplatesChanged();
+  OnMailLabelsChanged();
+  OnMailRulesChanged();
+  OnMailCalendarChanged();
+  OnMailBehaviorChanged();
+  OnMailAIConfigChanged();
+  OnMailSecurityChanged();
 };

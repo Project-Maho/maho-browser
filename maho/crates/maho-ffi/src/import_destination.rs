@@ -21,6 +21,7 @@ use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, ProfileId, SpaceId, TabId};
 use maho_types::space::SpaceColor;
+use maho_types::vault::{CredentialOrigin, VaultItemKind, VaultItemPublicMetadata};
 use std::ffi::{c_void, CString};
 
 use crate::import::{
@@ -359,15 +360,24 @@ impl ImportDestination for MahoCoreDestination {
         if self.core.0.is_null() || entry.origin_url.is_empty() {
             return false;
         }
-        let password = if entry.password.is_empty() {
-            None
+        let origin = if let Ok(origin) = CredentialOrigin::try_from(entry.origin_url.as_str()) {
+            origin
         } else {
-            Some(entry.password)
+            return false;
         };
-        let _ = self
-            .core_mut()
-            .add_password_persisted(entry.origin_url, entry.username, password);
-        true
+        let input = maho_core::vault_manager::VaultLoginInput {
+            metadata: VaultItemPublicMetadata {
+                title: entry.origin_url,
+                origins: vec![origin],
+                username_hint: entry.username.clone(),
+                item_kind: VaultItemKind::Login,
+                totp: None,
+                passkey: None,
+            },
+            username: entry.username,
+            password: zeroize::Zeroizing::new(entry.password),
+        };
+        self.core_mut().vault_add_login(input).is_ok()
     }
 }
 

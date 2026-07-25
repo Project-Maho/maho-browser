@@ -4,6 +4,7 @@
 
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 
+#include "base/json/json_writer.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,6 +31,24 @@ TEST(MahoMcpFirewallTest, V1_MultiplePasswordFieldsAllRedacted) {
 
 TEST(MahoMcpFirewallTest, V1_NoPasswordFieldsUnchanged) {
   const std::string html = R"(<input type="text" value="foo"/>)";
+  EXPECT_EQ(MahoMcpFirewall::RedactPasswordFields(html), html);
+}
+
+TEST(MahoMcpFirewallTest, V1_AutocompleteCredentialFieldsRedacted) {
+  const std::string html =
+      R"(<input value="S3NTINEL-current" autocomplete="current-password">)"
+      R"(<input aria-label="One-time code" value="S3NTINEL-totp">)"
+      R"(<textarea data-maho-field="recovery-code">S3NTINEL-recovery</textarea>)";
+  const std::string out = MahoMcpFirewall::RedactPasswordFields(html);
+  EXPECT_EQ(out.find("S3NTINEL-current"), std::string::npos);
+  EXPECT_EQ(out.find("S3NTINEL-totp"), std::string::npos);
+  EXPECT_EQ(out.find("S3NTINEL-recovery"), std::string::npos);
+}
+
+TEST(MahoMcpFirewallTest, V1_OrdinarySemanticFieldsSurvive) {
+  const std::string html =
+      R"(<input name="query" aria-label="Search" value="pizza recipes">)"
+      R"(<textarea name="notes">ordinary notes</textarea>)";
   EXPECT_EQ(MahoMcpFirewall::RedactPasswordFields(html), html);
 }
 
@@ -63,6 +82,7 @@ TEST(MahoMcpFirewallTest, V2_HeadersRegexPattern) {
 TEST(MahoMcpFirewallTest, V3_AxTreeAutofillRedacted) {
   base::DictValue node;
   node.Set("role", "textbox");
+  node.Set("protected", true);
   node.Set("value", "user@example.com");
   node.Set("AXAutocompleteValue", "cached-suggestion");
   MahoMcpFirewall::RedactAxTreeAutofill(node);
@@ -77,6 +97,7 @@ TEST(MahoMcpFirewallTest, V3_AxTreeRecursesIntoChildren) {
   base::ListValue children;
   base::DictValue child;
   child.Set("role", "textbox");
+  child.Set("autocomplete", "cc-number");
   child.Set("value", "cc-1234-5678-9012-3456");
   children.Append(std::move(child));
   root.Set("children", std::move(children));
@@ -87,6 +108,134 @@ TEST(MahoMcpFirewallTest, V3_AxTreeRecursesIntoChildren) {
   const base::DictValue* out_child = (*out_children)[0].GetIfDict();
   ASSERT_TRUE(out_child);
   EXPECT_EQ(*out_child->FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Baseline_OrdinarySearchboxValuePreserved) {
+  base::DictValue node;
+  node.Set("role", "searchbox");
+  node.Set("name", "Search");
+  node.Set("value", "pizza recipes");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), "pizza recipes");
+}
+
+TEST(MahoMcpFirewallTest, Baseline_OrdinaryTextboxValuePreserved) {
+  base::DictValue node;
+  node.Set("role", "textbox");
+  node.Set("name", "Full name");
+  node.Set("value", "Ada Lovelace");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), "Ada Lovelace");
+}
+
+TEST(MahoMcpFirewallTest, Baseline_OrdinaryDictAndHeadersSurvive) {
+  base::DictValue payload;
+  payload.Set("status", "ok");
+  payload.Set("title", "Weekly report");
+  base::DictValue headers;
+  headers.Set("Content-Type", "application/json");
+  headers.Set("Accept-Language", "en-US");
+  payload.Set("headers", std::move(headers));
+  payload.Set("url", "https://example.com/docs?page=2&sort=asc");
+
+  base::Value wrapped(std::move(payload));
+  MahoMcpFirewall::RedactAll(wrapped);
+  const base::DictValue& out = wrapped.GetDict();
+  EXPECT_EQ(*out.FindString("status"), "ok");
+  EXPECT_EQ(*out.FindString("title"), "Weekly report");
+  const base::DictValue* h = out.FindDict("headers");
+  ASSERT_TRUE(h);
+  EXPECT_EQ(*h->FindString("Content-Type"), "application/json");
+  EXPECT_EQ(*h->FindString("Accept-Language"), "en-US");
+  const std::string* url = out.FindString("url");
+  ASSERT_TRUE(url);
+  EXPECT_NE(url->find("page=2"), std::string::npos);
+  EXPECT_NE(url->find("sort=asc"), std::string::npos);
+}
+
+TEST(MahoMcpFirewallTest, Context_ProtectedFieldRedactedRegardlessOfRole) {
+  base::DictValue node;
+  node.Set("role", "generic");
+  node.Set("protected", true);
+  node.Set("value", "S3NTINEL-maho-vault-9F4C");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Context_InputTypePasswordRedacted) {
+  base::DictValue node;
+  node.Set("role", "generic");
+  node.Set("inputType", "password");
+  node.Set("value", "S3NTINEL-maho-vault-9F4C");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Context_AutocompleteCurrentPasswordRedacted) {
+  base::DictValue node;
+  node.Set("role", "custom-credential-widget");
+  node.Set("autocomplete", "current-password");
+  node.Set("value", "S3NTINEL-maho-vault-9F4C");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Context_AutocompleteOneTimeCodeRedacted) {
+  base::DictValue node;
+  node.Set("role", "generic");
+  node.Set("autocomplete", "one-time-code");
+  node.Set("value", "123456");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Context_CredentialNameRecoveryCodeRedacted) {
+  base::DictValue node;
+  node.Set("role", "generic");
+  node.Set("name", "Recovery code");
+  node.Set("value", "ABCD-EFGH-IJKL");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Context_CustomRoleNamePasswordRedacted) {
+  base::DictValue node;
+  node.Set("role", "custom-widget");
+  node.Set("name", "Password");
+  node.Set("value", "S3NTINEL-maho-vault-9F4C");
+  MahoMcpFirewall::RedactAxTreeAutofill(node);
+  EXPECT_EQ(*node.FindString("value"), MahoMcpFirewall::kRedacted);
+}
+
+TEST(MahoMcpFirewallTest, Context_RedactAllAppliesPreciseAxDetection) {
+  base::DictValue password_node;
+  password_node.Set("role", "textbox");
+  password_node.Set("name", "Password");
+  password_node.Set("protected", true);
+  password_node.Set("value", "S3NTINEL-maho-vault-9F4C");
+
+  base::DictValue search_node;
+  search_node.Set("role", "searchbox");
+  search_node.Set("name", "Search");
+  search_node.Set("value", "quarterly earnings");
+
+  base::ListValue children;
+  children.Append(std::move(password_node));
+  children.Append(std::move(search_node));
+
+  base::DictValue form;
+  form.Set("role", "form");
+  form.Set("children", std::move(children));
+
+  base::Value wrapped(std::move(form));
+  MahoMcpFirewall::RedactAll(wrapped);
+
+  const base::ListValue* out = wrapped.GetDict().FindList("children");
+  ASSERT_TRUE(out);
+  ASSERT_EQ(out->size(), 2u);
+  EXPECT_EQ(*(*out)[0].GetDict().FindString("value"),
+            MahoMcpFirewall::kRedacted);
+  EXPECT_EQ(*(*out)[1].GetDict().FindString("value"), "quarterly earnings");
 }
 
 TEST(MahoMcpFirewallTest, V4_OAuthImplicitFlowFragment) {
@@ -227,6 +376,89 @@ TEST(MahoMcpFirewallTest, RedactString_NoPatternMatch_PassThrough) {
   std::string raw = "This is a normal log message without any credentials.";
   std::string out = MahoMcpFirewall::RedactString(raw);
   EXPECT_EQ(out, raw);
+}
+
+TEST(MahoMcpFirewallTest, RedactString_HeaderAndAssignmentValuesRedacted) {
+  const std::string raw =
+      "Authorization: Basic S3NTINEL-auth\n"
+      "Cookie: session=S3NTINEL-cookie; theme=dark\n"
+      "password=S3NTINEL-password&keep=ordinary";
+  const std::string out = MahoMcpFirewall::RedactString(raw);
+  EXPECT_EQ(out.find("S3NTINEL-auth"), std::string::npos);
+  EXPECT_EQ(out.find("S3NTINEL-cookie"), std::string::npos);
+  EXPECT_EQ(out.find("S3NTINEL-password"), std::string::npos);
+  EXPECT_NE(out.find("keep=ordinary"), std::string::npos);
+}
+
+TEST(MahoMcpFirewallTest, RedactAll_NameValuePairsInNestedLists) {
+  base::ListValue fields;
+  base::DictValue password;
+  password.Set("name", "current-password");
+  password.Set("value", "S3NTINEL-password");
+  fields.Append(std::move(password));
+  base::DictValue ordinary;
+  ordinary.Set("name", "query");
+  ordinary.Set("value", "pizza recipes");
+  fields.Append(std::move(ordinary));
+  base::DictValue payload;
+  payload.Set("fields", std::move(fields));
+
+  base::Value wrapped(std::move(payload));
+  MahoMcpFirewall::RedactAll(wrapped);
+
+  const base::ListValue* out = wrapped.GetDict().FindList("fields");
+  ASSERT_TRUE(out);
+  EXPECT_EQ(*(*out)[0].GetDict().FindString("value"),
+            MahoMcpFirewall::kRedacted);
+  EXPECT_EQ(*(*out)[1].GetDict().FindString("value"), "pizza recipes");
+}
+
+TEST(MahoMcpFirewallTest, WrapHar_RedactsStandardHarMetadataShapes) {
+  base::ListValue headers;
+  base::DictValue authorization;
+  authorization.Set("name", "Authorization");
+  authorization.Set("value", "Basic S3NTINEL-auth");
+  headers.Append(std::move(authorization));
+  base::DictValue accept;
+  accept.Set("name", "Accept");
+  accept.Set("value", "application/json");
+  headers.Append(std::move(accept));
+
+  base::ListValue query;
+  base::DictValue token;
+  token.Set("name", "access_token");
+  token.Set("value", "S3NTINEL-query");
+  query.Append(std::move(token));
+
+  base::ListValue params;
+  base::DictValue password;
+  password.Set("name", "password");
+  password.Set("value", "S3NTINEL-post-param");
+  params.Append(std::move(password));
+  base::DictValue post_data;
+  post_data.Set("params", std::move(params));
+  post_data.Set("text", "password=S3NTINEL-post-text&keep=ordinary");
+
+  base::DictValue request;
+  request.Set("url",
+              "https://example.test/login?access_token=S3NTINEL-url&keep=1");
+  request.Set("headers", std::move(headers));
+  request.Set("queryString", std::move(query));
+  request.Set("postData", std::move(post_data));
+  base::DictValue entry;
+  entry.Set("request", std::move(request));
+  base::ListValue entries;
+  entries.Append(std::move(entry));
+  base::DictValue har;
+  har.Set("entries", std::move(entries));
+
+  Redacted<base::DictValue> safe = MahoMcpFirewall::WrapHar(std::move(har));
+  std::string serialized;
+  ASSERT_TRUE(base::JSONWriter::Write(base::Value(safe.get().Clone()),
+                                      &serialized));
+  EXPECT_EQ(serialized.find("S3NTINEL-"), std::string::npos);
+  EXPECT_NE(serialized.find("application/json"), std::string::npos);
+  EXPECT_NE(serialized.find("keep=ordinary"), std::string::npos);
 }
 
 TEST(MahoMcpFirewallTest, RedactAll_CredentialShapedKeys) {

@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const LMDB_DIRTY_TABS: u8 = 0b000001;
@@ -13,6 +14,13 @@ const LMDB_DIRTY_SPLIT_VIEW: u8 = 0b1000000;
 const LMDB_DIRTY_ALL: u8 = 0b1111111;
 
 const PERSIST_THROTTLE_MS: u64 = 50;
+
+const CONTENT_BLOCKER_ENGINE_VERSION: &str = "adblock-0.12.2";
+
+/// Persisted capability-grant lifecycle tokens (serde snake_case of
+/// `CredentialGrantState`).
+const GRANT_STATE_ACTIVE: &str = "active";
+const GRANT_STATE_REVOKED: &str = "revoked";
 
 struct PersistThrottle {
     pending_bits: u8,
@@ -44,7 +52,8 @@ use maho_types::space::{RootItem, Space, SpaceColor};
 use maho_types::split_view::{SplitConfig, SplitViewConfig};
 use maho_types::tab::{Tab, TabLifecycleState, TabRole};
 use maho_types::traits::shell_renderer::{
-    ArchivedTabViewModel, DownloadState, SearchContext, SpaceViewModel, SuggestionViewModel, TabViewModel,
+    ArchivedTabViewModel, DownloadState, SearchContext, SpaceViewModel, SuggestionViewModel,
+    TabViewModel,
 };
 
 use crate::account_manager::AccountManager;
@@ -69,7 +78,7 @@ use crate::llm_manager::LLMManager;
 use crate::memory_manager::{AuthSnapshot, MemoryManager, MemoryResult};
 use crate::note_manager::NoteManager;
 use crate::notification_manager::NotificationManager;
-use crate::password_manager::PasswordManager;
+use crate::oscrypt::{VaultDeviceBinding, VaultDeviceProtector, VaultDeviceWrapBundle};
 use crate::permission_manager::PermissionManager;
 use crate::profile_manager::ProfileManager;
 use crate::reading_list_manager::ReadingListManager;
@@ -81,6 +90,13 @@ use crate::space_manager::SpaceManager;
 use crate::sync_models::{SyncEntity, SyncEntityType};
 use crate::tab_lifecycle::{timestamp_millis_to_iso8601, TabLifecycleManager};
 use crate::tool_registry::ToolRegistry;
+use crate::vault_manager::{
+    VaultHydrationSlots, VaultManagerError, SLOT_KDF_PARAMS, SLOT_WRAPPED_RECOVERY_KEY,
+    SLOT_WRAPPED_USER_KEY,
+};
+use crate::vault_runtime::VaultRuntime;
+
+mod vault_items;
 
 fn private_tab_ids_from_tabs<'a, I>(tabs: I) -> HashSet<TabId>
 where
@@ -310,15 +326,209 @@ pub enum PersistenceError {
 mod tests {
     use super::*;
 
+    #[test]
+    fn vault_state_slot_read_error_is_not_uninitialized() {
+        let boom = MahoCore::classify_slot_read(Err(maho_storage::StorageError::Other(
+            "boom".to_string(),
+        )));
+        assert!(matches!(
+            boom,
+            Err(crate::vault_manager::VaultManagerError::Storage(_))
+        ));
+        assert!(matches!(MahoCore::classify_slot_read(Ok(None)), Ok(None)));
+        let present =
+            MahoCore::classify_slot_read(Ok(Some(maho_storage::sqlite::VaultMetadataRow {
+                slot: "kdf_params".to_string(),
+                schema_version: 1,
+                payload: vec![1, 2, 3],
+                updated_at: "t".to_string(),
+            })));
+        assert!(matches!(present, Ok(Some(bytes)) if bytes == vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn vault_state_lock_with_grant_store_error_is_observable() {
+        maho_storage::sqlite::set_sqlcipher_key("vault-state-unit-key").expect("key");
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("revfault.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.initialize_vault(b"master-secret", b"recovery-secret")
+            .expect("init");
+        core.vault_revocation_fault = true;
+
+        let result = core.lock_vault();
+
+        assert!(
+            result.is_err(),
+            "grant-store failure must surface from lock_vault"
+        );
+        assert!(core.last_vault_lifecycle_error().is_some());
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Locked
+        );
+        assert_ne!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Unlocked
+        );
+    }
+
+    #[test]
+    fn vault_device_initialization_persist_failure_reverts_uninitialized_state() {
+        struct Protector;
+
+        impl crate::oscrypt::VaultDeviceProtector for Protector {
+            fn device_secret(
+                &self,
+            ) -> Result<zeroize::Zeroizing<Vec<u8>>, crate::oscrypt::VaultDeviceProtectorError>
+            {
+                Ok(zeroize::Zeroizing::new(b"unit-test-device-secret".to_vec()))
+            }
+        }
+
+        maho_storage::sqlite::set_sqlcipher_key("vault-device-persist-failure-key").expect("key");
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("vault-device-persist-failure.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.vault_initialization_persist_fault = true;
+        let binding = crate::oscrypt::VaultDeviceBinding::new(
+            "profile-a",
+            "device-a",
+            crate::oscrypt::VaultDevicePlatform::Desktop,
+        );
+
+        assert!(core
+            .initialize_vault_with_device(b"master", b"recovery", &binding, &Protector)
+            .is_err());
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Uninitialized
+        );
+        let storage = core.storage_ref().expect("storage");
+        assert!(storage
+            .get_vault_metadata(SLOT_KDF_PARAMS)
+            .expect("kdf read")
+            .is_none());
+        assert!(storage
+            .get_vault_device_key("device-a")
+            .expect("device row read")
+            .is_none());
+    }
+
+    #[test]
+    fn vault_initialization_persist_failure_reverts_uninitialized_state() {
+        maho_storage::sqlite::set_sqlcipher_key("vault-init-persist-failure-key").expect("key");
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("vault-init-persist-failure.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.vault_initialization_persist_fault = true;
+
+        assert!(core.initialize_vault(b"master", b"recovery").is_err());
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Uninitialized
+        );
+        assert!(core
+            .storage_ref()
+            .expect("storage")
+            .get_vault_metadata(SLOT_KDF_PARAMS)
+            .expect("kdf read")
+            .is_none());
+    }
+
+    #[test]
+    fn vault_backend_range_delete_fault_rolls_back_all_rows_and_cached_count() {
+        use crate::vault_manager::VaultLoginInput;
+        use maho_types::vault::{
+            CredentialOrigin, VaultItemCreatedRange, VaultItemKind, VaultItemPublicMetadata,
+            VaultSchemaVersion,
+        };
+
+        fn login(origin: &str, username: &str) -> VaultLoginInput {
+            VaultLoginInput {
+                metadata: VaultItemPublicMetadata {
+                    title: "Site".to_string(),
+                    origins: vec![CredentialOrigin::try_from(origin).expect("origin")],
+                    username_hint: String::new(),
+                    item_kind: VaultItemKind::Login,
+                    totp: None,
+                    passkey: None,
+                },
+                username: username.to_string(),
+                password: zeroize::Zeroizing::new("password".to_string()),
+            }
+        }
+
+        // Given multiple live rows and a fault injected after the first candidate write.
+        maho_storage::sqlite::set_sqlcipher_key("vault-range-delete-fault-key").expect("key");
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("vault-range-delete-fault.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        let first = core
+            .vault_add_login(login("https://first.example", "first"))
+            .expect("add first");
+        let second = core
+            .vault_add_login(login("https://second.example", "second"))
+            .expect("add second");
+        core.vault_item_persist_fault = true;
+
+        // When the transactional range deletion encounters the injected fault.
+        let result = core.vault_delete_created_range(&VaultItemCreatedRange {
+            schema_version: VaultSchemaVersion::CURRENT,
+            from_inclusive: None,
+            until_exclusive: None,
+        });
+
+        // Then every selected row and the runtime cache retain their prior state.
+        assert!(matches!(
+            result,
+            Err(crate::vault_manager::VaultCrudError::Storage(_))
+        ));
+        assert_eq!(core.vault_status().item_count, 2);
+        let storage = core.storage_ref().expect("storage");
+        for id in [first.id, second.id] {
+            let row = storage
+                .get_vault_item(&id.to_string())
+                .expect("read row")
+                .expect("row");
+            assert!(row.deleted_at.is_none());
+            assert_eq!(row.revision, 1);
+        }
+    }
+
+    #[test]
+    fn vault_state_sign_out_locks_before_grant_revocation_failure_is_observable() {
+        maho_storage::sqlite::set_sqlcipher_key("vault-sign-out-revocation-failure-key")
+            .expect("key");
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("vault-sign-out-revocation-failure.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.vault_revocation_fault = true;
+
+        core.handle_event(ShellEvent::SignOut);
+
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Locked
+        );
+        assert!(core.last_vault_lifecycle_error().is_some());
+    }
+
     fn create_tab(core: &mut MahoCore) -> TabId {
         let space_id = core.get_active_space_id().clone();
+        create_tab_in_space(core, &space_id)
+    }
+
+    fn create_tab_in_space(core: &mut MahoCore, space_id: &SpaceId) -> TabId {
         let before: Vec<TabId> = core
             .get_tab_view_models()
             .iter()
             .map(|t| t.id.clone())
             .collect();
         core.handle_event(ShellEvent::CreateTab {
-            space_id,
+            space_id: space_id.clone(),
             url: None,
             parent_id: None,
             tab_id: None,
@@ -331,6 +541,18 @@ mod tests {
             .expect("New tab should appear in view models")
             .id
             .clone()
+    }
+
+    fn create_tab_with_id(core: &mut MahoCore, space_id: &SpaceId, tab_id: TabId) -> TabId {
+        core.handle_event(ShellEvent::CreateTab {
+            space_id: space_id.clone(),
+            url: None,
+            parent_id: None,
+            tab_id: Some(tab_id.clone()),
+            window_id: None,
+            is_private: false,
+        });
+        tab_id
     }
 
     fn write_agent_skill_config(skills: serde_json::Value) -> tempfile::NamedTempFile {
@@ -497,6 +719,45 @@ mod tests {
     }
 
     #[test]
+    fn get_favorite_tabs_tie_breaks_equal_order_by_tab_id_repeatedly() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_b = create_tab_with_id(&mut core, &active_space_id, TabId::new("tab-b"));
+        let tab_a = create_tab_with_id(&mut core, &active_space_id, TabId::new("tab-a"));
+        core.transition_tab_role(&tab_b, TabRole::Favorite { order: 0 });
+        core.transition_tab_role(&tab_a, TabRole::Favorite { order: 0 });
+
+        for attempt in 1..=5 {
+            let ordered_ids: Vec<TabId> = core
+                .get_favorite_tabs(&active_space_id)
+                .into_iter()
+                .map(|tab| tab.id)
+                .collect();
+            println!(
+                "duplicate-order deterministic read attempt {attempt}: {:?}",
+                ordered_ids
+            );
+            assert_eq!(ordered_ids, vec![tab_a.clone(), tab_b.clone()]);
+        }
+    }
+
+    #[test]
+    fn favorite_tab_assigns_zero_to_first_new_favorite() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        assert!(core.favorite_tab(&tab_id));
+
+        let favorites = core.get_favorite_tabs(&active_space_id);
+        let favorite = favorites
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .expect("newly favorited tab should be readable");
+        assert_eq!(favorite.favorite_order, Some(0));
+    }
+
+    #[test]
     fn reorder_favorite_persists_new_order() {
         let mut core = MahoCore::new();
         let active_space_id = core.get_active_space_id().clone();
@@ -572,11 +833,79 @@ mod tests {
 
         let favs = core.get_favorite_tabs(&active_space_id);
         let reordered_ids: Vec<TabId> = favs.iter().map(|f| f.id.clone()).collect();
+        println!("happy reorder B/C/A ids: {:?}", reordered_ids);
+        assert_eq!(
+            reordered_ids,
+            vec![tab_b.clone(), tab_c.clone(), tab_a.clone()]
+        );
+        let reordered_orders: Vec<Option<u32>> = favs.iter().map(|f| f.favorite_order).collect();
+        println!("happy reorder B/C/A orders: {:?}", reordered_orders);
+        assert_eq!(reordered_orders, vec![Some(0), Some(1), Some(2)]);
         assert_eq!(
             reordered_ids.last().unwrap(),
             &tab_a,
             "A should be last after move-to-end"
         );
+    }
+
+    #[test]
+    fn profile_scoped_favorite_order_does_not_leak_between_profiles() {
+        let mut core = MahoCore::new();
+        let default_space_id = core.get_active_space_id().clone();
+        let default_tab = create_tab(&mut core);
+        core.transition_tab_role(&default_tab, TabRole::Favorite { order: 10 });
+        let work_profile = core
+            .create_profile_persisted("Work".to_string())
+            .expect("work profile should be created");
+        let work_space = core.create_space(
+            "Work Space",
+            SpaceColor {
+                hue: 32.0,
+                saturation: 0.5,
+                brightness: 0.8,
+                grain: 0.0,
+            },
+            work_profile.id,
+        );
+        let work_space_id = work_space.id.clone();
+
+        let seeded_orders: Vec<Option<u32>> = core
+            .get_favorite_tabs(&work_space_id)
+            .iter()
+            .map(|tab| tab.favorite_order)
+            .collect();
+        assert_eq!(seeded_orders, vec![Some(0)]);
+
+        let work_tab = create_tab_in_space(&mut core, &work_space_id);
+        core.handle_event(ShellEvent::FavoriteTab {
+            tab_id: work_tab.clone(),
+        });
+
+        let work_favorites = core.get_favorite_tabs(&work_space_id);
+        let work_orders: Vec<Option<u32>> = work_favorites
+            .iter()
+            .map(|tab| tab.favorite_order)
+            .collect();
+        assert_eq!(work_orders, vec![Some(0), Some(1)]);
+        assert!(core
+            .get_favorite_tabs(&default_space_id)
+            .iter()
+            .any(|tab| tab.id == default_tab && tab.favorite_order == Some(10)));
+    }
+
+    #[test]
+    fn seed_first_run_tabs_assigns_first_favorite_order_zero() {
+        let mut core = MahoCore::new();
+
+        core.seed_first_run_tabs();
+
+        let active_space_id = core.get_active_space_id().clone();
+        let favorite_orders: Vec<Option<u32>> = core
+            .get_favorite_tabs(&active_space_id)
+            .iter()
+            .map(|tab| tab.favorite_order)
+            .collect();
+        assert_eq!(favorite_orders, vec![Some(0)]);
     }
 
     #[test]
@@ -1396,7 +1725,7 @@ pub struct MahoCore {
     easel_manager: EaselManager,
     download_manager: DownloadManager,
     permission_manager: PermissionManager,
-    password_manager: PasswordManager,
+    vault_runtime: Arc<VaultRuntime>,
     autofill_manager: AutofillManager,
     atc_manager: ATCManager,
     find_manager: FindManager,
@@ -1429,6 +1758,13 @@ pub struct MahoCore {
     sync_startup_time: Cell<chrono::DateTime<chrono::Utc>>,
     sync_last_upload_attempt: Cell<chrono::DateTime<chrono::Utc>>,
     emitted_during_dispatch: Rc<RefCell<Vec<CoreUpdate>>>,
+    last_vault_lifecycle_error: Option<VaultManagerError>,
+    #[cfg(test)]
+    vault_revocation_fault: bool,
+    #[cfg(test)]
+    vault_item_persist_fault: bool,
+    #[cfg(test)]
+    vault_initialization_persist_fault: bool,
 }
 
 impl Default for MahoCore {
@@ -1721,7 +2057,7 @@ impl MahoCore {
             easel_manager: EaselManager::new(),
             download_manager: DownloadManager::new(),
             permission_manager: PermissionManager::new(),
-            password_manager: PasswordManager::new(),
+            vault_runtime: Arc::new(VaultRuntime::new()),
             autofill_manager: AutofillManager::new(),
             atc_manager: ATCManager::new(),
             find_manager: FindManager::new(),
@@ -1732,7 +2068,7 @@ impl MahoCore {
             profile_manager: ProfileManager::new(),
             import_export: ImportExportManager::new(),
             notification_manager: NotificationManager::new(),
-            extension_bridge: ExtensionBridge::new(Box::new(Vec::new), Box::new(|| None)),
+            extension_bridge: ExtensionBridge::new(),
             backup_manager: BackupManager::new(),
             reading_list_manager: ReadingListManager::new(),
             shortcut_manager: ShortcutManager::new(),
@@ -1752,6 +2088,13 @@ impl MahoCore {
             sync_startup_time: Cell::new(chrono::Utc::now()),
             sync_last_upload_attempt: Cell::new(chrono::Utc::now() - chrono::Duration::hours(1)), // Initialize to 1 hour ago so first upload is allowed
             emitted_during_dispatch,
+            last_vault_lifecycle_error: None,
+            #[cfg(test)]
+            vault_revocation_fault: false,
+            #[cfg(test)]
+            vault_item_persist_fault: false,
+            #[cfg(test)]
+            vault_initialization_persist_fault: false,
         };
 
         core
@@ -1794,7 +2137,7 @@ impl MahoCore {
         );
         self.space_manager
             .add_tab_to_space(&active_space_id, favorite_tab.id.clone(), None);
-        self.tab_manager.favorite_tab(&favorite_tab.id);
+        self.favorite_tab(&favorite_tab.id);
 
         let pinned_tab =
             self.tab_manager
@@ -1826,6 +2169,42 @@ impl MahoCore {
                             self.settings_manager = SettingsManager::with_settings(settings);
                         }
                     }
+                    let persisted_state = storage.load_content_blocker_state().ok().flatten();
+                    let persisted_lists = storage.load_content_blocker_lists().unwrap_or_default();
+                    let had_persisted_lists = !persisted_lists.is_empty();
+                    if had_persisted_lists {
+                        self.content_blocker.hydrate_lists(persisted_lists);
+                    }
+                    if let Ok(exceptions) = storage.load_site_exceptions() {
+                        for exc in exceptions {
+                            self.content_blocker
+                                .restore_site_exception(&exc.key, exc.created_at);
+                        }
+                    }
+                    if let Some((mode, generation, cache, version, hash)) = persisted_state {
+                        self.content_blocker.set_mode(mode);
+                        self.content_blocker.set_generation(generation);
+                        let expected_hash =
+                            self.content_blocker.create_compile_snapshot().content_hash;
+                        let cache_is_valid = version.as_deref()
+                            == Some(CONTENT_BLOCKER_ENGINE_VERSION)
+                            && hash.as_deref() == Some(expected_hash.as_str());
+                        let restored_from_cache = match (cache_is_valid, cache) {
+                            (true, Some(bytes)) => self
+                                .content_blocker
+                                .deserialize_engine_with_gen(&bytes, generation, hash.as_deref())
+                                .is_ok(),
+                            _ => false,
+                        };
+                        if !restored_from_cache {
+                            self.content_blocker.rebuild_engine_sync();
+                        }
+                    } else {
+                        self.content_blocker.rebuild_engine_sync();
+                    }
+                    if !had_persisted_lists {
+                        Self::write_content_blocker_snapshot(storage, &self.content_blocker);
+                    }
                     if let Ok(shortcuts_data) = storage.load_shortcuts() {
                         for (action, key_combo_json, _, _) in &shortcuts_data {
                             if !key_combo_json.is_empty() {
@@ -1841,7 +2220,20 @@ impl MahoCore {
                         }
                     }
                     if let Ok(downloads_data) = storage.load_downloads() {
-                        for (id, filename, url, total_bytes, received_bytes, state, file_path, started_at, completed_at, mime_type, chromium_guid) in downloads_data {
+                        for (
+                            id,
+                            filename,
+                            url,
+                            total_bytes,
+                            received_bytes,
+                            state,
+                            file_path,
+                            started_at,
+                            completed_at,
+                            mime_type,
+                            chromium_guid,
+                        ) in downloads_data
+                        {
                             let dl_state = match state.as_str() {
                                 "paused" => DownloadState::Paused,
                                 "completed" => DownloadState::Completed,
@@ -1852,7 +2244,10 @@ impl MahoCore {
                             // Active rows are re-ingested live by the browser download
                             // manager on restart under a fresh id; drop the stale row so
                             // the same file does not appear twice.
-                            if matches!(dl_state, DownloadState::Downloading | DownloadState::Paused) {
+                            if matches!(
+                                dl_state,
+                                DownloadState::Downloading | DownloadState::Paused
+                            ) {
                                 let _ = storage.delete_download(&id);
                                 continue;
                             }
@@ -2471,15 +2866,15 @@ impl MahoCore {
             }
         }
 
-        // Load default link behavior and open_external_links_in_little_arc
+        // Load default link behavior and open_external_links_in_maho_mini
         if let Ok(Some(behavior_json)) = storage.get_setting("default_link_behavior") {
             if let Ok(behavior) = serde_json::from_str(&behavior_json) {
                 self.atc_manager.set_default_link_behavior(behavior);
             }
         }
-        if let Ok(Some(flag_str)) = storage.get_setting("open_external_links_in_little_arc") {
+        if let Ok(Some(flag_str)) = storage.get_setting("open_external_links_in_maho_mini") {
             let flag = flag_str == "true";
-            self.atc_manager.set_open_external_links_in_little_arc(flag);
+            self.atc_manager.set_open_external_links_in_maho_mini(flag);
         }
 
         // Load autofill addresses
@@ -2531,17 +2926,39 @@ impl MahoCore {
             }
         }
 
-        if let Ok(passwords) = storage.get_all_passwords() {
-            for (id, domain, username, created_at, last_used, password) in passwords {
-                self.password_manager
-                    .restore_password(maho_types::passwords::SavedPassword {
-                        id,
-                        domain,
-                        username,
-                        created_at,
-                        last_used,
-                        password,
-                    });
+        // Hydrate metadata-only Vault lock state from opaque Todo 9 slots. Only
+        // KDF params + wrapped-key envelopes are read here; no item ciphertext is
+        // touched. A storage READ ERROR is handled explicitly and never collapses
+        // to "uninitialized"; malformed/partial slots become CorruptedVaultData
+        // (hydrate is fail-closed and drops any prior key).
+        match Self::read_vault_slots(storage) {
+            Ok(vault_slots) => {
+                if let Err(error) = self.vault_runtime.hydrate_locked(vault_slots) {
+                    eprintln!(
+                        "[vault] persisted Vault metadata rejected as corrupt; kept fail-closed: {error}"
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "[vault] Vault metadata slot read failed; leaving Vault fail-closed (NOT uninitialized-by-default): {error}"
+                );
+            }
+        }
+
+        // Refresh the cached active item count from storage WITHOUT reading any
+        // envelope payload, so a locked Vault still reports an accurate count
+        // (Todo 11). A read failure leaves the cached count unchanged.
+        match storage.count_active_vault_items() {
+            Ok(count) => {
+                if let Err(error) = self.vault_runtime.set_item_count(count) {
+                    eprintln!(
+                        "[vault] active item count refresh failed; keeping cached count: {error}"
+                    )
+                }
+            }
+            Err(error) => {
+                eprintln!("[vault] active item count refresh failed; keeping cached count: {error}")
             }
         }
 
@@ -2658,36 +3075,28 @@ impl MahoCore {
         }
     }
 
-    pub fn search_passwords(&self, query: &str) -> Vec<&maho_types::passwords::SavedPassword> {
-        self.password_manager.search_passwords(query)
+    // === Legacy password API (fail-closed shims) ===
+    //
+    // Todo 10 removed active plaintext `PasswordManager` ownership. These
+    // signatures are preserved so existing FFI callers keep compiling, but they
+    // are metadata-only no-ops: lists/search return empty, lookup returns None,
+    // delete/update return false, and add returns a synthesized descriptor whose
+    // `password` is always `None` and is never retained. Real Vault-backed
+    // behavior arrives with Todos 11/12.
+
+    pub fn search_passwords(&self, _query: &str) -> Vec<&maho_types::passwords::SavedPassword> {
+        Vec::new()
     }
 
     pub fn list_passwords(&self) -> &[maho_types::passwords::SavedPassword] {
-        self.password_manager.list_passwords()
+        &[]
     }
 
-    fn assert_password_security(&self) {
-        if self.storage.is_some() {
-            assert!(
-                maho_storage::sqlite::is_key_configured(),
-                "SQLCipher key must be configured when storage is initialized"
-            );
-        }
+    pub fn password_by_id(&self, _id: &str) -> Option<&maho_types::passwords::SavedPassword> {
+        None
     }
 
-    pub fn password_by_id(&self, id: &str) -> Option<&maho_types::passwords::SavedPassword> {
-        self.assert_password_security();
-        self.password_manager.password_by_id(id)
-    }
-
-    pub fn delete_password_persisted(&mut self, password_id: &str) -> bool {
-        self.assert_password_security();
-        if self.password_manager.delete_password(password_id) {
-            if let Some(ref storage) = self.storage {
-                let _ = storage.delete_password(password_id);
-            }
-            return true;
-        }
+    pub fn delete_password_persisted(&mut self, _password_id: &str) -> bool {
         false
     }
 
@@ -2695,49 +3104,392 @@ impl MahoCore {
         &mut self,
         domain: String,
         username: String,
-        password: Option<String>,
+        _password: Option<String>,
     ) -> maho_types::passwords::SavedPassword {
-        self.assert_password_security();
-        let added = self
-            .password_manager
-            .add_password(domain, username, password)
-            .clone();
-        if let Some(ref storage) = self.storage {
-            let _ = storage.save_password(
-                &added.id,
-                &added.domain,
-                &added.username,
-                &added.created_at,
-                added.password.as_deref(),
-            );
+        // Metadata-only, non-retained descriptor. Plaintext is dropped on the
+        // floor: `password` is forced to `None` and nothing is stored.
+        maho_types::passwords::SavedPassword {
+            id: uuid::Uuid::new_v4().to_string(),
+            domain,
+            username,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            last_used: None,
+            password: None,
         }
-        added
     }
 
-    pub fn update_password_username_persisted(&mut self, id: &str, username: String) -> bool {
-        self.assert_password_security();
-        if !self.password_manager.update_username(id, username) {
-            return false;
-        }
+    pub fn update_password_username_persisted(&mut self, _id: &str, _username: String) -> bool {
+        false
+    }
 
-        if let Some(password) = self
-            .password_manager
-            .list_passwords()
-            .iter()
-            .find(|p| p.id == id)
+    // === Vault lifecycle (Todo 10) ===
+
+    pub fn vault_status(&self) -> maho_types::vault::VaultStatus {
+        let mut status = self.vault_runtime.status();
+        status.agent_policy_default = self
+            .vault_agent_policy_status()
+            .map(|policy| policy.policy)
+            .unwrap_or(maho_types::vault::VaultAgentPolicy::Deny);
+        status
+    }
+
+    pub fn set_vault_auto_lock_minutes(&self, minutes: u32) -> Result<(), VaultManagerError> {
+        self.vault_runtime.set_auto_lock_minutes(minutes)
+    }
+
+    /// Initialize the Vault and persist its metadata slots transactionally. On
+    /// any storage failure the in-memory Vault is reverted to uninitialized
+    /// (fail-closed): it is never left initialized-but-unpersisted.
+    pub fn initialize_vault(
+        &mut self,
+        master_passphrase: &[u8],
+        recovery_secret: &[u8],
+    ) -> Result<(), VaultManagerError> {
+        let now = chrono::Utc::now();
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage(
+                "vault storage is not configured; refusing non-durable initialization".to_string(),
+            )
+        })?;
+        // Preflight the opaque slots with typed Result handling: never overwrite
+        // existing, partial, or unreadable key material. All absent => init; all
+        // present => already initialized; any partial => corruption; read error
+        // => propagate.
+        let kdf = Self::read_vault_slot(storage, SLOT_KDF_PARAMS)?;
+        let user = Self::read_vault_slot(storage, SLOT_WRAPPED_USER_KEY)?;
+        let recovery = Self::read_vault_slot(storage, SLOT_WRAPPED_RECOVERY_KEY)?;
+        match [kdf.is_some(), user.is_some(), recovery.is_some()]
+            .into_iter()
+            .filter(|present| *present)
+            .count()
         {
-            if let Some(ref storage) = self.storage {
-                let _ = storage.save_password(
-                    &password.id,
-                    &password.domain,
-                    &password.username,
-                    &password.created_at,
-                    password.password.as_deref(),
-                );
+            0 => {}
+            3 => return Err(VaultManagerError::AlreadyInitialized),
+            _ => return Err(VaultManagerError::CorruptedVaultData),
+        }
+        #[cfg(test)]
+        let inject_persist_fault = self.vault_initialization_persist_fault;
+        let vault_runtime = Arc::clone(&self.vault_runtime);
+        vault_runtime.initialize_and_persist(master_passphrase, recovery_secret, now, |slots| {
+            let updated_at = now.to_rfc3339();
+            let schema_version =
+                i64::from(u16::from(maho_types::vault::VaultSchemaVersion::CURRENT));
+            storage
+                .vault_transaction(|tx| {
+                    #[cfg(test)]
+                    if inject_persist_fault {
+                        return Err(maho_storage::StorageError::Other(
+                            "injected Vault initialization persistence fault".to_string(),
+                        ));
+                    }
+                    tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                        slot: SLOT_KDF_PARAMS.to_string(),
+                        schema_version,
+                        payload: slots.kdf_params.clone(),
+                        updated_at: updated_at.clone(),
+                    })?;
+                    tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                        slot: SLOT_WRAPPED_USER_KEY.to_string(),
+                        schema_version,
+                        payload: slots.wrapped_user_key.clone(),
+                        updated_at: updated_at.clone(),
+                    })?;
+                    tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                        slot: SLOT_WRAPPED_RECOVERY_KEY.to_string(),
+                        schema_version,
+                        payload: slots.wrapped_recovery_key.clone(),
+                        updated_at: updated_at.clone(),
+                    })?;
+                    Ok(())
+                })
+                .map_err(|error| VaultManagerError::Storage(error.to_string()))
+        })
+    }
+
+    pub fn initialize_vault_with_device(
+        &mut self,
+        master_passphrase: &[u8],
+        recovery_secret: &[u8],
+        binding: &VaultDeviceBinding,
+        protector: &dyn VaultDeviceProtector,
+    ) -> Result<(), VaultManagerError> {
+        let now = chrono::Utc::now();
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage(
+                "vault storage is not configured; refusing non-durable initialization".to_string(),
+            )
+        })?;
+        let slots = Self::read_vault_slots(storage)?;
+        let device_row = storage
+            .get_vault_device_key(binding.device_id())
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?;
+        match (
+            slots.kdf_params.is_some(),
+            slots.wrapped_user_key.is_some(),
+            slots.wrapped_recovery_key.is_some(),
+            device_row.is_some(),
+        ) {
+            (false, false, false, false) => {}
+            (true, true, true, _) => return Err(VaultManagerError::AlreadyInitialized),
+            _ => return Err(VaultManagerError::CorruptedVaultData),
+        }
+        let vault_runtime = Arc::clone(&self.vault_runtime);
+        vault_runtime.initialize_with_device_and_persist(
+            master_passphrase,
+            recovery_secret,
+            binding,
+            protector,
+            now,
+            |slots, bundle| self.persist_vault_initialization(slots, bundle, binding, now),
+        )
+    }
+
+    /// Convert one `Result<Option<VaultMetadataRow>, StorageError>` slot read into
+    /// typed slot bytes: a storage READ ERROR propagates as `Storage`, never
+    /// collapses to `None`/absent.
+    fn classify_slot_read(
+        result: Result<Option<maho_storage::sqlite::VaultMetadataRow>, maho_storage::StorageError>,
+    ) -> Result<Option<Vec<u8>>, VaultManagerError> {
+        match result {
+            Ok(row) => Ok(row.map(|row| row.payload)),
+            Err(error) => Err(VaultManagerError::Storage(error.to_string())),
+        }
+    }
+
+    fn read_vault_slot(
+        storage: &maho_storage::sqlite::SqliteStorage,
+        slot: &str,
+    ) -> Result<Option<Vec<u8>>, VaultManagerError> {
+        Self::classify_slot_read(storage.get_vault_metadata(slot))
+    }
+
+    fn read_vault_slots(
+        storage: &maho_storage::sqlite::SqliteStorage,
+    ) -> Result<VaultHydrationSlots, VaultManagerError> {
+        Ok(VaultHydrationSlots {
+            kdf_params: Self::read_vault_slot(storage, SLOT_KDF_PARAMS)?,
+            wrapped_user_key: Self::read_vault_slot(storage, SLOT_WRAPPED_USER_KEY)?,
+            wrapped_recovery_key: Self::read_vault_slot(storage, SLOT_WRAPPED_RECOVERY_KEY)?,
+        })
+    }
+
+    pub fn last_vault_lifecycle_error(&self) -> Option<&VaultManagerError> {
+        self.last_vault_lifecycle_error.as_ref()
+    }
+
+    pub fn unlock_vault(&mut self, master_passphrase: &[u8]) -> Result<(), VaultManagerError> {
+        self.vault_runtime
+            .unlock(master_passphrase, chrono::Utc::now())
+    }
+
+    pub fn unlock_vault_with_recovery(
+        &mut self,
+        recovery_secret: &[u8],
+    ) -> Result<(), VaultManagerError> {
+        self.vault_runtime
+            .unlock_with_recovery(recovery_secret, chrono::Utc::now())
+    }
+
+    pub fn unlock_vault_with_device(
+        &mut self,
+        binding: &VaultDeviceBinding,
+        protector: &dyn VaultDeviceProtector,
+    ) -> Result<(), VaultManagerError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let row = storage
+            .get_vault_device_key(binding.device_id())
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?
+            .ok_or(VaultManagerError::DeviceBindingMismatch)?;
+        let bundle = VaultDeviceWrapBundle::from_opaque_bytes(&row.wrapped_key)?;
+        self.vault_runtime
+            .unlock_with_device(&bundle, binding, protector, chrono::Utc::now())
+    }
+
+    pub fn rewrap_vault_device_with_recovery(
+        &mut self,
+        recovery_secret: &[u8],
+        binding: &VaultDeviceBinding,
+        protector: &dyn VaultDeviceProtector,
+    ) -> Result<(), VaultManagerError> {
+        let now = chrono::Utc::now();
+        let vault_runtime = Arc::clone(&self.vault_runtime);
+        vault_runtime.rewrap_device_with_recovery_and_persist(
+            recovery_secret,
+            binding,
+            protector,
+            now,
+            |bundle| self.persist_vault_device_bundle(bundle, binding, now),
+        )
+    }
+
+    fn persist_vault_initialization(
+        &self,
+        slots: &crate::vault_manager::VaultPersistedSlots,
+        bundle: &VaultDeviceWrapBundle,
+        binding: &VaultDeviceBinding,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), VaultManagerError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let updated_at = now.to_rfc3339();
+        let schema_version = i64::from(u16::from(maho_types::vault::VaultSchemaVersion::CURRENT));
+        let wrapped_key = bundle.to_opaque_bytes()?;
+        storage
+            .vault_transaction(|tx| {
+                #[cfg(test)]
+                if self.vault_initialization_persist_fault {
+                    return Err(maho_storage::StorageError::Other(
+                        "injected Vault initialization persistence fault".to_string(),
+                    ));
+                }
+                tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                    slot: SLOT_KDF_PARAMS.to_string(),
+                    schema_version,
+                    payload: slots.kdf_params.clone(),
+                    updated_at: updated_at.clone(),
+                })?;
+                tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                    slot: SLOT_WRAPPED_USER_KEY.to_string(),
+                    schema_version,
+                    payload: slots.wrapped_user_key.clone(),
+                    updated_at: updated_at.clone(),
+                })?;
+                tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                    slot: SLOT_WRAPPED_RECOVERY_KEY.to_string(),
+                    schema_version,
+                    payload: slots.wrapped_recovery_key.clone(),
+                    updated_at: updated_at.clone(),
+                })?;
+                tx.upsert_device_key(&maho_storage::sqlite::VaultDeviceKeyRow {
+                    device_id: binding.device_id().to_string(),
+                    schema_version,
+                    wrapped_key: wrapped_key.clone(),
+                    created_at: updated_at.clone(),
+                    updated_at: updated_at.clone(),
+                    revoked_at: None,
+                })
+            })
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))
+    }
+
+    fn persist_vault_device_bundle(
+        &self,
+        bundle: &VaultDeviceWrapBundle,
+        binding: &VaultDeviceBinding,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), VaultManagerError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let updated_at = now.to_rfc3339();
+        storage
+            .save_vault_device_key(&maho_storage::sqlite::VaultDeviceKeyRow {
+                device_id: binding.device_id().to_string(),
+                schema_version: i64::from(u16::from(
+                    maho_types::vault::VaultSchemaVersion::CURRENT,
+                )),
+                wrapped_key: bundle.to_opaque_bytes()?,
+                created_at: updated_at.clone(),
+                updated_at,
+                revoked_at: None,
+            })
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))
+    }
+
+    /// Explicit lock: drop the active key (zeroized) FIRST, then revoke active
+    /// grants. A revocation/storage failure is surfaced as an error and recorded
+    /// in `last_vault_lifecycle_error`; the key is dropped regardless.
+    pub fn lock_vault(&mut self) -> Result<(), VaultManagerError> {
+        self.vault_runtime.lock()?;
+        match self.revoke_active_grants(
+            maho_types::vault::CredentialRevocationReason::VaultLocked,
+            chrono::Utc::now(),
+        ) {
+            Ok(_) => {
+                self.last_vault_lifecycle_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.last_vault_lifecycle_error = Some(error);
+                Err(VaultManagerError::Storage(
+                    "grant revocation failed during explicit lock".to_string(),
+                ))
             }
         }
+    }
 
-        true
+    /// Deterministic auto-lock evaluation seam. Drops the key and revokes grants
+    /// when the inactivity window at `now` has elapsed; returns whether it locked.
+    /// A revocation failure is recorded in `last_vault_lifecycle_error`.
+    pub fn evaluate_vault_auto_lock_at(&mut self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        let locked = match self.vault_runtime.evaluate_auto_lock(now) {
+            Ok(locked) => locked,
+            Err(error) => {
+                self.last_vault_lifecycle_error = Some(error);
+                return false;
+            }
+        };
+        if locked {
+            match self.revoke_active_grants(
+                maho_types::vault::CredentialRevocationReason::VaultLocked,
+                now,
+            ) {
+                Ok(_) => self.last_vault_lifecycle_error = None,
+                Err(error) => self.last_vault_lifecycle_error = Some(error),
+            }
+        }
+        locked
+    }
+
+    /// Revoke every persisted active capability grant with `reason`, atomically.
+    /// Returns the count revoked (0 when there is no storage). List/transaction
+    /// failures surface as a typed error rather than being swallowed.
+    fn revoke_active_grants(
+        &self,
+        reason: maho_types::vault::CredentialRevocationReason,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<usize, VaultManagerError> {
+        #[cfg(test)]
+        if self.vault_revocation_fault {
+            return Err(VaultManagerError::Storage(
+                "injected grant-store fault".to_string(),
+            ));
+        }
+        let Some(storage) = self.storage.as_ref() else {
+            return Ok(0);
+        };
+        let grants = storage
+            .list_vault_grants()
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?;
+        let now_rfc3339 = now.to_rfc3339();
+        let reason_token = Self::revocation_reason_token(reason);
+        let mut revoked = 0usize;
+        storage
+            .vault_transaction(|tx| {
+                for mut row in grants
+                    .into_iter()
+                    .filter(|grant| grant.state == GRANT_STATE_ACTIVE)
+                {
+                    row.state = GRANT_STATE_REVOKED.to_string();
+                    row.revoked_at = Some(now_rfc3339.clone());
+                    row.revocation_reason = Some(reason_token.clone());
+                    tx.upsert_grant(&row)?;
+                    revoked += 1;
+                }
+                Ok(())
+            })
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?;
+        Ok(revoked)
+    }
+
+    fn revocation_reason_token(reason: maho_types::vault::CredentialRevocationReason) -> String {
+        serde_json::to_value(reason)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| GRANT_STATE_REVOKED.to_string())
     }
 
     /// Full command bar search using the CommandBarEngine.
@@ -2752,6 +3504,27 @@ impl MahoCore {
         external_tabs: Vec<TabViewModel>,
         is_incognito: bool,
     ) -> Vec<SuggestionViewModel> {
+        // R-11: OTR search must never collect spaces, folders, archived/closed
+        // tabs, bookmarks, favicons, or extensions from the regular profile.
+        // search_incognito() only reads window-local `tabs`, so build a minimal
+        // context and skip the regular-profile collection entirely (previously
+        // it was gathered and then discarded).
+        if is_incognito {
+            let ctx = SearchContext {
+                tabs: external_tabs,
+                spaces: Vec::new(),
+                folders: Vec::new(),
+                archived_tabs: Vec::new(),
+                bookmarks: Vec::new(),
+                bookmark_favicons: Vec::new(),
+                closed_tabs: Vec::new(),
+                extensions: Vec::new(),
+                is_incognito: true,
+                recent_tabs: Vec::new(),
+            };
+            return self.command_bar.search(query, mode, &ctx);
+        }
+
         let space_view_models = self.get_space_view_models();
 
         let archived_tabs: Vec<TabViewModel> = self
@@ -3292,16 +4065,17 @@ impl MahoCore {
         rule
     }
 
-    pub fn set_open_external_links_in_little_arc_persisted(&mut self, enabled: bool) {
-        self.atc_manager.set_open_external_links_in_little_arc(enabled);
+    pub fn set_open_external_links_in_maho_mini_persisted(&mut self, enabled: bool) {
+        self.atc_manager
+            .set_open_external_links_in_maho_mini(enabled);
         if let Some(ref storage) = self.storage {
             let val_str = if enabled { "true" } else { "false" };
-            let _ = storage.set_setting("open_external_links_in_little_arc", val_str);
+            let _ = storage.set_setting("open_external_links_in_maho_mini", val_str);
         }
     }
 
-    pub fn get_open_external_links_in_little_arc(&self) -> bool {
-        self.atc_manager.get_open_external_links_in_little_arc()
+    pub fn get_open_external_links_in_maho_mini(&self) -> bool {
+        self.atc_manager.get_open_external_links_in_maho_mini()
     }
 
     pub fn get_default_link_behavior(&self) -> &maho_types::air_traffic::DefaultLinkBehavior {
@@ -3312,9 +4086,13 @@ impl MahoCore {
         &self,
         url: &str,
         is_external: bool,
-        space_rules: &[(maho_types::identifiers::SpaceId, Vec<maho_types::space::ATCRule>)],
+        space_rules: &[(
+            maho_types::identifiers::SpaceId,
+            Vec<maho_types::space::ATCRule>,
+        )],
     ) -> maho_types::air_traffic::LinkDestination {
-        self.atc_manager.decide_link_destination(url, is_external, space_rules)
+        self.atc_manager
+            .decide_link_destination(url, is_external, space_rules)
     }
 
     pub fn add_autofill_address_persisted(
@@ -3821,11 +4599,8 @@ impl MahoCore {
                         DownloadState::Failed => "failed",
                         DownloadState::Cancelled => "cancelled",
                     };
-                    let _ = storage.update_download_progress(
-                        download_id,
-                        received_bytes,
-                        state_str,
-                    );
+                    let _ =
+                        storage.update_download_progress(download_id, received_bytes, state_str);
                 }
             }
             self.download_progress_last_persisted
@@ -3993,7 +4768,16 @@ impl MahoCore {
         let urgent = Self::event_persist_is_urgent(&event);
         let event_cloned = event.clone();
         self.emitted_during_dispatch.borrow_mut().clear();
-        let result = self.handle_event_inner(event);
+        // Real user/shell activity refreshes the Vault inactivity timer (only
+        // when unlocked). tick() is deliberately NOT routed here, so periodic
+        // ticks never count as activity.
+        if let Err(error) = self.vault_runtime.record_activity(chrono::Utc::now()) {
+            self.last_vault_lifecycle_error = Some(error);
+        }
+        let result = match self.apply_content_blocker_shell_event(&event) {
+            Some(updates) => updates,
+            None => self.handle_event_inner(event),
+        };
         if dirty_bits != 0 {
             if urgent {
                 self.persist_lmdb_now_partial(dirty_bits);
@@ -4002,6 +4786,7 @@ impl MahoCore {
             }
         }
         self.post_dispatch_sync(&event_cloned, &result);
+        self.converge_content_blocker_mode_from_settings(&event_cloned);
 
         let emitted = self.emitted_during_dispatch.borrow().clone();
         let emitted_strs: std::collections::HashSet<String> = emitted
@@ -4490,6 +5275,19 @@ impl MahoCore {
             }
             ShellEvent::SignOut => {
                 self.account_manager.sign_out();
+                // Session ended: lock the Vault (dropping+zeroizing the active key
+                // first; Uninitialized is preserved) and revoke active grants,
+                // recording any revocation failure for observability.
+                if let Err(error) = self.vault_runtime.lock() {
+                    self.last_vault_lifecycle_error = Some(error);
+                }
+                match self.revoke_active_grants(
+                    maho_types::vault::CredentialRevocationReason::SessionEnded,
+                    chrono::Utc::now(),
+                ) {
+                    Ok(_) => self.last_vault_lifecycle_error = None,
+                    Err(error) => self.last_vault_lifecycle_error = Some(error),
+                }
                 if let Some(ref storage) = self.storage {
                     if let Err(e) = storage.set_setting("auth:access_token", "") {
                         eprintln!(
@@ -4726,47 +5524,17 @@ impl MahoCore {
                 self.tab_manager.unfreeze_tab(tab_id);
                 return vec![];
             }
-            ShellEvent::SearchPasswords { query } => {
-                let results: Vec<maho_types::passwords::SavedPassword> = self
-                    .password_manager
-                    .search_passwords(query)
-                    .into_iter()
-                    .cloned()
-                    .collect();
-                return vec![CoreUpdate::PasswordsSearchResult { passwords: results }];
+            ShellEvent::SearchPasswords { .. } => {
+                // Fail-closed shim: no active plaintext store to search (Todo 10).
+                return vec![CoreUpdate::PasswordsSearchResult { passwords: vec![] }];
             }
-            ShellEvent::DeletePassword { password_id } => {
-                if self.password_manager.delete_password(password_id) {
-                    if let Some(ref storage) = self.storage {
-                        let _ = storage.delete_password(password_id);
-                    }
-                    return vec![CoreUpdate::PasswordDeleted {
-                        password_id: password_id.clone(),
-                    }];
-                }
+            ShellEvent::DeletePassword { .. } => {
+                // Fail-closed no-op until Vault CRUD lands (Todo 11).
                 return vec![];
             }
-            ShellEvent::AddPassword {
-                domain,
-                username,
-                password,
-            } => {
-                let pw = self
-                    .password_manager
-                    .add_password(domain.clone(), username.clone(), Some(password.clone()))
-                    .clone();
-                if let Some(ref storage) = self.storage {
-                    let _ = storage.save_password(
-                        &pw.id,
-                        &pw.domain,
-                        &pw.username,
-                        &pw.created_at,
-                        pw.password.as_deref(),
-                    );
-                }
-                return vec![CoreUpdate::PasswordsSearchResult {
-                    passwords: vec![pw],
-                }];
+            ShellEvent::AddPassword { .. } => {
+                // Fail-closed no-op: never retains plaintext (Todo 10).
+                return vec![];
             }
             ShellEvent::AddAutofillAddress { address } => {
                 let addr = self.add_autofill_address_persisted(address.clone());
@@ -4916,17 +5684,8 @@ impl MahoCore {
                     }];
                 }
 
-                let max_order = self
-                    .tab_manager
-                    .get_all_favorite_tabs()
-                    .iter()
-                    .filter(|t| profile_space_ids.contains(&t.space_id))
-                    .filter_map(|t| t.role.favorite_order())
-                    .max()
-                    .unwrap_or(0);
-
                 let new_role = TabRole::Favorite {
-                    order: max_order + 1,
+                    order: self.next_favorite_order_for_spaces(&profile_space_ids),
                 };
                 return self.transition_tab_role(tab_id, new_role);
             }
@@ -4938,8 +5697,7 @@ impl MahoCore {
             }
             ShellEvent::PinTab { ref tab_id } => {
                 let mut updates = self.transition_tab_role(tab_id, TabRole::Pinned);
-                if let Some(space_id) =
-                    self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone())
+                if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone())
                 {
                     let pinned_tab_ids: HashSet<TabId> = self
                         .tab_manager
@@ -5539,6 +6297,13 @@ impl MahoCore {
     }
 
     pub fn tick(&mut self) -> Vec<CoreUpdate> {
+        self.tick_at(chrono::Utc::now())
+    }
+
+    /// Deterministic periodic tick. Production `tick()` delegates here with the
+    /// real clock; tests inject `now` to drive Vault inactivity auto-lock through
+    /// the same code path without sleeping.
+    pub fn tick_at(&mut self, now: chrono::DateTime<chrono::Utc>) -> Vec<CoreUpdate> {
         let global_archive_timeout = self
             .settings_manager
             .get_settings()
@@ -5567,6 +6332,10 @@ impl MahoCore {
         for result in self.memory_manager.drain_results() {
             self.handle_memory_result(result, &mut updates);
         }
+
+        // Evaluate Vault inactivity auto-lock on the real periodic path. `tick`
+        // itself is not counted as user activity.
+        self.evaluate_vault_auto_lock_at(now);
 
         updates
     }
@@ -5692,7 +6461,7 @@ impl MahoCore {
             .update_tab_title(&tab.id, "Google".to_string());
         self.space_manager
             .add_tab_to_space(space_id, tab.id.clone(), None);
-        self.tab_manager.favorite_tab(&tab.id);
+        self.favorite_tab(&tab.id);
     }
 
     pub fn delete_space(&mut self, space_id: &SpaceId) {
@@ -5816,6 +6585,10 @@ impl MahoCore {
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
         }
+        // Global-bus emit is required in addition to the instance listeners above:
+        // direct setters (`set_density`, `update_settings`) return no updates, so only
+        // the global bus reaches FFI push-callbacks. No-op when no global callback is set.
+        maho_types::events::core_update::emit_core_update(update);
     }
 
     pub fn get_settings(&self) -> &Settings {
@@ -5847,7 +6620,10 @@ impl MahoCore {
         self.profile_manager.list_profiles()
     }
 
-    pub fn create_profile_persisted(&mut self, name: String) -> Result<maho_types::profile::ProfileConfig, crate::profile_manager::ProfileError> {
+    pub fn create_profile_persisted(
+        &mut self,
+        name: String,
+    ) -> Result<maho_types::profile::ProfileConfig, crate::profile_manager::ProfileError> {
         let profile = self.profile_manager.create_profile(name)?.clone();
         self.persist_profile(&profile);
         let update = CoreUpdate::ProfileCreated {
@@ -6046,7 +6822,13 @@ impl MahoCore {
     }
 
     pub fn toggle_traffic_rule_persisted(&mut self, rule_id: &str, enabled: bool) {
-        if let Some(rule) = self.atc_manager.get_traffic_rules().iter().find(|r| r.id == rule_id).cloned() {
+        if let Some(rule) = self
+            .atc_manager
+            .get_traffic_rules()
+            .iter()
+            .find(|r| r.id == rule_id)
+            .cloned()
+        {
             let mut updated_rule = rule;
             updated_rule.enabled = enabled;
             self.update_traffic_rule_persisted(updated_rule);
@@ -6148,7 +6930,10 @@ impl MahoCore {
                 }
             }
         }
-        tabs.sort_by_key(|t| t.favorite_order.unwrap_or(u32::MAX));
+        tabs.sort_by(|a, b| {
+            (a.favorite_order.unwrap_or(u32::MAX), a.id.as_ref())
+                .cmp(&(b.favorite_order.unwrap_or(u32::MAX), b.id.as_ref()))
+        });
         tabs
     }
 
@@ -6180,9 +6965,9 @@ impl MahoCore {
                 favicon: tab.favicon.clone(),
                 archived_at: self
                     .tab_manager
-                     .state_timestamp_for_tab(&tab.id)
-                     .map(timestamp_millis_to_iso8601)
-                     .unwrap_or_else(|| tab.last_active_at.0.clone()),
+                    .state_timestamp_for_tab(&tab.id)
+                    .map(timestamp_millis_to_iso8601)
+                    .unwrap_or_else(|| tab.last_active_at.0.clone()),
             })
             .collect()
     }
@@ -6320,20 +7105,21 @@ impl MahoCore {
             return false;
         }
 
-        let max_order = self
-            .tab_manager
-            .get_all_favorite_tabs()
-            .iter()
-            .filter(|t| profile_space_ids.contains(&t.space_id))
-            .filter_map(|t| t.role.favorite_order())
-            .max()
-            .unwrap_or(0);
-
         let new_role = TabRole::Favorite {
-            order: max_order + 1,
+            order: self.next_favorite_order_for_spaces(&profile_space_ids),
         };
         let _updates = self.transition_tab_role(tab_id, new_role);
         true
+    }
+
+    fn next_favorite_order_for_spaces(&self, profile_space_ids: &HashSet<SpaceId>) -> u32 {
+        self.tab_manager
+            .get_all_favorite_tabs()
+            .iter()
+            .filter(|tab| profile_space_ids.contains(&tab.space_id))
+            .filter_map(|tab| tab.role.favorite_order())
+            .max()
+            .map_or(0, |max_order| max_order + 1)
     }
 
     pub fn transition_tab_role(&mut self, id: &TabId, new_role: TabRole) -> Vec<CoreUpdate> {
@@ -6451,17 +7237,44 @@ impl MahoCore {
             .collect()
     }
 
+    pub fn add_filter_list(&mut self, id: String, name: String, url: String) -> bool {
+        match self.content_blocker.add_filter_list(id, name, url) {
+            Ok(()) => {
+                self.persist_content_blocker_snapshot();
+                let state_change = self.content_blocker_state_change(None);
+                self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+                true
+            }
+            Err(err) => {
+                let state_change = self.content_blocker_state_change(Some(err));
+                self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+                false
+            }
+        }
+    }
+
     pub fn toggle_filter_list(&mut self, id: &str, enabled: bool) {
-        self.content_blocker.toggle_filter_list(id, enabled);
+        if self.content_blocker.toggle_filter_list(id, enabled) {
+            self.persist_content_blocker_snapshot();
+            let state_change = self.content_blocker_state_change(None);
+            self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        }
     }
 
     pub fn remove_filter_list(&mut self, id: &str) {
-        self.content_blocker.remove_filter_list(id);
+        if self.content_blocker.remove_filter_list(id) {
+            self.persist_content_blocker_snapshot();
+            let state_change = self.content_blocker_state_change(None);
+            self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        }
     }
 
     pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {
         let res = self.extension_bridge.toggle_extension(extension_id);
-        if res.is_some() {
+        if let Some(enabled) = res {
+            if let Some(ref cb) = self.extension_bridge.sync_callback {
+                cb(extension_id, enabled, false);
+            }
             let update = CoreUpdate::InstalledExtensionsUpdated;
             for listener in self.update_listeners.borrow().iter() {
                 listener(update.clone());
@@ -6476,6 +7289,9 @@ impl MahoCore {
     ) -> Option<crate::extension_bridge::InstalledExtension> {
         let res = self.extension_bridge.remove_extension(extension_id);
         if res.is_some() {
+            if let Some(ref cb) = self.extension_bridge.sync_callback {
+                cb(extension_id, false, true);
+            }
             let update = CoreUpdate::InstalledExtensionsUpdated;
             for listener in self.update_listeners.borrow().iter() {
                 listener(update.clone());
@@ -6523,13 +7339,15 @@ impl MahoCore {
         &mut self,
         exts: Vec<crate::extension_bridge::InstalledExtension>,
     ) {
+        let is_baseline = !self.extension_bridge.baseline_synced;
+        self.extension_bridge.baseline_synced = true;
         for ext in &exts {
             let old_ext = self.extension_bridge.extensions.get(&ext.id);
             let state_changed = match old_ext {
                 Some(old) => old.enabled != ext.enabled,
                 None => true,
             };
-            if state_changed {
+            if state_changed && !is_baseline {
                 let cws_url = format!("https://chromewebstore.google.com/detail/{}", ext.id);
                 let payload = serde_json::json!({
                     "id": ext.id,
@@ -6562,6 +7380,47 @@ impl MahoCore {
                             ext.id, e
                         );
                     }
+                }
+            }
+        }
+
+        // H7: emit deletion tombstones for removed extensions. The receive path
+        // handles deleted:true, but the send path never produced them → uninstalls
+        // never propagated. Must run before the mirror is replaced below.
+        let new_ids: std::collections::HashSet<&str> =
+            exts.iter().map(|e| e.id.as_str()).collect();
+        let removed_ids: Vec<String> = self
+            .extension_bridge
+            .extensions
+            .keys()
+            .filter(|id| !new_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for removed_id in removed_ids {
+            match self.next_hlc_ts() {
+                Ok(version) => {
+                    let device_id = self.account_manager.device_id_hash();
+                    let payload_str = serde_json::json!({ "id": removed_id }).to_string();
+                    let fields_hlc_json =
+                        crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
+                    self.sync_push_entity_persisted(SyncEntity {
+                        entity_type: SyncEntityType::Extension,
+                        entity_id: removed_id.clone(),
+                        version,
+                        device_id,
+                        schema_version: 1,
+                        modified_at: chrono::Utc::now().timestamp(),
+                        payload_json: payload_str,
+                        deleted: true,
+                        queue_row_id: None,
+                        fields_hlc_json,
+                    });
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[sync] Skipping extension tombstone for '{}': HLC failure: {}",
+                        removed_id, e
+                    );
                 }
             }
         }
@@ -6773,7 +7632,6 @@ impl MahoCore {
         let passwords_section = SettingsSection {
             title: "Passwords".to_string(),
             items: self
-                .password_manager
                 .list_passwords()
                 .iter()
                 .map(|p| SettingsItem {
@@ -6885,16 +7743,265 @@ impl MahoCore {
         &mut self.import_export
     }
 
+    pub fn get_content_blocker_mode(&self) -> maho_types::content_blocking::ContentBlockingMode {
+        self.content_blocker.mode()
+    }
+
+    fn content_blocker_state_change(
+        &self,
+        last_error: Option<maho_types::content_blocking::ContentBlockingError>,
+    ) -> maho_types::content_blocking::ContentBlockerStateChange {
+        maho_types::content_blocking::ContentBlockerStateChange {
+            mode: self.content_blocker.mode(),
+            popup_blocking: self.content_blocker.is_popup_blocking_enabled(),
+            last_error,
+        }
+    }
+
+    fn persist_content_blocker_snapshot_result(&self) -> Result<(), String> {
+        if let Some(storage) = self.storage.as_ref() {
+            Self::write_content_blocker_snapshot_result(storage, &self.content_blocker)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn persist_content_blocker_snapshot(&self) {
+        let _ = self.persist_content_blocker_snapshot_result();
+    }
+
+    fn write_content_blocker_snapshot_result(
+        storage: &maho_storage::sqlite::SqliteStorage,
+        content_blocker: &ContentBlocker,
+    ) -> Result<(), String> {
+        let lists: Vec<(maho_types::content_blocking::FilterListMetadata, String)> =
+            content_blocker
+                .get_filter_lists()
+                .iter()
+                .map(|meta| {
+                    let raw = content_blocker
+                        .filter_list_content(&meta.id)
+                        .unwrap_or("")
+                        .to_string();
+                    (meta.clone(), raw)
+                })
+                .collect();
+        let exceptions = content_blocker.get_site_exceptions();
+        let engine_cache = content_blocker.serialize_engine();
+        let engine_hash = content_blocker.active_content_hash().map(str::to_string);
+        let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+            mode: content_blocker.mode(),
+            generation: content_blocker.generation(),
+            engine_cache: Some(&engine_cache),
+            engine_version: Some(CONTENT_BLOCKER_ENGINE_VERSION),
+            engine_hash: engine_hash.as_deref(),
+            lists: &lists,
+            exceptions: &exceptions,
+        };
+        storage
+            .replace_content_blocker_snapshot(&snapshot)
+            .map_err(|e| e.to_string())
+    }
+
+    fn write_content_blocker_snapshot(
+        storage: &maho_storage::sqlite::SqliteStorage,
+        content_blocker: &ContentBlocker,
+    ) {
+        let lists: Vec<(maho_types::content_blocking::FilterListMetadata, String)> =
+            content_blocker
+                .get_filter_lists()
+                .iter()
+                .map(|meta| {
+                    let raw = content_blocker
+                        .filter_list_content(&meta.id)
+                        .unwrap_or("")
+                        .to_string();
+                    (meta.clone(), raw)
+                })
+                .collect();
+        let exceptions = content_blocker.get_site_exceptions();
+        let engine_cache = content_blocker.serialize_engine();
+        let engine_hash = content_blocker.active_content_hash().map(str::to_string);
+        let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+            mode: content_blocker.mode(),
+            generation: content_blocker.generation(),
+            engine_cache: Some(&engine_cache),
+            engine_version: Some(CONTENT_BLOCKER_ENGINE_VERSION),
+            engine_hash: engine_hash.as_deref(),
+            lists: &lists,
+            exceptions: &exceptions,
+        };
+        if let Err(err) = storage.replace_content_blocker_snapshot(&snapshot) {
+            eprintln!("[MahoCore] content-blocker snapshot persist failed: {err}");
+        }
+    }
+
+    fn apply_content_blocking_mode(
+        &mut self,
+        mode: maho_types::content_blocking::ContentBlockingMode,
+    ) {
+        self.content_blocker.set_mode(mode);
+        self.settings_manager
+            .update_settings(maho_types::settings::SettingsUpdate {
+                privacy: Some(maho_types::settings::PrivacySettingsUpdate {
+                    content_blocking_mode: Some(mode),
+                    content_blocker_enabled: Some(mode.to_legacy_bool()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        self.persist_content_blocker_snapshot();
+    }
+
+    /// Handle content-blocker mutation ShellEvents on the authoritative path
+    /// (mutate + persist), returning the resulting updates for the caller to
+    /// emit. Kept out of the dispatcher so every mutation converges through one
+    /// persistent owner. Returns `None` for events it does not own.
+    fn apply_content_blocker_shell_event(&mut self, event: &ShellEvent) -> Option<Vec<CoreUpdate>> {
+        use maho_types::content_blocking::ContentBlockingMode;
+        match event {
+            ShellEvent::SetContentBlockingMode { mode } => {
+                self.apply_content_blocking_mode(*mode);
+                let settings = self.settings_manager.get_settings().clone();
+                Some(vec![
+                    CoreUpdate::ContentBlockerStateChanged(self.content_blocker_state_change(None)),
+                    CoreUpdate::SettingsChanged { settings },
+                ])
+            }
+            ShellEvent::ToggleContentBlocker { enabled } => {
+                let mode = if *enabled {
+                    ContentBlockingMode::Native
+                } else {
+                    ContentBlockingMode::Disabled
+                };
+                self.apply_content_blocking_mode(mode);
+                let settings = self.settings_manager.get_settings().clone();
+                Some(vec![
+                    CoreUpdate::ContentBlockerStateChanged(self.content_blocker_state_change(None)),
+                    CoreUpdate::SettingsChanged { settings },
+                ])
+            }
+            ShellEvent::TogglePopupBlocking { enabled } => {
+                self.content_blocker.set_popup_blocking(*enabled);
+                self.persist_content_blocker_snapshot();
+                Some(vec![CoreUpdate::ContentBlockerStateChanged(
+                    self.content_blocker_state_change(None),
+                )])
+            }
+            ShellEvent::AddFilterList { id, name, url } => {
+                let last_error = match self.content_blocker.add_filter_list(
+                    id.clone(),
+                    name.clone(),
+                    url.clone(),
+                ) {
+                    Ok(()) => {
+                        self.persist_content_blocker_snapshot();
+                        None
+                    }
+                    Err(err) => Some(err),
+                };
+                Some(vec![CoreUpdate::ContentBlockerStateChanged(
+                    self.content_blocker_state_change(last_error),
+                )])
+            }
+            ShellEvent::RemoveFilterList { id } => {
+                if self.content_blocker.remove_filter_list(id) {
+                    self.persist_content_blocker_snapshot();
+                }
+                Some(vec![CoreUpdate::ContentBlockerStateChanged(
+                    self.content_blocker_state_change(None),
+                )])
+            }
+            ShellEvent::ToggleFilterList { id, enabled } => {
+                if self.content_blocker.toggle_filter_list(id, *enabled) {
+                    self.persist_content_blocker_snapshot();
+                }
+                Some(vec![CoreUpdate::ContentBlockerStateChanged(
+                    self.content_blocker_state_change(None),
+                )])
+            }
+            ShellEvent::AddSiteException { exception } => {
+                let _ = self.content_blocker.add_site_exception(exception);
+                self.persist_content_blocker_snapshot();
+                Some(vec![CoreUpdate::ContentBlockerStateChanged(
+                    self.content_blocker_state_change(None),
+                )])
+            }
+            ShellEvent::RemoveSiteException { exception } => {
+                if self.content_blocker.remove_site_exception(exception) {
+                    self.persist_content_blocker_snapshot();
+                }
+                Some(vec![CoreUpdate::ContentBlockerStateChanged(
+                    self.content_blocker_state_change(None),
+                )])
+            }
+            _ => None,
+        }
+    }
+
+    fn converge_content_blocker_mode_from_settings(&mut self, event: &ShellEvent) {
+        let ShellEvent::UpdateSettings { changes } = event else {
+            return;
+        };
+        let Some(privacy) = changes.privacy.as_ref() else {
+            return;
+        };
+        let Some(mode) = privacy.content_blocking_mode else {
+            return;
+        };
+        if self.content_blocker.mode() == mode {
+            return;
+        }
+        self.apply_content_blocking_mode(mode);
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+    }
+
+    pub fn set_content_blocking_mode(
+        &mut self,
+        mode: maho_types::content_blocking::ContentBlockingMode,
+    ) {
+        self.apply_content_blocking_mode(mode);
+        let state_change = self.content_blocker_state_change(None);
+        let settings = self.settings_manager.get_settings().clone();
+        self.emit_updates(vec![
+            CoreUpdate::ContentBlockerStateChanged(state_change),
+            CoreUpdate::SettingsChanged { settings },
+        ]);
+    }
+
     pub fn add_content_blocker_site_exception(&mut self, origin: &str) {
-        self.content_blocker.add_site_exception(origin.to_string());
+        let _ = self.content_blocker.add_site_exception(origin);
+        self.persist_content_blocker_snapshot();
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
     }
 
     pub fn remove_content_blocker_site_exception(&mut self, origin: &str) {
-        self.content_blocker.remove_site_exception(origin);
+        if self.content_blocker.remove_site_exception(origin) {
+            self.persist_content_blocker_snapshot();
+            let state_change = self.content_blocker_state_change(None);
+            self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        }
     }
 
-    pub fn get_content_blocker_site_exceptions(&self) -> Vec<&str> {
+    pub fn get_content_blocker_site_exceptions(
+        &self,
+    ) -> Vec<maho_types::content_blocking::CanonicalSiteException> {
         self.content_blocker.get_site_exceptions()
+    }
+
+    pub fn is_site_excepted(&self, origin: &str) -> bool {
+        self.content_blocker.is_site_excepted(origin)
+    }
+
+    pub fn update_filter_list_content(&mut self, id: &str, content: String) -> bool {
+        if let Err(err) = self.content_blocker.update_filter_list_content(id, content) {
+            eprintln!("[MahoCore] update_filter_list_content rejected for {id}: {err}");
+            return false;
+        }
+        self.persist_content_blocker_snapshot();
+        true
     }
 
     pub fn should_block_request(&self, url: &str, source_url: &str, request_type: &str) -> bool {
@@ -6919,16 +8026,8 @@ impl MahoCore {
         self.content_blocker.get_cosmetic_resources(url)
     }
 
-    pub fn add_filter_list(&mut self, id: String, name: String, url: String) {
-        self.content_blocker.add_filter_list(id, name, url);
-    }
-
-    pub fn update_filter_list_content(&mut self, id: &str, content: String) {
-        self.content_blocker.update_filter_list_content(id, content);
-    }
-
     pub fn rebuild_content_rules(&mut self) {
-        self.content_blocker.rebuild_engine();
+        self.content_blocker.rebuild_engine_sync();
     }
 
     pub fn get_content_rules(&self) -> String {
@@ -6941,11 +8040,19 @@ impl MahoCore {
     }
 
     pub fn toggle_content_blocker(&mut self, enabled: bool) {
-        self.content_blocker.set_enabled(enabled);
+        let mode = if enabled {
+            maho_types::content_blocking::ContentBlockingMode::Native
+        } else {
+            maho_types::content_blocking::ContentBlockingMode::Disabled
+        };
+        self.set_content_blocking_mode(mode);
     }
 
     pub fn toggle_popup_blocking(&mut self, enabled: bool) {
         self.content_blocker.set_popup_blocking(enabled);
+        self.persist_content_blocker_snapshot();
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
     }
 
     pub fn is_content_blocker_enabled(&self) -> bool {
@@ -6960,14 +8067,130 @@ impl MahoCore {
         self.content_blocker.get_rule_count()
     }
 
-    pub fn save_content_engine_cache(&self, path: &str) -> Result<(), String> {
-        let data = self.content_blocker.serialize_engine();
-        std::fs::write(path, data).map_err(|e| format!("{e}"))
+    pub fn get_content_blocker_state_dto(
+        &self,
+    ) -> maho_types::content_blocking::ContentBlockerStateDto {
+        self.content_blocker.get_state_dto()
     }
 
-    pub fn load_content_engine_cache(&mut self, path: &str) -> Result<(), String> {
-        let data = std::fs::read(path).map_err(|e| format!("{e}"))?;
-        self.content_blocker.deserialize_engine(&data)
+    pub fn apply_filter_list_update_response(
+        &mut self,
+        resp: maho_types::content_blocking::FilterListUpdateResponse,
+    ) -> Result<bool, String> {
+        use crate::content_blocker::FilterUpdateOutcome;
+        let outcome = self
+            .content_blocker
+            .apply_update_response(resp)
+            .map_err(|err| err.to_string())?;
+        // A 200 candidate is recorded only. The C++ caller then compiles the
+        // candidate-aware snapshot exactly once on ThreadPool and installs on the
+        // UI sequence, which promotes and persists the matching candidate. We do
+        // NOT compile/install synchronously here, and never persist an unpromoted
+        // candidate.
+        let rebuild_needed = match outcome {
+            FilterUpdateOutcome::CandidatePending => true,
+            FilterUpdateOutcome::NotModified | FilterUpdateOutcome::Unchanged => {
+                self.persist_content_blocker_snapshot();
+                false
+            }
+            FilterUpdateOutcome::Failed { status_code } => {
+                self.persist_content_blocker_snapshot();
+                let state_change = self.content_blocker_state_change(None);
+                self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+                return Err(format!("HTTP status {status_code}"));
+            }
+        };
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        Ok(rebuild_needed)
+    }
+
+    pub fn create_content_blocker_compile_snapshot(
+        &self,
+    ) -> crate::content_blocker::CompileInputSnapshot {
+        self.content_blocker.select_compile_snapshot()
+    }
+
+    pub fn install_content_blocker_compiled_engine(
+        &mut self,
+        compiled: crate::content_blocker::OpaqueCompiledEngine,
+    ) -> bool {
+        let Some(promotion) = self
+            .content_blocker
+            .prepare_compiled_engine_install(&compiled)
+        else {
+            return false;
+        };
+        if let Some(storage) = self.storage.as_ref() {
+            let cache = compiled.engine.serialize();
+            let lists: Vec<(maho_types::content_blocking::FilterListMetadata, String)> = promotion
+                .lists
+                .iter()
+                .map(|list| {
+                    let body = promotion
+                        .contents
+                        .iter()
+                        .find(|(id, _)| id == &list.id)
+                        .map(|(_, body)| body.clone())
+                        .unwrap_or_default();
+                    (list.clone(), body)
+                })
+                .collect();
+            let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+                mode: self.content_blocker.mode(),
+                generation: promotion.generation,
+                engine_cache: Some(&cache),
+                engine_version: Some(CONTENT_BLOCKER_ENGINE_VERSION),
+                engine_hash: Some(&promotion.content_hash),
+                lists: &lists,
+                exceptions: &promotion.exceptions,
+            };
+            if let Err(error) = storage.replace_content_blocker_snapshot(&snapshot) {
+                eprintln!("[ContentBlocker] promoted snapshot persist failed: {error}");
+                return false;
+            }
+        }
+        let installed = self
+            .content_blocker
+            .commit_compiled_engine(compiled, promotion);
+        if installed {
+            let state_change = self.content_blocker_state_change(None);
+            self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        }
+        installed
+    }
+
+    pub fn save_content_engine_cache(&self, _path: &str) -> Result<(), String> {
+        let data = self.content_blocker.serialize_engine();
+        if let Some(ref storage) = self.storage {
+            storage
+                .save_content_blocker_state(
+                    self.content_blocker.mode(),
+                    self.content_blocker.generation(),
+                    Some(&data),
+                    Some("adblock-0.12.2"),
+                    self.content_blocker.active_content_hash(),
+                )
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn load_content_engine_cache(&mut self, _path: &str) -> Result<(), String> {
+        if let Some(ref storage) = self.storage {
+            if let Ok(Some((_mode, gen, cache, _ver, hash))) = storage.load_content_blocker_state()
+            {
+                if let Some(cache_data) = cache {
+                    return self.content_blocker.deserialize_engine_with_gen(
+                        &cache_data,
+                        gen,
+                        hash.as_deref(),
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn get_search_url(&self, query: &str) -> String {
@@ -8495,41 +9718,92 @@ impl MahoCore {
     }
 
     pub fn handle_incoming_websocket_message(&mut self, message_json: &str) -> Result<(), String> {
-        use crate::sync_models::SyncMessage;
+        use crate::sync_manager::{SyncPayloadKind, SyncTransportError};
+        use crate::sync_models::{SyncMessage, SyncStatus};
         let msg: SyncMessage = serde_json::from_str(message_json)
             .map_err(|e| format!("Failed to parse SyncMessage: {}", e))?;
 
-        let decrypted_msg = if let SyncMessage::Encrypted { data } = msg {
-            if let Some(ref sm) = self.sync_manager {
-                if let Some(ref key) = sm.encryption_key {
-                    let decrypted = crate::sync_crypto::decrypt_update(&data, key)
-                        .map_err(|e| format!("Decryption failed: {}", e))?;
-                    serde_json::from_slice::<SyncMessage>(&decrypted)
-                        .map_err(|e| format!("Failed to parse decrypted message: {}", e))?
-                } else {
-                    return Err("No encryption key configured".to_string());
+        let (decrypted_msg, authenticated) = if let SyncMessage::Encrypted { data } = msg {
+            // Decrypt/parse inside a scoped immutable borrow, producing an owned
+            // outcome, so the typed error can be recorded under a later mutable
+            // borrow without a conflict.
+            let outcome: Result<SyncMessage, SyncTransportError> =
+                match self.sync_manager {
+                    Some(ref sm) => match sm.encryption_key {
+                        Some(ref key) => match crate::sync_crypto::decrypt_update(&data, key) {
+                            Ok(decrypted) => serde_json::from_slice::<SyncMessage>(&decrypted)
+                                .map_err(|e| SyncTransportError::MalformedEnvelopeContents {
+                                    detail: e.to_string(),
+                                }),
+                            Err(detail) => Err(SyncTransportError::Decrypt { detail }),
+                        },
+                        None => Err(SyncTransportError::MissingEncryptionKey),
+                    },
+                    None => return Err("SyncManager not active".to_string()),
+                };
+
+            match outcome {
+                Ok(inner) => (inner, true),
+                Err(err) => {
+                    let rendered = err.to_string();
+                    if let Some(ref mut sm) = self.sync_manager {
+                        sm.set_status(SyncStatus::Error);
+                        sm.set_last_transport_error(err);
+                    }
+                    return Err(rendered);
                 }
-            } else {
-                return Err("SyncManager not active".to_string());
             }
         } else {
-            msg
+            (msg, false)
         };
+
+        // Fail-closed E2EE: entity payloads and tab transfers are applied only
+        // when they arrived inside the authenticated encrypted envelope. Raw
+        // top-level plaintext (a keyless/downgrade attempt) is rejected; control
+        // frames (Ack/Pull/Device*/Ping/Pong) remain allowed unauthenticated.
+        if !authenticated {
+            let payload = match &decrypted_msg {
+                SyncMessage::EntityPush { .. } => Some(SyncPayloadKind::EntityPush),
+                SyncMessage::EntityBatch { .. } => Some(SyncPayloadKind::EntityBatch),
+                SyncMessage::SendTab { .. } => Some(SyncPayloadKind::SendTab),
+                _ => None,
+            };
+            if let Some(payload) = payload {
+                let err = SyncTransportError::PlaintextPayloadRejected { payload };
+                let rendered = err.to_string();
+                if let Some(ref mut sm) = self.sync_manager {
+                    sm.set_status(SyncStatus::Error);
+                    sm.set_last_transport_error(err);
+                }
+                return Err(rendered);
+            }
+        }
 
         match decrypted_msg {
             SyncMessage::EntityPush { entity } => {
                 self.apply_sync_remote_entities(vec![entity]);
+                Ok(())
             }
             SyncMessage::EntityBatch { entities } => {
                 self.apply_sync_remote_entities(entities);
+                Ok(())
             }
             other => {
                 if let Some(ref mut sm) = self.sync_manager {
-                    sm.handle_incoming_message(other);
+                    sm.handle_authenticated_message(other);
                 }
+                Ok(())
             }
         }
-        Ok(())
+    }
+
+    /// Typed, matchable view of the most recent sync transport error, if any.
+    /// Callers should branch on this (or its `code()`) instead of parsing the
+    /// `Err(String)` returned by [`handle_incoming_websocket_message`].
+    pub fn sync_last_transport_error(&self) -> Option<crate::sync_manager::SyncTransportError> {
+        self.sync_manager
+            .as_ref()
+            .and_then(|sm| sm.last_transport_error().cloned())
     }
 
     pub fn get_sync_auth_token(&self) -> String {
@@ -10032,6 +11306,7 @@ impl MahoCore {
                         }
                     }
                 }
+                SyncEntityType::VaultItem => {}
             }
         }
 
@@ -10561,7 +11836,70 @@ fn parse_sync_entity_type(s: &str) -> Option<SyncEntityType> {
         "autofillpayment" => Some(SyncEntityType::AutofillPayment),
         "settings" => Some(SyncEntityType::Settings),
         "sharedcollection" => Some(SyncEntityType::SharedCollection),
+        "vaultitem" => Some(SyncEntityType::VaultItem),
         _ => None,
+    }
+}
+
+impl MahoCore {
+    pub fn create_vault_backend_session(
+        &self,
+    ) -> Result<
+        crate::vault_runtime::session::VaultBackendSession,
+        crate::vault_runtime::session::VaultBackendSessionError,
+    > {
+        let storage = self
+            .storage
+            .as_ref()
+            .ok_or(crate::vault_runtime::session::VaultBackendSessionError::StorageUnavailable)?;
+        Ok(crate::vault_runtime::session::VaultBackendSession::new(
+            Arc::downgrade(&self.vault_runtime),
+            storage.path(),
+        ))
+    }
+
+    pub fn vault_batch_read(
+        &self,
+        request: &maho_types::vault::VaultBatchReadRequest,
+    ) -> Result<maho_types::vault::VaultBatchReadResult, crate::vault_manager::VaultCrudError> {
+        self.vault_runtime
+            .ensure_unlocked()
+            .map_err(crate::vault_manager::VaultCrudError::from)?;
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            crate::vault_manager::VaultCrudError::Storage(
+                "vault storage not configured".to_string(),
+            )
+        })?;
+        self.vault_runtime.batch_read(
+            crate::vault_runtime::repository::VaultRepository::new(storage, false),
+            request,
+        )
+    }
+
+    pub fn vault_delete_created_range(
+        &self,
+        range: &maho_types::vault::VaultItemCreatedRange,
+    ) -> Result<maho_types::vault::VaultRangeDeleteResult, crate::vault_manager::VaultCrudError>
+    {
+        self.vault_runtime
+            .ensure_unlocked()
+            .map_err(crate::vault_manager::VaultCrudError::from)?;
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            crate::vault_manager::VaultCrudError::Storage(
+                "vault storage not configured".to_string(),
+            )
+        })?;
+        #[cfg(test)]
+        let inject_post_write_fault = self.vault_item_persist_fault;
+        #[cfg(not(test))]
+        let inject_post_write_fault = false;
+        self.vault_runtime.delete_created_range(
+            crate::vault_runtime::repository::VaultRepository::new(
+                storage,
+                inject_post_write_fault,
+            ),
+            range,
+        )
     }
 }
 

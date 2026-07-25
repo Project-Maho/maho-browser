@@ -6,12 +6,14 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "maho/browser/ai/maho_credential_redaction.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "url/gurl.h"
 
@@ -60,6 +62,51 @@ bool MatchesAnyLowercase(std::string_view needle,
   return false;
 }
 
+const re2::RE2& CredentialFieldNamePattern() {
+  static const base::NoDestructor<re2::RE2> kPattern(
+      "(?i)(password|passcode|passphrase|one[- _]?time|\\botp\\b|\\btotp\\b|"
+      "\\b2fa\\b|\\bmfa\\b|two[- _]?factor|verification code|security code|"
+      "authenticator|backup code|\\bcvv\\b|\\bcvc\\b|card number|\\bssn\\b|"
+      "social security|recovery|\\bsecret\\b|\\bpin\\b)");
+  return *kPattern;
+}
+
+bool IsSensitiveAutocompleteToken(std::string_view token) {
+  return credential_redaction::IsSensitiveAutocomplete(token);
+}
+
+bool IsCredentialFieldContext(const base::DictValue& node) {
+  if (node.FindBool("protected").value_or(false)) {
+    return true;
+  }
+  if (const std::string* input_type = node.FindString("inputType")) {
+    if (base::EqualsCaseInsensitiveASCII(*input_type, "password")) {
+      return true;
+    }
+  }
+  if (const std::string* autocomplete = node.FindString("autocomplete")) {
+    if (IsSensitiveAutocompleteToken(*autocomplete)) {
+      return true;
+    }
+  }
+  if (const std::string* name = node.FindString("name")) {
+    if (re2::RE2::PartialMatch(*name, CredentialFieldNamePattern())) {
+      return true;
+    }
+  }
+  static constexpr std::array<std::string_view, 5> kSemanticKeys = {
+      "ariaLabel", "fieldName", "elementId", "placeholder", "dataField"};
+  for (std::string_view key : kSemanticKeys) {
+    if (const std::string* signal = node.FindString(key)) {
+      if (re2::RE2::PartialMatch(*signal, CredentialFieldNamePattern()) ||
+          credential_redaction::IsCredentialName(*signal)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool IsCredentialDictKey(std::string_view key) {
   std::string lower(key);
   std::transform(lower.begin(), lower.end(), lower.begin(),
@@ -76,9 +123,93 @@ bool IsCredentialDictKey(std::string_view key) {
        lower.find("token") != std::string::npos)) {
     return true;
   }
-  static const base::NoDestructor<re2::RE2> kDictKeyPattern(
-      "(?i)(auth|token|secret|session|password)");
-  return re2::RE2::PartialMatch(std::string(key), *kDictKeyPattern);
+  return credential_redaction::IsCredentialName(key);
+}
+
+std::optional<std::pair<size_t, size_t>> FindHtmlAttributeValue(
+    std::string_view tag,
+    std::string_view attribute_name) {
+  const std::string lower = credential_redaction::LowerAscii(tag);
+  size_t search = 0;
+  while ((search = lower.find(attribute_name, search)) != std::string::npos) {
+    const size_t after_name = search + attribute_name.size();
+    const bool left_boundary =
+        search == 0 || !std::isalnum(static_cast<unsigned char>(lower[search - 1]));
+    const bool right_boundary =
+        after_name == lower.size() ||
+        !std::isalnum(static_cast<unsigned char>(lower[after_name]));
+    if (!left_boundary || !right_boundary) {
+      search = after_name;
+      continue;
+    }
+    size_t equals = after_name;
+    while (equals < tag.size() && std::isspace(static_cast<unsigned char>(tag[equals]))) {
+      ++equals;
+    }
+    if (equals >= tag.size() || tag[equals] != '=') {
+      search = after_name;
+      continue;
+    }
+    size_t value_start = equals + 1;
+    while (value_start < tag.size() &&
+           std::isspace(static_cast<unsigned char>(tag[value_start]))) {
+      ++value_start;
+    }
+    if (value_start >= tag.size()) {
+      return std::nullopt;
+    }
+    if (tag[value_start] == '"' || tag[value_start] == '\'') {
+      const char quote = tag[value_start++];
+      const size_t value_end = tag.find(quote, value_start);
+      if (value_end == std::string_view::npos) {
+        return std::nullopt;
+      }
+      return std::pair(value_start, value_end);
+    }
+    size_t value_end = value_start;
+    while (value_end < tag.size() &&
+           !std::isspace(static_cast<unsigned char>(tag[value_end])) &&
+           tag[value_end] != '>') {
+      ++value_end;
+    }
+    return std::pair(value_start, value_end);
+  }
+  return std::nullopt;
+}
+
+bool IsSensitiveHtmlField(std::string_view tag) {
+  static constexpr std::array<std::string_view, 7> kAttributes = {
+      "type", "autocomplete", "aria-label", "name", "id", "placeholder",
+      "data-maho-field"};
+  for (std::string_view attribute : kAttributes) {
+    const auto span = FindHtmlAttributeValue(tag, attribute);
+    if (!span.has_value()) {
+      continue;
+    }
+    const std::string_view value =
+        tag.substr(span->first, span->second - span->first);
+    if ((attribute == "type" &&
+         base::EqualsCaseInsensitiveASCII(value, "password")) ||
+        (attribute == "autocomplete" &&
+         credential_redaction::IsSensitiveAutocomplete(value)) ||
+        credential_redaction::IsCredentialName(value) ||
+        re2::RE2::PartialMatch(std::string(value),
+                               CredentialFieldNamePattern())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string RedactHtmlValueAttribute(std::string_view tag) {
+  const auto span = FindHtmlAttributeValue(tag, "value");
+  if (!span.has_value()) {
+    return std::string(tag);
+  }
+  std::string redacted(tag);
+  redacted.replace(span->first, span->second - span->first,
+                   MahoMcpFirewall::kRedacted);
+  return redacted;
 }
 
 }  // namespace
@@ -86,13 +217,48 @@ bool IsCredentialDictKey(std::string_view key) {
 // static
 std::string MahoMcpFirewall::RedactPasswordFields(
     std::string_view html_or_text) {
-  static const base::NoDestructor<re2::RE2> kPasswordInputPattern(
-      R"((?is)(<input\b[^>]*\btype\s*=\s*["']password["'][^>]*)"
-      R"(\bvalue\s*=\s*["'])[^"']*(["']))");
-  std::string out(html_or_text);
-  re2::RE2::GlobalReplace(&out, *kPasswordInputPattern,
-                          base::StrCat({"\\1", kRedacted, "\\2"}));
-  return out;
+  const std::string lower = credential_redaction::LowerAscii(html_or_text);
+  std::string output;
+  output.reserve(html_or_text.size());
+  size_t cursor = 0;
+  while (cursor < html_or_text.size()) {
+    const size_t tag_start = html_or_text.find('<', cursor);
+    if (tag_start == std::string_view::npos) {
+      output.append(html_or_text.substr(cursor));
+      break;
+    }
+    const size_t tag_end = html_or_text.find('>', tag_start + 1);
+    if (tag_end == std::string_view::npos) {
+      output.append(html_or_text.substr(cursor));
+      break;
+    }
+    const std::string_view tag =
+        html_or_text.substr(tag_start, tag_end - tag_start + 1);
+    const std::string_view lower_tag =
+        std::string_view(lower).substr(tag_start, tag.size());
+    const bool is_input = lower_tag.rfind("<input", 0) == 0;
+    const bool is_textarea = lower_tag.rfind("<textarea", 0) == 0;
+    if ((!is_input && !is_textarea) || !IsSensitiveHtmlField(tag)) {
+      output.append(html_or_text.substr(cursor, tag_end - cursor + 1));
+      cursor = tag_end + 1;
+      continue;
+    }
+    output.append(html_or_text.substr(cursor, tag_start - cursor));
+    if (is_input) {
+      output.append(RedactHtmlValueAttribute(tag));
+      cursor = tag_end + 1;
+      continue;
+    }
+    output.append(tag);
+    const size_t close_start = lower.find("</textarea", tag_end + 1);
+    if (close_start == std::string::npos) {
+      output.append(kRedacted);
+      break;
+    }
+    output.append(kRedacted);
+    cursor = close_start;
+  }
+  return output;
 }
 
 // static
@@ -127,16 +293,8 @@ void MahoMcpFirewall::RedactHeaders(base::DictValue& headers) {
 
 // static
 void MahoMcpFirewall::RedactAxTreeAutofill(base::DictValue& node) {
-  const std::string* role = node.FindString("role");
-  const bool is_credential_context = role && (*role == "textbox" ||
-                                              *role == "searchbox" ||
-                                              *role == "combobox" ||
-                                              *role == "password");
-
-  if (is_credential_context) {
-    if (node.contains("value")) {
-      node.Set("value", kRedacted);
-    }
+  if (IsCredentialFieldContext(node) && node.contains("value")) {
+    node.Set("value", kRedacted);
   }
 
   // Always redact autocomplete suggestion lists regardless of role.
@@ -223,21 +381,8 @@ std::string MahoMcpFirewall::RedactUrl(std::string_view url) {
 
 // static
 std::string MahoMcpFirewall::RedactString(std::string_view raw) {
-  std::string out(raw);
-
-  // Redact JWT: eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+ -> [REDACTED_JWT]
-  static const base::NoDestructor<re2::RE2> kJwtPattern(
-      R"(eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+)");
-  re2::RE2::GlobalReplace(&out, *kJwtPattern, "[REDACTED_JWT]");
-
-  // Redact Bearer: (?i)Bearer\s+[a-zA-Z0-9_\-\.]+ -> Bearer [REDACTED]
-  static const base::NoDestructor<re2::RE2> kBearerPattern(
-      R"((?i)Bearer\s+[a-zA-Z0-9_\-\.]+)");
-  re2::RE2::GlobalReplace(&out, *kBearerPattern, "Bearer [REDACTED]");
-
-  // Existing URL scrub also applied
+  std::string out = credential_redaction::RedactCredentialText(raw);
   out = RedactUrl(out);
-
   return out;
 }
 
@@ -248,6 +393,13 @@ void MahoMcpFirewall::RedactAll(base::Value& value) {
     return;
   }
   if (base::DictValue* dict = value.GetIfDict()) {
+    RedactAxTreeAutofill(*dict);
+    if (const std::string* name = dict->FindString("name")) {
+      if (credential_redaction::IsCredentialName(*name) &&
+          dict->contains("value")) {
+        dict->Set("value", kRedacted);
+      }
+    }
     for (auto pair : *dict) {
       const std::string& key = pair.first;
       base::Value& child = pair.second;
@@ -298,27 +450,9 @@ Redacted<std::string> MahoMcpFirewall::WrapString(std::string_view raw) {
 // static
 Redacted<base::DictValue> MahoMcpFirewall::WrapHar(
     base::DictValue har_json) {
-  if (base::ListValue* entries = har_json.FindList("entries")) {
-    for (auto& entry_val : *entries) {
-      if (base::DictValue* entry = entry_val.GetIfDict()) {
-        if (base::DictValue* request = entry->FindDict("request")) {
-          if (base::DictValue* req_headers = request->FindDict("headers")) {
-            RedactHeaders(*req_headers);
-          }
-          if (const std::string* url = request->FindString("url")) {
-            request->Set("url", RedactUrl(*url));
-          }
-        }
-        if (base::DictValue* response = entry->FindDict("response")) {
-          if (base::DictValue* resp_headers =
-                  response->FindDict("headers")) {
-            RedactHeaders(*resp_headers);
-          }
-        }
-      }
-    }
-  }
-  return Redacted<base::DictValue>(std::move(har_json));
+  base::Value value(std::move(har_json));
+  RedactAll(value);
+  return Redacted<base::DictValue>(std::move(value).TakeDict());
 }
 
 }  // namespace maho

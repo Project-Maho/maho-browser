@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn test_platform_tools_divergence() {
         let tools = get_platform_tools();
-        
+
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
             assert_eq!(tools.len(), 3);
@@ -103,5 +103,17 @@ mod tests {
             assert!(tools.iter().any(|t| t.name == "shell_exec"));
             assert!(!tools.iter().any(|t| t.name == "camera"));
         }
+    }
+
+    #[test]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    fn permission_shell_exec_remains_always_ask() {
+        let tools = get_platform_tools();
+        let shell_exec = tools
+            .iter()
+            .find(|tool| tool.name == "shell_exec")
+            .expect("desktop registry includes shell_exec");
+        assert_eq!(shell_exec.permission, ToolPermission::AlwaysAsk);
+        assert!(shell_exec.sensitive);
     }
 }

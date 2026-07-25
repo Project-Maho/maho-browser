@@ -22,7 +22,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/time/time.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
@@ -46,6 +45,9 @@ namespace maho {
 inline constexpr int kMahoMcpErrorTabNotFound = -32004;
 inline constexpr int kMahoMcpErrorNoEligibleActiveTab = -32005;
 inline constexpr int kMahoMcpErrorNoEligibleActiveBrowser = -32006;
+// Todo 6: an input/navigation mutation was attempted without an active tab
+// lease held by this session. Uniform, non-revealing.
+inline constexpr int kMahoMcpErrorLeaseRequired = -32007;
 
 inline constexpr char kMahoMcpMessageTabNotFound[] = "tab not found";
 inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
@@ -74,6 +76,24 @@ struct ResolvedMahoMcpTarget {
 struct MahoMcpTargetResolution {
   ResolvedMahoMcpTarget target;
   MahoMcpTargetError error = MahoMcpTargetError::kNone;
+};
+
+// Trusted, browser/AX-derived classification metadata for one input field,
+// resolved from the accessibility tree — never from field-name strings the
+// model supplies in tool-call arguments. browser_type consults it to refuse
+// credential/one-time-code/recovery entry before any text reaches the page.
+struct MahoMcpFieldMetadata {
+  // False until a delegate has actually inspected the field's AX node. An
+  // unclassified field is treated as credential-bearing (fail closed), so a
+  // delegate that omits GetFieldMetadata cannot silently type into a secret.
+  bool classified = false;
+  // AX State::kProtected: the renderer's masked-input bit (type=password).
+  bool is_protected = false;
+  // AX kAutoComplete token, lowercased (e.g. "current-password",
+  // "one-time-code").
+  std::string autocomplete;
+  // AX accessible name/label, lowercased; supplementary OTP/recovery signal.
+  std::string accessible_name;
 };
 
 class MahoMcpNetworkCaptureState : public base::RefCountedThreadSafe<MahoMcpNetworkCaptureState> {
@@ -115,6 +135,16 @@ class MahoMcpBrowserDelegate;
 class MahoMcpSession {
  public:
   static void SetBrowserDelegate(MahoMcpBrowserDelegate* delegate);
+  static MahoMcpBrowserDelegate* GetBrowserDelegateForBrowserActions();
+  static void SetLeaseRegistryForBrowserActions(
+      MahoMcpLeaseRegistry* lease_registry);
+  static MahoMcpLeaseRegistry* GetLeaseRegistryForBrowserActions();
+
+  // Returns true when |meta| identifies a credential-class field (password,
+  // current-password, one-time-code/TOTP, or recovery) per trusted AX signals.
+  // Pure and side-effect free so it is unit-tested in isolation.
+  static bool IsCredentialField(const MahoMcpFieldMetadata& meta);
+
   enum class State {
     kAwaitingInitialize,
     kActive,
@@ -154,6 +184,11 @@ class MahoMcpSession {
 
   State state() const { return state_; }
 
+  // Unguessable per-connection id used as the lease-holder key. Exposed so the
+  // socket/pipe server can notify the lease registry when this connection
+  // drops (OnSessionDropped), keeping disconnect semantics truthful.
+  const std::string& session_id() const { return session_id_; }
+
   struct ConsoleMessage {
     ConsoleMessage();
     ~ConsoleMessage();
@@ -178,9 +213,12 @@ class MahoMcpSession {
     TabInfo& operator=(TabInfo&&) noexcept;
 
     int id = 0;
+    std::string stable_id;
     std::string title;
     std::string url;
     bool is_active = false;
+    bool targetable = false;
+    int tab_strip_index = -1;
   };
 
   struct NavigationEvent {
@@ -358,6 +396,24 @@ class MahoMcpBrowserDelegate {
   virtual bool Navigate(int tab_id, const GURL& url) = 0;
   virtual bool SetViewportSize(int tab_id, int width, int height) = 0;
 
+  struct VaultCredentialSummary {
+    std::string handle;
+    std::string username_hint;
+    std::string origin;
+  };
+  virtual std::vector<VaultCredentialSummary> VaultListCredentialsForActivePage(
+      int tab_id);
+  virtual std::optional<std::string> VaultRequestCredentialUse(
+      int tab_id,
+      const std::string& handle,
+      const std::string& origin);
+  virtual bool VaultFillCredential(int tab_id,
+                                   const std::string& grant_handle,
+                                   ui::AXNodeID ax_id);
+  virtual bool VaultFillTotp(int tab_id,
+                             const std::string& grant_handle,
+                             ui::AXNodeID ax_id);
+
   struct StartNetworkCaptureResult {
     bool success = false;
     int tab_id = 0;
@@ -410,6 +466,37 @@ class MahoMcpBrowserDelegate {
   virtual void MailListThread(const std::string& account_id,
                               const std::string& message_id,
                               MailReadCallback callback);
+  virtual void MailAddAccount(const std::string& request_json,
+                              MailReadCallback callback);
+  virtual void MailTestConnection(const std::string& params_json,
+                                  MailReadCallback callback);
+  virtual void MailDeleteAccount(const std::string& account_id,
+                                 MailReadCallback callback);
+  virtual void MailOAuthStartUrl(const std::string& provider,
+                                 const std::string& client_id,
+                                 const std::string& redirect_uri,
+                                 MailReadCallback callback);
+  virtual void MailOAuthComplete(const std::string& state,
+                                 const std::string& code,
+                                 MailReadCallback callback);
+  virtual void MailReconnectAccount(const std::string& account_id,
+                                    MailReadCallback callback);
+  virtual void MailImportMigrationArchive(const std::string& archive_json,
+                                          MailReadCallback callback);
+  virtual void MailExtractOtp(const std::string& account_id,
+                              const std::string& folder_id,
+                              const std::string& query,
+                              int64_t max_age_seconds,
+                              MailReadCallback callback);
+  virtual void MailSendEmail(const std::string& request_json,
+                             MailReadCallback callback);
+  virtual void MailSaveDraft(const std::string& request_json,
+                             MailReadCallback callback);
+  virtual void MailUpdateDraft(const std::string& draft_id,
+                               const std::string& request_json,
+                               MailReadCallback callback);
+  virtual void MailQueueEmail(const std::string& request_json,
+                              MailReadCallback callback);
 
   // R-8 non-revealing target resolution. |requested_tab_id| == 0 means the
   // caller omitted the id / passed 0 (active-tab request). Production
@@ -424,6 +511,12 @@ class MahoMcpBrowserDelegate {
   // a synchronous or deferred success. Returns false when the bound
   // browser/tab/generation no longer authorizes MCP.
   virtual bool RevalidateTarget(const ResolvedMahoMcpTarget& target);
+
+  // Returns trusted AX-derived classification metadata for the field bound to
+  // |ax_id| in |tab_id|. The default returns empty (non-sensitive) metadata so
+  // test delegates that do not model private contexts keep ordinary typing
+  // functional; production overrides read the live accessibility tree.
+  virtual MahoMcpFieldMetadata GetFieldMetadata(int tab_id, ui::AXNodeID ax_id);
 };
 
 }  // namespace maho

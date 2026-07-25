@@ -120,41 +120,67 @@ bool IsExtensionIdForProvider(const std::string& provider_id, const std::string&
   return false;
 }
 
+bool IsProviderExtensionAvailableInCore(MahoCore* core,
+                                        std::string_view provider_id) {
+  char* installed_json = maho_core_get_installed_extensions(core);
+  if (!installed_json) {
+    return false;
+  }
+  std::string json(installed_json);
+  maho_string_free(installed_json);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return false;
+  }
+
+  const std::string provider(provider_id);
+  for (const auto& item : parsed->GetList()) {
+    if (!item.is_dict()) {
+      continue;
+    }
+    const auto& dict = item.GetDict();
+    const std::string* id = dict.FindString("id");
+    const std::optional<bool> enabled = dict.FindBool("enabled");
+    if (id && enabled.value_or(false) &&
+        IsExtensionIdForProvider(provider, *id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool IsBitwardenExtensionAvailable() {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
-  char* ext_id = maho_core_get_password_provider_extension(core);
-  if (!ext_id) return false;
-  std::string ext_id_str(ext_id);
-  maho_string_free(ext_id);
-  return IsExtensionIdForProvider("bitwarden", ext_id_str);
+  return IsProviderExtensionAvailableInCore(core, "bitwarden");
 }
 
 bool IsOnePasswordExtensionAvailable() {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
-  char* ext_id = maho_core_get_password_provider_extension(core);
-  if (!ext_id) return false;
-  std::string ext_id_str(ext_id);
-  maho_string_free(ext_id);
-  return IsExtensionIdForProvider("onepassword", ext_id_str);
+  return IsProviderExtensionAvailableInCore(core, "onepassword");
 }
 
 bool IsPasswordProviderAvailable(std::string_view mode) {
-  std::string mode_str(mode);
-  if (mode_str == "chromium" || mode_str == "builtin" || mode_str == "disabled" ||
-      mode_str == "system" || mode_str == "maho_native") {
+  std::string mode_str = NormalizePasswordProviderMode(mode);
+  if (mode_str == kNativeProviderMode) {
     return true;
   }
   MahoCore* core = maho::GetCore();
   if (!core) {
     return true;
   }
-  char* ext_id = maho_core_get_password_provider_extension(core);
-  if (!ext_id) return false;
-  std::string ext_id_str(ext_id);
-  maho_string_free(ext_id);
-  return IsExtensionIdForProvider(mode_str, ext_id_str);
+  return IsProviderExtensionAvailableInCore(core, mode_str);
+}
+
+bool IsChromiumAccountStoreDisabled() {
+  return IsNativePasswordProviderActive();
+}
+
+bool IsGooglePasswordsSyncDisabled() {
+  return IsNativePasswordProviderActive();
 }
 
 }  // namespace passwords

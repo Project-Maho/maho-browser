@@ -1,4 +1,5 @@
 import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
 
 mojom("mojo_bindings") {
   sources = [ "maho_settings.mojom" ]
@@ -31,6 +32,7 @@ source_set("maho_settings") {
     "//maho/browser:maho_password_provider",
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
+    "//chrome/common:channel_info",
     "//components/content_settings/core/browser",
     "//components/os_crypt/async/browser",
     "//components/os_crypt/async/common",
@@ -40,13 +42,38 @@ source_set("maho_settings") {
     "//components/safe_browsing/core/common",
     "//extensions/browser",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_content_blocker_update_service",
+    "//maho/browser/net",
+    "//maho/browser/mail_helper:maho_mail_service",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser/resources/maho_settings:resources",
+    "//maho/browser/updates:maho_updates_lib",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
     "//mojo/public/cpp/bindings",
+    "//components/version_info",
     "//services/network/public/mojom",
+    "//ui/shell_dialogs",
     "//ui/webui",
     "//url",
+  ]
+}
+
+test("maho_settings_vault_handler_test") {
+  sources = [
+    "maho_settings_provider_availability_unittest.cc",
+    "maho_settings_vault_handler_test_main.cc",
+    "maho_settings_vault_handler_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_settings",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//testing/gtest",
   ]
 }

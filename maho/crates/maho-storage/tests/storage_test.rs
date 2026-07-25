@@ -295,24 +295,41 @@ fn sqlite_save_and_load_atc_rules() {
         Some(24),
         Some(50),
         true,
+        None,
     )
     .unwrap();
-    db.save_atc_rule("r2", "Limit news", None, None, None, Some(10), false)
+    db.save_atc_rule("r2", "Limit news", None, None, None, Some(10), false, None)
         .unwrap();
+    db.save_atc_rule(
+        "r3",
+        "*.github.com",
+        Some("space2"),
+        None,
+        None,
+        None,
+        true,
+        Some("glob"),
+    )
+    .unwrap();
     let rules = db.load_atc_rules().unwrap();
-    assert_eq!(rules.len(), 2);
+    assert_eq!(rules.len(), 3);
     let r1 = rules.iter().find(|r| r.0 == "r1").unwrap();
     assert_eq!(r1.1, "Close old tabs");
     assert_eq!(r1.2, Some("space1".to_string()));
     assert_eq!(r1.4, Some(24));
     assert_eq!(r1.5, Some(50));
     assert!(r1.6);
+    assert_eq!(r1.7, None);
+    // Traffic rules round-trip their match type through the match_type column.
+    let r3 = rules.iter().find(|r| r.0 == "r3").unwrap();
+    assert_eq!(r3.1, "*.github.com");
+    assert_eq!(r3.7, Some("glob".to_string()));
 }
 
 #[test]
 fn sqlite_delete_atc_rule() {
     let db = sqlite_store();
-    db.save_atc_rule("r1", "Rule", None, None, None, None, true)
+    db.save_atc_rule("r1", "Rule", None, None, None, None, true, None)
         .unwrap();
     assert!(db.delete_atc_rule("r1").unwrap());
     assert!(!db.delete_atc_rule("r1").unwrap());
@@ -403,6 +420,9 @@ fn sqlite_save_and_load_downloads() {
         "downloading",
         None,
         "2025-01-01T00:00:00",
+        None,
+        None,
+        Some("test-guid-1"),
     )
     .unwrap();
     db.save_download(
@@ -414,6 +434,9 @@ fn sqlite_save_and_load_downloads() {
         "completed",
         Some("/tmp/doc.pdf"),
         "2025-01-02T00:00:00",
+        None,
+        None,
+        None,
     )
     .unwrap();
     let downloads = db.load_downloads().unwrap();
@@ -423,8 +446,10 @@ fn sqlite_save_and_load_downloads() {
     assert_eq!(downloads[0].3, 2000);
     assert_eq!(downloads[0].5, "completed");
     assert_eq!(downloads[0].6, Some("/tmp/doc.pdf".to_string()));
+    assert_eq!(downloads[0].10, None);
     assert_eq!(downloads[1].0, "d1");
     assert_eq!(downloads[1].4, 500);
+    assert_eq!(downloads[1].10, Some("test-guid-1".to_string()));
 }
 
 #[test]
@@ -439,6 +464,9 @@ fn sqlite_update_download_progress() {
         "downloading",
         None,
         "2025-01-01T00:00:00",
+        None,
+        None,
+        None,
     )
     .unwrap();
     db.update_download_progress("d1", 750, "downloading")
@@ -464,6 +492,9 @@ fn sqlite_delete_download() {
         "completed",
         Some("/tmp/file.zip"),
         "2025-01-01T00:00:00",
+        None,
+        None,
+        None,
     )
     .unwrap();
     assert!(db.delete_download("d1").unwrap());
@@ -1076,4 +1107,392 @@ fn sqlite_search_notes_fts_ordering() {
     let matched_ids: Vec<String> = results.iter().map(|(id, _)| id.clone()).collect();
     assert!(matched_ids.contains(&"n1".to_string()));
     assert!(matched_ids.contains(&"n3".to_string()));
+}
+
+// === Content Blocker Storage Tests ===
+
+#[test]
+fn sqlite_content_blocker_lists_round_trip() {
+    let db = sqlite_store();
+    let meta = maho_types::content_blocking::FilterListMetadata {
+        id: "easylist".to_string(),
+        name: "EasyList".to_string(),
+        url: "https://easylist.to/easylist/easylist.txt".to_string(),
+        enabled: true,
+        rule_count: 1234,
+        etag: Some("\"12345\"".to_string()),
+        last_modified: Some("Wed, 21 Oct 2025 07:28:00 GMT".to_string()),
+        sha256: Some("abc123def456".to_string()),
+        last_attempt_timestamp: Some(1700000000),
+        last_success_timestamp: Some(1700000000),
+        failure_count: 0,
+        last_status: Some(200),
+        last_error: None,
+    };
+    db.save_content_blocker_list(&meta, Some("||example.com^"))
+        .unwrap();
+
+    let loaded = db.load_content_blocker_lists().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].0, meta);
+    assert_eq!(loaded[0].1, "||example.com^");
+
+    // Deletion
+    assert!(db.delete_content_blocker_list("easylist").unwrap());
+    assert!(db.load_content_blocker_lists().unwrap().is_empty());
+}
+
+#[test]
+fn sqlite_site_exceptions_round_trip() {
+    let db = sqlite_store();
+    db.save_site_exception("example.co.uk", 1700000100).unwrap();
+    db.save_site_exception("sub.domain.org", 1700000200)
+        .unwrap();
+
+    let exceptions = db.load_site_exceptions().unwrap();
+    assert_eq!(exceptions.len(), 2);
+    assert_eq!(exceptions[0].key, "example.co.uk");
+    assert_eq!(exceptions[1].key, "sub.domain.org");
+
+    assert!(db.delete_site_exception("example.co.uk").unwrap());
+    let remaining = db.load_site_exceptions().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].key, "sub.domain.org");
+}
+
+#[test]
+fn sqlite_content_blocker_state_blob_round_trip() {
+    let db = sqlite_store();
+    let cache_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8];
+    db.save_content_blocker_state(
+        maho_types::content_blocking::ContentBlockingMode::Extension,
+        42,
+        Some(&cache_bytes),
+        Some("v1.0"),
+        Some("hash123"),
+    )
+    .unwrap();
+
+    let state = db.load_content_blocker_state().unwrap().unwrap();
+    assert_eq!(
+        state.0,
+        maho_types::content_blocking::ContentBlockingMode::Extension
+    );
+    assert_eq!(state.1, 42);
+    assert_eq!(state.2.unwrap(), cache_bytes);
+    assert_eq!(state.3.as_deref(), Some("v1.0"));
+    assert_eq!(state.4.as_deref(), Some("hash123"));
+}
+
+// === Content Blocker Atomic Persistence (L2) ===
+
+fn cb_meta(id: &str, name: &str, url: &str) -> maho_types::content_blocking::FilterListMetadata {
+    maho_types::content_blocking::FilterListMetadata {
+        id: id.to_string(),
+        name: name.to_string(),
+        url: url.to_string(),
+        enabled: true,
+        rule_count: 1,
+        etag: None,
+        last_modified: None,
+        sha256: None,
+        last_attempt_timestamp: None,
+        last_success_timestamp: None,
+        failure_count: 0,
+        last_status: None,
+        last_error: None,
+    }
+}
+
+#[test]
+fn sqlite_content_blocker_transaction_rollback_preserves_prior_state() {
+    let db = sqlite_store();
+
+    let mut baseline = cb_meta("easylist", "EasyList", "https://easylist.to/easylist.txt");
+    baseline.rule_count = 3;
+    baseline.sha256 = Some("goodhash".to_string());
+    baseline.last_status = Some(200);
+    db.save_content_blocker_list(&baseline, Some("||good.example^"))
+        .unwrap();
+    db.save_site_exception("keep.example", 111).unwrap();
+    let good_cache = vec![9u8, 9, 9, 9];
+    db.save_content_blocker_state(
+        maho_types::content_blocking::ContentBlockingMode::Native,
+        7,
+        Some(&good_cache),
+        Some("adblock-1.0"),
+        Some("engine-good"),
+    )
+    .unwrap();
+
+    let before_lists = db.load_content_blocker_lists().unwrap();
+    let before_exceptions = db.load_site_exceptions().unwrap();
+    let before_state = db.load_content_blocker_state().unwrap();
+
+    let result: Result<(), maho_storage::StorageError> = db.content_blocker_transaction(|tx| {
+        tx.clear_lists()?;
+        let mut candidate = cb_meta("easylist", "Tampered", "https://evil.example/l.txt");
+        candidate.rule_count = 999;
+        candidate.sha256 = Some("badhash".to_string());
+        tx.save_list(&candidate, Some("||bad.example^"))?;
+        tx.save_exception("intruder.example", 222)?;
+        tx.save_state(
+            maho_types::content_blocking::ContentBlockingMode::Disabled,
+            99,
+            Some(&[1u8, 2, 3]),
+            Some("adblock-bad"),
+            Some("engine-bad"),
+        )?;
+        Err(maho_storage::StorageError::Other(
+            "forced mid-transaction failure".to_string(),
+        ))
+    });
+
+    assert!(
+        result.is_err(),
+        "closure returned Err so the call must surface it"
+    );
+
+    let after_lists = db.load_content_blocker_lists().unwrap();
+    let after_exceptions = db.load_site_exceptions().unwrap();
+    let after_state = db.load_content_blocker_state().unwrap();
+
+    assert_eq!(
+        after_lists, before_lists,
+        "list metadata + raw content must be byte-identical after rollback"
+    );
+    assert_eq!(after_lists.len(), 1);
+    assert_eq!(after_lists[0].1, "||good.example^", "raw content unchanged");
+    assert_eq!(
+        after_exceptions, before_exceptions,
+        "exceptions must be unchanged after rollback"
+    );
+    assert!(
+        after_exceptions.iter().all(|e| e.key != "intruder.example"),
+        "candidate exception must not survive rollback"
+    );
+    assert_eq!(
+        after_state, before_state,
+        "engine state must be unchanged after rollback"
+    );
+
+    let (mode, generation, cache, version, hash) = after_state.unwrap();
+    assert_eq!(
+        mode,
+        maho_types::content_blocking::ContentBlockingMode::Native
+    );
+    assert_eq!(generation, 7);
+    assert_eq!(cache.unwrap(), good_cache);
+    assert_eq!(version.as_deref(), Some("adblock-1.0"));
+    assert_eq!(hash.as_deref(), Some("engine-good"));
+}
+
+/// The atomic snapshot replace clears prior lists/exceptions and commits the
+/// new full set plus singleton engine state as one unit.
+#[test]
+fn sqlite_content_blocker_atomic_snapshot_round_trip() {
+    let db = sqlite_store();
+
+    db.save_content_blocker_list(
+        &cb_meta("stale", "Stale", "https://stale.example/l.txt"),
+        Some("||stale^"),
+    )
+    .unwrap();
+    db.save_site_exception("stale.example", 1).unwrap();
+
+    let lists = vec![
+        (
+            cb_meta("easylist", "EasyList", "https://easylist.to/easylist.txt"),
+            "||ads.example^".to_string(),
+        ),
+        (
+            cb_meta(
+                "easyprivacy",
+                "EasyPrivacy",
+                "https://easylist.to/easyprivacy.txt",
+            ),
+            "||track.example^".to_string(),
+        ),
+    ];
+    let exceptions = vec![maho_types::content_blocking::CanonicalSiteException {
+        key: "trusted.example".to_string(),
+        created_at: 500,
+    }];
+    let cache = vec![7u8; 16];
+    let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+        mode: maho_types::content_blocking::ContentBlockingMode::Native,
+        generation: 12,
+        engine_cache: Some(&cache),
+        engine_version: Some("adblock-9"),
+        engine_hash: Some("agg-hash"),
+        lists: &lists,
+        exceptions: &exceptions,
+    };
+    db.replace_content_blocker_snapshot(&snapshot).unwrap();
+
+    let mut loaded = db.load_content_blocker_lists().unwrap();
+    loaded.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+    assert_eq!(loaded.len(), 2, "stale list must be replaced, not merged");
+    assert_eq!(loaded[0].0.id, "easylist");
+    assert_eq!(loaded[0].1, "||ads.example^");
+    assert_eq!(loaded[1].0.id, "easyprivacy");
+    assert_eq!(loaded[1].1, "||track.example^");
+
+    let exc = db.load_site_exceptions().unwrap();
+    assert_eq!(exc.len(), 1, "stale exception must be replaced");
+    assert_eq!(exc[0].key, "trusted.example");
+
+    let (mode, generation, c, v, h) = db.load_content_blocker_state().unwrap().unwrap();
+    assert_eq!(
+        mode,
+        maho_types::content_blocking::ContentBlockingMode::Native
+    );
+    assert_eq!(generation, 12);
+    assert_eq!(c.unwrap(), cache);
+    assert_eq!(v.as_deref(), Some("adblock-9"));
+    assert_eq!(h.as_deref(), Some("agg-hash"));
+}
+
+/// Exceptions persist independently of lists: writing/deleting a list never
+/// touches exception rows (cascade-free), and vice versa.
+#[test]
+fn sqlite_content_blocker_exceptions_persist_independently() {
+    let db = sqlite_store();
+
+    db.save_site_exception("a.example", 1).unwrap();
+    db.save_site_exception("b.example", 2).unwrap();
+    assert!(
+        db.load_content_blocker_lists().unwrap().is_empty(),
+        "exceptions must not create list rows"
+    );
+    assert_eq!(db.load_site_exceptions().unwrap().len(), 2);
+
+    db.save_content_blocker_list(
+        &cb_meta("l1", "L1", "https://l1.example/l.txt"),
+        Some("||x^"),
+    )
+    .unwrap();
+    assert_eq!(
+        db.load_site_exceptions().unwrap().len(),
+        2,
+        "adding a list must not touch exceptions"
+    );
+    assert_eq!(db.load_content_blocker_lists().unwrap().len(), 1);
+
+    assert!(db.delete_content_blocker_list("l1").unwrap());
+    assert_eq!(
+        db.load_site_exceptions().unwrap().len(),
+        2,
+        "deleting a list must not cascade into exceptions"
+    );
+}
+
+/// A user-added custom list with a multi-megabyte raw body and a 1 MiB engine
+/// cache BLOB survives a snapshot round trip byte-identically.
+#[test]
+fn sqlite_content_blocker_custom_list_large_body_round_trip() {
+    let db = sqlite_store();
+
+    let big_body = "||ads.example^\n".repeat(200_000);
+    let big_cache = vec![0xABu8; 1_048_576];
+    let mut meta = cb_meta(
+        "custom-user-list",
+        "My Custom List",
+        "https://mylists.example/custom.txt",
+    );
+    meta.rule_count = 200_000;
+
+    let lists = vec![(meta.clone(), big_body.clone())];
+    let exceptions: Vec<maho_types::content_blocking::CanonicalSiteException> = Vec::new();
+    let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+        mode: maho_types::content_blocking::ContentBlockingMode::Native,
+        generation: 3,
+        engine_cache: Some(&big_cache),
+        engine_version: Some("v-big"),
+        engine_hash: Some("h-big"),
+        lists: &lists,
+        exceptions: &exceptions,
+    };
+    db.replace_content_blocker_snapshot(&snapshot).unwrap();
+
+    let loaded = db.load_content_blocker_lists().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].0, meta, "custom list metadata round trips");
+    assert_eq!(loaded[0].1.len(), big_body.len());
+    assert_eq!(loaded[0].1, big_body, "large raw body byte-identical");
+
+    let (_, _, cache, _, _) = db.load_content_blocker_state().unwrap().unwrap();
+    assert_eq!(cache.unwrap(), big_cache, "large BLOB byte-identical");
+}
+
+/// Tempfile-backed restart: an atomic snapshot committed to a real on-disk DB
+/// is fully visible after reopening the database.
+#[test]
+fn sqlite_content_blocker_snapshot_tempfile_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("cb.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let key = test_key();
+
+    let lists = vec![(
+        cb_meta("easylist", "EasyList", "https://easylist.to/easylist.txt"),
+        "||ads.example^".to_string(),
+    )];
+    let exceptions = vec![maho_types::content_blocking::CanonicalSiteException {
+        key: "trusted.example".to_string(),
+        created_at: 900,
+    }];
+    let cache = vec![3u8, 1, 4, 1, 5, 9, 2, 6];
+
+    {
+        let db = SqliteStorage::open_with_key(db_path_str, &key).unwrap();
+        let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+            mode: maho_types::content_blocking::ContentBlockingMode::Native,
+            generation: 21,
+            engine_cache: Some(&cache),
+            engine_version: Some("adblock-x"),
+            engine_hash: Some("agg"),
+            lists: &lists,
+            exceptions: &exceptions,
+        };
+        db.replace_content_blocker_snapshot(&snapshot).unwrap();
+    }
+
+    let db2 = SqliteStorage::open_with_key(db_path_str, &key).unwrap();
+    let loaded = db2.load_content_blocker_lists().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].1, "||ads.example^");
+    let exc = db2.load_site_exceptions().unwrap();
+    assert_eq!(exc.len(), 1);
+    assert_eq!(exc[0].key, "trusted.example");
+    let (mode, generation, c, _, _) = db2.load_content_blocker_state().unwrap().unwrap();
+    assert_eq!(
+        mode,
+        maho_types::content_blocking::ContentBlockingMode::Native
+    );
+    assert_eq!(generation, 21);
+    assert_eq!(c.unwrap(), cache);
+}
+
+#[test]
+fn sqlite_content_blocker_unknown_mode_loads_non_native() {
+    let db = sqlite_store();
+    db.save_content_blocker_state(
+        maho_types::content_blocking::ContentBlockingMode::Unknown,
+        5,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let (mode, _, _, _, _) = db.load_content_blocker_state().unwrap().unwrap();
+    assert_eq!(
+        mode,
+        maho_types::content_blocking::ContentBlockingMode::Unknown
+    );
+    assert!(
+        !mode.is_native(),
+        "persisted Unknown must never load as native"
+    );
 }

@@ -10,7 +10,17 @@
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
+use maho_core::vault_manager::VaultLoginInput;
 use maho_import::detect::detect_installed_browsers;
+use maho_import::{
+    PasswordImportCommitDestination, PasswordImportCommitError, PasswordImportInput,
+    PasswordImportJob, PasswordImportJobConfig, PasswordImportJobError,
+    PasswordImportPreviewReceipt, PasswordImportSource, PasswordImportSourceFormat,
+};
+use maho_types::vault::{
+    CredentialOrigin, VaultAuditDecision, VaultErrorCode, VaultItemKind, VaultItemPublicMetadata,
+    VaultLockState,
+};
 
 fn to_json_cstring<T: serde::Serialize>(val: &T) -> *mut c_char {
     match serde_json::to_string(val) {
@@ -59,6 +69,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 
 use maho_core::maho_core::MahoCore;
@@ -74,6 +85,109 @@ use crate::import_destination::MahoCoreDestination;
 pub struct MahoImportSession {
     cancel_token: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
+}
+
+pub struct MahoPasswordImportJob {
+    job: Mutex<PasswordImportJob>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PasswordImportPreviewPathRequest {
+    source_format: String,
+    path: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PasswordImportCommitRequest {
+    preview_token: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordImportFfiResponse<T> {
+    ok: bool,
+    data: Option<T>,
+    error: Option<PasswordImportFfiError>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordImportFfiError {
+    code: &'static str,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordImportPreviewData {
+    preview_token: String,
+    source: &'static str,
+    file_format: &'static str,
+    source_format: &'static str,
+    source_label: &'static str,
+    imported: usize,
+    skipped: usize,
+    duplicates: usize,
+    blank_passwords: usize,
+    unsupported_fields: usize,
+    safe_messages: Vec<String>,
+    safe_errors: Vec<String>,
+    terminal_result_count: u8,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordImportCommitData {
+    committed: usize,
+    failed: usize,
+    terminal_result_count: u8,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordImportCancelData {
+    terminal_result_count: u8,
+}
+
+struct VaultPasswordImportDestination<'a> {
+    core: &'a mut MahoCore,
+}
+
+impl PasswordImportCommitDestination for VaultPasswordImportDestination<'_> {
+    fn add_login(
+        &mut self,
+        credential: maho_import::PasswordImportCredential,
+    ) -> Result<(), PasswordImportCommitError> {
+        let origin_url = credential.origin_url;
+        let origin = CredentialOrigin::try_from(origin_url.as_str()).map_err(|_| {
+            PasswordImportCommitError::DestinationRejected("invalid_origin".to_string())
+        })?;
+        let username = credential.username;
+        let input = VaultLoginInput {
+            metadata: VaultItemPublicMetadata {
+                title: origin_url,
+                origins: vec![origin],
+                username_hint: username.clone(),
+                item_kind: VaultItemKind::Login,
+                totp: None,
+                passkey: None,
+            },
+            username,
+            password: credential.password,
+        };
+        self.core
+            .vault_add_login(input)
+            .map(|_| ())
+            .map_err(|error| {
+                if matches!(error, maho_core::vault_manager::VaultCrudError::Locked) {
+                    PasswordImportCommitError::DestinationLocked
+                } else {
+                    PasswordImportCommitError::DestinationRejected(error.to_string())
+                }
+            })
+    }
 }
 
 /// Pending user-provided passwords CSV path, set via
@@ -94,6 +208,320 @@ fn take_pending_password_csv() -> Option<std::path::PathBuf> {
         .lock()
         .ok()
         .and_then(|mut g| g.take())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_password_import_job_new() -> *mut MahoPasswordImportJob {
+    crate::ffi_safe!(
+        {
+            Box::into_raw(Box::new(MahoPasswordImportJob {
+                job: Mutex::new(PasswordImportJob::default()),
+            }))
+        },
+        ptr::null_mut()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_password_import_job_free(handle: *mut MahoPasswordImportJob) {
+    crate::ffi_safe!(
+        {
+            if !handle.is_null() {
+                drop(Box::from_raw(handle));
+            }
+        },
+        ()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_password_import_job_cancel(
+    handle: *mut MahoPasswordImportJob,
+) -> *mut c_char {
+    crate::ffi_safe!(
+        {
+            let Some(handle) = handle.as_ref() else {
+                return password_import_error("invalid_handle", "import job handle is required");
+            };
+            let Ok(mut job) = handle.job.lock() else {
+                return password_import_error(
+                    "state_unavailable",
+                    "import job state is unavailable",
+                );
+            };
+            let summary = job.cancel();
+            password_import_ok(PasswordImportCancelData {
+                terminal_result_count: summary.terminal_result_count,
+            })
+        },
+        ptr::null_mut()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_password_import_job_preview_path_json(
+    handle: *mut MahoPasswordImportJob,
+    request_json: *const c_char,
+) -> *mut c_char {
+    crate::ffi_safe!(
+        {
+            let Some(handle) = handle.as_ref() else {
+                return password_import_error("invalid_handle", "import job handle is required");
+            };
+            let request = match parse_password_import_request::<PasswordImportPreviewPathRequest>(
+                request_json,
+            ) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            let Some(source_format) = source_format_from_token(&request.source_format) else {
+                return password_import_error("invalid_source_format", "unsupported source format");
+            };
+            let config = PasswordImportJobConfig::new(
+                source_format,
+                PasswordImportInput::Path(std::path::PathBuf::from(request.path)),
+            );
+            let Ok(mut job) = handle.job.lock() else {
+                return password_import_error(
+                    "state_unavailable",
+                    "import job state is unavailable",
+                );
+            };
+            match job.preview(config) {
+                Ok(receipt) => password_import_ok(preview_data(receipt)),
+                Err(error) => password_import_job_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_password_import_job_commit_json(
+    handle: *mut MahoPasswordImportJob,
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    crate::ffi_safe!(
+        {
+            let Some(handle) = handle.as_ref() else {
+                return password_import_error("invalid_handle", "import job handle is required");
+            };
+            if crate::import_gate::is_active() {
+                return password_import_error("import_active", "browser import is already active");
+            }
+            let Some(core) = core.as_mut() else {
+                return password_import_error("core_unavailable", "core is unavailable");
+            };
+            if core.vault_status().lock_state != VaultLockState::Unlocked {
+                if let Err(response) = record_import_commit_audit(
+                    core,
+                    VaultAuditDecision::Denied,
+                    Some(VaultErrorCode::Locked),
+                ) {
+                    return response;
+                }
+                return password_import_error("locked", "Vault is locked");
+            }
+            let request =
+                match parse_password_import_request::<PasswordImportCommitRequest>(request_json) {
+                    Ok(request) => request,
+                    Err(response) => {
+                        if let Err(audit_response) = record_import_commit_audit(
+                            core,
+                            VaultAuditDecision::Failed,
+                            Some(VaultErrorCode::InvalidGrant),
+                        ) {
+                            return audit_response;
+                        }
+                        return response;
+                    }
+                };
+            let Ok(mut job) = handle.job.lock() else {
+                if let Err(response) = record_import_commit_audit(
+                    core,
+                    VaultAuditDecision::Failed,
+                    Some(VaultErrorCode::StorageFailure),
+                ) {
+                    return response;
+                }
+                return password_import_error(
+                    "state_unavailable",
+                    "import job state is unavailable",
+                );
+            };
+            let commit_result = {
+                let mut destination = VaultPasswordImportDestination { core };
+                job.commit(&request.preview_token, &mut destination)
+            };
+            match commit_result {
+                Ok(summary) => {
+                    if let Err(response) =
+                        record_import_commit_audit(core, VaultAuditDecision::Allowed, None)
+                    {
+                        return response;
+                    }
+                    password_import_ok(PasswordImportCommitData {
+                        committed: summary.committed,
+                        failed: summary.failed,
+                        terminal_result_count: summary.terminal_result_count,
+                    })
+                }
+                Err(error) => {
+                    let (decision, reason) = password_import_audit_outcome(&error);
+                    if let Err(response) = record_import_commit_audit(core, decision, reason) {
+                        return response;
+                    }
+                    password_import_job_error(error)
+                }
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+fn record_import_commit_audit(
+    core: &MahoCore,
+    decision: VaultAuditDecision,
+    reason: Option<VaultErrorCode>,
+) -> Result<(), *mut c_char> {
+    core.vault_record_import_commit_audit(decision, reason)
+        .map_err(|error| password_import_error("audit_failed", error.to_string()))
+}
+
+fn password_import_audit_outcome(
+    error: &PasswordImportJobError,
+) -> (VaultAuditDecision, Option<VaultErrorCode>) {
+    match error {
+        PasswordImportJobError::DestinationLocked => {
+            (VaultAuditDecision::Denied, Some(VaultErrorCode::Locked))
+        }
+        PasswordImportJobError::NoPreview | PasswordImportJobError::StalePreviewToken => (
+            VaultAuditDecision::Failed,
+            Some(VaultErrorCode::InvalidGrant),
+        ),
+        PasswordImportJobError::InvalidFile(_) | PasswordImportJobError::CommitFailed(_) => (
+            VaultAuditDecision::Failed,
+            Some(VaultErrorCode::StorageFailure),
+        ),
+    }
+}
+
+fn password_import_ok<T: serde::Serialize>(data: T) -> *mut c_char {
+    to_json_cstring(&PasswordImportFfiResponse {
+        ok: true,
+        data: Some(data),
+        error: None,
+    })
+}
+
+fn password_import_error(code: &'static str, message: impl Into<String>) -> *mut c_char {
+    to_json_cstring(&PasswordImportFfiResponse::<()> {
+        ok: false,
+        data: None,
+        error: Some(PasswordImportFfiError {
+            code,
+            message: message.into(),
+        }),
+    })
+}
+
+fn password_import_job_error(error: PasswordImportJobError) -> *mut c_char {
+    match error {
+        PasswordImportJobError::InvalidFile(message) => {
+            password_import_error("invalid_file", message)
+        }
+        PasswordImportJobError::NoPreview => password_import_error("no_preview", error.to_string()),
+        PasswordImportJobError::StalePreviewToken => {
+            password_import_error("stale_preview_token", error.to_string())
+        }
+        PasswordImportJobError::DestinationLocked => {
+            password_import_error("locked", error.to_string())
+        }
+        PasswordImportJobError::CommitFailed(message) => {
+            password_import_error("commit_failed", message)
+        }
+    }
+}
+
+unsafe fn parse_password_import_request<T: serde::de::DeserializeOwned>(
+    request_json: *const c_char,
+) -> Result<T, *mut c_char> {
+    if request_json.is_null() {
+        return Err(password_import_error(
+            "invalid_request",
+            "request JSON is required",
+        ));
+    }
+    let request = match CStr::from_ptr(request_json).to_str() {
+        Ok(value) => value,
+        Err(_) => return Err(password_import_error("invalid_request", "invalid UTF-8")),
+    };
+    serde_json::from_str(request)
+        .map_err(|error| password_import_error("invalid_request", error.to_string()))
+}
+
+fn preview_data(receipt: PasswordImportPreviewReceipt) -> PasswordImportPreviewData {
+    PasswordImportPreviewData {
+        preview_token: receipt.preview_token,
+        source: source_token(receipt.source),
+        file_format: file_format_token(receipt.file_format),
+        source_format: source_format_token(receipt.source_format),
+        source_label: receipt.source_label,
+        imported: receipt.preview.imported,
+        skipped: receipt.preview.skipped,
+        duplicates: receipt.preview.duplicates,
+        blank_passwords: receipt.preview.blank_passwords,
+        unsupported_fields: receipt.preview.unsupported_fields,
+        safe_messages: receipt.preview.safe_messages,
+        safe_errors: receipt.preview.safe_errors,
+        terminal_result_count: receipt.terminal_result_count,
+    }
+}
+
+fn source_format_from_token(token: &str) -> Option<PasswordImportSourceFormat> {
+    match token {
+        "one_password_csv" => Some(PasswordImportSourceFormat::OnePasswordCsv),
+        "one_password_1pux" => Some(PasswordImportSourceFormat::OnePasswordPux),
+        "bitwarden_individual_csv" => Some(PasswordImportSourceFormat::BitwardenIndividualCsv),
+        "bitwarden_organization_csv" => Some(PasswordImportSourceFormat::BitwardenOrganizationCsv),
+        "bitwarden_json" => Some(PasswordImportSourceFormat::BitwardenJson),
+        "apple_passwords_csv" => Some(PasswordImportSourceFormat::ApplePasswordsCsv),
+        "keepassxc_csv" => Some(PasswordImportSourceFormat::KeePassXcCsv),
+        "keepass_classic_csv" => Some(PasswordImportSourceFormat::KeePassClassicCsv),
+        _ => None,
+    }
+}
+
+fn source_format_token(source_format: PasswordImportSourceFormat) -> &'static str {
+    match source_format {
+        PasswordImportSourceFormat::OnePasswordCsv => "one_password_csv",
+        PasswordImportSourceFormat::OnePasswordPux => "one_password_1pux",
+        PasswordImportSourceFormat::BitwardenIndividualCsv => "bitwarden_individual_csv",
+        PasswordImportSourceFormat::BitwardenOrganizationCsv => "bitwarden_organization_csv",
+        PasswordImportSourceFormat::BitwardenJson => "bitwarden_json",
+        PasswordImportSourceFormat::ApplePasswordsCsv => "apple_passwords_csv",
+        PasswordImportSourceFormat::KeePassXcCsv => "keepassxc_csv",
+        PasswordImportSourceFormat::KeePassClassicCsv => "keepass_classic_csv",
+    }
+}
+
+fn source_token(source: PasswordImportSource) -> &'static str {
+    match source {
+        PasswordImportSource::OnePassword => "one_password",
+        PasswordImportSource::Bitwarden => "bitwarden",
+        PasswordImportSource::ApplePasswords => "apple_passwords",
+        PasswordImportSource::KeePassXc => "keepassxc",
+        PasswordImportSource::KeePassClassic => "keepass_classic",
+    }
+}
+
+fn file_format_token(file_format: maho_import::PasswordImportFileFormat) -> &'static str {
+    match file_format {
+        maho_import::PasswordImportFileFormat::Csv => "csv",
+        maho_import::PasswordImportFileFormat::OnePux => "1pux",
+        maho_import::PasswordImportFileFormat::Json => "json",
+    }
 }
 
 /// Progress callback type invoked from the import background thread.
@@ -319,7 +747,7 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
                     });
                     Box::into_raw(session)
                 }
-                None => {
+                std::option::Option::None => {
                     crate::import_gate::exit();
                     ptr::null_mut()
                 }

@@ -1,0 +1,180 @@
+{
+  "gate": "Safe Vault Password Backend + Product Password Manager Receipt",
+  "status": "AUTOMATED_PRODUCT_PATHS_PASS_WITH_NAMED_RESIDUALS",
+  "timestamp": "2026-07-24T15:51:30Z",
+  "head_commit": "85119ad6e845430188bf6b24aad39467facad2ae",
+  "worktree_state": "dirty",
+  "matrix_results": {
+    "maho_agent_vault_tools": {
+      "command": "python3 scripts/build_lock.py -- cargo test -p maho-agent vault_tools --quiet",
+      "verdict": "PASS",
+      "selected_count": 4,
+      "passed_count": 4
+    },
+    "mcp_secretless_vault_tools": {
+      "build_command": "python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target maho_mcp_session_test",
+      "test_command": "python3 maho/scripts/build_lock.py -- chromium/src/out/Default/maho_mcp_session_test '--gtest_filter=MahoMcpSessionTypeGuardTest.*:MahoMcpCredentialClassifierTest.*:MahoMcpSessionTest.ToolSetsAreExactAndEvaluateJsStaysDenied:MahoMcpSessionTest.EveryTargetedToolUsesStableResolution' --gtest_fail_if_no_test_selected --test-launcher-jobs=1 --test-launcher-retry-limit=0",
+      "verdict": "PASS",
+      "selected_count": 10,
+      "passed_count": 10
+    },
+    "security_fixture_smoke": {
+      "command": "node --test \"maho-chromium/build/scripts/security_fixtures/tests/*.test.js\"",
+      "verdict": "PASS",
+      "selected_count": 9,
+      "passed_count": 9
+    },
+    "security_fixture_playwright_sentinel": {
+      "command": "node maho-chromium/build/scripts/security_fixtures/playwright_qa.js --artifact-dir /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/maho-safe-vault-todo35-playwright-artifacts",
+      "artifact_dir": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/maho-safe-vault-todo35-playwright-artifacts",
+      "result_json": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/maho-safe-vault-todo35-playwright-artifacts/result.json",
+      "verdict": "PASS",
+      "authorized_sentinel_artifacts": [
+        "dom/login.html",
+        "ax/login.aria.yaml",
+        "dom/login-b.html",
+        "ax/login-b.aria.yaml"
+      ],
+      "sentinel_occurrence_count": 4
+    },
+    "settings_passwords_pane_e2e": {
+      "command": "Maho.app/Contents/MacOS/Maho --user-data-dir=<temp-profile> --no-first-run --disable-default-apps --maho-disable-login-gate --enable-automation --remote-debugging-port=9222; bun maho-chromium/browser/resources/maho_settings/testing/e2e_pane_passwords.ts",
+      "profile": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/m-pw-e2e-final.bTtl",
+      "verdict": "PASS",
+      "selected_count": 17,
+      "passed_count": 17,
+      "coverage": [
+        "Passwords pane renders",
+        "Provider selector exposes Maho Native, Bitwarden, and 1Password availability",
+        "Vault initialize/unlock gate is handled",
+        "Native password add succeeds",
+        "Reveal succeeds without printing the secret in test output",
+        "Hide remasks the secret",
+        "No-match search exposes no reveal control or plaintext",
+        "Cleanup delete runs"
+      ],
+      "password_store_dcheck": "absent"
+    },
+    "live_mcp_vault_list_smoke": {
+      "command": "Maho.app/Contents/MacOS/Maho --user-data-dir=<short-temp-profile> --no-first-run --disable-default-apps --maho-disable-login-gate about:blank; initialize MCP socket; browser_set_allowed_domains(example.com); browser_tab_new(https://example.com); vault_list_credentials_for_active_page",
+      "profile": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/m.nvL9",
+      "socket": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/m.nvL9/maho.sock",
+      "verdict": "PASS",
+      "tab_created": true,
+      "vault_list_response": { "items": [] },
+      "plaintext_tokens": "absent",
+      "password_store_dcheck": "absent"
+    },
+    "rust_ffi_vault_backend": {
+      "command": "python3 maho/scripts/build_lock.py -- cargo test --manifest-path maho/Cargo.toml -p maho-ffi --quiet --test vault_backend",
+      "verdict": "PASS",
+      "selected_count": 6,
+      "passed_count": 6
+    },
+    "legacy_password_ffi_vault_compat": {
+      "command": "python3 scripts/build_lock.py -- cargo test -p maho-ffi --quiet test_legacy_password_ffi_routes_to_vault_when_initialized",
+      "verdict": "PASS",
+      "selected_count": 1,
+      "passed_count": 1
+    },
+    "import_destination_passwords_to_vault": {
+      "command": "python3 scripts/build_lock.py -- cargo test -p maho-ffi --test destination_callbacks --quiet destination_add_password_writes_to_vault",
+      "verdict": "PASS",
+      "selected_count": 1,
+      "passed_count": 1
+    },
+    "rust_ffi_null_boundary": {
+      "command": "python3 maho/scripts/build_lock.py -- cargo test --manifest-path maho/Cargo.toml -p maho-ffi --quiet --test null_safety vault_backend_handles_accept_null_without_crashing",
+      "verdict": "PASS",
+      "selected_count": 1,
+      "passed_count": 1
+    },
+    "rust_core_vault_crud": {
+      "command": "python3 maho/scripts/build_lock.py -- cargo test --manifest-path maho/Cargo.toml -p maho-core --quiet vault_crud",
+      "verdict": "PASS",
+      "selected_count": 27,
+      "passed_count": 27
+    },
+    "password_backend_exact_inventory": {
+      "build_command": "python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target maho_password_store_backend_test",
+      "test_command": "python3 maho-chromium/build/scripts/run_chromium_test.py --inventory maho-chromium/browser/passwords/maho_password_store_backend_inventory.json --group maho_password_store_backend --out-dir out/Default --artifact-dir /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/maho-password-backend-real-vault-artifacts-todo53-current",
+      "artifact_dir": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/maho-password-backend-real-vault-artifacts-todo53-current",
+      "verdict": "PASS",
+      "selected_count": 14,
+      "passed_count": 14
+    },
+    "raw_json_reveal_removed": {
+      "command": "rg -n \"maho_vault_use_login_password_json|VaultUseLoginPasswordRequest|VaultLoginPasswordResponse\" maho/crates/maho-ffi/src/lib.rs maho-chromium/third_party/maho/maho_ffi.h maho/ios-shell/include/maho_ffi.h",
+      "verdict": "PASS_NO_MATCHES"
+    },
+    "miri_backend_null_boundary": {
+      "command": "python3 scripts/build_lock.py -- env MIRIFLAGS='-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-preemption-rate=0.1 -Zmiri-backtrace=full -Zmiri-disable-isolation' cargo +nightly miri test --manifest-path Cargo.toml -p maho-ffi --test null_safety vault_backend_handles_accept_null_without_crashing",
+      "verdict": "PASS",
+      "selected_count": 1,
+      "passed_count": 1
+    },
+    "miri_legacy_password_fail_closed_boundary": {
+      "command": "python3 scripts/build_lock.py -- env MIRIFLAGS='-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-preemption-rate=0.1 -Zmiri-backtrace=full -Zmiri-disable-isolation' cargo +nightly miri test --manifest-path Cargo.toml -p maho-ffi --test ffi_test test_password_list_omits_plaintext_and_unauthenticated_reveal_fails_closed",
+      "verdict": "PASS",
+      "selected_count": 1,
+      "passed_count": 1,
+      "note": "Storage-backed legacy password FFI test is blocked under Miri by rusqlite's unsupported sqlite3_threadsafe FFI call; it passes under native cargo test."
+    },
+    "vault_runtime_bridge": {
+      "command": "python3 maho/scripts/build_lock.py -- chromium/src/out/Default/maho_theme_io_test '--gtest_filter=MahoVaultRuntimeBridgeTest.*' --gtest_fail_if_no_test_selected --test-launcher-jobs=1 --test-launcher-retry-limit=0",
+      "verdict": "PASS",
+      "selected_count": 4,
+      "passed_count": 4
+    },
+    "chrome_narrow_compile": {
+      "command": "python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target chrome",
+      "verdict": "PASS"
+    },
+    "canonical_full_build": {
+      "command": "python3 maho-chromium/build/scripts/build_maho.py --no-launch",
+      "verdict": "PASS"
+    },
+    "app_launch_proof": {
+      "command": "Maho.app/Contents/MacOS/Maho --user-data-dir=<temp-profile> --no-first-run --disable-default-apps about:blank",
+      "verdict": "PASS",
+      "profile": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/opencode/maho-launch-proof-current.QPRsEW",
+      "pid": 441,
+      "password_store_dcheck": "absent"
+    }
+  },
+  "implemented_entry_points": {
+    "agent_vault_dtos": "maho/crates/maho-agent/src/vault_tools.rs",
+    "mcp_secretless_handlers": "maho-chromium/browser/mcp/maho_mcp_session.cc",
+    "mcp_delegate_contract": "maho-chromium/browser/mcp/maho_mcp_session.h",
+    "mcp_secretless_tests": "maho-chromium/browser/mcp/maho_mcp_session_unittest.cc",
+    "browser_side_injector": "maho-chromium/browser/maho_browser_main_extra_parts.cc",
+    "password_backend": "maho-chromium/browser/passwords/maho_password_store_backend.cc",
+    "legacy_password_ffi_compat": "maho/crates/maho-ffi/src/lib.rs",
+    "import_destination": "maho/crates/maho-ffi/src/import_destination.rs",
+    "settings_passwords_pane": "maho-chromium/browser/resources/maho_settings/react/domain_panes.tsx",
+    "settings_passwords_e2e": "maho-chromium/browser/resources/maho_settings/testing/e2e_pane_passwords.ts"
+  },
+  "fixed_blockers": [
+    "Removed production maho_vault_use_login_password_json JSON plaintext reveal export from Rust and generated headers.",
+    "Converted maho_password_store_backend_inventory.json to run_chromium_test.py groups schema and verified exact 14/14 coverage.",
+    "Repaired password backend factory override partial-state guard and generated checkout factory output.",
+    "Replaced null account password backend with disabled non-null Maho backend.",
+    "Added backend-session credential endpoint for Chromium-only password materialization through dedicated backend buffers.",
+    "Added initialized/unlocked Vault backend tests for add/list/fill/update/delete/locked/disabled behavior.",
+    "Added handle-only MCP vault_list/request/fill tools so agent-facing payloads carry handles/grants/status only.",
+    "Added browser-side grant consumption and field injection path; generic browser_type still rejects credential-class fields.",
+    "Changed agent vault request DTOs from stable item_id requests to opaque handle requests.",
+    "Added local security fixture smoke and Playwright sentinel scan evidence.",
+    "Routed legacy settings password FFI list/search/add/reveal/update/delete compatibility surface to Vault-backed storage.",
+    "Routed password import destination entries into durable Vault login items instead of the previous metadata-only shim.",
+    "Added Passwords pane Vault initialize/unlock gate so new profiles can actually add native passwords.",
+    "Added automation-only reauth bypass for settings password E2E while preserving normal OS reauth for users.",
+    "Verified Settings Passwords pane add/reveal/hide/delete flow through real Maho.app + CDP."
+  ],
+  "residual_risks": [
+    "Manual OS device reauth UX is preserved but not manually clicked in this automated run; E2E uses --enable-automation to bypass reauth only for automation.",
+    "Chromium save-bubble UI is not exercised end-to-end because Chromium disables password saving UI under --enable-automation; backend save/add and Settings add/reveal paths are covered.",
+    "IsGooglePasswordsSyncDisabled() exists but has no direct consumer found in this pass; account store is disabled via factory and MahoPasswordStoreBackend has no sync controller delegate.",
+    "Vault policy and audit settings surfaces still return explicit unavailable placeholders; they are not required for basic password manager save/list/reveal/fill but remain incomplete for advanced agent policy/audit UX."
+  ]
+}

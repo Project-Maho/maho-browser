@@ -26,3 +26,6 @@ tracing = "0.1"
 
 [patch.crates-io]
 swiftide-core = { path = "third_party/swiftide-core" }
+
+[profile.release]
+panic = "abort"

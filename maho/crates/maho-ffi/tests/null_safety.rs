@@ -147,3 +147,38 @@ fn chat_send_text_with_image_full_null() {
         );
     }
 }
+
+#[test]
+fn vault_backend_handles_accept_null_without_crashing() {
+    unsafe {
+        assert!(maho_ffi::vault_backend::maho_vault_backend_session_new(ptr::null_mut()).is_null());
+        maho_ffi::vault_backend::maho_vault_backend_session_close(ptr::null_mut());
+        maho_ffi::vault_backend::maho_vault_backend_session_free(ptr::null_mut());
+        assert!(maho_ffi::vault_backend::maho_vault_backend_session_execute(
+            ptr::null_mut(),
+            ptr::null(),
+        )
+        .is_null());
+        assert!(
+            maho_ffi::vault_backend::maho_vault_backend_session_execute_credentials(
+                ptr::null_mut(),
+                ptr::null(),
+            )
+            .is_null()
+        );
+        assert_eq!(
+            maho_ffi::vault_backend::maho_vault_backend_result_status(ptr::null()),
+            maho_ffi::vault_backend::MahoVaultBackendResultStatus::Failed,
+        );
+        assert!(
+            maho_ffi::vault_backend::maho_vault_backend_result_consume(ptr::null_mut()).is_null()
+        );
+        maho_ffi::vault_backend::maho_vault_backend_result_free(ptr::null_mut());
+        assert!(maho_ffi::vault_backend::maho_vault_backend_buffer_data(ptr::null()).is_null());
+        assert_eq!(
+            maho_ffi::vault_backend::maho_vault_backend_buffer_len(ptr::null()),
+            0
+        );
+        maho_ffi::vault_backend::maho_vault_backend_buffer_free(ptr::null_mut());
+    }
+}

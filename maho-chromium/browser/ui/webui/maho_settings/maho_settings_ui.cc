@@ -49,7 +49,8 @@ MahoSettingsUI::MahoSettingsUI(content::WebUI* web_ui)
       "script-src chrome://resources 'self' https://app.lemonsqueezy.com;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FrameSrc,
-      "frame-src https://maho.lemonsqueezy.com https://lemonsqueezy.com;");
+      "frame-src https://maho.lemonsqueezy.com https://lemonsqueezy.com "
+      "chrome://settings chrome://settings/passwords;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ConnectSrc,
       "connect-src 'self' https://api.lemonsqueezy.com;");

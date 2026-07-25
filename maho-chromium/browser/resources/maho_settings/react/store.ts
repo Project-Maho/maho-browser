@@ -1,4 +1,5 @@
 import {
+  BrowserUpdateState,
   PageCallbackRouter,
   PageHandlerFactory,
   PageHandlerRemote,
@@ -6,6 +7,7 @@ import {
 import type {
   AccountStatus,
   BillingInfo,
+  BrowserVersionInfo,
   SettingValue,
   Invoice,
 } from '../maho_settings.mojom-webui.js';
@@ -31,6 +33,10 @@ export interface SettingsState {
   readonly lastActionError: string | null;
   readonly savingKeys: ReadonlySet<string>;
   readonly settings: SettingValue[];
+  readonly browserVersion: string;
+  readonly browserChannel: string;
+  readonly updateState: number;
+  readonly updateSupported: boolean;
 }
 
 function createSignedOutAccountStatus(): AccountStatus {
@@ -84,13 +90,16 @@ function paneKeyFromCurrentUrl(): string {
   return param ? resolvePaneKey(param) : PANE_DEFINITIONS[0]!.key;
 }
 
-// Writes |paneKey| into the current URL as ?pane=<key>, replacing any
-// existing query so that GetVisibleURL always reflects the active pane.
-// replaceState is used (not pushState) to avoid polluting back-button history.
-function writePaneToUrl(paneKey: string): void {
+// Writes |paneKey| into the current URL as ?pane=<key>.
+// If |replace| is true, replaces the history entry. Otherwise, pushes a new entry.
+function writePaneToUrl(paneKey: string, replace = false): void {
   const url = new URL(window.location.href);
   url.searchParams.set('pane', paneKey);
-  window.history.replaceState(null, '', url.href);
+  if (replace) {
+    window.history.replaceState(null, '', url.href);
+  } else {
+    window.history.pushState(null, '', url.href);
+  }
 }
 
 function createInitialState(): SettingsState {
@@ -109,6 +118,10 @@ function createInitialState(): SettingsState {
     lastActionError: null,
     savingKeys: new Set<string>(),
     settings: [],
+    browserVersion: '',
+    browserChannel: '',
+    updateState: BrowserUpdateState.kIdle,
+    updateSupported: false,
   };
 }
 
@@ -171,14 +184,21 @@ export class MahoSettingsStore {
       }
     });
 
-    writePaneToUrl(this.state.currentPaneKey);
+    this.updateStateChangedListenerId =
+        this.callbackRouter.onBrowserUpdateStateChanged.addListener(
+            (state: number) => {
+              this.patch(current => ({...current, updateState: state}));
+            });
 
-    window.addEventListener('popstate', () => {
+    writePaneToUrl(this.state.currentPaneKey, true);
+
+    this.popstateListener = () => {
       const paneKey = paneKeyFromCurrentUrl();
       if (paneKey !== this.state.currentPaneKey) {
         this.patch(state => ({...state, currentPaneKey: paneKey}));
       }
-    });
+    };
+    window.addEventListener('popstate', this.popstateListener);
   }
 
   getSnapshot(): SettingsState {
@@ -222,6 +242,7 @@ export class MahoSettingsStore {
       const {settings} = await this.pageHandler.getSettings();
       this.bootstrapComplete = true;
       this.replaceSettings(settings);
+      void this.refreshBrowserVersionInfo();
     } catch {
       this.bootstrapComplete = true;
       this.patch(state => ({
@@ -229,6 +250,30 @@ export class MahoSettingsStore {
         bootstrapError: 'Unable to load settings right now. Try reopening the page.',
       }));
     }
+  }
+
+  async refreshBrowserVersionInfo(): Promise<void> {
+    try {
+      const {info} = await this.pageHandler.getBrowserVersionInfo();
+      this.patch(state => ({
+        ...state,
+        browserVersion: info.version,
+        browserChannel: info.channel,
+        updateState: info.updateState,
+        updateSupported: info.updateSupported,
+      }));
+    } catch (error) {
+      console.warn('Failed to load browser version info', error);
+    }
+  }
+
+  checkForBrowserUpdates(): void {
+    this.patch(state => ({...state, updateState: BrowserUpdateState.kChecking}));
+    void this.pageHandler.checkForBrowserUpdates();
+  }
+
+  applyBrowserUpdateAndRestart(): void {
+    void this.pageHandler.applyBrowserUpdateAndRestart();
   }
 
   private replaceSettings(settings: SettingValue[]): void {
@@ -356,10 +401,11 @@ export class MahoSettingsStore {
     }));
 
     try {
-      const {info} = await this.pageHandler.getBillingInfo();
+      const {info, error} = await this.pageHandler.getBillingInfo();
       this.patch(state => ({
         ...state,
         billingInfo: info,
+        billingError: error || '',
         billingLoading: false,
       }));
     } catch (error) {
@@ -412,8 +458,17 @@ export class MahoSettingsStore {
     return this.state.savingKeys.has(key);
   }
 
+  /**
+   * Commits the given setting value to the backend page handler.
+   * If a commit for this setting is already in progress, the value is queued.
+   * Only the latest queued value will be committed once the active request finishes.
+   * Returns a promise resolving to true if the immediate save succeeded, or false if
+   * the immediate save failed or the value was queued (in which case a subsequent queued
+   * save will run).
+   */
   async commitSettingValue(key: string, value: string): Promise<boolean> {
     if (this.state.savingKeys.has(key)) {
+      this.pendingValues.set(key, value);
       return false;
     }
 

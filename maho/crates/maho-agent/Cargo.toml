@@ -3,6 +3,10 @@ name = "maho-agent"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+vault-agent-tools = []
+
 [dependencies]
 maho-types = { path = "../maho-types" }
 maho-storage = { path = "../maho-storage" }

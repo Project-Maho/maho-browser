@@ -3,30 +3,37 @@
 #ifndef MAHO_BROWSER_UI_WEBUI_MAHO_SETTINGS_MAHO_SETTINGS_PAGE_HANDLER_H_
 #define MAHO_BROWSER_UI_WEBUI_MAHO_SETTINGS_MAHO_SETTINGS_PAGE_HANDLER_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/extensions/extension_uninstall_dialog.h"
-#include "components/prefs/pref_change_registrar.h"
 #include "components/os_crypt/async/common/encryptor.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
-
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
+#include "maho/browser/updates/maho_update_manager.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 
 class PrefService;
 class Profile;
+
+extern "C" {
+struct MahoPasswordImportJob;
+}
 
 namespace maho::ai {
 class MahoModelListFetcher;
@@ -37,10 +44,10 @@ namespace device_reauth {
 class DeviceAuthenticator;
 }
 
-class MahoSettingsPageHandler
-    : public maho_settings::mojom::PageHandler,
-      public maho::MahoExtensionStateBridge::Observer,
-      public extensions::ExtensionUninstallDialog::Delegate {
+class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
+                                 public maho::MahoMailService::Observer,
+                                 public maho::MahoUpdateObserver,
+                                 public ui::SelectFileDialog::Listener {
  public:
   MahoSettingsPageHandler(
       mojo::PendingReceiver<maho_settings::mojom::PageHandler> receiver,
@@ -49,6 +56,22 @@ class MahoSettingsPageHandler
   MahoSettingsPageHandler(const MahoSettingsPageHandler&) = delete;
   MahoSettingsPageHandler& operator=(const MahoSettingsPageHandler&) = delete;
   ~MahoSettingsPageHandler() override;
+
+  void OnProfileDeletedForTesting(DeleteProfileCallback callback,
+                                  std::string json_res) {
+    OnProfileDeleted(std::move(callback), json_res);
+  }
+
+  // maho::MahoMailService::Observer:
+  void OnAccountsChanged() override;
+
+  // maho::MahoUpdateObserver:
+  void OnUpdateStateChanged(maho::UpdateState state) override;
+  void OnUpdateProgress(double percent) override;
+
+  // ui::SelectFileDialog::Listener:
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
 
   static MahoSettingsPageHandler* GetActiveInstance();
   const os_crypt_async::Encryptor* encryptor() const {
@@ -60,6 +83,10 @@ class MahoSettingsPageHandler
   void SetSetting(const std::string& key,
                   const std::string& value,
                   SetSettingCallback callback) override;
+
+  void GetBrowserVersionInfo(GetBrowserVersionInfoCallback callback) override;
+  void CheckForBrowserUpdates() override;
+  void ApplyBrowserUpdateAndRestart() override;
 
   void GetProfiles(GetProfilesCallback callback) override;
   void CreateProfile(const std::string& name,
@@ -106,8 +133,9 @@ class MahoSettingsPageHandler
   void GetSyncStatus(GetSyncStatusCallback callback) override;
   void GetSyncDevices(GetSyncDevicesCallback callback) override;
   void GenerateSyncKey(GenerateSyncKeyCallback callback) override;
-  void ConfigureSyncEncryption(const std::string& recovery_phrase,
-                               ConfigureSyncEncryptionCallback callback) override;
+  void ConfigureSyncEncryption(
+      const std::string& recovery_phrase,
+      ConfigureSyncEncryptionCallback callback) override;
   void JoinSync(const std::string& recovery_phrase,
                 JoinSyncCallback callback) override;
   void StopSync() override;
@@ -117,11 +145,73 @@ class MahoSettingsPageHandler
                         const std::string& new_name,
                         RenameSyncDeviceCallback callback) override;
 
-
   void GetSpaces(GetSpacesCallback callback) override;
 
-  void GetPasswordProviderStatus(GetPasswordProviderStatusCallback callback) override;
-  void GetPasswordProviderOptions(GetPasswordProviderOptionsCallback callback) override;
+  void GetVaultStatus(GetVaultStatusCallback callback) override;
+  void GetVaultProviderStatus(GetVaultProviderStatusCallback callback) override;
+  void InitializeVault(const std::string& master_passphrase,
+                       const std::string& recovery_secret,
+                       InitializeVaultCallback callback) override;
+  void UnlockVault(const std::string& master_passphrase,
+                   UnlockVaultCallback callback) override;
+  void UnlockVaultWithRecovery(
+      const std::string& recovery_secret,
+      UnlockVaultWithRecoveryCallback callback) override;
+  void LockVault(LockVaultCallback callback) override;
+  void ListVaultItems(
+      std::optional<maho_settings::mojom::PasswordProviderKind> provider,
+      const std::vector<maho_settings::mojom::VaultItemKind>& kinds,
+      const std::optional<std::string>& cursor,
+      uint32_t limit,
+      ListVaultItemsCallback callback) override;
+  void SearchVaultItems(
+      const std::string& origin,
+      std::optional<maho_settings::mojom::PasswordProviderKind> provider,
+      const std::vector<maho_settings::mojom::VaultItemKind>& kinds,
+      SearchVaultItemsCallback callback) override;
+  void AddVaultLogin(const std::string& title,
+                     const std::vector<std::string>& origins,
+                     const std::string& username,
+                     const std::string& password,
+                     AddVaultLoginCallback callback) override;
+  void UpdateVaultLogin(const std::string& item_id,
+                        uint64_t expected_revision,
+                        const std::string& title,
+                        const std::vector<std::string>& origins,
+                        const std::string& username,
+                        const std::optional<std::string>& password,
+                        UpdateVaultLoginCallback callback) override;
+  void DeleteVaultItem(const std::string& item_id,
+                       uint64_t expected_revision,
+                       DeleteVaultItemCallback callback) override;
+  void UseVaultSecret(const std::string& item_id,
+                      uint64_t expected_revision,
+                      maho_settings::mojom::SecretAction action,
+                      UseVaultSecretCallback callback) override;
+  void GetVaultPolicyStatus(GetVaultPolicyStatusCallback callback) override;
+  void SetVaultPolicy(maho_settings::mojom::VaultAgentPolicy policy,
+                      const std::optional<std::string>& item_id,
+                      const std::optional<std::string>& origin,
+                      const std::optional<std::string>& expires_at,
+                      SetVaultPolicyCallback callback) override;
+  void GetVaultAuditPage(const std::optional<std::string>& cursor,
+                         uint32_t limit,
+                         GetVaultAuditPageCallback callback) override;
+  void SelectPasswordImportFile(
+      maho_settings::mojom::PasswordImportSourceFormat source_format,
+      SelectPasswordImportFileCallback callback) override;
+  void PreviewPasswordImport(
+      maho_settings::mojom::PasswordImportSourceFormat source_format,
+      const std::string& file_path,
+      PreviewPasswordImportCallback callback) override;
+  void CancelPasswordImport(CancelPasswordImportCallback callback) override;
+  void CommitPasswordImport(const std::string& preview_token,
+                            CommitPasswordImportCallback callback) override;
+
+  void GetPasswordProviderStatus(
+      GetPasswordProviderStatusCallback callback) override;
+  void GetPasswordProviderOptions(
+      GetPasswordProviderOptionsCallback callback) override;
   void GetSavedPasswords(GetSavedPasswordsCallback callback) override;
   void SearchPasswords(const std::string& query,
                        SearchPasswordsCallback callback) override;
@@ -134,8 +224,6 @@ class MahoSettingsPageHandler
                               UpdatePasswordUsernameCallback callback) override;
   void DeletePassword(const std::string& password_id,
                       DeletePasswordCallback callback) override;
-  void RevealPassword(const std::string& password_id,
-                      RevealPasswordCallback callback) override;
 
   void GetAutofillAddresses(GetAutofillAddressesCallback callback) override;
   void AddAutofillAddress(const std::string& id,
@@ -166,16 +254,18 @@ class MahoSettingsPageHandler
                      const std::string& name,
                      const std::string& url,
                      AddFilterListCallback callback) override;
-  void ToggleFilterList(const std::string& id, bool enabled) override;
-  void RemoveFilterList(const std::string& id) override;
+  void ToggleFilterList(const std::string& id,
+                        bool enabled,
+                        ToggleFilterListCallback callback) override;
+  void RemoveFilterList(const std::string& id,
+                        RemoveFilterListCallback callback) override;
   void RebuildContentRules(RebuildContentRulesCallback callback) override;
   void GetContentBlockerStats(GetContentBlockerStatsCallback callback) override;
+  void SetContentBlockingMode(maho_settings::mojom::ContentBlockingMode mode,
+                              SetContentBlockingModeCallback callback) override;
+  void TriggerFilterUpdate(const std::optional<std::string>& list_id,
+                           TriggerFilterUpdateCallback callback) override;
 
-  void GetInstalledExtensions(GetInstalledExtensionsCallback callback) override;
-  void ToggleExtension(const std::string& id,
-                       ToggleExtensionCallback callback) override;
-  void RemoveExtension(const std::string& id,
-                       RemoveExtensionCallback callback) override;
   void OpenExtensionsPage() override;
 
   void SetBYOKKey(const std::string& provider,
@@ -195,13 +285,141 @@ class MahoSettingsPageHandler
   void GetBuyCreditsUrl(int32_t pack_size_usd,
                         GetBuyCreditsUrlCallback callback) override;
 
-  // maho::MahoExtensionStateBridge::Observer:
-  void OnInstalledExtensionsChanged() override;
+  // Mail accounts — thin proxies to the profile-keyed MahoMailService.
+  void MailListAccounts(MailListAccountsCallback callback) override;
+  void MailAddAccount(const std::string& request_json,
+                      MailAddAccountCallback callback) override;
+  void MailDeleteAccount(const std::string& account_id,
+                         MailDeleteAccountCallback callback) override;
+  void MailOAuthStartUrl(const std::string& provider,
+                         const std::string& client_id,
+                         const std::string& redirect_uri,
+                         MailOAuthStartUrlCallback callback) override;
+  void MailOAuthComplete(const std::string& state,
+                         const std::string& code,
+                         MailOAuthCompleteCallback callback) override;
+  void MailReconnectAccount(const std::string& account_id,
+                            MailReconnectAccountCallback callback) override;
+  void MailOAuthCancel(const std::string& state,
+                       MailOAuthCancelCallback callback) override;
 
-  // extensions::ExtensionUninstallDialog::Delegate:
-  void OnExtensionUninstallDialogClosed(
-      bool did_start_uninstall,
-      const std::u16string& error) override;
+  // Signatures
+  void MailListSignatures(const std::optional<std::string>& account_id,
+                          MailListSignaturesCallback callback) override;
+  void MailUpsertSignature(const std::string& request_json,
+                           MailUpsertSignatureCallback callback) override;
+  void MailDeleteSignature(const std::string& id,
+                           MailDeleteSignatureCallback callback) override;
+
+  // Templates
+  void MailListTemplates(MailListTemplatesCallback callback) override;
+  void MailUpsertTemplate(const std::string& request_json,
+                          MailUpsertTemplateCallback callback) override;
+  void MailDeleteTemplate(const std::string& id,
+                          MailDeleteTemplateCallback callback) override;
+
+  // Labels
+  void MailListLabels(const std::string& account_id,
+                      MailListLabelsCallback callback) override;
+  void MailCreateLabel(const std::string& account_id,
+                       const std::string& name,
+                       const std::string& color,
+                       MailCreateLabelCallback callback) override;
+  void MailDeleteLabel(const std::string& id,
+                       MailDeleteLabelCallback callback) override;
+
+  // Rules
+  void MailListRules(const std::string& account_id,
+                     MailListRulesCallback callback) override;
+  void MailUpsertRule(const std::string& request_json,
+                      MailUpsertRuleCallback callback) override;
+  void MailDeleteRule(const std::string& id,
+                      MailDeleteRuleCallback callback) override;
+  void MailReorderRules(const std::string& account_id,
+                        const std::string& rule_ids_json,
+                        MailReorderRulesCallback callback) override;
+
+  // Calendar
+  void MailGetCalendarPrefs(MailGetCalendarPrefsCallback callback) override;
+  void MailSetCalendarPrefs(const std::string& prefs_json,
+                            MailSetCalendarPrefsCallback callback) override;
+  void MailListCalendarCategories(
+      const std::string& account_id,
+      MailListCalendarCategoriesCallback callback) override;
+  void MailCreateCalendarCategory(
+      const std::string& account_id,
+      const std::string& name,
+      const std::string& color,
+      MailCreateCalendarCategoryCallback callback) override;
+  void MailUpdateCalendarCategory(
+      const std::string& id,
+      const std::string& name,
+      const std::string& color,
+      MailUpdateCalendarCategoryCallback callback) override;
+  void MailDeleteCalendarCategory(
+      const std::string& id,
+      MailDeleteCalendarCategoryCallback callback) override;
+  void MailListAccountCalendars(
+      const std::string& account_id,
+      MailListAccountCalendarsCallback callback) override;
+  void MailSetCalendarVisibility(
+      const std::string& calendar_row_id,
+      bool visible,
+      MailSetCalendarVisibilityCallback callback) override;
+
+  // Behavior
+  void MailGetBehaviorPrefs(MailGetBehaviorPrefsCallback callback) override;
+  void MailSetBehaviorPref(const std::string& key,
+                           const std::string& value,
+                           MailSetBehaviorPrefCallback callback) override;
+
+  // AI
+  void MailGetAIConfig(const std::string& feature,
+                       MailGetAIConfigCallback callback) override;
+  void MailSetAIConfig(const std::string& feature,
+                       const std::string& config_json,
+                       MailSetAIConfigCallback callback) override;
+  void MailSetAIKey(const std::string& provider,
+                    const std::string& api_key,
+                    MailSetAIKeyCallback callback) override;
+
+  // Security (PGP/S-MIME)
+  void MailGeneratePgpKey(const std::string& account_id,
+                          const std::string& email,
+                          const std::string& passphrase,
+                          MailGeneratePgpKeyCallback callback) override;
+  void MailImportPgpKey(const std::string& account_id,
+                        const std::string& key_block,
+                        const std::optional<std::string>& passphrase,
+                        MailImportPgpKeyCallback callback) override;
+  void MailListPgpKeys(const std::string& account_id,
+                       MailListPgpKeysCallback callback) override;
+  void MailDeletePgpKey(const std::string& key_id,
+                        MailDeletePgpKeyCallback callback) override;
+  void MailSetDefaultPgpKey(const std::string& account_id,
+                            const std::string& key_id,
+                            MailSetDefaultPgpKeyCallback callback) override;
+  void MailImportSmimeIdentity(
+      const std::string& account_id,
+      const std::string& p12_data_base64,
+      const std::string& passphrase,
+      MailImportSmimeIdentityCallback callback) override;
+  void MailListSmimeIdentities(
+      const std::string& account_id,
+      MailListSmimeIdentitiesCallback callback) override;
+  void MailDeleteSmimeIdentity(
+      const std::string& id,
+      MailDeleteSmimeIdentityCallback callback) override;
+  void MailSetDefaultSmimeIdentity(
+      const std::string& account_id,
+      const std::string& identity_id,
+      MailSetDefaultSmimeIdentityCallback callback) override;
+
+  // MahoMailService::Observer overrides:
+  void OnMutation(const std::string& account_id,
+                  const std::string& payload) override;
+  void OnCalendar(const std::string& account_id,
+                  const std::string& payload) override;
 
  private:
   static const char* GetPrefPath(const std::string& maho_key);
@@ -220,17 +438,15 @@ class MahoSettingsPageHandler
   // emitted value, and pushes to the page only if something changed.
   void FlushNotify();
 
-  bool HandleFfiSetting(const std::string& key, const std::string& value);
+  enum class FfiResult { kNotHandled, kOk, kInvalid };
+  FfiResult HandleFfiSetting(const std::string& key, const std::string& value);
   void AppendFfiSettings(
       std::vector<maho_settings::mojom::SettingValuePtr>& settings);
-
-  void ScheduleExtensionNotify();
-  void FlushExtensionNotify();
-
 
   void OnRelayLoginCompleted(LoginCallback callback,
                              bool ok,
                              const std::string& error_message);
+  void OnProfileDeleted(DeleteProfileCallback callback, std::string json_res);
   void OnSubscriptionResponse(GetBillingInfoCallback callback,
                               bool refreshed_once,
                               std::unique_ptr<network::SimpleURLLoader> loader,
@@ -248,36 +464,10 @@ class MahoSettingsPageHandler
   base::OneShotTimer notify_timer_;
   std::string last_emitted_snapshot_;
 
-  base::OneShotTimer ext_notify_timer_;
-
-  base::ScopedObservation<maho::MahoExtensionStateBridge,
-                          maho::MahoExtensionStateBridge::Observer>
-      ext_bridge_observation_{this};
-
-  std::unique_ptr<extensions::ExtensionUninstallDialog> uninstall_dialog_;
-  RemoveExtensionCallback pending_remove_callback_;
-
-  struct PendingToggle {
-    PendingToggle();
-    ~PendingToggle();
-    bool target_state;
-    ToggleExtensionCallback callback;
-    base::OneShotTimer timer;
-  };
-  base::flat_map<std::string, std::unique_ptr<PendingToggle>> pending_toggles_;
-
-  void OnToggleTimeout(const std::string& extension_id);
-
-
   std::optional<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
   void OnProviderModelsRefreshed(const std::string& provider_id,
                                  const std::vector<std::string>& model_ids);
-  void OnReauthRevealComplete(
-      const std::string& password_id,
-      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
-      RevealPasswordCallback callback,
-      bool success);
   void OnReauthAddComplete(
       const std::string& domain,
       const std::string& username,
@@ -296,6 +486,13 @@ class MahoSettingsPageHandler
       std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
       DeletePasswordCallback callback,
       bool success);
+  void OnReauthUseVaultSecretComplete(
+      const std::string& item_id,
+      uint64_t expected_revision,
+      maho_settings::mojom::SecretAction action,
+      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+      UseVaultSecretCallback callback,
+      bool success);
 
   struct PendingByokSave {
     PendingByokSave(std::string provider,
@@ -312,6 +509,9 @@ class MahoSettingsPageHandler
 
   std::unique_ptr<maho::ai::MahoModelListFetcher> model_list_fetcher_;
   std::unique_ptr<maho::ai::MahoManagedConnectionTest> managed_connection_test_;
+  raw_ptr<MahoPasswordImportJob> password_import_job_ = nullptr;
+  scoped_refptr<ui::SelectFileDialog> password_import_select_file_dialog_;
+  SelectPasswordImportFileCallback password_import_file_callback_;
   double last_known_credit_balance_ = -1.0;
   double last_known_tier_ceiling_ = -1.0;
 

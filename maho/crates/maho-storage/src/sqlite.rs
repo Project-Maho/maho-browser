@@ -1,15 +1,27 @@
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
+use std::time::Duration;
 
 use rusqlite::Connection;
 
 use crate::StorageError;
+
+mod vault;
+pub use vault::{
+    EncryptedVaultItemRow, VaultAuditRow, VaultDeviceKeyRow, VaultGrantRow, VaultMetadataRow,
+    VaultPolicyRow, VaultRecoveryRow, VaultSyncVersionRow, VaultTombstoneCas, VaultTx,
+};
 
 /// Process-wide SQLCipher key slot. The browser (C++ via OSCrypt) injects the
 /// real key once at startup through [`set_sqlcipher_key`]; it is never baked
 /// into source. `open`/`open_in_memory` read from here so existing call sites
 /// keep their signatures while the key stays dependency-injected.
 static SQLCIPHER_KEY: RwLock<Option<String>> = RwLock::new(None);
+
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Cap for unindexed `LIKE '%q%'` suggestion scans (see `search_bookmarks`).
+const SEARCH_RESULT_LIMIT: i64 = 200;
 
 /// Inject the SQLCipher key used by [`SqliteStorage::open`] and
 /// [`SqliteStorage::open_in_memory`]. Call once before opening any database.
@@ -54,6 +66,31 @@ fn apply_key(conn: &Connection, key: &str) -> Result<(), StorageError> {
     ensure_sqlcipher_key(key)?;
     conn.pragma_update(None, "key", key)
         .map_err(StorageError::Encryption)
+}
+
+fn configure_connection(conn: &Connection, key: &str) -> Result<(), StorageError> {
+    apply_key(conn, key)?;
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+
+    // WAL + NORMAL. Must run AFTER `apply_key`: SQLCipher rejects pragmas on an
+    // unkeyed connection.
+    //
+    // Default rollback-journal + `synchronous = FULL` costs several fsyncs per
+    // write, and writes here land on the browser UI thread (every navigation
+    // calls `add_history_entry` through the synchronous FFI). WAL removes the
+    // journal rewrite; NORMAL stops fsyncing the WAL on every commit.
+    //
+    // Tradeoff: under WAL, `NORMAL` is durable against process crashes but a
+    // host power loss / OS crash can lose the most recent commits (the DB is
+    // never corrupted). This matches Chromium's own SQLite defaults.
+    //
+    // `journal_mode` returns a row, so it must be read with `query_row` —
+    // `execute` fails with `ExecuteReturnedResults`. The setting is persisted in
+    // the DB header, so re-applying it on every open is a no-op after the first.
+    let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get(0))?;
+    conn.execute("PRAGMA synchronous = NORMAL;", [])?;
+    Ok(())
 }
 
 /// A plaintext SQLite DB can read `sqlite_master` with no key; an encrypted
@@ -116,9 +153,7 @@ fn secure_delete_and_remove(path: &Path) -> std::io::Result<()> {
     let metadata = std::fs::metadata(path)?;
     let len = metadata.len();
 
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)?;
+    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
 
     let zero_buffer = vec![0u8; 65536];
     let mut remaining = len;
@@ -148,7 +183,11 @@ fn migrate_plaintext_to_encrypted_inner(
     // Boot cleanup: delete legacy plain backup if encrypted DB is already verified and healthy
     if backup_path.exists() && path.exists() && verify(path, key) {
         if let Err(e) = secure_delete_and_remove(&backup_path) {
-            eprintln!("Warning: Failed to clean up stale plain backup DB at {}: {}", backup_path.display(), e);
+            eprintln!(
+                "Warning: Failed to clean up stale plain backup DB at {}: {}",
+                backup_path.display(),
+                e
+            );
         }
     }
 
@@ -197,7 +236,11 @@ fn migrate_plaintext_to_encrypted_inner(
 
     // Securely delete and remove plain_backup file on success
     if let Err(e) = secure_delete_and_remove(&backup_path) {
-        eprintln!("Warning: Failed to securely delete plain backup DB at {}: {}", backup_path.display(), e);
+        eprintln!(
+            "Warning: Failed to securely delete plain backup DB at {}: {}",
+            backup_path.display(),
+            e
+        );
     }
 
     Ok(())
@@ -289,8 +332,7 @@ impl SqliteStorage {
     pub fn open_with_key(path: &str, key: &str) -> Result<Self, StorageError> {
         migrate_plaintext_to_encrypted(path, key)?;
         let conn = Connection::open(path)?;
-        apply_key(&conn, key)?;
-        conn.execute("PRAGMA foreign_keys = ON;", [])?;
+        configure_connection(&conn, key)?;
         let storage = Self {
             conn,
             path: path.to_string(),
@@ -310,8 +352,7 @@ impl SqliteStorage {
     /// Open an in-memory database with a caller-supplied key.
     pub fn open_in_memory_with_key(key: &str) -> Result<Self, StorageError> {
         let conn = Connection::open_in_memory()?;
-        apply_key(&conn, key)?;
-        conn.execute("PRAGMA foreign_keys = ON;", [])?;
+        configure_connection(&conn, key)?;
         let storage = Self {
             conn,
             path: ":memory:".to_string(),
@@ -332,10 +373,6 @@ impl SqliteStorage {
     }
 
     fn run_migrations(&self) -> Result<(), StorageError> {
-        // NOTE: password stored as plaintext TEXT column. Encryption at rest is a future improvement.
-        let _ = self
-            .conn
-            .execute("ALTER TABLE passwords ADD COLUMN password TEXT", []);
         let _ = self.conn.execute(
             "ALTER TABLE shortcuts ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
             [],
@@ -344,6 +381,24 @@ impl SqliteStorage {
             "ALTER TABLE shortcuts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
             [],
         );
+
+        // downloads: completed_at + mime_type added post-v1 (existing DBs lack them).
+        let _ = self
+            .conn
+            .execute("ALTER TABLE downloads ADD COLUMN completed_at TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE downloads ADD COLUMN mime_type TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE downloads ADD COLUMN chromium_guid TEXT", []);
+
+        // atc_rules: match_type added post-v1. Traffic rules persisted before
+        // this column existed lose their match type and are re-inferred on
+        // load (see MahoCore ATC restore).
+        let _ = self
+            .conn
+            .execute("ALTER TABLE atc_rules ADD COLUMN match_type TEXT", []);
 
         let has_dot_pos_x: bool = self
             .conn
@@ -550,6 +605,29 @@ impl SqliteStorage {
                 CREATE INDEX IF NOT EXISTS idx_custom_routines_enabled ON custom_routines(enabled);",
             )
             .map_err(|e| StorageError::Other(format!("custom_routines migration failed: {e}")))?;
+
+        // Durable routine-run ledger (routine inbox). Each row is one execution of
+        // a built-in or user-defined routine. `success = 0` rows carry the error
+        // text in `content`. `source` records how the run was triggered
+        // ("scheduled" | "manual" | "event"). This is the persistence layer behind
+        // the routine inbox: scheduled/manual/event runs are recorded here rather
+        // than discarded to logs.
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS routine_results (
+                    result_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    routine_id TEXT NOT NULL,
+                    ran_at INTEGER NOT NULL,
+                    success INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'manual'
+                );
+                CREATE INDEX IF NOT EXISTS idx_routine_results_routine
+                    ON routine_results(routine_id, ran_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_routine_results_ran_at
+                    ON routine_results(ran_at DESC);",
+            )
+            .map_err(|e| StorageError::Other(format!("routine_results migration failed: {e}")))?;
         Ok(())
     }
 
@@ -855,6 +933,35 @@ impl SqliteStorage {
                 policy TEXT NOT NULL DEFAULT 'ask',
                 PRIMARY KEY (origin, permission)
             );
+            CREATE TABLE IF NOT EXISTS content_blocker_lists (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                raw_content TEXT NOT NULL DEFAULT '',
+                rule_count INTEGER NOT NULL DEFAULT 0,
+                etag TEXT,
+                last_modified TEXT,
+                sha256 TEXT,
+                last_attempt_timestamp INTEGER,
+                last_success_timestamp INTEGER,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                last_status INTEGER,
+                last_error TEXT
+            );
+            CREATE TABLE IF NOT EXISTS content_blocker_exceptions (
+                key TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS content_blocker_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                mode TEXT NOT NULL DEFAULT 'native',
+                generation INTEGER NOT NULL DEFAULT 0,
+                engine_cache BLOB,
+                engine_version TEXT,
+                engine_hash TEXT,
+                updated_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS atc_rules (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -862,7 +969,8 @@ impl SqliteStorage {
                 url_pattern TEXT,
                 max_age_hours INTEGER,
                 max_tabs INTEGER,
-                enabled INTEGER NOT NULL DEFAULT 1
+                enabled INTEGER NOT NULL DEFAULT 1,
+                match_type TEXT
             );
             CREATE TABLE IF NOT EXISTS search_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -881,7 +989,10 @@ impl SqliteStorage {
                 received_bytes INTEGER NOT NULL DEFAULT 0,
                 state TEXT NOT NULL DEFAULT 'downloading',
                 file_path TEXT,
-                started_at TEXT NOT NULL
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                mime_type TEXT,
+                chromium_guid TEXT
             );
             CREATE TABLE IF NOT EXISTS bookmark_folders (
                 id TEXT PRIMARY KEY,
@@ -909,14 +1020,6 @@ impl SqliteStorage {
                 id TEXT PRIMARY KEY,
                 data TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS passwords (
-                id TEXT PRIMARY KEY,
-                domain TEXT NOT NULL,
-                username TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_used TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_passwords_domain ON passwords(domain);
             CREATE TABLE IF NOT EXISTS autofill_addresses (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -1054,6 +1157,8 @@ impl SqliteStorage {
             );
             CREATE INDEX IF NOT EXISTS idx_entity_versions_type ON entity_versions(entity_type);",
         )?;
+
+        self.initialize_vault_schema()?;
 
         let has_acked_at: bool = self
             .conn
@@ -1216,11 +1321,14 @@ impl SqliteStorage {
     }
 
     pub fn search_bookmarks(&self, query: &str) -> Result<Vec<BookmarkRecord>, StorageError> {
+        // Bounded: the leading-wildcard LIKE cannot use an index, so this is a
+        // full scan + sort. Without a cap it materializes every matching
+        // bookmark; callers only ever render a suggestion list.
         let mut stmt = self.conn.prepare(
-            "SELECT id, url, title, folder_id, created_at FROM bookmarks WHERE title LIKE ?1 OR url LIKE ?1 ORDER BY created_at DESC",
+            "SELECT id, url, title, folder_id, created_at FROM bookmarks WHERE title LIKE ?1 OR url LIKE ?1 ORDER BY created_at DESC LIMIT ?2",
         )?;
         let pattern = format!("%{query}%");
-        let rows = stmt.query_map(rusqlite::params![pattern], |row| {
+        let rows = stmt.query_map(rusqlite::params![pattern, SEARCH_RESULT_LIMIT], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1779,10 +1887,11 @@ impl SqliteStorage {
         max_age_hours: Option<u32>,
         max_tabs: Option<usize>,
         enabled: bool,
+        match_type: Option<&str>,
     ) -> Result<(), StorageError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO atc_rules (id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled],
+            "INSERT OR REPLACE INTO atc_rules (id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled, match_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled, match_type],
         )?;
         Ok(())
     }
@@ -1799,11 +1908,12 @@ impl SqliteStorage {
             Option<u32>,
             Option<usize>,
             bool,
+            Option<String>,
         )>,
         StorageError,
     > {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled FROM atc_rules",
+            "SELECT id, name, space_id, url_pattern, max_age_hours, max_tabs, enabled, match_type FROM atc_rules",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -1814,6 +1924,7 @@ impl SqliteStorage {
                 row.get::<_, Option<u32>>(4)?,
                 row.get::<_, Option<usize>>(5)?,
                 row.get::<_, bool>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         let mut results = Vec::new();
@@ -1904,10 +2015,13 @@ impl SqliteStorage {
         state: &str,
         file_path: Option<&str>,
         started_at: &str,
+        completed_at: Option<&str>,
+        mime_type: Option<&str>,
+        chromium_guid: Option<&str>,
     ) -> Result<(), StorageError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO downloads (id, filename, url, total_bytes, received_bytes, state, file_path, started_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![id, filename, url, total_bytes, received_bytes, state, file_path, started_at],
+            "INSERT OR REPLACE INTO downloads (id, filename, url, total_bytes, received_bytes, state, file_path, started_at, completed_at, mime_type, chromium_guid) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![id, filename, url, total_bytes, received_bytes, state, file_path, started_at, completed_at, mime_type, chromium_guid],
         )?;
         Ok(())
     }
@@ -1925,11 +2039,14 @@ impl SqliteStorage {
             String,
             Option<String>,
             String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
         )>,
         StorageError,
     > {
         let mut stmt = self.conn.prepare(
-            "SELECT id, filename, url, total_bytes, received_bytes, state, file_path, started_at FROM downloads ORDER BY started_at DESC",
+            "SELECT id, filename, url, total_bytes, received_bytes, state, file_path, started_at, completed_at, mime_type, chromium_guid FROM downloads ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -1941,6 +2058,9 @@ impl SqliteStorage {
                 row.get::<_, String>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
             ))
         })?;
         let mut results = Vec::new();
@@ -2019,49 +2139,36 @@ impl SqliteStorage {
         Ok(())
     }
 
-    // === Passwords ===
+    // === Passwords (legacy; removed by Vault cutover) ===
+    //
+    // The plaintext `passwords` table no longer exists. These signatures remain
+    // only so downstream `maho-core` callers keep compiling until Todos 10-12
+    // migrate them to the Vault APIs. They fail clearly and never recreate or
+    // write a plaintext password table.
 
     pub fn save_password(
         &self,
-        id: &str,
-        domain: &str,
-        username: &str,
-        created_at: &str,
-        password: Option<&str>,
+        _id: &str,
+        _domain: &str,
+        _username: &str,
+        _created_at: &str,
+        _password: Option<&str>,
     ) -> Result<(), StorageError> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO passwords (id, domain, username, created_at, password) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![id, domain, username, created_at, password],
-        )?;
-        Ok(())
+        Err(StorageError::Other(
+            "legacy plaintext password storage removed; use the Vault APIs".to_string(),
+        ))
     }
 
     pub fn get_all_passwords(&self) -> Result<Vec<PasswordRecord>, StorageError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, domain, username, created_at, last_used, password FROM passwords ORDER BY domain",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-            ))
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+        Err(StorageError::Other(
+            "legacy plaintext password storage removed; use the Vault APIs".to_string(),
+        ))
     }
 
-    pub fn delete_password(&self, id: &str) -> Result<bool, StorageError> {
-        let affected = self
-            .conn
-            .execute("DELETE FROM passwords WHERE id = ?1", rusqlite::params![id])?;
-        Ok(affected > 0)
+    pub fn delete_password(&self, _id: &str) -> Result<bool, StorageError> {
+        Err(StorageError::Other(
+            "legacy plaintext password storage removed; use the Vault APIs".to_string(),
+        ))
     }
 
     // === Autofill Addresses ===
@@ -3720,5 +3827,405 @@ impl SqliteStorage {
             rusqlite::params![session_id],
         );
         Ok(true)
+    }
+
+    // === Content Blocker Persistence ===
+
+    pub fn save_content_blocker_list(
+        &self,
+        list: &maho_types::content_blocking::FilterListMetadata,
+        raw_content: Option<&str>,
+    ) -> Result<(), StorageError> {
+        upsert_content_blocker_list(&self.conn, list, raw_content)
+    }
+
+    pub fn load_content_blocker_lists(
+        &self,
+    ) -> Result<Vec<(maho_types::content_blocking::FilterListMetadata, String)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, url, enabled, raw_content, rule_count, etag, last_modified, sha256,
+                    last_attempt_timestamp, last_success_timestamp, failure_count, last_status, last_error
+             FROM content_blocker_lists",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let enabled_int: i32 = row.get(3)?;
+            let list = maho_types::content_blocking::FilterListMetadata {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                url: row.get(2)?,
+                enabled: enabled_int != 0,
+                rule_count: row.get::<_, i64>(5)? as usize,
+                etag: row.get(6)?,
+                last_modified: row.get(7)?,
+                sha256: row.get(8)?,
+                last_attempt_timestamp: row.get(9)?,
+                last_success_timestamp: row.get(10)?,
+                failure_count: row.get(11)?,
+                last_status: row.get(12)?,
+                last_error: row.get(13)?,
+            };
+            let raw_content: String = row.get(4)?;
+            Ok((list, raw_content))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_content_blocker_list(&self, id: &str) -> Result<bool, StorageError> {
+        let count = self.conn.execute(
+            "DELETE FROM content_blocker_lists WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn save_site_exception(&self, key: &str, created_at: i64) -> Result<(), StorageError> {
+        upsert_site_exception(&self.conn, key, created_at)
+    }
+
+    pub fn delete_site_exception(&self, key: &str) -> Result<bool, StorageError> {
+        let count = self.conn.execute(
+            "DELETE FROM content_blocker_exceptions WHERE key = ?1",
+            rusqlite::params![key],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn load_site_exceptions(
+        &self,
+    ) -> Result<Vec<maho_types::content_blocking::CanonicalSiteException>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT key, created_at FROM content_blocker_exceptions ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(maho_types::content_blocking::CanonicalSiteException {
+                key: row.get(0)?,
+                created_at: row.get(1)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_content_blocker_state(
+        &self,
+        mode: maho_types::content_blocking::ContentBlockingMode,
+        generation: u64,
+        engine_cache: Option<&[u8]>,
+        engine_version: Option<&str>,
+        engine_hash: Option<&str>,
+    ) -> Result<(), StorageError> {
+        upsert_content_blocker_state(
+            &self.conn,
+            mode,
+            generation,
+            engine_cache,
+            engine_version,
+            engine_hash,
+        )
+    }
+
+    pub fn load_content_blocker_state(
+        &self,
+    ) -> Result<
+        Option<(
+            maho_types::content_blocking::ContentBlockingMode,
+            u64,
+            Option<Vec<u8>>,
+            Option<String>,
+            Option<String>,
+        )>,
+        StorageError,
+    > {
+        let result = self.conn.query_row(
+            "SELECT mode, generation, engine_cache, engine_version, engine_hash FROM content_blocker_state WHERE id = 1",
+            [],
+            |row| {
+                let mode_str: String = row.get(0)?;
+                let mode = match mode_str.as_str() {
+                    "native" => maho_types::content_blocking::ContentBlockingMode::Native,
+                    "extension" => maho_types::content_blocking::ContentBlockingMode::Extension,
+                    "disabled" => maho_types::content_blocking::ContentBlockingMode::Disabled,
+                    _ => maho_types::content_blocking::ContentBlockingMode::Unknown,
+                };
+                let gen: i64 = row.get(1)?;
+                let cache: Option<Vec<u8>> = row.get(2)?;
+                let ver: Option<String> = row.get(3)?;
+                let hash: Option<String> = row.get(4)?;
+                Ok((mode, gen as u64, cache, ver, hash))
+            },
+        );
+        match result {
+            Ok(res) => Ok(Some(res)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Run `body` inside one SQLite transaction over the content-blocker tables.
+    /// On `Ok` the transaction commits; on `Err` returned from `body` it is
+    /// dropped and SQLite rolls back every write, so the previously committed
+    /// lists, exceptions, and engine state stay byte-identical. This is the
+    /// atomic primitive the core lane composes candidate promotion on top of.
+    ///
+    /// `unchecked_transaction` is used because the connection is reached through
+    /// `&self`; all writes are single-threaded through `&self`, so the unchecked
+    /// borrow cannot race a second live transaction.
+    pub fn content_blocker_transaction<T>(
+        &self,
+        body: impl FnOnce(&ContentBlockerTx<'_>) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let conn: &Connection = &tx;
+        let handle = ContentBlockerTx { conn };
+        let value = body(&handle)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
+    /// Atomically replace the entire persisted content-blocker snapshot: every
+    /// filter list (metadata + last-known-good raw body), every canonical
+    /// exception, and the singleton engine state. Any failure rolls the whole
+    /// replacement back, leaving the prior snapshot intact.
+    pub fn replace_content_blocker_snapshot(
+        &self,
+        snapshot: &ContentBlockerSnapshot<'_>,
+    ) -> Result<(), StorageError> {
+        self.content_blocker_transaction(|tx| {
+            tx.clear_lists()?;
+            tx.clear_exceptions()?;
+            for (list, raw_content) in snapshot.lists {
+                tx.save_list(list, Some(raw_content.as_str()))?;
+            }
+            for exception in snapshot.exceptions {
+                tx.save_exception(&exception.key, exception.created_at)?;
+            }
+            tx.save_state(
+                snapshot.mode,
+                snapshot.generation,
+                snapshot.engine_cache,
+                snapshot.engine_version,
+                snapshot.engine_hash,
+            )
+        })
+    }
+}
+
+/// A full content-blocker persistence snapshot handed to
+/// [`SqliteStorage::replace_content_blocker_snapshot`] for atomic replacement.
+pub struct ContentBlockerSnapshot<'a> {
+    pub mode: maho_types::content_blocking::ContentBlockingMode,
+    pub generation: u64,
+    pub engine_cache: Option<&'a [u8]>,
+    pub engine_version: Option<&'a str>,
+    pub engine_hash: Option<&'a str>,
+    pub lists: &'a [(maho_types::content_blocking::FilterListMetadata, String)],
+    pub exceptions: &'a [maho_types::content_blocking::CanonicalSiteException],
+}
+
+/// Transaction-scoped writer handed to the closure passed to
+/// [`SqliteStorage::content_blocker_transaction`]. Every write goes through the
+/// enclosing transaction, so returning `Err` from the closure rolls them back.
+pub struct ContentBlockerTx<'conn> {
+    conn: &'conn Connection,
+}
+
+impl ContentBlockerTx<'_> {
+    pub fn clear_lists(&self) -> Result<(), StorageError> {
+        self.conn.execute("DELETE FROM content_blocker_lists", [])?;
+        Ok(())
+    }
+
+    pub fn clear_exceptions(&self) -> Result<(), StorageError> {
+        self.conn
+            .execute("DELETE FROM content_blocker_exceptions", [])?;
+        Ok(())
+    }
+
+    pub fn save_list(
+        &self,
+        list: &maho_types::content_blocking::FilterListMetadata,
+        raw_content: Option<&str>,
+    ) -> Result<(), StorageError> {
+        upsert_content_blocker_list(self.conn, list, raw_content)
+    }
+
+    pub fn delete_list(&self, id: &str) -> Result<bool, StorageError> {
+        let count = self.conn.execute(
+            "DELETE FROM content_blocker_lists WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn save_exception(&self, key: &str, created_at: i64) -> Result<(), StorageError> {
+        upsert_site_exception(self.conn, key, created_at)
+    }
+
+    pub fn delete_exception(&self, key: &str) -> Result<bool, StorageError> {
+        let count = self.conn.execute(
+            "DELETE FROM content_blocker_exceptions WHERE key = ?1",
+            rusqlite::params![key],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn save_state(
+        &self,
+        mode: maho_types::content_blocking::ContentBlockingMode,
+        generation: u64,
+        engine_cache: Option<&[u8]>,
+        engine_version: Option<&str>,
+        engine_hash: Option<&str>,
+    ) -> Result<(), StorageError> {
+        upsert_content_blocker_state(
+            self.conn,
+            mode,
+            generation,
+            engine_cache,
+            engine_version,
+            engine_hash,
+        )
+    }
+}
+
+fn upsert_content_blocker_list(
+    conn: &Connection,
+    list: &maho_types::content_blocking::FilterListMetadata,
+    raw_content: Option<&str>,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "INSERT INTO content_blocker_lists (
+            id, name, url, enabled, raw_content, rule_count, etag, last_modified, sha256,
+            last_attempt_timestamp, last_success_timestamp, failure_count, last_status, last_error
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            url = excluded.url,
+            enabled = excluded.enabled,
+            raw_content = CASE WHEN ?15 THEN excluded.raw_content ELSE raw_content END,
+            rule_count = excluded.rule_count,
+            etag = excluded.etag,
+            last_modified = excluded.last_modified,
+            sha256 = excluded.sha256,
+            last_attempt_timestamp = excluded.last_attempt_timestamp,
+            last_success_timestamp = excluded.last_success_timestamp,
+            failure_count = excluded.failure_count,
+            last_status = excluded.last_status,
+            last_error = excluded.last_error",
+        rusqlite::params![
+            list.id,
+            list.name,
+            list.url,
+            if list.enabled { 1 } else { 0 },
+            raw_content.unwrap_or(""),
+            list.rule_count as i64,
+            list.etag,
+            list.last_modified,
+            list.sha256,
+            list.last_attempt_timestamp,
+            list.last_success_timestamp,
+            list.failure_count,
+            list.last_status,
+            list.last_error,
+            raw_content.is_some(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_site_exception(
+    conn: &Connection,
+    key: &str,
+    created_at: i64,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "INSERT INTO content_blocker_exceptions (key, created_at) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET created_at = excluded.created_at",
+        rusqlite::params![key, created_at],
+    )?;
+    Ok(())
+}
+
+fn upsert_content_blocker_state(
+    conn: &Connection,
+    mode: maho_types::content_blocking::ContentBlockingMode,
+    generation: u64,
+    engine_cache: Option<&[u8]>,
+    engine_version: Option<&str>,
+    engine_hash: Option<&str>,
+) -> Result<(), StorageError> {
+    let mode_str = match mode {
+        maho_types::content_blocking::ContentBlockingMode::Native => "native",
+        maho_types::content_blocking::ContentBlockingMode::Extension => "extension",
+        maho_types::content_blocking::ContentBlockingMode::Disabled => "disabled",
+        maho_types::content_blocking::ContentBlockingMode::Unknown => "unknown",
+    };
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO content_blocker_state (id, mode, generation, engine_cache, engine_version, engine_hash, updated_at)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+            mode = excluded.mode,
+            generation = excluded.generation,
+            engine_cache = excluded.engine_cache,
+            engine_version = excluded.engine_version,
+            engine_hash = excluded.engine_hash,
+            updated_at = excluded.updated_at",
+        rusqlite::params![mode_str, generation as i64, engine_cache, engine_version, engine_hash, now],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod content_blocker_load_tests {
+    use super::*;
+
+    fn store() -> SqliteStorage {
+        SqliteStorage::open_in_memory_with_key("l2-load-test-key").unwrap()
+    }
+
+    #[test]
+    fn load_state_maps_unrecognized_mode_string_to_unknown() {
+        let db = store();
+        db.conn
+            .execute(
+                "INSERT INTO content_blocker_state (id, mode, generation, updated_at) VALUES (1, ?1, 3, 0)",
+                rusqlite::params!["future_mode_v99"],
+            )
+            .unwrap();
+
+        let (mode, _, _, _, _) = db.load_content_blocker_state().unwrap().unwrap();
+        assert_eq!(
+            mode,
+            maho_types::content_blocking::ContentBlockingMode::Unknown
+        );
+        assert!(
+            !mode.is_native(),
+            "unrecognized mode string must never load as native"
+        );
+    }
+
+    #[test]
+    fn load_state_maps_native_string_to_native() {
+        let db = store();
+        db.conn
+            .execute(
+                "INSERT INTO content_blocker_state (id, mode, generation, updated_at) VALUES (1, 'native', 1, 0)",
+                [],
+            )
+            .unwrap();
+
+        let (mode, _, _, _, _) = db.load_content_blocker_state().unwrap().unwrap();
+        assert_eq!(
+            mode,
+            maho_types::content_blocking::ContentBlockingMode::Native
+        );
     }
 }

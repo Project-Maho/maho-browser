@@ -1,4 +1,4 @@
-export type ControlKind = 'text'|'number'|'toggle'|'select'|'slider'|'textarea';
+export type ControlKind = 'text'|'toggle'|'select'|'slider'|'textarea';
 
 export type PaneKind = 'live'|'hidden'|'embed';
 
@@ -7,9 +7,10 @@ export type DomainId =
     | 'look-and-feel'
     | 'identity'
     | 'productivity'
-    | 'protection';
+    | 'protection'
+    | 'mail';
 
-export interface ControlOption {
+interface ControlOption {
   value: string;
   label: string;
   displayLabel?: string;
@@ -25,6 +26,7 @@ export interface SettingMetadata {
   min?: number;
   max?: number;
   step?: number;
+  unit?: string;
 }
 
 export interface SettingDefinition {
@@ -41,7 +43,8 @@ export interface PaneDefinition {
   domain: DomainId;
   groupKeys?: string[];
   embedUrl?: string;
-  contentKind?: 'settings'|'profiles'|'atc'|'ai'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'content-blocker'|'extensions';
+  contentKind?: 'profiles'|'atc'|'ai'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'content-blocker'|'extensions'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-ai'|'mail-security';
+  externalAction?: 'openExtensions';
 }
 
 export interface LiveCardDefinition {

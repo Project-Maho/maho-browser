@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::autofill::{AutofillSettings, AutofillSettingsUpdate};
+use crate::content_blocking::ContentBlockingMode;
 use crate::keyboard::KeyModifier;
 use crate::max_settings::{MaxSettings, MaxSettingsUpdate};
 
@@ -164,12 +165,28 @@ fn default_site_search_entries() -> Vec<SiteSearchEntry> {
     ]
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct PrivacySettings {
     pub do_not_track: bool,
     pub block_third_party_cookies: bool,
+    pub content_blocking_mode: ContentBlockingMode,
     pub content_blocker_enabled: bool,
+    pub popup_blocker_enabled: bool,
+    pub search_suggestions_enabled: bool,
+    pub secure_dns_enabled: bool,
+    pub secure_dns_provider: String,
+    pub secure_dns_custom_url: Option<String>,
+    pub clear_data_on_exit: bool,
+    pub safe_browsing_enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivacySettingsDe {
+    pub do_not_track: bool,
+    pub block_third_party_cookies: bool,
+    pub content_blocking_mode: Option<ContentBlockingMode>,
+    pub content_blocker_enabled: Option<bool>,
     pub popup_blocker_enabled: bool,
     #[serde(default)]
     pub search_suggestions_enabled: bool,
@@ -183,6 +200,56 @@ pub struct PrivacySettings {
     pub clear_data_on_exit: bool,
     #[serde(default = "default_true")]
     pub safe_browsing_enabled: bool,
+}
+
+impl<'de> Deserialize<'de> for PrivacySettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = PrivacySettingsDe::deserialize(deserializer)?;
+        let mode = match (raw.content_blocking_mode, raw.content_blocker_enabled) {
+            (Some(mode), _) => mode,
+            (None, Some(enabled)) => ContentBlockingMode::from_legacy_bool(enabled),
+            (None, None) => ContentBlockingMode::Native,
+        };
+        let content_blocker_enabled = mode.to_legacy_bool();
+        Ok(PrivacySettings {
+            do_not_track: raw.do_not_track,
+            block_third_party_cookies: raw.block_third_party_cookies,
+            content_blocking_mode: mode,
+            content_blocker_enabled,
+            popup_blocker_enabled: raw.popup_blocker_enabled,
+            search_suggestions_enabled: raw.search_suggestions_enabled,
+            secure_dns_enabled: raw.secure_dns_enabled,
+            secure_dns_provider: raw.secure_dns_provider,
+            secure_dns_custom_url: raw.secure_dns_custom_url,
+            clear_data_on_exit: raw.clear_data_on_exit,
+            safe_browsing_enabled: raw.safe_browsing_enabled,
+        })
+    }
+}
+
+impl Serialize for PrivacySettings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("PrivacySettings", 11)?;
+        state.serialize_field("doNotTrack", &self.do_not_track)?;
+        state.serialize_field("blockThirdPartyCookies", &self.block_third_party_cookies)?;
+        state.serialize_field("contentBlockingMode", &self.content_blocking_mode)?;
+        state.serialize_field("contentBlockerEnabled", &self.content_blocker_enabled)?;
+        state.serialize_field("popupBlockerEnabled", &self.popup_blocker_enabled)?;
+        state.serialize_field("searchSuggestionsEnabled", &self.search_suggestions_enabled)?;
+        state.serialize_field("secureDnsEnabled", &self.secure_dns_enabled)?;
+        state.serialize_field("secureDnsProvider", &self.secure_dns_provider)?;
+        state.serialize_field("secureDnsCustomUrl", &self.secure_dns_custom_url)?;
+        state.serialize_field("clearDataOnExit", &self.clear_data_on_exit)?;
+        state.serialize_field("safeBrowsingEnabled", &self.safe_browsing_enabled)?;
+        state.end()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -236,9 +303,15 @@ pub struct ToolbarItem {
     pub label: String,
 }
 
+fn default_settings_schema_version() -> u32 {
+    2
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(default = "default_settings_schema_version")]
+    pub settings_schema_version: u32,
     pub general: GeneralSettings,
     pub appearance: AppearanceSettings,
     pub privacy: PrivacySettings,
@@ -333,6 +406,8 @@ pub struct PrivacySettingsUpdate {
     pub do_not_track: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_third_party_cookies: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_blocking_mode: Option<ContentBlockingMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_blocker_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
