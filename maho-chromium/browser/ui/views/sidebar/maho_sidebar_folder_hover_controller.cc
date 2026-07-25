@@ -35,8 +35,13 @@ MahoSidebarFolderHoverController::~MahoSidebarFolderHoverController() {
 void MahoSidebarFolderHoverController::ScheduleShow(
     views::View* anchor,
     std::string folder_id,
-    std::u16string folder_name) {
+    std::u16string folder_name,
+    std::vector<SidebarTreeNode> children) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (children.empty()) {
+    HideImmediately();
+    return;
+  }
   if (popup_widget_ && open_folder_id_ == folder_id) {
     hide_grace_timer_.Stop();
     return;
@@ -50,14 +55,7 @@ void MahoSidebarFolderHoverController::ScheduleShow(
   anchor_tracker_.SetView(anchor);
   pending_folder_id_ = std::move(folder_id);
   pending_folder_name_ = std::move(folder_name);
-
-  // H5: Retrieve children snapshot on demand from anchor row to avoid copying O(N) children
-  auto* folder_row = views::AsViewClass<SidebarFolderRowView>(anchor);
-  if (folder_row) {
-    pending_children_ = folder_row->children_snapshot_;
-  } else {
-    pending_children_.clear();
-  }
+  pending_children_ = std::move(children);
 
   show_timer_.Start(FROM_HERE, kHoverShowDelay,
                     base::BindOnce(&MahoSidebarFolderHoverController::ShowNow,
@@ -92,10 +90,11 @@ void MahoSidebarFolderHoverController::HideImmediately() {
   }
 
   if (popup_widget_) {
-    popup_widget_->RemoveObserver(this);
-    popup_widget_->Close();
+    views::Widget* widget = popup_widget_;
     popup_widget_ = nullptr;
     open_folder_id_.clear();
+    widget->RemoveObserver(this);
+    widget->CloseNow();
   }
 }
 

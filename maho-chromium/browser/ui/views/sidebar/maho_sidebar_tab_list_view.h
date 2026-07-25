@@ -3,8 +3,10 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_TAB_LIST_VIEW_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_TAB_LIST_VIEW_H_
 
+#include <cstdint>
 #include <memory>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -136,10 +138,12 @@ struct SidebarVisualRow {
   int indent_depth = 0;
   int height_dp = 0;          // deterministic (see MeasureVisualRowHeight).
   int cumulative_top_dp = 0;  // prefix sum within the section.
-  // Shallow copy: folders/splits keep children; tabs are childless.
+  // Shallow projection: folders/tabs are childless; splits keep children.
   SidebarTreeNode node;
   std::string parent_folder_id;
   std::string folder_next_sibling_id;                        // folder-only
+  bool folder_has_children = false;
+  bool split_force_stacked = false;
   SidebarNodeKind lane_target_kind = SidebarNodeKind::kTab;  // lane-only
   std::string lane_target_id;                                // lane-only
   bool lane_append = false;                                  // lane-only
@@ -155,7 +159,8 @@ int MeasureVisualRowHeight(const SidebarVisualRow& row);
 // prefix sum within the section.
 void BuildSectionProjection(const std::vector<SidebarTreeNode>& nodes,
                             MahoSidebarTabSection section,
-                            std::vector<SidebarVisualRow>* out);
+                            std::vector<SidebarVisualRow>* out,
+                            bool force_split_stacked);
 
 class MahoSidebarTabListView : public views::View,
                                public views::ContextMenuController,
@@ -168,7 +173,7 @@ class MahoSidebarTabListView : public views::View,
   MahoSidebarTabListView& operator=(const MahoSidebarTabListView&) = delete;
   ~MahoSidebarTabListView() override;
 
-  void Update(const MahoSidebarTabListModel& model, Browser* browser);
+  void Update(MahoSidebarTabListModel model, Browser* browser);
   void SetPrivateMode(bool private_mode);
   void SetLastFavoritesModel(const MahoSidebarFavoritesModel& model);
 
@@ -256,6 +261,8 @@ class MahoSidebarTabListView : public views::View,
   // Public so the sidebar drop path can wake tabs before splitting them.
   content::WebContents* WakeSuspendedTab(const std::string& tab_id);
 
+  bool IsTabRowRealizedAt(int strip_index) const;
+
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
   // Requests that the folder with the given id enter inline name-editing mode
   // after the next rebuild completes (used for newly-created folders).
@@ -290,6 +297,18 @@ class MahoSidebarTabListView : public views::View,
     return scroll_layout_invalidation_count_for_testing_;
   }
   void ResetScrollLayoutInvalidationStateForTesting();
+  uint64_t row_favicon_generation_for_testing(
+      const std::string& tab_id) const;
+  void RunFaviconLoadedForTesting(
+      const std::string& tab_id,
+      const GURL& requested_url,
+      uint64_t generation,
+      const favicon_base::FaviconImageResult& result) {
+    OnFaviconLoaded(tab_id, requested_url, generation, result);
+  }
+  void ForgetTabRowForTesting(const std::string& tab_id) {
+    tab_id_to_row_view_.erase(tab_id);
+  }
 
   // Returns true if a re-entrant ReconcileSectionWindow call is correctly
   // blocked (no-op) while an outer reconcile is notionally in progress — i.e.
@@ -362,9 +381,18 @@ class MahoSidebarTabListView : public views::View,
 
   bool CoreSuspendedForTab(const std::string& tab_id) const;
 
+  const std::vector<SidebarTreeNode>* FindFolderChildrenForTesting(
+      const std::string& folder_id) const {
+    return FindFolderChildren(folder_id);
+  }
+
   int rebuild_rows_count_for_testing() const {
     return rebuild_rows_count_for_testing_;
   }
+  int accessibility_rebuild_count_for_testing() const {
+    return accessibility_rebuild_count_for_testing_;
+  }
+  void set_accessibility_tree_enabled_for_testing(bool enabled);
 
   void ApplyCosmeticRefresh();
 
@@ -436,7 +464,10 @@ class MahoSidebarTabListView : public views::View,
   // Rebuilds the AXVirtualView subtree that exposes the FULL per-section tab/
   // folder projection to assistive tech, independent of which rows are
   // realized. Realized row Views are AX-ignored so they don't duplicate these.
+  void ScheduleAccessibilityTreeRebuild();
+  void RunScheduledAccessibilityTreeRebuild();
   void RebuildAccessibilityTree();
+  bool ShouldBuildAccessibilityTree() const;
   void RebuildTreeNodes(views::View* parent,
                         const std::vector<SidebarTreeNode>& nodes,
                         MahoSidebarTabSection section,
@@ -495,7 +526,6 @@ class MahoSidebarTabListView : public views::View,
   // ui::SimpleMenuModel::Delegate (Clear menu only).
   void ExecuteCommand(int command_id, int event_flags) override;
   void ToggleFolderExpanded(const std::string& folder_id);
-  void IncrementalToggleFolder(const std::string& folder_id, bool expand);
   void CommitTabTitleChange(const std::string& tab_id,
                             const std::u16string& new_title);
   void CommitFolderNameChange(const std::string& folder_id,
@@ -504,9 +534,25 @@ class MahoSidebarTabListView : public views::View,
   void PruneLocalTitleCache(const MahoSidebarTabListModel& model);
   void HandleTabRowHoverStart(views::View* anchor_view, int tab_index);
   void HandleTabRowHoverEnd();
+  void ScheduleFolderHoverPopup(views::View* anchor,
+                                std::string folder_id,
+                                std::u16string folder_name);
   void OnFaviconLoaded(const std::string& tab_id,
                        const GURL& requested_url,
+                       uint64_t generation,
                        const favicon_base::FaviconImageResult& result);
+  void RefreshRowFaviconRequestsFromModel(
+      const MahoSidebarTabListModel& model);
+  uint64_t UpdateRowFaviconRequest(const std::string& tab_id,
+                                   const GURL& requested_url);
+  bool IsCurrentRowFaviconRequest(const std::string& tab_id,
+                                   const GURL& requested_url,
+                                  uint64_t generation) const;
+
+  struct RowFaviconRequestState {
+    GURL requested_url;
+    uint64_t generation = 0;
+  };
 
   raw_ptr<Browser> browser_ = nullptr;
   bool private_mode_ = false;
@@ -554,10 +600,12 @@ class MahoSidebarTabListView : public views::View,
   // reconciling_ ends after each reconcile; this spans the full scroll
   // reconcile plus synchronous presentation callback.
   bool scroll_presenting_ = false;
+  bool rebuilding_rows_ = false;
 
   std::unique_ptr<SidebarVisibilityManager> visibility_manager_;
 
   base::CancelableTaskTracker favicon_task_tracker_;
+  std::map<std::string, RowFaviconRequestState> row_favicon_requests_;
 
   bool rebuild_deferred_ = false;
   MahoSidebarTabListModel deferred_model_;
@@ -590,6 +638,9 @@ class MahoSidebarTabListView : public views::View,
   raw_ptr<views::View> trigger_button_ = nullptr;
 
   int rebuild_rows_count_for_testing_ = 0;
+  int accessibility_rebuild_count_for_testing_ = 0;
+  bool accessibility_rebuild_pending_ = false;
+  std::optional<bool> accessibility_tree_enabled_for_testing_;
 
   std::map<std::string, raw_ptr<SidebarFolderRowView>> folder_rows_by_id_;
 
@@ -640,6 +691,8 @@ class MahoSidebarTabListView : public views::View,
   // past the realized window are reachable; realized-only callers keep using
   // GetTabRowsInVisualOrder().
   std::vector<std::string> GetTabVisualOrderIds() const;
+  const std::vector<SidebarTreeNode>* FindFolderChildren(
+      const std::string& folder_id) const;
 
   // Section-local visual projections, rebuilt in RebuildRows. Drive windowed
   // realization via ReconcileSectionWindow(); the projected height of a
@@ -797,6 +850,7 @@ class SidebarTabRowView : public views::View,
   bool is_selected() const { return is_selected_; }
 
   void SetFavicon(ui::ImageModel image);
+  ui::ImageModel favicon_for_testing() const;
   const std::string& tab_id() const { return tab_id_; }
   const std::string& containing_folder_id() const { return source_parent_folder_id_; }
 
@@ -898,7 +952,8 @@ class SidebarFolderRowView : public views::View,
                                                     const std::u16string&)>
                            rename_callback,
                        std::string next_sibling_folder_id = std::string(),
-                       std::string parent_folder_id = std::string());
+                       std::string parent_folder_id = std::string(),
+                       bool has_children = false);
   SidebarFolderRowView(const SidebarFolderRowView&) = delete;
   SidebarFolderRowView& operator=(const SidebarFolderRowView&) = delete;
   ~SidebarFolderRowView() override;
@@ -955,8 +1010,6 @@ class SidebarFolderRowView : public views::View,
     spring_expand_callback_ = std::move(callback);
   }
 
-  std::vector<SidebarTreeNode> children_snapshot_;
-
   bool is_drop_indicator_visible_for_testing() const {
     return drag_over_drop_target_;
   }
@@ -996,6 +1049,7 @@ class SidebarFolderRowView : public views::View,
   const bool folder_is_pinned_;
   const std::string next_sibling_folder_id_;
   const std::string parent_folder_id_;
+  const bool has_children_;
   bool is_expanded_;
   MahoSidebarTabSection section_;
   raw_ptr<Browser> browser_ = nullptr;

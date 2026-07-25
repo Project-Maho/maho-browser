@@ -16,7 +16,10 @@
 #include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/favicon_status.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/maho_core_holder.h"
@@ -34,6 +37,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -42,6 +46,7 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/image/image.h"
 #include "ui/views/accessibility/ax_virtual_view.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/scroll_view.h"
@@ -94,6 +99,31 @@ void ExpectNoTabsRows(views::View* rows) {
       << "+ New Tab should be the single CTA child";
   EXPECT_TRUE(rows->children()[0]->GetVisible())
       << "+ New Tab should be visible";
+}
+
+gfx::Image MakeSidebarFaviconForTesting(SkColor color) {
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(16, 16);
+  bitmap.eraseColor(color);
+  return gfx::Image::CreateFrom1xBitmap(bitmap);
+}
+
+bool SetWebContentsFaviconForTesting(content::WebContents* contents,
+                                     const GURL& icon_url,
+                                     const gfx::Image& image) {
+  if (!contents) {
+    return false;
+  }
+  content::NavigationEntry* entry =
+      contents->GetController().GetLastCommittedEntry();
+  if (!entry) {
+    return false;
+  }
+  content::FaviconStatus& status = entry->GetFavicon();
+  status.image = image;
+  status.url = icon_url;
+  status.valid = true;
+  return true;
 }
 
 SidebarTreeNode MakeScrollPerfTab(int tab_number, bool pinned = false) {
@@ -1626,7 +1656,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 // When ResolveTabStripIndexForTabId is called with a known tab_id,
 // Then it returns the correct strip index using only the helper scan.
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                         ResolveTabStripIndexUsesHelperScan) {
+                          ResolveTabStripIndexUsesHelperScan) {
   SeedProfile(2);
   base::RunLoop().RunUntilIdle();
   ResolveViews();
@@ -1658,7 +1688,127 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                         RuntimeNewTabIdentityAligned) {
+                       TabRowApplyCosmeticRefreshUpdatesFavicon) {
+  SeedProfile(1);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+  RunAllPendingTasks();
+  StopSidebarObservations();
+  tab_list_->set_accessibility_tree_enabled_for_testing(false);
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  ASSERT_GT(strip->count(), 0);
+  content::WebContents* contents = strip->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  const std::string tab_id = helper->stable_tab_id();
+  ASSERT_FALSE(tab_id.empty());
+
+  const gfx::Image red = MakeSidebarFaviconForTesting(SK_ColorRED);
+  const gfx::Image blue = MakeSidebarFaviconForTesting(SK_ColorBLUE);
+  ASSERT_TRUE(SetWebContentsFaviconForTesting(
+      contents, GURL("https://example.com/red-favicon.ico"), red));
+
+  MahoSidebarTabListModel model;
+  model.active_space_id = GetActiveSpaceId();
+  model.active_tab.tab_id = tab_id;
+  model.active_tab.index = 0;
+  SidebarTreeNode node;
+  node.kind = SidebarNodeKind::kTab;
+  node.tab_id = tab_id;
+  node.tab_strip_index = 0;
+  node.title = u"Favicon test";
+  node.host = u"example.com";
+  node.url = contents->GetVisibleURL().is_valid()
+                 ? contents->GetVisibleURL().spec()
+                 : "https://example.com/favicon-test";
+  model.normal_tree.push_back(node);
+
+  MahoSidebarTabListView* tab_list = GetTabListView();
+  ASSERT_TRUE(tab_list);
+  tab_list->Update(model, browser());
+  SidebarTabRowView* row = tab_list->FindTabRowByIdForTesting(tab_id);
+  ASSERT_TRUE(row);
+  EXPECT_EQ(ui::ImageModel::FromImage(red), row->favicon_for_testing());
+
+  ASSERT_TRUE(SetWebContentsFaviconForTesting(
+      contents, GURL("https://example.com/blue-favicon.ico"), blue));
+  tab_list->ApplyCosmeticRefresh();
+
+  EXPECT_EQ(ui::ImageModel::FromImage(blue), row->favicon_for_testing())
+      << "ApplyCosmeticRefresh must refresh the realized row favicon after creation";
+  RunAllPendingTasks();
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       TabRowCreateRejectsStaleTabStripIndexFavicon) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+  RunAllPendingTasks();
+  StopSidebarObservations();
+  tab_list_->set_accessibility_tree_enabled_for_testing(false);
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  ASSERT_GE(strip->count(), 2);
+  content::WebContents* first_contents = strip->GetWebContentsAt(0);
+  content::WebContents* second_contents = strip->GetWebContentsAt(1);
+  ASSERT_TRUE(first_contents);
+  ASSERT_TRUE(second_contents);
+
+  auto* first_helper = MahoTabIdHelper::FromWebContents(first_contents);
+  auto* second_helper = MahoTabIdHelper::FromWebContents(second_contents);
+  ASSERT_TRUE(first_helper);
+  ASSERT_TRUE(second_helper);
+  const std::string first_tab_id = first_helper->stable_tab_id();
+  const std::string second_tab_id = second_helper->stable_tab_id();
+  ASSERT_FALSE(first_tab_id.empty());
+  ASSERT_FALSE(second_tab_id.empty());
+  ASSERT_NE(first_tab_id, second_tab_id);
+
+  const gfx::Image first_favicon = MakeSidebarFaviconForTesting(SK_ColorRED);
+  const gfx::Image second_favicon = MakeSidebarFaviconForTesting(SK_ColorBLUE);
+  ASSERT_TRUE(SetWebContentsFaviconForTesting(
+      first_contents, GURL("https://example.com/first-favicon.ico"),
+      first_favicon));
+  ASSERT_TRUE(SetWebContentsFaviconForTesting(
+      second_contents, GURL("https://example.com/second-favicon.ico"),
+      second_favicon));
+
+  MahoSidebarTabListModel model;
+  model.active_space_id = GetActiveSpaceId();
+  model.active_tab.tab_id = first_tab_id;
+  model.active_tab.index = 0;
+  SidebarTreeNode stale_node;
+  stale_node.kind = SidebarNodeKind::kTab;
+  stale_node.tab_id = first_tab_id;
+  stale_node.tab_strip_index = 1;
+  stale_node.title = u"Stale-index row";
+  stale_node.host = u"example.com";
+  stale_node.url = first_contents->GetVisibleURL().is_valid()
+                       ? first_contents->GetVisibleURL().spec()
+                       : "https://example.com/stale-index";
+  model.normal_tree.push_back(stale_node);
+
+  MahoSidebarTabListView* tab_list = GetTabListView();
+  ASSERT_TRUE(tab_list);
+  tab_list->Update(model, browser());
+  SidebarTabRowView* row = tab_list->FindTabRowByIdForTesting(first_tab_id);
+  ASSERT_TRUE(row);
+
+  EXPECT_EQ(ui::ImageModel::FromImage(first_favicon), row->favicon_for_testing())
+      << "CreateTabRowView must resolve by tab_id instead of trusting stale tab_strip_index";
+  EXPECT_FALSE(ui::ImageModel::FromImage(second_favicon) ==
+               row->favicon_for_testing())
+      << "A stale index must not leak the neighbor tab favicon into this row";
+  RunAllPendingTasks();
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                          RuntimeNewTabIdentityAligned) {
   SeedProfile(2);
   base::RunLoop().RunUntilIdle();
   ResolveViews();
@@ -2560,12 +2710,134 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   }
 }
 
+// B2 regression: cosmetic refreshes requested while the ScrollView is actively
+// scrolling must be held (pending) and applied exactly once after the scroll-
+// idle transition — not during scrolling.
+//
+// Uses the real ScrollView callback path (AddContentsScrolledCallback →
+// OnTabListScrolled), ScheduleCosmeticRefresh(), and the deterministic idle
+// hook SimulateScrollIdleForTesting() — no wall-clock sleeps.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollIdle_CosmeticRefreshDeferredDuringScroll) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(80), browser());
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_EQ(scroll->contents(), tab_list_);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  ASSERT_GE(scroll->vertical_scroll_bar()->GetMaxPosition(), 10)
+      << "Scroll content must be tall enough for the 10dp test offset";
+
+  // Precondition: no scrolling state, no pending cosmetic work.
+  EXPECT_FALSE(sidebar_->is_scrolling_for_testing());
+  EXPECT_FALSE(sidebar_->cosmetic_refresh_pending_for_testing());
+  const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
+
+  // Trigger a real contents-scrolled callback, which sets is_scrolling_ = true.
+  scroll->ScrollToOffset(gfx::PointF(0, 10));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == 10; }));
+  EXPECT_TRUE(sidebar_->is_scrolling_for_testing());
+
+  // While scrolling: ScheduleCosmeticRefresh() must mark pending, not apply.
+  sidebar_->ScheduleCosmeticRefresh();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(sidebar_->cosmetic_refresh_pending_for_testing());
+  EXPECT_EQ(apply_count_before, sidebar_->cosmetic_apply_count_for_testing())
+      << "ApplyCosmeticRefresh must not run during active scrolling";
+
+  // Multiple cosmetic refresh requests during the same scroll window still
+  // coalesce to a single pending flag (idempotent).
+  sidebar_->ScheduleCosmeticRefresh();
+  sidebar_->ScheduleCosmeticRefresh();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(sidebar_->cosmetic_refresh_pending_for_testing());
+  EXPECT_EQ(apply_count_before, sidebar_->cosmetic_apply_count_for_testing());
+
+  // Fire the scroll-idle transition deterministically (no sleep).
+  sidebar_->SimulateScrollIdleForTesting();
+  EXPECT_FALSE(sidebar_->is_scrolling_for_testing());
+  EXPECT_FALSE(sidebar_->cosmetic_refresh_pending_for_testing());
+
+  // The cosmetic debounce timer is now armed; fire it deterministically.
+  // RunUntilIdle() does not advance OneShotTimers, so use the test hook.
+  sidebar_->FireCosmeticDebounceForTesting();
+  EXPECT_EQ(apply_count_before + 1,
+            sidebar_->cosmetic_apply_count_for_testing())
+      << "ApplyCosmeticRefresh must fire exactly once after scroll-idle";
+}
+
+// B2 regression (issue 1): a cosmetic refresh armed while idle (debounce timer
+// running) must be converted to pending — not applied — if a real scroll starts
+// before the 16ms window expires.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollIdle_ArmedCosmeticConvertedToPendingOnScroll) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(80), browser());
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_EQ(scroll->contents(), tab_list_);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  ASSERT_GE(scroll->vertical_scroll_bar()->GetMaxPosition(), 10)
+      << "Scroll content must be tall enough for the 10dp test offset";
+
+  EXPECT_FALSE(sidebar_->is_scrolling_for_testing());
+  EXPECT_FALSE(sidebar_->cosmetic_refresh_pending_for_testing());
+  const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
+
+  // Arm the cosmetic debounce timer while idle (normal fast-path).
+  sidebar_->ScheduleCosmeticRefresh();
+  EXPECT_FALSE(sidebar_->cosmetic_refresh_pending_for_testing());
+  EXPECT_EQ(apply_count_before, sidebar_->cosmetic_apply_count_for_testing());
+
+  // Scroll starts before the 16ms debounce fires — real callback path.
+  scroll->ScrollToOffset(gfx::PointF(0, 10));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == 10; }));
+
+  // OnTabListScrolled() must have stopped the timer and set pending.
+  EXPECT_TRUE(sidebar_->is_scrolling_for_testing());
+  EXPECT_TRUE(sidebar_->cosmetic_refresh_pending_for_testing())
+      << "Armed cosmetic timer must be converted to pending when scroll starts";
+  EXPECT_EQ(apply_count_before, sidebar_->cosmetic_apply_count_for_testing())
+      << "ApplyCosmeticRefresh must not have run during scroll onset";
+
+  // Deterministic idle + debounce release must produce exactly one apply.
+  sidebar_->SimulateScrollIdleForTesting();
+  sidebar_->FireCosmeticDebounceForTesting();
+  EXPECT_EQ(apply_count_before + 1,
+            sidebar_->cosmetic_apply_count_for_testing())
+      << "Exactly one apply after pending work is released";
+}
+
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                        SectionProjectionMirrorsRebuildTreeOrder) {
   MahoSidebarTabListModel model = MakeProjectionModel();
   std::vector<SidebarVisualRow> projection;
   BuildSectionProjection(model.normal_tree, MahoSidebarTabSection::kNormal,
-                         &projection);
+                         &projection, false);
 
   struct ExpectedRow {
     SidebarVisualRowKind kind;
@@ -2608,6 +2880,46 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       SectionProjectionKeepsOnlySplitChildren) {
+  MahoSidebarTabListModel model = MakeProjectionModel();
+  std::vector<SidebarVisualRow> projection;
+  BuildSectionProjection(model.normal_tree, MahoSidebarTabSection::kNormal,
+                         &projection, false);
+
+  const SidebarVisualRow* expanded_folder = nullptr;
+  const SidebarVisualRow* collapsed_folder = nullptr;
+  const SidebarVisualRow* sticky_tab = nullptr;
+  const SidebarVisualRow* split_group = nullptr;
+  for (const SidebarVisualRow& row : projection) {
+    if (row.kind == SidebarVisualRowKind::kFolder &&
+        row.stable_id == "proj-f1") {
+      expanded_folder = &row;
+    } else if (row.kind == SidebarVisualRowKind::kFolder &&
+               row.stable_id == "proj-f2") {
+      collapsed_folder = &row;
+    } else if (row.kind == SidebarVisualRowKind::kCollapsedStickyTab) {
+      sticky_tab = &row;
+    } else if (row.kind == SidebarVisualRowKind::kSplitGroup) {
+      split_group = &row;
+    }
+  }
+
+  ASSERT_NE(expanded_folder, nullptr);
+  ASSERT_NE(collapsed_folder, nullptr);
+  ASSERT_NE(sticky_tab, nullptr);
+  ASSERT_NE(split_group, nullptr);
+
+  EXPECT_TRUE(expanded_folder->node.children.empty())
+      << "Folder projection rows must not deep-copy their child subtree";
+  EXPECT_TRUE(collapsed_folder->node.children.empty())
+      << "Collapsed folder projection rows must not retain hidden children";
+  EXPECT_TRUE(sticky_tab->node.children.empty())
+      << "Sticky tab rows are single tab descriptors, not subtree owners";
+  EXPECT_EQ(2u, split_group->node.children.size())
+      << "Split groups still need their member nodes for layout and AX";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                        SectionProjectionMatchesRealizedEagerTree) {
   RunAllPendingTasks();
   StopSidebarObservations();
@@ -2619,7 +2931,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   std::vector<SidebarVisualRow> expected;
   BuildSectionProjection(model.normal_tree, MahoSidebarTabSection::kNormal,
-                         &expected);
+                         &expected, false);
   const std::vector<SidebarVisualRow>& wired =
       tab_list_->normal_projection_for_testing();
   ASSERT_EQ(expected.size(), wired.size());
@@ -2684,6 +2996,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   split_side_by_side.node.children.push_back(MakeProjectionTab("m0"));
   split_side_by_side.node.children.push_back(MakeProjectionTab("m1"));
   EXPECT_EQ(36, MeasureVisualRowHeight(split_side_by_side));
+  split_side_by_side.split_force_stacked = true;
+  EXPECT_EQ(2 * (36 + 2 * 2) + 1,
+            MeasureVisualRowHeight(split_side_by_side));
 
   SidebarVisualRow split_stacked;
   split_stacked.kind = SidebarVisualRowKind::kSplitGroup;
@@ -2715,6 +3030,28 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
       gfx::Rect(0, 50, 100, 40), tops, total_height);
   EXPECT_EQ(1, spanning.first_visible_index);
   EXPECT_EQ(2, spanning.last_visible_index);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ProjectionVisibleRangeAccessorMatchesVectorWrapper) {
+  SidebarVisibilityManager manager(SidebarVisibilityManager::Config{
+      .row_height_dp = 36,
+      .buffer_rows_above = 0,
+      .buffer_rows_below = 1,
+      .drag_overscan_rows = 0});
+  const std::vector<int> tops = {0, 36, 72, 144, 180};
+  const int total_height = 216;
+  const gfx::Rect viewport(0, 80, 100, 40);
+
+  auto wrapper = manager.ComputeVisibleRangeForProjection(viewport, tops,
+                                                          total_height);
+  auto accessor = manager.ComputeVisibleRange(
+      viewport, static_cast<int>(tops.size()), total_height,
+      [&tops](int index) { return tops[index]; });
+
+  EXPECT_EQ(wrapper.first_visible_index, accessor.first_visible_index);
+  EXPECT_EQ(wrapper.last_visible_index, accessor.last_visible_index);
+  EXPECT_EQ(wrapper.total_rows, accessor.total_rows);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -2814,6 +3151,162 @@ int CountAxTabNodes(const views::ViewAccessibility& ax) {
     walk(child.get());
   }
   return count;
+}
+
+int ExpectedProjectionAxTabCount(const MahoSidebarTabListModel& model) {
+  std::vector<SidebarVisualRow> pinned;
+  std::vector<SidebarVisualRow> normal;
+  BuildSectionProjection(model.pinned_tree, MahoSidebarTabSection::kPinned,
+                         &pinned, false);
+  BuildSectionProjection(model.normal_tree, MahoSidebarTabSection::kNormal,
+                         &normal, false);
+  return static_cast<int>(ReconstructProjectionTabOrder(pinned).size() +
+                          ReconstructProjectionTabOrder(normal).size());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       AccessibilityRebuildIsDeferredAndCoalesced) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeProjectionModel();
+  const int expected_tabs = ExpectedProjectionAxTabCount(model);
+  ASSERT_GT(expected_tabs, 0);
+
+  tab_list_->set_accessibility_tree_enabled_for_testing(true);
+  tab_list_->Update(model, browser());
+  EXPECT_EQ(0, tab_list_->accessibility_rebuild_count_for_testing())
+      << "RebuildRows should only post the a11y rebuild, not run it inline";
+  EXPECT_EQ(0, CountAxTabNodes(tab_list_->GetViewAccessibility()))
+      << "AX tree should be populated by the deferred task";
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, tab_list_->accessibility_rebuild_count_for_testing());
+  EXPECT_EQ(expected_tabs, CountAxTabNodes(tab_list_->GetViewAccessibility()))
+      << "Deferred a11y rebuild must still expose the full projection";
+
+  MahoSidebarTabListModel model_with_extra = model;
+  model_with_extra.normal_tree.push_back(MakeProjectionTab("proj-extra-a"));
+  MahoSidebarTabListModel model_with_two_extra = model_with_extra;
+  model_with_two_extra.normal_tree.push_back(
+      MakeProjectionTab("proj-extra-b"));
+  tab_list_->Update(model_with_extra, browser());
+  tab_list_->Update(model_with_two_extra, browser());
+  EXPECT_EQ(1, tab_list_->accessibility_rebuild_count_for_testing())
+      << "Multiple rebuilds in the same burst should coalesce before idle";
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(2, tab_list_->accessibility_rebuild_count_for_testing())
+      << "The burst should produce one additional a11y rebuild";
+  EXPECT_EQ(ExpectedProjectionAxTabCount(model_with_two_extra),
+            CountAxTabNodes(tab_list_->GetViewAccessibility()));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       FolderChildrenLookupSurvivesChildlessProjectionRows) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeProjectionModel();
+  tab_list_->Update(model, browser());
+  base::RunLoop().RunUntilIdle();
+
+  const std::vector<SidebarTreeNode>* children =
+      tab_list_->FindFolderChildrenForTesting("proj-f1");
+  ASSERT_NE(children, nullptr)
+      << "Folder hover should resolve children from last_model_ on demand";
+  ASSERT_EQ(2u, children->size());
+  EXPECT_EQ("proj-c0", (*children)[0].tab_id);
+  EXPECT_EQ("proj-c1", (*children)[1].tab_id);
+
+  const std::vector<SidebarVisualRow>& projection =
+      tab_list_->normal_projection_for_testing();
+  const auto folder_row = std::ranges::find_if(
+      projection, [](const SidebarVisualRow& row) {
+        return row.kind == SidebarVisualRowKind::kFolder &&
+               row.stable_id == "proj-f1";
+      });
+  ASSERT_NE(folder_row, projection.end());
+  EXPECT_TRUE(folder_row->node.children.empty())
+      << "The on-demand lookup, not projection storage, owns hover children";
+  EXPECT_TRUE(folder_row->folder_has_children)
+      << "Folder hover still needs a cheap child-presence bit after shallow copy";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       SelectionFastPathSchedulesAccessibilityRebuild) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->set_accessibility_tree_enabled_for_testing(true);
+  tab_list_->Update(MakeProjectionModel(), browser());
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(1, tab_list_->accessibility_rebuild_count_for_testing());
+
+  tab_list_->ToggleTabSelected("proj-t0");
+  EXPECT_EQ(1, tab_list_->accessibility_rebuild_count_for_testing());
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(2, tab_list_->accessibility_rebuild_count_for_testing())
+      << "Selection-only changes must refresh the virtual AX selected state";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       BackgroundAllTabChangeSkipsUnrealizedRows) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->set_accessibility_tree_enabled_for_testing(true);
+  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  ASSERT_TRUE(tab_list_->GetWidget());
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
+  const int non_realized_background_index =
+      browser()->tab_strip_model()->active_index() + 1000;
+  ASSERT_FALSE(tab_list_->IsTabRowRealizedAt(non_realized_background_index));
+
+  sidebar_->OnTabChangedAtForTesting(
+      nullptr, non_realized_background_index, TabChangeType::kAll);
+  sidebar_->FireCosmeticDebounceForTesting();
+
+  EXPECT_EQ(apply_count_before, sidebar_->cosmetic_apply_count_for_testing())
+      << "background kAll changes for non-realized rows should not schedule a "
+         "cosmetic refresh";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       BackgroundAllTabChangeKeepsRealizedRowsRefreshing) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+  StopSidebarObservations();
+
+  auto state = GetViewState();
+  tab_list_->Update(state.tab_list, browser());
+  ASSERT_TRUE(tab_list_->GetWidget());
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  ASSERT_GE(strip->count(), 2);
+  const int active_index = strip->active_index();
+  ASSERT_TRUE(strip->ContainsIndex(active_index));
+  const int realized_background_index = active_index == 0 ? 1 : 0;
+  ASSERT_TRUE(strip->ContainsIndex(realized_background_index));
+  ASSERT_NE(active_index, realized_background_index);
+  ASSERT_TRUE(tab_list_->IsTabRowRealizedAt(realized_background_index));
+
+  const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
+
+  sidebar_->OnTabChangedAtForTesting(nullptr, realized_background_index,
+                                     TabChangeType::kAll);
+  sidebar_->FireCosmeticDebounceForTesting();
+
+  EXPECT_EQ(apply_count_before + 1,
+            sidebar_->cosmetic_apply_count_for_testing())
+      << "realized background kAll changes should still schedule a cosmetic "
+         "refresh";
 }
 
 // --- T5: off-window reveal + focus ---

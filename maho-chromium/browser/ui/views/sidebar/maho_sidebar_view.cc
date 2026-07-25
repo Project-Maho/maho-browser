@@ -157,6 +157,14 @@ std::unique_ptr<ui::LayerTreeOwner> DeepRecreateLayers(ui::LayerOwner* root) {
   return old_tree;
 }
 
+views::View::DropCallback MakeNoOpDropCallback() {
+  return base::BindOnce(
+      [](const ui::DropTargetEvent&, ui::mojom::DragOperation& output_drag_op,
+         std::unique_ptr<ui::LayerTreeOwner>) {
+        output_drag_op = ui::mojom::DragOperation::kNone;
+      });
+}
+
 }  // namespace
 
 BEGIN_METADATA(MahoSidebarView)
@@ -165,7 +173,18 @@ END_METADATA
 MahoSidebarView::MahoSidebarView(Browser* browser)
     : browser_(browser),
       last_focused_body_view_tracker_(std::make_unique<views::ViewTracker>()) {
+  // R-12: Derive the exact-primary-Incognito flag from the profile before
+  // BuildUi() so the first ApplySidebarBackground() paints the private surface
+  // instead of the general branch (SetPrivateAppearance() otherwise arrives a
+  // frame later). Presentation-only; the OTR data gate is is_otr_ below.
+  is_private_ = browser_ && browser_->profile() &&
+                browser_->profile()->IsIncognitoProfile() &&
+                browser_->profile()->IsPrimaryOTRProfile();
   BuildUi();
+
+  if (!browser_) {
+    return;
+  }
 
   // R-11: OTR (Incognito/Guest/system) sidebar reads only the current
   // window's TabStripModel. Never touch MahoCore, SpaceBridge, favorites
@@ -965,6 +984,12 @@ void MahoSidebarView::OpenLibrary() {
 
 void MahoSidebarView::OpenLibraryCategory(
     MahoSidebarLibraryRailView::Category category) {
+  // R-11: The library (archived tabs / downloads) reads the regular profile's
+  // MahoCore. No OTR window (primary Incognito, Guest, or other OTR) may open
+  // it, or it would leak regular-profile data into an off-the-record surface.
+  if (is_otr_) {
+    return;
+  }
   active_library_category_ = category;
   if (current_body_mode_ != MahoSidebarBodyMode::kLibrary) {
     SetBodyMode(MahoSidebarBodyMode::kLibrary);
@@ -1052,6 +1077,9 @@ bool MahoSidebarView::ActivateFavoriteByIndex(size_t index) {
 
 void MahoSidebarView::OpenLibrary(
     MahoSidebarLibraryRailView::Category category) {
+  if (is_otr_) {
+    return;
+  }
   active_library_category_ = category;
   SetBodyMode(MahoSidebarBodyMode::kLibrary);
 }
@@ -1171,6 +1199,24 @@ void MahoSidebarView::RefreshAllSynchronously() {
       state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result)));
 }
 
+void MahoSidebarView::RefreshFavoritesSynchronouslyAfterDrop() {
+  if (is_otr_ || is_private_) {
+    return;
+  }
+  std::string active_space_id_json;
+  if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
+    const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
+    if (!active_space_id.empty()) {
+      active_space_id_json = base::GetQuotedJSONString(active_space_id);
+    }
+  }
+  state_adapter_.SetFavoritesModel(
+      MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+          active_space_id_json));
+  UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+  ScheduleRefreshAll();
+}
+
 void MahoSidebarView::RefreshPrivateSidebar() {
   // R-11: Window-local, MahoCore/Space-free rebuild. BuildTabListModel reads
   // only browser_->tab_strip_model() when no v2 FFI tree is cached (which the
@@ -1182,7 +1228,7 @@ void MahoSidebarView::RefreshPrivateSidebar() {
 }
 
 void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
-  LOG(INFO) << "OnBackgroundStateReady start";
+  DVLOG(1) << "OnBackgroundStateReady start";
   if (background_state_ready_callback_for_testing_) {
     if (!background_state_ready_callback_for_testing_.Run(this, result)) {
       return;
@@ -1195,8 +1241,9 @@ void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result
     return;
   }
 
-  auto model = state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result));
-  ApplyViewState(model);
+  auto model =
+      state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result));
+  ApplyViewState(std::move(model));
 
   if (current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
       active_library_category_ ==
@@ -1208,13 +1255,14 @@ void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result
   refresh_state_ = RefreshState::kIdle;
 }
 
-void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
+void MahoSidebarView::ApplyViewState(MahoSidebarViewStateModel model) {
   if (space_switch_anim_in_progress_) {
     FinishSpaceSlide();
   }
 
   int slide_dir = 0;
   bool should_animate = ShouldAnimateSpaceSwitch(model, &slide_dir);
+  std::string next_active_space_id = model.tab_list.active_space_id;
 
   if (should_animate) {
     if (GetWidget()) {
@@ -1264,7 +1312,7 @@ void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
   UpdateTopBar(model.top_bar);
   UpdateSearch(model.search);
   UpdateFavorites(model.favorites);
-  UpdateTabList(model.tab_list);
+  UpdateTabList(std::move(model.tab_list));
   UpdateFooter(model.footer);
 
   if (should_animate && outgoing_space_layer_owner_) {
@@ -1274,7 +1322,7 @@ void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
     StartSpaceSlide(slide_dir);
   }
 
-  last_rendered_active_space_id_ = model.tab_list.active_space_id;
+  last_rendered_active_space_id_ = std::move(next_active_space_id);
 }
 
 bool MahoSidebarView::ShouldAnimateSpaceSwitch(
@@ -1389,14 +1437,14 @@ void MahoSidebarView::UpdateFavorites(const MahoSidebarFavoritesModel& model) {
   }
 }
 
-void MahoSidebarView::UpdateTabList(const MahoSidebarTabListModel& model) {
-  if (tab_list_view_) {
-    tab_list_view_->Update(model, browser_);
-  }
+void MahoSidebarView::UpdateTabList(MahoSidebarTabListModel model) {
   if (space_header_view_ && !is_private_) {
     UpdateSidebarSpaceHeaderRow(space_header_view_, model.active_space_icon,
                                 model.active_space_name);
     space_header_view_->SetVisible(!model.active_space_name.empty());
+  }
+  if (tab_list_view_) {
+    tab_list_view_->Update(std::move(model), browser_);
   }
 }
 
@@ -1501,8 +1549,8 @@ void MahoSidebarView::OnTabStripModelChanged(
     case TabStripModelChange::kMoved: ch = "Moved"; break;
     case TabStripModelChange::kReplaced: ch = "Replaced"; break;
   }
-  LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged type=" << ch
-            << " active_tab_changed=" << selection.active_tab_changed();
+  DVLOG(1) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged type=" << ch
+           << " active_tab_changed=" << selection.active_tab_changed();
 
   // Strip-index-shifting changes invalidate the tab_id->index cache; clear it
   // so a stale entry can't resolve a row click / CloseTabById to a neighbor.
@@ -1561,8 +1609,8 @@ void MahoSidebarView::OnTabStripModelChanged(
         UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
       }
       refresh_active_tab_chrome();
-      LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_select) "
-                << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+      DVLOG(1) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_select) "
+               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
       return;
     }
   }
@@ -1580,8 +1628,8 @@ void MahoSidebarView::OnTabStripModelChanged(
       UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
     }
     refresh_active_tab_chrome();
-    LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake_flip) "
-              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+    DVLOG(1) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake_flip) "
+             << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
 
@@ -1594,8 +1642,8 @@ void MahoSidebarView::OnTabStripModelChanged(
         UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
       }
       refresh_active_tab_chrome();
-      LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake) "
-                << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+      DVLOG(1) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake) "
+               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
       return;
     }
   }
@@ -1626,7 +1674,7 @@ void MahoSidebarView::OnTabStripModelChanged(
           UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
         }
         refresh_active_tab_chrome();
-        LOG(INFO)
+        DVLOG(1)
             << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_suspend) "
             << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
         return;
@@ -1646,10 +1694,10 @@ void MahoSidebarView::OnTabStripModelChanged(
     }
   }
 
-  LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged -> ScheduleRefreshAll";
+  DVLOG(1) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged -> ScheduleRefreshAll";
   ScheduleRefreshAll();
-  LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(slow) "
-            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+  DVLOG(1) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(slow) "
+           << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void MahoSidebarView::OnSplitTabChanged(const SplitTabChange& change) {
@@ -1659,14 +1707,18 @@ void MahoSidebarView::OnSplitTabChanged(const SplitTabChange& change) {
 void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
                                      int index,
                                      TabChangeType change_type) {
+  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
   if (change_type == TabChangeType::kAll) {
+    if (strip && index != strip->active_index() &&
+        (!tab_list_view_ || !tab_list_view_->IsTabRowRealizedAt(index))) {
+      return;
+    }
     ScheduleCosmeticRefresh();
     return;
   }
   // P3: Skip ScheduleRefreshAll for non-active tab changes; only the active
   // tab's title/favicon update needs immediate sidebar reflection. With 870+
   // tabs, background loads fire OnTabChangedAt hundreds of times per second.
-  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
   if (strip && index != strip->active_index()) {
     return;
   }
@@ -1704,9 +1756,9 @@ void MahoSidebarView::OnTabPinnedStateChanged(tabs::TabInterface* tab,
       }
     }
   }
-  LOG(INFO) << "MahoPinnedDebug OnTabPinnedStateChanged: index=" << index
-            << " pinned=" << pinned << " core_tab_id='" << core_tab_id
-            << "' sync_skipped=" << sync_skipped;
+  DVLOG(1) << "MahoPinnedDebug OnTabPinnedStateChanged: index=" << index
+           << " pinned=" << pinned << " core_tab_id='" << core_tab_id
+           << "' sync_skipped=" << sync_skipped;
   if (tab_list_view_ && sync_skipped) {
     if (core_tab_id.empty()) {
       content::WebContents* contents =
@@ -1786,7 +1838,7 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged(bool is_structural) {
   if (is_structural) {
     OnSpaceProfileBridgeChanged();
   } else {
-    LOG(INFO) << "[MAHO_PERF] NotifyChanged cosmetic_skipped_rebuild=true";
+    DVLOG(1) << "[MAHO_PERF] NotifyChanged cosmetic_skipped_rebuild=true";
     ScheduleCosmeticRefresh();
   }
 }
@@ -1881,6 +1933,13 @@ int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
 
+  if (is_private_ || is_otr_) {
+    if (favorites_view_->is_drag_reveal_active_for_testing()) {
+      favorites_view_->CollapseFromDrag();
+    }
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+
   SidebarDragPayload payload;
   if (!ReadMahoDragData(event.data(), payload) ||
       payload.node_kind != SidebarNodeKind::kTab) {
@@ -1918,16 +1977,19 @@ int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
 
 views::View::DropCallback MahoSidebarView::GetDropCallback(
     const ui::DropTargetEvent& event) {
-  if (!favorites_view_) {
-    return base::BindOnce(
-        [](const ui::DropTargetEvent&, ui::mojom::DragOperation& output_drag_op,
-           std::unique_ptr<ui::LayerTreeOwner>) {
-          output_drag_op = ui::mojom::DragOperation::kNone;
-        });
+  if (!favorites_view_ || is_private_ || is_otr_) {
+    if (favorites_view_) {
+      favorites_view_->OnFavoritesZoneExited();
+    }
+    return MakeNoOpDropCallback();
   }
 
   gfx::Point fav_location = event.location();
   views::View::ConvertPointToTarget(this, favorites_view_, &fav_location);
+  if (!gfx::Rect(favorites_view_->size()).Contains(fav_location)) {
+    favorites_view_->OnFavoritesZoneExited();
+    return MakeNoOpDropCallback();
+  }
   ui::DropTargetEvent fav_event(event.data(), gfx::PointF(fav_location),
                                 event.root_location_f(),
                                 event.source_operations());

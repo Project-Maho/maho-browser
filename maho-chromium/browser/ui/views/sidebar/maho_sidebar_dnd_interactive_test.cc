@@ -2,10 +2,9 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
-#include <map>
-
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
@@ -24,13 +23,28 @@ class MahoSidebarDndInteractiveTest
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
                        DragReordersFavoriteTile) {
   SeedProfile(2);
+  tab_list_->set_accessibility_tree_enabled_for_testing(false);
+  RunAllPendingTasks();
   observer_.Clear();
 
   auto state = GetViewState();
   ASSERT_GE(state.favorites.items.size(), 2u);
 
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    if (!favorites_ || !favorites_->GetWidget()) {
+      return false;
+    }
+    favorites_->GetWidget()->LayoutRootViewIfNecessary();
+    views::View* tile = favorites_->GetTileForTesting(1);
+    return tile && tile->GetVisible() && tile->parent();
+  }));
   views::View* target_tile = favorites_->GetTileForTesting(1);
   ASSERT_TRUE(target_tile);
+  ASSERT_TRUE(target_tile->parent());
+  gfx::Point drop_point = target_tile->bounds().CenterPoint();
+  views::View::ConvertPointToTarget(target_tile->parent(), favorites_,
+                                    &drop_point);
 
   SidebarDragPayload payload;
   payload.node_kind = SidebarNodeKind::kTab;
@@ -40,16 +54,80 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
 
   ui::OSExchangeData data;
   WriteMahoDragData(payload, &data);
-  ui::DropTargetEvent event(data, gfx::PointF(5, 5), gfx::PointF(5, 5),
+  ui::DropTargetEvent event(data, gfx::PointF(drop_point),
+                            gfx::PointF(drop_point),
                             static_cast<int>(ui::mojom::DragOperation::kMove));
-  target_tile->OnDragUpdated(event);
-  auto callback = target_tile->GetDropCallback(event);
+  EXPECT_EQ(favorites_->OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  auto callback = favorites_->GetDropCallbackForTesting(event);
   ASSERT_TRUE(callback);
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
-  target_tile->OnDragExited();
+  favorites_->OnDragExited();
 
   EXPECT_TRUE(observer_.HasEvent("reorder_favorite"));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       FavoriteDropThenSelectionFastPathKeepsReorderedOrder) {
+  SeedProfile(2);
+  ResolveViews();
+  tab_list_->set_accessibility_tree_enabled_for_testing(false);
+  RunAllPendingTasks();
+  observer_.Clear();
+
+  auto state = GetViewState();
+  ASSERT_GE(state.favorites.items.size(), 2u);
+  const std::string moved_tab_id = state.favorites.items[0].tab_id;
+  const std::string expected_first_tab_id = state.favorites.items[1].tab_id;
+  ASSERT_FALSE(moved_tab_id.empty());
+  ASSERT_FALSE(expected_first_tab_id.empty());
+  ASSERT_GE(browser()->tab_strip_model()->count(), 2);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    if (!favorites_ || !favorites_->GetWidget()) {
+      return false;
+    }
+    favorites_->GetWidget()->LayoutRootViewIfNecessary();
+    views::View* tile = favorites_->GetTileForTesting(1);
+    return tile && tile->GetVisible() && tile->parent();
+  }));
+  views::View* target_tile = favorites_->GetTileForTesting(1);
+  ASSERT_TRUE(target_tile);
+  ASSERT_TRUE(target_tile->parent());
+  gfx::Point drop_point = target_tile->bounds().CenterPoint();
+  views::View::ConvertPointToTarget(target_tile->parent(), favorites_,
+                                    &drop_point);
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = moved_tab_id;
+  payload.origin = SidebarDragOrigin::kFavorites;
+  payload.space_id = state.tab_list.active_space_id;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(data, gfx::PointF(drop_point),
+                            gfx::PointF(drop_point),
+                            static_cast<int>(ui::mojom::DragOperation::kMove));
+  favorites_->OnDragUpdated(event);
+  auto callback = favorites_->GetDropCallbackForTesting(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_TRUE(observer_.HasEvent("reorder_favorite"));
+  EXPECT_EQ(favorites_->tile_tab_id_for_testing(0), expected_first_tab_id);
+
+  const int active_index = browser()->tab_strip_model()->active_index();
+  const int next_index = active_index == 0 ? 1 : 0;
+  browser()->tab_strip_model()->ActivateTabAt(next_index);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(favorites_->tile_tab_id_for_testing(0), expected_first_tab_id)
+      << "A selection-only fast path must repaint from the refreshed favorite "
+         "model, not from the pre-drop order cached in state_adapter_";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabToPinnedSection) {

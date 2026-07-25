@@ -7,25 +7,30 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/values.h"
+#include "components/favicon_base/favicon_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/image/image.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/test/button_test_api.h"
@@ -151,6 +156,29 @@ std::optional<base::Value> ParseJson(const std::string& json) {
 
 views::Button::PressedCallback NoOpPressedCallback() {
   return base::BindRepeating([](const ui::Event&) {});
+}
+
+favicon_base::FaviconImageResult MakeFaviconResult(SkColor color) {
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(8, 8);
+  bitmap.eraseColor(color);
+
+  favicon_base::FaviconImageResult result;
+  result.image = gfx::Image::CreateFrom1xBitmap(bitmap);
+  return result;
+}
+
+MahoSidebarFavoritesModel MakeFavoritesModelForTesting(size_t count) {
+  MahoSidebarFavoritesModel model;
+  for (size_t index = 0; index < count; ++index) {
+    MahoSidebarFavoriteItemModel item;
+    item.tab_id = "fav-" + std::to_string(index + 1);
+    item.url = GURL("https://favorite" + std::to_string(index + 1) +
+                    ".example");
+    item.title = u"Favorite";
+    model.items.push_back(item);
+  }
+  return model;
 }
 
 class SidebarDnDDispatchTest : public views::ViewsTestBase {
@@ -577,6 +605,138 @@ TEST_F(SidebarDnDDispatchTest, FavoriteReorderDispatchesReorderFavorite) {
   const base::DictValue& dict = parsed->GetDict();
   ASSERT_TRUE(dict.Find("tab_id") != nullptr);
   ASSERT_TRUE(dict.Find("new_index") != nullptr);
+}
+
+TEST_F(SidebarDnDDispatchTest, PrivateSidebarDragDoesNotRevealFavorites) {
+  MahoSidebarView sidebar(/*browser=*/nullptr);
+  sidebar.SetPrivateFlagsForTesting(/*is_private=*/true, /*is_otr=*/true);
+  sidebar.SetBoundsRect(gfx::Rect(0, 0, 240, 300));
+
+  MahoSidebarFavoritesGridView* favorites = sidebar.favorites_view_for_testing();
+  ASSERT_TRUE(favorites);
+  favorites->SetVisible(false);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(10, 10));
+
+  EXPECT_EQ(sidebar.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kNone));
+  EXPECT_FALSE(favorites->GetVisible());
+  EXPECT_FALSE(favorites->is_drag_reveal_active_for_testing());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       SidebarOutsideFavoritesDropCallbackReturnsNone) {
+  MahoSidebarView sidebar(/*browser=*/nullptr);
+  sidebar.SetPrivateFlagsForTesting(false, false);
+  sidebar.SetBoundsRect(gfx::Rect(0, 0, 240, 300));
+
+  MahoSidebarFavoritesGridView* favorites = sidebar.favorites_view_for_testing();
+  ASSERT_TRUE(favorites);
+  favorites->SetVisible(true);
+  favorites->SetBoundsRect(gfx::Rect(0, 0, 220, 80));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent inside_event = MakeDropEvent(data, gfx::Point(5, 5));
+  EXPECT_EQ(favorites->OnDragUpdated(inside_event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_TRUE(favorites->insertion_preview_visible_for_testing());
+
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(500, 500));
+  auto callback = sidebar.GetDropCallback(event);
+  ASSERT_TRUE(callback);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  EXPECT_EQ(output, ui::mojom::DragOperation::kNone);
+  EXPECT_TRUE(observer_.events.empty());
+  EXPECT_FALSE(favorites->insertion_preview_visible_for_testing());
+  EXPECT_FALSE(favorites->is_drop_indicator_visible_for_testing());
+}
+
+TEST_F(SidebarDnDDispatchTest, FavoritesDragCancelRestoresExpandedHeight) {
+  MahoSidebarFavoritesGridView favorites(nullptr);
+  MahoSidebarFavoritesModel model = MakeFavoritesModelForTesting(3);
+  favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 120));
+  favorites.Update(model);
+  favorites.DeprecatedLayoutImmediately();
+  const int original_height = favorites.GetPreferredSize().height();
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-new", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 5));
+
+  EXPECT_EQ(favorites.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_GT(favorites.GetPreferredSize().height(), original_height);
+  EXPECT_TRUE(favorites.insertion_preview_visible_for_testing());
+  EXPECT_TRUE(favorites.is_drop_indicator_visible_for_testing());
+  EXPECT_EQ(favorites.active_drag_tab_id_for_testing(), "tab-new");
+
+  favorites.OnDragEnded();
+
+  EXPECT_EQ(favorites.GetPreferredSize().height(), original_height);
+  EXPECT_FALSE(favorites.insertion_preview_visible_for_testing());
+  EXPECT_FALSE(favorites.is_drop_indicator_visible_for_testing());
+  EXPECT_TRUE(favorites.active_drag_tab_id_for_testing().empty());
+  EXPECT_TRUE(favorites.drag_accepted_tab_id_for_testing().empty());
+  EXPECT_TRUE(favorites.pending_external_drag_tab_id_for_testing().empty());
+  for (size_t index = 0; index < model.items.size(); ++index) {
+    views::Button* tile = favorites.GetTileForTesting(index);
+    ASSERT_TRUE(tile);
+    ASSERT_TRUE(tile->layer());
+    EXPECT_EQ(tile->layer()->GetTargetOpacity(), 1.0f);
+    EXPECT_TRUE(tile->layer()->GetTargetTransform().IsIdentity());
+  }
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteOriginDragSourceRemainsHiddenAfterZoneExit) {
+  MahoSidebarFavoritesGridView favorites(nullptr);
+  MahoSidebarFavoritesModel model = MakeFavoritesModelForTesting(1);
+  favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 100));
+  favorites.Update(model);
+
+  views::Button* tile = favorites.GetTileForTesting(0);
+  ASSERT_TRUE(tile);
+  ASSERT_TRUE(tile->layer());
+
+  favorites.OnDragStarted("fav-1");
+  EXPECT_EQ(tile->layer()->GetTargetOpacity(), 0.f);
+
+  favorites.OnFavoritesZoneExited();
+  favorites.Update(model);
+
+  EXPECT_EQ(favorites.active_drag_tab_id_for_testing(), "fav-1");
+  EXPECT_EQ(tile->layer()->GetTargetOpacity(), 0.f);
+
+  favorites.OnDragEnded();
+  EXPECT_TRUE(favorites.active_drag_tab_id_for_testing().empty());
+  EXPECT_EQ(tile->layer()->GetTargetOpacity(), 1.f);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteTileIndexDoesNotAppendFromYCoordinateAlone) {
+  MahoSidebarFavoritesGridView favorites(nullptr);
+  MahoSidebarFavoritesModel model = MakeFavoritesModelForTesting(2);
+  favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 100));
+  favorites.Update(model);
+  favorites.DeprecatedLayoutImmediately();
+
+  views::Button* last_tile = favorites.GetTileForTesting(1);
+  ASSERT_TRUE(last_tile);
+
+  gfx::Point point = last_tile->bounds().CenterPoint();
+  views::View::ConvertPointToTarget(last_tile->parent(), &favorites, &point);
+  point.Offset(-1, last_tile->height() + sidebar_layout::kFavoriteTileSpacingDp);
+
+  EXPECT_EQ(favorites.TileIndexForPointForTesting(point, 2), 1);
 }
 
 TEST_F(SidebarDnDDispatchTest, FolderRowDropIndicatorResetsOnDragExit) {
@@ -3923,6 +4083,288 @@ TEST_F(SidebarDnDDispatchTest, FavoriteDragPreviewRestoredOnAsyncUpdate) {
   EXPECT_TRUE(tile->layer()->GetTargetTransform().IsIdentity());
 }
 
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteStaleFaviconCallbackDoesNotOverwriteReusedSlot) {
+  constexpr char kSharedUrl[] = "https://example.com/shared";
+  MahoSidebarFavoritesGridView grid(nullptr);
+  MahoSidebarFavoritesModel model;
+
+  MahoSidebarFavoriteItemModel item;
+  item.tab_id = "tab-a";
+  item.url = GURL(kSharedUrl);
+  item.title = u"Tab A";
+  model.items.push_back(item);
+
+  grid.SetBoundsRect(gfx::Rect(0, 0, 220, 100));
+  grid.Update(model);
+
+  const uint64_t tab_a_generation = grid.favicon_generation_for_testing(0);
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  ui::ImageModel red_icon = ui::ImageModel::FromImage(red_result.image);
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kSharedUrl),
+                                  tab_a_generation, red_result);
+  EXPECT_EQ(red_icon, grid.cached_favicon_for_tab_id_for_testing("tab-a"));
+  EXPECT_TRUE(grid.cached_favicon_for_tab_id_for_testing("tab-b").IsEmpty());
+
+  model.items[0].tab_id = "tab-b";
+  model.items[0].title = u"Tab B";
+  grid.Update(model);
+  const ui::ImageModel tab_b_before = grid.tile_favicon_for_testing(0);
+
+  favicon_base::FaviconImageResult blue_result = MakeFaviconResult(SK_ColorBLUE);
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kSharedUrl),
+                                  tab_a_generation, blue_result);
+
+  EXPECT_EQ(tab_b_before, grid.tile_favicon_for_testing(0));
+  EXPECT_TRUE(grid.cached_favicon_for_tab_id_for_testing("tab-b").IsEmpty());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteRepeatedUpdatePreservesCachedFavicon) {
+  constexpr char kUrl[] = "https://example.com/favorite";
+  MahoSidebarFavoritesGridView grid(nullptr);
+  MahoSidebarFavoritesModel model;
+  MahoSidebarFavoriteItemModel item;
+  item.tab_id = "tab-a";
+  item.url = GURL(kUrl);
+  item.title = u"Tab A";
+  model.items.push_back(item);
+
+  grid.SetBoundsRect(gfx::Rect(0, 0, 220, 100));
+  grid.Update(model);
+
+  const uint64_t generation = grid.favicon_generation_for_testing(0);
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  const ui::ImageModel red_icon = ui::ImageModel::FromImage(red_result.image);
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kUrl), generation,
+                                  red_result);
+  ASSERT_EQ(red_icon, grid.tile_favicon_for_testing(0));
+  ASSERT_EQ(red_icon, grid.cached_favicon_for_tab_id_for_testing("tab-a"));
+
+  grid.Update(model);
+
+  EXPECT_EQ(red_icon, grid.tile_favicon_for_testing(0));
+  EXPECT_EQ(red_icon, grid.cached_favicon_for_tab_id_for_testing("tab-a"));
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteUrlChangeSameTabIdKeepsCachedFaviconUntilFreshResult) {
+  constexpr char kOldUrl[] = "https://example.com/old";
+  constexpr char kNewUrl[] = "https://example.com/new";
+  MahoSidebarFavoritesGridView grid(nullptr);
+  MahoSidebarFavoritesModel model;
+  MahoSidebarFavoriteItemModel item;
+  item.tab_id = "tab-a";
+  item.url = GURL(kOldUrl);
+  item.title = u"Tab A";
+  model.items.push_back(item);
+
+  grid.SetBoundsRect(gfx::Rect(0, 0, 220, 100));
+  grid.Update(model);
+
+  const uint64_t old_generation = grid.favicon_generation_for_testing(0);
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  const ui::ImageModel red_icon = ui::ImageModel::FromImage(red_result.image);
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kOldUrl), old_generation,
+                                  red_result);
+  ASSERT_EQ(red_icon, grid.tile_favicon_for_testing(0));
+
+  model.items[0].url = GURL(kNewUrl);
+  grid.Update(model);
+  const uint64_t new_generation = grid.favicon_generation_for_testing(0);
+
+  EXPECT_EQ(red_icon, grid.tile_favicon_for_testing(0));
+  EXPECT_NE(old_generation, new_generation);
+
+  favicon_base::FaviconImageResult stale_result =
+      MakeFaviconResult(SK_ColorBLUE);
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kOldUrl), old_generation,
+                                  stale_result);
+  EXPECT_EQ(red_icon, grid.tile_favicon_for_testing(0));
+
+  favicon_base::FaviconImageResult green_result =
+      MakeFaviconResult(SK_ColorGREEN);
+  const ui::ImageModel green_icon =
+      ui::ImageModel::FromImage(green_result.image);
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kNewUrl), new_generation,
+                                  green_result);
+
+  EXPECT_EQ(green_icon, grid.tile_favicon_for_testing(0));
+  EXPECT_EQ(green_icon, grid.cached_favicon_for_tab_id_for_testing("tab-a"));
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteSameUrlDifferentTabIdsKeepSeparateFaviconCaches) {
+  constexpr char kSharedUrl[] = "https://example.com/shared";
+  MahoSidebarFavoritesGridView grid(nullptr);
+  MahoSidebarFavoritesModel model;
+
+  MahoSidebarFavoriteItemModel tab_a;
+  tab_a.tab_id = "tab-a";
+  tab_a.url = GURL(kSharedUrl);
+  tab_a.title = u"Tab A";
+  model.items.push_back(tab_a);
+
+  MahoSidebarFavoriteItemModel tab_b;
+  tab_b.tab_id = "tab-b";
+  tab_b.url = GURL(kSharedUrl);
+  tab_b.title = u"Tab B";
+  model.items.push_back(tab_b);
+
+  grid.SetBoundsRect(gfx::Rect(0, 0, 220, 100));
+  grid.Update(model);
+
+  const uint64_t tab_a_generation = grid.favicon_generation_for_testing(0);
+  const uint64_t tab_b_generation = grid.favicon_generation_for_testing(1);
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  favicon_base::FaviconImageResult blue_result =
+      MakeFaviconResult(SK_ColorBLUE);
+  const ui::ImageModel red_icon = ui::ImageModel::FromImage(red_result.image);
+  const ui::ImageModel blue_icon = ui::ImageModel::FromImage(blue_result.image);
+
+  grid.RunFaviconLoadedForTesting(0, "tab-a", GURL(kSharedUrl),
+                                  tab_a_generation, red_result);
+  grid.RunFaviconLoadedForTesting(1, "tab-b", GURL(kSharedUrl),
+                                  tab_b_generation, blue_result);
+  ASSERT_EQ(red_icon, grid.cached_favicon_for_tab_id_for_testing("tab-a"));
+  ASSERT_EQ(blue_icon, grid.cached_favicon_for_tab_id_for_testing("tab-b"));
+
+  std::swap(model.items[0], model.items[1]);
+  grid.Update(model);
+
+  EXPECT_EQ(blue_icon, grid.tile_favicon_for_testing(0));
+  EXPECT_EQ(red_icon, grid.tile_favicon_for_testing(1));
+  EXPECT_EQ(red_icon, grid.cached_favicon_for_tab_id_for_testing("tab-a"));
+  EXPECT_EQ(blue_icon, grid.cached_favicon_for_tab_id_for_testing("tab-b"));
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteTwoRowStableUpdateDoesNotAnimateReorder) {
+  MahoSidebarFavoritesGridView grid(nullptr);
+  MahoSidebarFavoritesModel model = MakeFavoritesModelForTesting(5);
+  grid.SetBoundsRect(gfx::Rect(0, 0, 220, 140));
+
+  grid.Update(model);
+  grid.DeprecatedLayoutImmediately();
+  ASSERT_FALSE(grid.tile_bounds_in_grid_for_testing(4).IsEmpty())
+      << "Test setup must produce a laid-out second-row tile";
+
+  grid.Update(model);
+
+  EXPECT_FALSE(grid.last_update_had_reorder_animation_for_testing())
+      << "Unchanged two-row favorites must compare old and new bounds in the "
+         "same grid-local coordinate space, not row-local vs grid-local";
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteInsertionAnimationUsesPostLayoutBoundsAfterFourToFive) {
+  MahoSidebarFavoritesGridView grid(nullptr);
+  MahoSidebarFavoritesModel model = MakeFavoritesModelForTesting(4);
+  grid.SetBoundsRect(gfx::Rect(0, 0, 220, 140));
+  grid.Update(model);
+  grid.DeprecatedLayoutImmediately();
+
+  model = MakeFavoritesModelForTesting(5);
+  grid.Update(model);
+
+  const gfx::Rect insertion_bounds =
+      grid.last_insertion_animation_bounds_for_testing();
+  EXPECT_FALSE(insertion_bounds.IsEmpty())
+      << "Insertion animation after 4->5 must read post-layout tile bounds";
+  EXPECT_GT(insertion_bounds.width(), 0);
+  EXPECT_GT(insertion_bounds.height(), 0);
+  EXPECT_EQ(insertion_bounds, grid.tile_bounds_in_grid_for_testing(4));
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       TabRowStaleFaviconGenerationDoesNotOverwriteCurrentRow) {
+  MahoSidebarTabListView list(nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  SidebarTreeNode tab = MakeTabNode("tab-a", 0);
+  tab.url = "https://example.com/old";
+  tab.host = u"example.com";
+  model.normal_tree.push_back(tab);
+
+  list.Update(model, nullptr);
+  SidebarTabRowView* row = list.FindTabRowByIdForTesting("tab-a");
+  ASSERT_TRUE(row);
+  const uint64_t old_generation =
+      list.row_favicon_generation_for_testing("tab-a");
+
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  ui::ImageModel red_icon = ui::ImageModel::FromImage(red_result.image);
+  list.RunFaviconLoadedForTesting("tab-a", GURL("https://example.com/old"),
+                                  old_generation, red_result);
+  EXPECT_EQ(red_icon, row->favicon_for_testing());
+
+  model.normal_tree[0].url = "https://example.com/new";
+  list.Update(model, nullptr);
+  row = list.FindTabRowByIdForTesting("tab-a");
+  ASSERT_TRUE(row);
+  EXPECT_NE(old_generation, list.row_favicon_generation_for_testing("tab-a"));
+  const ui::ImageModel current_icon = row->favicon_for_testing();
+
+  favicon_base::FaviconImageResult blue_result = MakeFaviconResult(SK_ColorBLUE);
+  list.RunFaviconLoadedForTesting("tab-a", GURL("https://example.com/old"),
+                                  old_generation, blue_result);
+
+  EXPECT_EQ(current_icon, row->favicon_for_testing());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       TabRowBackgroundFaviconCompletionReplacesGlobeWithoutActivation) {
+  MahoSidebarTabListView list(nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  SidebarTreeNode tab = MakeTabNode("tab-a", 0);
+  tab.url = "https://example.com/background";
+  tab.host = u"example.com";
+  model.normal_tree.push_back(tab);
+
+  list.Update(model, nullptr);
+  SidebarTabRowView* row = list.FindTabRowByIdForTesting("tab-a");
+  ASSERT_TRUE(row);
+  const ui::ImageModel before = row->favicon_for_testing();
+  const uint64_t generation =
+      list.row_favicon_generation_for_testing("tab-a");
+
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  ui::ImageModel red_icon = ui::ImageModel::FromImage(red_result.image);
+  list.RunFaviconLoadedForTesting("tab-a", GURL("https://example.com/background"),
+                                  generation, red_result);
+
+  EXPECT_EQ(red_icon, row->favicon_for_testing());
+  EXPECT_FALSE(before == row->favicon_for_testing())
+      << "Async favicon completion must replace the initial globe without tab activation";
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       TabRowFaviconCallbackRequiresTrackedRowLookup) {
+  MahoSidebarTabListView list(nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  SidebarTreeNode tab = MakeTabNode("tab-a", 0);
+  tab.url = "https://example.com/o1";
+  tab.host = u"example.com";
+  model.normal_tree.push_back(tab);
+
+  list.Update(model, nullptr);
+  SidebarTabRowView* row = list.FindTabRowByIdForTesting("tab-a");
+  ASSERT_TRUE(row);
+  const ui::ImageModel before = row->favicon_for_testing();
+  const uint64_t generation =
+      list.row_favicon_generation_for_testing("tab-a");
+
+  list.ForgetTabRowForTesting("tab-a");
+  favicon_base::FaviconImageResult red_result = MakeFaviconResult(SK_ColorRED);
+  list.RunFaviconLoadedForTesting("tab-a", GURL("https://example.com/o1"),
+                                  generation, red_result);
+
+  EXPECT_EQ(before, row->favicon_for_testing())
+      << "OnFaviconLoaded must use the O(1) tracked-row map, not DFS over tab_rows_";
+}
+
 TEST_F(SidebarDnDDispatchTest, FavoriteDragEndedCancelsAnimations) {
   MahoSidebarFavoritesGridView grid(/*browser=*/nullptr);
   MahoSidebarFavoritesModel model;
@@ -4311,6 +4753,27 @@ TEST_F(SidebarStateModelContractTest, FolderCollapsePreservesMultiSelection) {
   EXPECT_FALSE(list.IsTabSelected("tab-1"));
 }
 
+TEST_F(SidebarStateModelContractTest,
+       UpdateRvaluePreservesLastModelForFolderToggle) {
+  MahoSidebarTabListView list(nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode folder = MakeFolderNode("folder-1");
+  folder.is_expanded = true;
+  folder.children.push_back(MakeFolderChildTabNode("tab-1", 0, "folder-1", 0));
+  model.normal_tree.push_back(folder);
+
+  list.Update(std::move(model), nullptr);
+
+  ASSERT_NE(list.FindTabRowByIdForTesting("tab-1"), nullptr);
+  list.ToggleFolderExpandedForTesting("folder-1");
+  EXPECT_EQ(list.FindTabRowByIdForTesting("tab-1"), nullptr);
+
+  list.ToggleFolderExpandedForTesting("folder-1");
+  EXPECT_NE(list.FindTabRowByIdForTesting("tab-1"), nullptr);
+}
+
 TEST_F(SidebarStateModelContractTest, MultiSelectDragAndKeyboardNavigation) {
   MahoSidebarTabListView list(/*browser=*/nullptr);
   MahoSidebarTabListModel model;
@@ -4669,4 +5132,3 @@ TEST_F(SidebarDnDDispatchTest,
 
 }  // namespace
 }  // namespace maho
-

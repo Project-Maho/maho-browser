@@ -5,11 +5,14 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -19,6 +22,7 @@
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -116,8 +120,46 @@ class MahoSidebarFavoritesGridView : public views::View {
     return drag_reveal_active_;
   }
 
+  bool insertion_preview_visible_for_testing() const {
+    return drag_preview_tile_ && drag_preview_tile_->GetVisible();
+  }
+
+  const std::string& active_drag_tab_id_for_testing() const {
+    return active_drag_tab_id_;
+  }
+
+  const std::string& drag_accepted_tab_id_for_testing() const {
+    return drag_accepted_tab_id_;
+  }
+
+  const std::string& pending_external_drag_tab_id_for_testing() const {
+    return pending_external_drag_tab_id_;
+  }
+
+  int TileIndexForPointForTesting(const gfx::Point& point,
+                                  int item_count) const {
+    return TileIndexForPoint(point, item_count);
+  }
+
   views::Button* GetTileForTesting(size_t index) {
     return index < kTileCount ? tile_views_[index].get() : nullptr;
+  }
+
+  std::string tile_tab_id_for_testing(size_t index) const {
+    return index < tile_tab_ids_.size() ? tile_tab_ids_[index]
+                                        : std::string();
+  }
+
+  gfx::Rect tile_bounds_in_grid_for_testing(size_t index) const {
+    return TileBoundsInGrid(index);
+  }
+
+  bool last_update_had_reorder_animation_for_testing() const {
+    return last_update_had_reorder_animation_for_testing_;
+  }
+
+  gfx::Rect last_insertion_animation_bounds_for_testing() const {
+    return last_insertion_animation_bounds_for_testing_;
   }
 
   views::View* empty_state_view_for_testing() { return empty_state_view_; }
@@ -126,6 +168,23 @@ class MahoSidebarFavoritesGridView : public views::View {
 
   void SetPrefsForTesting(PrefService* prefs) { prefs_ = prefs; }
 
+  uint64_t favicon_generation_for_testing(size_t index) const {
+    return index < tile_favicon_generations_.size()
+               ? tile_favicon_generations_[index]
+               : 0;
+  }
+  ui::ImageModel tile_favicon_for_testing(size_t index) const;
+  ui::ImageModel cached_favicon_for_tab_id_for_testing(
+      const std::string& tab_id) const;
+  void RunFaviconLoadedForTesting(
+      size_t index,
+      const std::string& tab_id,
+      const GURL& requested_url,
+      uint64_t generation,
+      const favicon_base::FaviconImageResult& result) {
+    OnFaviconLoaded(index, tab_id, requested_url, generation, result);
+  }
+
   void ShowTileContextMenu(size_t index,
                            const gfx::Point& point,
                            ui::mojom::MenuSourceType source_type);
@@ -133,6 +192,8 @@ class MahoSidebarFavoritesGridView : public views::View {
   void MarkDropAccepted(const std::string& tab_id);
 
  private:
+  enum class DragIdentityCleanup { kKeep, kClear };
+
   struct LayoutSpec {
     LayoutSpec();
     LayoutSpec(const LayoutSpec&);
@@ -160,8 +221,19 @@ class MahoSidebarFavoritesGridView : public views::View {
   void UpdateContainerOwnedPreferredHeight(size_t favorite_count);
   void UpdateEmptyStateHighlight(bool highlighted);
   void OnFaviconLoaded(size_t index,
+                       const std::string& tab_id,
                        const GURL& requested_url,
+                       uint64_t generation,
                        const favicon_base::FaviconImageResult& result);
+  bool IsCurrentFaviconRequest(size_t index,
+                               const std::string& tab_id,
+                               const GURL& requested_url,
+                               uint64_t generation) const;
+  size_t FindTileIndexForTabId(const std::string& tab_id) const;
+  void ApplyTileFavicon(size_t index,
+                        const std::string& tab_id,
+                        const ui::ImageModel& favicon,
+                        bool cache_by_tab_id);
 
   // Insertion-preview (phantom) tile: shown at the target drop index while a
   // tab is being dragged FROM the tab list INTO the favorites grid. Gives the
@@ -170,6 +242,8 @@ class MahoSidebarFavoritesGridView : public views::View {
   void ShowInsertionPreview(const gfx::Point& cursor,
                             const std::string& tab_id);
   void HideInsertionPreview();
+  void ResetDragFeedback(DragIdentityCleanup identity_cleanup,
+                         bool restore_os_drag_image);
   void OnInsertionPreviewFaviconLoaded(
       const std::string& tab_id,
       const GURL& requested_url,
@@ -191,9 +265,14 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::array<GURL, kTileCount> tile_urls_ = {};
   std::array<std::u16string, kTileCount> tile_titles_ = {};
   std::array<std::string, kTileCount> tile_tab_ids_ = {};
-  std::array<ui::ImageModel, kTileCount> cached_tile_favicons_ = {};
-  std::array<std::optional<SkColor>, kTileCount> cached_tile_colors_ = {};
-  std::array<bool, kTileCount> cached_tile_colors_valid_ = {};
+  std::array<uint64_t, kTileCount> tile_favicon_generations_ = {};
+  base::flat_map<std::string, ui::ImageModel> cached_favicons_by_tab_id_;
+  struct DominantColorCacheEntry {
+    ui::ImageModel favicon;
+    std::optional<SkColor> color;
+  };
+  base::flat_map<std::string, DominantColorCacheEntry>
+      dominant_color_cache_by_tab_id_;
   std::vector<raw_ptr<views::View>> row_views_;
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
@@ -212,6 +291,8 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::array<gfx::Rect, kTileCount> snapshot_bounds_ = {};
   std::array<std::string, kTileCount> snapshot_tab_ids_ = {};
   int current_drag_preview_index_ = -1;
+  bool last_update_had_reorder_animation_for_testing_ = false;
+  gfx::Rect last_insertion_animation_bounds_for_testing_;
 
   raw_ptr<views::View> drag_preview_tile_ = nullptr;
   raw_ptr<views::ImageView> drag_preview_icon_ = nullptr;
@@ -225,6 +306,8 @@ class MahoSidebarFavoritesGridView : public views::View {
   base::CancelableTaskTracker drag_preview_task_tracker_;
 
   // Animation helpers
+  void ApplyImmediateLayoutForAnimation();
+  gfx::Rect TileBoundsInGrid(size_t tile_index) const;
   void SnapshotCurrentBounds();
   void AnimateReorder();
   void AnimateInsertion(size_t tile_index);

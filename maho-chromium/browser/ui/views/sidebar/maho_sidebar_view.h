@@ -139,6 +139,7 @@ class MahoSidebarView
   // Synchronous, inline variant of RefreshAll for latency-sensitive callers
   // (e.g. a drag drop): rebuilds now instead of posting to base::ThreadPool.
   void RefreshAllSynchronously();
+  void RefreshFavoritesSynchronouslyAfterDrop();
   // T5: Coalesced cosmetic refresh — debounces title/URL/favicon updates so
   // rapid-fire cosmetic events collapse into a single UpdateTabList() pass.
   // Structural changes (create/close/reorder) cancel any pending cosmetic
@@ -212,6 +213,15 @@ class MahoSidebarView
       ApplyCosmeticRefresh();
     }
   }
+  void OnTabChangedAtForTesting(tabs::TabInterface* tab,
+                                int index,
+                                TabChangeType change_type) {
+    OnTabChangedAt(tab, index, change_type);
+  }
+  void SetPrivateFlagsForTesting(bool is_private, bool is_otr) {
+    is_private_ = is_private;
+    is_otr_ = is_otr;
+  }
   MahoSidebarLibraryRailView::Category active_library_category_for_testing()
       const;
   using OnBackgroundStateReadyCallbackForTesting =
@@ -249,7 +259,7 @@ class MahoSidebarView
   // translucent glass-frame look. Public so overlay dismiss paths can restore
   // the translucent look when their overlay closes.
   void ApplySidebarBackground();
-  void ApplyViewState(const MahoSidebarViewStateModel& model);
+  void ApplyViewState(MahoSidebarViewStateModel model);
   bool ShouldAnimateSpaceSwitch(const MahoSidebarViewStateModel& model,
                                 int* out_dir) const;
   void StartSpaceSlide(int dir);
@@ -306,7 +316,7 @@ class MahoSidebarView
   void UpdateTopBar(const MahoSidebarTopBarModel& model);
   void UpdateSearch(const MahoSidebarSearchModel& model);
   void UpdateFavorites(const MahoSidebarFavoritesModel& model);
-  void UpdateTabList(const MahoSidebarTabListModel& model);
+  void UpdateTabList(MahoSidebarTabListModel model);
   void UpdateFooter(const MahoSidebarFooterModel& model);
   void PositionUpdateNotification();
   void PositionNowPlayingView();
