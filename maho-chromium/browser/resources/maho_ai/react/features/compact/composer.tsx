@@ -481,9 +481,9 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
               handlers.onLoadOpenTabs();
             }
           }}>
-          <PopoverTrigger asChild>
-            <Tooltip>
-              <TooltipTrigger asChild>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
                 <Button
                   aria-label="Add context or start a new session"
                   variant="ghost"
@@ -491,10 +491,10 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                   className="h-8 w-8 shrink-0 rounded-full">
                   <Plus className="size-4" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>Add context</TooltipContent>
-            </Tooltip>
-          </PopoverTrigger>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent>Add context</TooltipContent>
+          </Tooltip>
           <PopoverContent
               align="start"
               className="w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border-border bg-popover/95 p-2 shadow-2xl backdrop-blur-xl"
