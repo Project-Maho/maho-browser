@@ -3,7 +3,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
 import JSONLD from '../../components/JSONLD.astro';
-import ScrollReveal from '../../components/motion/ScrollReveal';
+import ScrollReveal from '../../components/motion/ScrollReveal.astro';
 import { getSiteUrl } from '../../lib/site';
 
 const { absoluteUrl } = getSiteUrl(Astro);
@@ -66,7 +66,7 @@ const comparisonRows = [
     <main id="main" class="pt-24 sm:pt-28 md:pt-32">
       <div class="container-marketing pad-x-ladder section-rhythm">
         <div class="mx-auto max-w-5xl">
-          <ScrollReveal client:visible variant="fade" className="max-w-3xl mb-12">
+          <ScrollReveal variant="fade" class="max-w-3xl mb-12">
             <header>
               <p class="mb-4 font-mono text-xs uppercase tracking-mono-loose text-muted-foreground">
                 Comparison
@@ -80,7 +80,7 @@ const comparisonRows = [
             </header>
           </ScrollReveal>
 
-          <ScrollReveal client:visible variant="fade" className="mb-16">
+          <ScrollReveal variant="fade" class="mb-16">
             <div class="overflow-x-auto rounded-squircle-lg border border-border bg-card">
               <table class="w-full border-collapse text-left text-sm" id="aside-comparison-table">
                 <thead>
@@ -105,7 +105,7 @@ const comparisonRows = [
             </div>
           </ScrollReveal>
 
-          <ScrollReveal client:visible variant="fade" className="grid gap-8 md:grid-cols-2">
+          <ScrollReveal variant="fade" class="grid gap-8 md:grid-cols-2">
             <section class="space-y-4">
               <h2 class="heading-serif text-2xl text-foreground">Why Maho?</h2>
               <p class="text-sm leading-relaxed text-muted-foreground">
@@ -121,10 +121,9 @@ const comparisonRows = [
           </ScrollReveal>
 
           <ScrollReveal
-            client:visible
             as="section"
             variant="fade"
-            className="mt-16 rounded-squircle-lg border border-border bg-card p-8 text-center squircle-enhanced sm:p-10"
+            class="mt-16 rounded-squircle-lg border border-border bg-card p-8 text-center squircle-enhanced sm:p-10"
           >
             <h2 class="heading-serif mb-4 text-3xl sm:text-4xl">Try Maho Browser today.</h2>
             <p class="mx-auto mb-6 max-w-lg text-sm leading-relaxed text-muted-foreground">

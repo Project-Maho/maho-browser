@@ -89,7 +89,7 @@ void MahoSyncRelayClient::StopPolling() {
   poll_timer_.Stop();
 }
 
-void MahoSyncRelayClient::Poll() {
+void MahoSyncRelayClient::DrainReceivedTabs() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   ::MahoCore* core = maho::GetCore();
   if (!core) return;
@@ -127,6 +127,17 @@ void MahoSyncRelayClient::Poll() {
       }
     }
   }
+}
+
+void MahoSyncRelayClient::Poll() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ::MahoCore* core = maho::GetCore();
+  if (!core) return;
+
+  // Received tabs are drained by the socket read path the moment core has been
+  // handed a message, so the timer no longer needs to poll for them. It still
+  // reconciles connection state and flushes the outgoing queue, neither of
+  // which has a push signal from core today.
 
   char* status_c = maho_core_get_sync_status(core);
   if (!status_c) return;
@@ -376,6 +387,11 @@ void MahoSyncRelayClient::ReadFromDataPipe(MojoResult result,
           ::MahoCore* core = maho::GetCore();
           if (core) {
             maho_core_handle_incoming_websocket_message(core, message_str.c_str());
+            // Surface anything the message just enqueued immediately. Waiting
+            // for the next timer tick both delayed the received-tab toast by up
+            // to the poll interval and forced every tick to pay a drain call
+            // plus a JSON list parse even when nothing had arrived.
+            DrainReceivedTabs();
           }
         }
       }

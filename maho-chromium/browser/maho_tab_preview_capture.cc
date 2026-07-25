@@ -8,6 +8,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/task/thread_pool.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -193,23 +194,57 @@ void MahoTabPreviewCapture::OnCaptureDone(
   if (bitmap.isNull()) {
     return;
   }
-  StoreAsJpeg(tab_id, bitmap);
+  StoreAsJpeg(tab_id, web_contents, bitmap);
 }
 
-void MahoTabPreviewCapture::StoreAsJpeg(const std::string& tab_id,
-                                        const SkBitmap& bitmap) {
-  std::optional<std::vector<uint8_t>> jpeg_data = gfx::JPEGCodec::Encode(bitmap, 70);
-  if (jpeg_data) {
-    auto* core = maho::GetCore();
-    if (core) {
-      // R-13-b: Desktop capture only reaches here after kPreview revalidation,
-      // so the additive privacy ABI is always called with is_private=false;
-      // the legacy ABI is never used from desktop capture.
-      maho_core_update_tab_preview_with_privacy(
-          core, tab_id.c_str(), /*is_private=*/false, jpeg_data->data(),
-          jpeg_data->size());
-    }
+void MahoTabPreviewCapture::StoreAsJpeg(
+    const std::string& tab_id,
+    base::WeakPtr<content::WebContents> web_contents,
+    const SkBitmap& bitmap) {
+  // JPEG encoding is pure CPU work with no UI-thread affinity, but it ran here
+  // on every tab switch. Only the core write below has to stay on the UI thread
+  // (MahoCore is single-threaded), so just the encode moves off.
+  //
+  // BEST_EFFORT: a stale preview thumbnail is never worth competing with
+  // user-visible work.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(
+          [](const SkBitmap& bitmap) {
+            return gfx::JPEGCodec::Encode(bitmap, 70);
+          },
+          bitmap),
+      base::BindOnce(&MahoTabPreviewCapture::OnJpegEncoded,
+                     weak_factory_.GetWeakPtr(), tab_id, web_contents));
+}
+
+void MahoTabPreviewCapture::OnJpegEncoded(
+    const std::string& tab_id,
+    base::WeakPtr<content::WebContents> web_contents,
+    std::optional<std::vector<uint8_t>> jpeg_data) {
+  if (!jpeg_data) {
+    return;
   }
+  // R-13-b: Revalidate after the thread-pool hop. The WebContents may have been
+  // torn down or reclassified OTR while the encode was queued, and a preview
+  // must never be written for a context that is no longer eligible.
+  if (!web_contents) {
+    return;
+  }
+  MahoPrivateContextToken encoded_token(nullptr, web_contents.get());
+  if (!encoded_token.Revalidate(MahoPrivateCapability::kPreview)) {
+    return;
+  }
+  auto* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+  // R-13-b: Desktop capture only reaches here after kPreview revalidation,
+  // so the additive privacy ABI is always called with is_private=false;
+  // the legacy ABI is never used from desktop capture.
+  maho_core_update_tab_preview_with_privacy(
+      core, tab_id.c_str(), /*is_private=*/false, jpeg_data->data(),
+      jpeg_data->size());
 }
 
 void MahoTabPreviewCapture::CaptureScrollPosition(
@@ -322,8 +357,8 @@ void MahoTabWakeHelper::DidFinishLoad(content::RenderFrameHost* render_frame_hos
                          TRACE_EVENT_SCOPE_THREAD,
                          "tab_id", tab_id_,
                          "elapsed_ms", elapsed_ms);
-    LOG(INFO) << "[MAHO_PERF] WakeTab.DidFinishLoad tab_id=" << tab_id_
-              << " elapsed=" << elapsed_ms << "ms";
+    DVLOG(1) << "[MAHO_PERF] WakeTab.DidFinishLoad tab_id=" << tab_id_
+             << " elapsed=" << elapsed_ms << "ms";
     // Only inject JS when the frame is live and active. DidFinishLoad can race
     // with a concurrent navigation so the primary main frame may already be in
     // a non-JS-executable lifecycle state (kSpeculative/kPendingCommit), which
@@ -346,8 +381,8 @@ void MahoTabWakeHelper::DidFirstVisuallyNonEmptyPaint() {
                        TRACE_EVENT_SCOPE_THREAD,
                        "tab_id", tab_id_,
                        "elapsed_ms", elapsed_ms);
-  LOG(INFO) << "[MAHO_PERF] WakeTab.FirstPaint tab_id=" << tab_id_
-            << " elapsed=" << elapsed_ms << "ms";
+  DVLOG(1) << "[MAHO_PERF] WakeTab.FirstPaint tab_id=" << tab_id_
+           << " elapsed=" << elapsed_ms << "ms";
 }
 
 void MahoTabWakeHelper::WebContentsDestroyed() {

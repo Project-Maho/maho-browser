@@ -410,6 +410,7 @@ class ZenBoostEditorApp {
   private renameInput: HTMLInputElement | null = null;
   private codeMirrorView: MahoCodeMirrorEditorView | null = null;
   private isSyncingCodeMirror = false;
+  private pendingVisualsFrame = 0;
 
   constructor() {
     this.callbackRouter = new PageObserverCallbackRouter();
@@ -755,7 +756,7 @@ class ZenBoostEditorApp {
     });
 
     window.addEventListener('resize', () => {
-      this.updateAllVisuals();
+      this.scheduleUpdateAllVisuals();
     });
 
     window.addEventListener('unload', () => {
@@ -1778,6 +1779,21 @@ class ZenBoostEditorApp {
       changeWasMade: wasDirty ? true : boost.changeWasMade,
     };
     this.updateAllVisuals();
+  }
+
+  /**
+   * Coalesce repeated visual refreshes onto a single animation frame.
+   * `updateAllVisuals` reads layout (getBoundingClientRect) and writes styles,
+   * so running it once per resize event thrashes layout during a drag-resize.
+   */
+  private scheduleUpdateAllVisuals(): void {
+    if (this.pendingVisualsFrame) {
+      return;
+    }
+    this.pendingVisualsFrame = window.requestAnimationFrame(() => {
+      this.pendingVisualsFrame = 0;
+      this.updateAllVisuals();
+    });
   }
 
   private updateAllVisuals(): void {

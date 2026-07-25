@@ -5,7 +5,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
-import ScrollReveal from '../components/motion/ScrollReveal';
+import ScrollReveal from '../components/motion/ScrollReveal.astro';
 import JSONLD from '../components/JSONLD.astro';
 import { getSiteUrl } from '../lib/site';
 
@@ -157,9 +157,8 @@ const ld = {
     <main id="main" class="pt-24 sm:pt-28 md:pt-32">
       <section class="container-marketing pad-x-ladder section-rhythm-tall">
         <ScrollReveal
-          client:visible
           variant="fade"
-          className="download-shell relative overflow-hidden rounded-squircle-xl border border-border p-8 squircle-enhanced sm:p-10 lg:p-14"
+          class="download-shell relative overflow-hidden rounded-squircle-xl border border-border p-8 squircle-enhanced sm:p-10 lg:p-14"
         >
           <div class="download-orb download-orb-left" aria-hidden="true"></div>
           <div class="download-orb download-orb-right" aria-hidden="true"></div>
@@ -191,7 +190,7 @@ const ld = {
 
             <div class="mt-12 grid gap-4 md:grid-cols-3 lg:gap-6">
               {platforms.map((platform, index) => (
-                <ScrollReveal client:visible variant="slide" delayMs={index * 100} className="h-full">
+                <ScrollReveal variant="slide" delayMs={index * 100} class="h-full">
                   <article data-platform={platform.id} class="download-platform-card h-full">
                     <div class="download-platform-shell flex h-full flex-col rounded-squircle-lg border border-border p-6 squircle-enhanced sm:p-7">
                       <div class="flex items-start justify-between gap-4">
@@ -246,7 +245,7 @@ const ld = {
       <section class="container-marketing pad-x-ladder pb-10">
         <div class="grid gap-6 lg:grid-cols-3">
           {platforms.map((platform, index) => (
-            <ScrollReveal client:visible variant="slide" delayMs={index * 120} className="h-full">
+            <ScrollReveal variant="slide" delayMs={index * 120} class="h-full">
               <article class="h-full rounded-squircle-lg border border-border bg-card p-6 squircle-enhanced sm:p-7">
                 <div class="mb-6 flex items-center gap-4">
                   <span class="download-platform-icon" set:html={platform.icon} />

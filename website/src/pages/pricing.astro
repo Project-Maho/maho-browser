@@ -11,7 +11,7 @@ import SquircleBox from '../components/marketing/SquircleBox.astro';
 import PressBadge from '../components/marketing/PressBadge.astro';
 import { CtaButton } from '../components/marketing/CtaButton';
 import { CharReveal } from '../components/motion/CharReveal';
-import { ScrollReveal } from '../components/motion/ScrollReveal';
+import ScrollReveal from '../components/motion/ScrollReveal.astro';
 import { getSiteUrl } from '../lib/site';
 import { creditPackUrl } from '../lib/checkout-urls';
 
@@ -193,7 +193,7 @@ const ldFaq = {
 
           <div class="grid gap-6 md:grid-cols-3">
             {subscriptionTiers.map((tier, index) => (
-              <ScrollReveal client:visible variant="slide" delayMs={index * 100} className="h-full">
+              <ScrollReveal variant="slide" delayMs={index * 100} class="h-full">
                 <SquircleBox
                   radius="lg"
                   class={`h-full border bg-card p-6 ${tier.featured ? 'border-2 border-foreground' : 'border-border'}`}

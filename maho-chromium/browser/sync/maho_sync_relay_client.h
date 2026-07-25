@@ -34,6 +34,9 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
 
   void StartPolling();
   void StopPolling();
+  // Pulls tabs core has queued from inbound relay messages and surfaces them.
+  // Driven by the socket read path; the poll timer no longer calls it.
+  void DrainReceivedTabs();
 
   // WebSocketHandshakeClient:
   void OnOpeningHandshakeStarted(

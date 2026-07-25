@@ -3,7 +3,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
 import JSONLD from '../../components/JSONLD.astro';
-import ScrollReveal from '../../components/motion/ScrollReveal';
+import ScrollReveal from '../../components/motion/ScrollReveal.astro';
 import { getSiteUrl } from '../../lib/site';
 
 const { absoluteUrl } = getSiteUrl(Astro);
@@ -68,7 +68,7 @@ const comparisons = [
   {
     target: 'Vivaldi',
     href: '/blog/maho-vs-vivaldi',
-    description: 'Vivaldi\'s deep customisation vs Maho\'s AI-first architecture, native mobile shells, and modern Spaces workflow.',
+    description: 'Vivaldi\'s deep customisation vs Maho\'s ergonomic Spaces workflow, Chromium Profiles, native mobile shells, and AI only when asked.',
     tag: 'Productivity'
   },
   {
@@ -96,7 +96,7 @@ const comparisons = [
     <main id="main" class="pt-24 sm:pt-28 md:pt-32">
       <div class="container-marketing pad-x-ladder section-rhythm">
         <div class="mx-auto max-w-5xl">
-          <ScrollReveal client:visible variant="fade" className="max-w-3xl mb-12 sm:mb-16">
+          <ScrollReveal variant="fade" class="max-w-3xl mb-12 sm:mb-16">
             <header>
               <p class="mb-4 font-mono text-xs uppercase tracking-mono-loose text-muted-foreground animate-pulse">
                 Compare
@@ -112,7 +112,7 @@ const comparisons = [
 
           <div class="grid gap-6 sm:grid-cols-2">
             {comparisons.map((comp, idx) => (
-              <ScrollReveal client:visible variant="fade" className="flex">
+              <ScrollReveal variant="fade" class="flex">
                 <a
                   id={`compare-card-${comp.target.toLowerCase().replace(/\s+/g, '-')}`}
                   href={comp.href}

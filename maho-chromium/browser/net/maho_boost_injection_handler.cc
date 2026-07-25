@@ -216,8 +216,8 @@ void MahoBoostInjectionHandler::DidFinishNavigation(
     return;
   }
 
-  LOG(INFO) << "[MAHO_PERF] BoostInjection.DidFinishNavigation url="
-            << navigation_handle->GetURL().spec();
+  DVLOG(1) << "[MAHO_PERF] BoostInjection.DidFinishNavigation url="
+           << navigation_handle->GetURL().spec();
   content_script_injected_ = false;
   StopPolling();
 

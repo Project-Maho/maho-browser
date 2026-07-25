@@ -36,14 +36,24 @@ constexpr char kPageContextScript[] = R"JS(
   const selected_text = window.getSelection ? String(window.getSelection() || '') : '';
   const meta = document.querySelector('meta[name="description"]');
   const meta_description = meta ? (meta.getAttribute('content') || '') : '';
-  const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
-      .map((heading) => (heading.textContent || '').trim())
-      .filter((heading) => heading.length > 0)
-      .slice(0, 50);
-  const links = Array.from(document.querySelectorAll('a[href]'))
-      .map((link) => (link.href || '').trim())
-      .filter((link) => link.length > 0)
-      .slice(0, 20);
+  // Collect the first `cap` non-empty values in document order, stopping as
+  // soon as the cap is reached. The previous map/filter/slice chain read every
+  // matching node and built three full intermediate arrays before discarding
+  // all but the first `cap` entries — costly on link-heavy pages. Results are
+  // identical.
+  const collectCapped = (selector, extract, cap) => {
+    const out = [];
+    const nodes = document.querySelectorAll(selector);
+    for (let i = 0; i < nodes.length && out.length < cap; i++) {
+      const value = (extract(nodes[i]) || '').trim();
+      if (value.length > 0) {
+        out.push(value);
+      }
+    }
+    return out;
+  };
+  const headings = collectCapped('h1,h2,h3,h4,h5,h6', (n) => n.textContent, 50);
+  const links = collectCapped('a[href]', (n) => n.href, 20);
   const body_text = document.body ? (document.body.innerText || '') : '';
   const main_text = body_text.length > 50000 ? body_text.slice(0, 50000) : body_text;
 

@@ -4,7 +4,7 @@
 // biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
 import MarqueeTicker from '../marketing/MarqueeTicker.astro';
 import PressBadge from '../marketing/PressBadge.astro';
-import ScrollReveal from '../motion/ScrollReveal';
+import ScrollReveal from '../motion/ScrollReveal.astro';
 
 interface Props {
   tickerItems?: string[];
@@ -32,7 +32,7 @@ const shouldRender = normalizedTickerItems.length > 0 || normalizedTestimonialBa
 ---
 
 {shouldRender && (
-  <ScrollReveal client:visible variant="fade">
+  <ScrollReveal variant="fade">
     <section class="border-t border-border py-5 sm:py-6">
       <div class="max-w-6xl mx-auto pad-x-ladder">
         <p class="landing-eyebrow mb-4 text-center text-muted-foreground">{eyebrow}</p>

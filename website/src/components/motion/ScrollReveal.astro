@@ -1,0 +1,120 @@
+---
+// Zero-JavaScript-island scroll reveal.
+//
+// The React version of this component (ScrollReveal.tsx, still used inside
+// React trees) shipped a `client:visible` island per reveal — the React runtime
+// plus a hydration pass on marketing pages whose only interactivity was "add a
+// class when this scrolls into view". It also created one IntersectionObserver
+// per instance, and flashed on hydration because the server rendered the
+// element already-visible and the client's first render took that class away.
+//
+// This variant renders plain markup and is driven by a single shared observer
+// (one per distinct threshold/rootMargin pair) declared once for the page.
+interface Props {
+  as?: keyof HTMLElementTagNameMap;
+  variant?: "fade" | "slide";
+  delayMs?: number;
+  thresholdRatio?: number;
+  rootMarginPx?: number;
+  class?: string;
+}
+
+const {
+  as = "div",
+  variant = "slide",
+  delayMs = 0,
+  thresholdRatio = 0.15,
+  rootMarginPx = -40,
+  class: className,
+} = Astro.props;
+
+const Tag = as;
+const baseClass = variant === "fade" ? "motion-safe-fade" : "motion-safe-slide";
+const classes = [baseClass, className].filter(Boolean).join(" ");
+---
+
+<Tag
+  class={classes}
+  style={delayMs > 0 ? `transition-delay: ${delayMs}ms` : undefined}
+  data-reveal
+  data-reveal-threshold={String(thresholdRatio)}
+  data-reveal-root-margin={String(rootMarginPx)}
+>
+  <slot />
+</Tag>
+
+{/* Without scripting nothing would ever add `is-visible`, leaving the page
+    blank. This keeps the content readable instead. */}
+<noscript>
+  <style>
+    .motion-safe-fade,
+    .motion-safe-slide {
+      opacity: 1 !important;
+      transform: none !important;
+    }
+  </style>
+</noscript>
+
+<script>
+  // Astro bundles and dedupes this module across every instance on the page, so
+  // it runs once no matter how many reveals are rendered.
+  const REVEAL_SELECTOR = "[data-reveal]:not([data-reveal-bound])";
+
+  function reveal(element: Element) {
+    element.classList.add("is-visible");
+  }
+
+  function bindReveals() {
+    const elements = document.querySelectorAll(REVEAL_SELECTOR);
+    if (elements.length === 0) return;
+
+    // Honour the same escape hatch the stylesheet uses: with reduced motion the
+    // transition is disabled, so observing would only delay content.
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+
+    // One observer per distinct configuration rather than one per element.
+    const observers = new Map<string, IntersectionObserver>();
+
+    for (const element of elements) {
+      element.setAttribute("data-reveal-bound", "");
+
+      if (prefersReducedMotion || !("IntersectionObserver" in window)) {
+        reveal(element);
+        continue;
+      }
+
+      const threshold = Number(
+        element.getAttribute("data-reveal-threshold") ?? "0.15",
+      );
+      const rootMarginPx = Number(
+        element.getAttribute("data-reveal-root-margin") ?? "-40",
+      );
+      const key = `${threshold}|${rootMarginPx}`;
+
+      let observer = observers.get(key);
+      if (!observer) {
+        observer = new IntersectionObserver(
+          (entries, self) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              reveal(entry.target);
+              self.unobserve(entry.target);
+            }
+          },
+          {
+            threshold: Number.isFinite(threshold) ? threshold : 0.15,
+            rootMargin: `${Number.isFinite(rootMarginPx) ? rootMarginPx : -40}px`,
+          },
+        );
+        observers.set(key, observer);
+      }
+      observer.observe(element);
+    }
+  }
+
+  bindReveals();
+  // Astro's client-side router swaps page content without a full reload.
+  document.addEventListener("astro:after-swap", bindReveals);
+</script>

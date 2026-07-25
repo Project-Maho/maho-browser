@@ -6,7 +6,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
-import ScrollReveal from '../components/motion/ScrollReveal';
+import ScrollReveal from '../components/motion/ScrollReveal.astro';
 import { getSiteUrl } from '../lib/site';
 
 const { absoluteUrl } = getSiteUrl(Astro);
@@ -43,7 +43,7 @@ const ld = {
       </header>
 
       <section aria-labelledby="status-heading" class="section-rhythm !pt-0">
-        <ScrollReveal client:visible variant="fade">
+        <ScrollReveal variant="fade">
           <div class="rounded-lg border border-border p-6">
             <p class="mb-4 inline-flex w-fit rounded-full border border-border bg-card px-3 py-1 text-xs font-medium font-mono uppercase tracking-mono-loose text-muted-foreground">
               Audit status
@@ -67,7 +67,7 @@ const ld = {
 
         <div class="border-y border-border">
           <section class="section-rhythm !pt-0">
-            <ScrollReveal client:visible variant="fade">
+            <ScrollReveal variant="fade">
               <div class="space-y-3">
                 <p class="inline-flex w-fit rounded-full border border-border bg-card px-3 py-1 text-xs font-medium font-mono uppercase tracking-mono-loose text-muted-foreground">
                   E2E
@@ -80,7 +80,7 @@ const ld = {
             </ScrollReveal>
           </section>
           <section class="section-rhythm border-t border-border">
-            <ScrollReveal client:visible variant="fade">
+            <ScrollReveal variant="fade">
               <div class="space-y-3">
                 <p class="inline-flex w-fit rounded-full border border-border bg-card px-3 py-1 text-xs font-medium font-mono uppercase tracking-mono-loose text-muted-foreground">
                   Zero-knowledge
@@ -93,7 +93,7 @@ const ld = {
             </ScrollReveal>
           </section>
           <section class="section-rhythm border-t border-border">
-            <ScrollReveal client:visible variant="fade">
+            <ScrollReveal variant="fade">
               <div class="space-y-3">
                 <p class="inline-flex w-fit rounded-full border border-border bg-card px-3 py-1 text-xs font-medium font-mono uppercase tracking-mono-loose text-muted-foreground">
                   BYOK
@@ -109,7 +109,7 @@ const ld = {
       </section>
 
       <section aria-labelledby="verify-heading" class="section-rhythm border-t border-border">
-        <ScrollReveal client:visible variant="fade">
+        <ScrollReveal variant="fade">
           <div>
             <h2 id="verify-heading" class="mb-4 text-2xl font-medium">How to verify</h2>
             <ul class="list-disc space-y-3 pl-5 text-sm leading-relaxed text-muted-foreground">
@@ -123,7 +123,7 @@ const ld = {
       </section>
 
       <section aria-labelledby="trust-heading" class="section-rhythm border-t border-border">
-        <ScrollReveal client:visible variant="fade">
+        <ScrollReveal variant="fade">
           <div class="rounded-lg border border-border p-6">
             <h2 id="trust-heading" class="mb-3 text-lg font-medium">A note on trust</h2>
             <p class="mb-3 text-sm leading-relaxed text-muted-foreground">
@@ -137,7 +137,7 @@ const ld = {
       </section>
 
       <section aria-labelledby="contact-heading" class="section-rhythm border-t border-border">
-        <ScrollReveal client:visible variant="fade">
+        <ScrollReveal variant="fade">
           <div>
             <h2 id="contact-heading" class="mb-3 text-lg font-medium">Security contact</h2>
             <p class="text-sm leading-relaxed text-muted-foreground">

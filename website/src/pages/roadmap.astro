@@ -6,7 +6,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
-import ScrollReveal from '../components/motion/ScrollReveal';
+import ScrollReveal from '../components/motion/ScrollReveal.astro';
 import { getSiteUrl } from '../lib/site';
 
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
@@ -82,7 +82,7 @@ const ld = {
         <ul class="space-y-4">
           {shipped.map((item) => (
             <li class="border-l-2 border-muted-foreground/20 pl-6 py-2">
-              <ScrollReveal client:visible variant="slide" thresholdRatio={0.2}>
+              <ScrollReveal variant="slide" thresholdRatio={0.2}>
                 <p class="text-foreground font-medium mb-1">{item.title}</p>
                 <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
               </ScrollReveal>
@@ -104,7 +104,7 @@ const ld = {
         <ul class="space-y-4">
           {building.map((item) => (
             <li class="border-l-2 border-muted-foreground/20 pl-6 py-2">
-              <ScrollReveal client:visible variant="slide" thresholdRatio={0.2}>
+              <ScrollReveal variant="slide" thresholdRatio={0.2}>
                 <p class="text-foreground font-medium mb-1">{item.title}</p>
                 <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
               </ScrollReveal>
@@ -126,7 +126,7 @@ const ld = {
         <ul class="space-y-4">
           {considering.map((item) => (
             <li class="border-l-2 border-muted-foreground/20 pl-6 py-2">
-              <ScrollReveal client:visible variant="slide" thresholdRatio={0.2}>
+              <ScrollReveal variant="slide" thresholdRatio={0.2}>
                 <p class="text-foreground font-medium mb-1">{item.title}</p>
                 <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
               </ScrollReveal>

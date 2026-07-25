@@ -118,9 +118,17 @@ export class MahoSettingsStore {
   private readonly accountStatusChangedListenerId: number;
   private readonly pageHandler: PageHandlerRemote;
   private readonly settingsChangedListenerId: number;
+  private readonly updateStateChangedListenerId: number;
   private state: SettingsState = createInitialState();
+  // RAF-coalesced notify: the C++ handler emits a full settings snapshot on
+  // every change, and each notify re-renders the whole pane tree. Multiple
+  // patches within one frame collapse into a single render.
+  private notifyScheduled = false;
+  private rafHandle: number | null = null;
   private bootstrapComplete = false;
-  private toastTimers = new Map<string, any>();
+  private toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingValues = new Map<string, string>();
+  private readonly popstateListener: () => void;
 
   constructor() {
     const {router, handler} = bindMojoPageHandler(
@@ -195,6 +203,18 @@ export class MahoSettingsStore {
   dispose(): void {
     this.callbackRouter.removeListener(this.settingsChangedListenerId);
     this.callbackRouter.removeListener(this.accountStatusChangedListenerId);
+    this.callbackRouter.removeListener(this.updateStateChangedListenerId);
+    window.removeEventListener('popstate', this.popstateListener);
+    for (const timer of this.toastTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.toastTimers.clear();
+    if (this.rafHandle !== null) {
+      cancelAnimationFrame(this.rafHandle);
+      this.rafHandle = null;
+    }
+    this.notifyScheduled = false;
+    this.listeners.clear();
   }
 
   async bootstrap(): Promise<void> {
@@ -457,11 +477,33 @@ export class MahoSettingsStore {
           savingKeys,
         };
       });
+      if (this.pendingValues.has(key)) {
+        const nextValue = this.pendingValues.get(key)!;
+        this.pendingValues.delete(key);
+        void this.commitSettingValue(key, nextValue);
+      }
     }
   }
 
   private patch(mutator: (state: SettingsState) => SettingsState): void {
     this.state = mutator(this.state);
-    notifyListeners(this.listeners);
+    this.scheduleNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyScheduled) {
+      return;
+    }
+    this.notifyScheduled = true;
+    const flush = () => {
+      this.notifyScheduled = false;
+      this.rafHandle = null;
+      notifyListeners(this.listeners);
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      this.rafHandle = requestAnimationFrame(flush);
+    } else {
+      setTimeout(flush, 0);
+    }
   }
 }

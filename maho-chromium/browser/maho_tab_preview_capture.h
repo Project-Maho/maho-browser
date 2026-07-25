@@ -14,6 +14,10 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 
+#include <optional>
+#include <string>
+#include <vector>
+
 class BrowserWindowInterface;
 
 namespace views {
@@ -55,7 +59,16 @@ class MahoTabPreviewCapture : public BrowserCollectionObserver,
   void OnCaptureDone(const std::string& tab_id,
                      base::WeakPtr<content::WebContents> web_contents,
                      const content::CopyFromSurfaceResult& result);
-  void StoreAsJpeg(const std::string& tab_id, const SkBitmap& bitmap);
+  // Kicks the JPEG encode onto the thread pool. Encoding a 640x400 bitmap ran
+  // on the UI thread on every tab switch; only the core write has to stay here.
+  void StoreAsJpeg(const std::string& tab_id,
+                   base::WeakPtr<content::WebContents> web_contents,
+                   const SkBitmap& bitmap);
+  // R-13: revalidates after the thread-pool hop, like every other async path in
+  // this file, then writes the encoded preview to core on the UI thread.
+  void OnJpegEncoded(const std::string& tab_id,
+                     base::WeakPtr<content::WebContents> web_contents,
+                     std::optional<std::vector<uint8_t>> jpeg_data);
   void OnScrollPositionCaptured(const std::string& tab_id,
                                 base::WeakPtr<content::WebContents> web_contents,
                                 base::Value result);

@@ -6,7 +6,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
-import ScrollReveal from '../components/motion/ScrollReveal';
+import ScrollReveal from '../components/motion/ScrollReveal.astro';
 import { getSiteUrl } from '../lib/site';
 
 const { absoluteUrl } = getSiteUrl(Astro);
@@ -77,11 +77,10 @@ const commitments = [
           <div class="space-y-6">
             {commitments.map((commitment, index) => (
               <ScrollReveal
-                client:visible
                 as="section"
                 variant="slide"
                 delayMs={200 * index}
-                className="space-y-4 border-t border-border/60 pt-8 first:border-t-0 first:pt-0"
+                class="space-y-4 border-t border-border/60 pt-8 first:border-t-0 first:pt-0"
               >
                 <h3 class="text-lg font-medium text-foreground" set:html={commitment.title} />
                 {commitment.paragraphs.map((paragraph) => (
