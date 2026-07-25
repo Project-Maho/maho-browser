@@ -1,4 +1,6 @@
 import {
+  ApprovalPolicy,
+  ApprovalSensitivity,
   RuntimeEventKind,
   ToolCallStatus,
 } from '../maho_ai.mojom-webui.js';
@@ -8,6 +10,10 @@ import type {
   ToolResultInfo,
 } from '../maho_ai.mojom-webui.js';
 import {
+  getApprovalPolicyLabel,
+  getApprovalDecisionLabel,
+  getApprovalSensitivityLabel,
+  getApprovalStateLabel,
   getEventText,
   TimelineEntry,
 } from '../types.js';
@@ -22,7 +28,12 @@ interface ConversationChip {
 export interface ConversationItem {
   approval?: {
     approvalId: string;
+    decision?: string;
+    approvalPolicy?: string;
+    pageDerivedJustification?: boolean;
     reason?: string;
+    sensitivity?: string;
+    state?: string;
     status: 'approved'|'denied'|'pending';
     toolAction?: string;
     toolName?: string;
@@ -264,6 +275,25 @@ function getToolStatusChip(status?: ToolCallStatus): ConversationChip {
   }
 }
 
+function buildApprovalChips(
+    policy?: ApprovalPolicy|null,
+    sensitivity?: ApprovalSensitivity|null,
+    pageDerivedJustification?: boolean): ConversationChip[]|undefined {
+  const chips: ConversationChip[] = [
+    {text: getApprovalPolicyLabel(policy ?? ApprovalPolicy.kPrompt), tone: 'warning'},
+    {text: getApprovalSensitivityLabel(sensitivity ?? ApprovalSensitivity.kSensitive), tone: 'danger'},
+  ];
+  if (pageDerivedJustification) {
+    chips.push({text: 'Page-derived', tone: 'accent'});
+  }
+  return chips;
+}
+
+function getApprovalToolAction(toolName?: string): string|undefined {
+  const display = getToolDisplayName(toolName);
+  return display ? `Calling ${display}` : undefined;
+}
+
 export function collectConversationItems(entries: TimelineEntry[]): ConversationItem[] {
   const items: ConversationItem[] = [];
   const toolCallsById = new Map<string, ToolCallInfo>();
@@ -479,12 +509,23 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         items.push({
           approval: event.approvalRequest?.approvalId ? {
              approvalId: event.approvalRequest.approvalId,
-             status: 'pending',
-             toolAction: event.approvalRequest.relatedToolCall ?
-                 humanizeToolRequest(event.approvalRequest.relatedToolCall) :
-                 undefined,
-             toolName: getToolDisplayName(event.approvalRequest.relatedToolCall?.toolName),
-           } : undefined,
+              status: 'pending',
+              approvalPolicy: getApprovalPolicyLabel(
+                  event.approvalRequest.approvalPolicy ?? ApprovalPolicy.kPrompt),
+              pageDerivedJustification:
+                  event.approvalRequest.pageDerivedJustification,
+              sensitivity: getApprovalSensitivityLabel(
+                  event.approvalRequest.sensitivity ??
+                  ApprovalSensitivity.kSensitive),
+              state: getApprovalStateLabel(event.approvalRequest.state),
+              toolAction: getApprovalToolAction(
+                  event.approvalRequest.relatedToolCall?.toolName),
+              toolName: getToolDisplayName(event.approvalRequest.relatedToolCall?.toolName),
+            } : undefined,
+          chips: event.approvalRequest ? buildApprovalChips(
+              event.approvalRequest.approvalPolicy,
+              event.approvalRequest.sensitivity,
+              event.approvalRequest.pageDerivedJustification) : undefined,
           kind: 'approval',
           key,
           markdown: false,
@@ -511,9 +552,21 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
                 approval: {
                   ...(approvalItem.approval || {}),
                   approvalId: event.approvalResult.approvalId,
+                  approvalPolicy: getApprovalPolicyLabel(
+                      event.approvalResult.approvalPolicy),
+                  decision: getApprovalDecisionLabel(event.approvalResult.decision),
+                  pageDerivedJustification:
+                      event.approvalResult.pageDerivedJustification,
                   reason: event.approvalResult.reason || undefined,
+                  sensitivity: getApprovalSensitivityLabel(
+                      event.approvalResult.sensitivity),
+                  state: getApprovalStateLabel(event.approvalResult.state),
                   status: event.approvalResult.approved ? 'approved' : 'denied',
                 },
+                chips: buildApprovalChips(
+                    event.approvalResult.approvalPolicy,
+                    event.approvalResult.sensitivity,
+                    event.approvalResult.pageDerivedJustification),
                 note: event.approvalResult.reason || approvalItem.note,
                 tone: event.approvalResult.approved ? 'success' : 'danger',
               };

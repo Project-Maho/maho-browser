@@ -24,12 +24,13 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ai_prefs::kChatOrchestratorV2Enabled, false);
   registry->RegisterBooleanPref(ai_prefs::kProviderAdapterV2Enabled, false);
   registry->RegisterBooleanPref(ai_prefs::kUiThinModeEnabled, false);
-  registry->RegisterStringPref(ai_prefs::kPendingInitialQuery, std::string());
   registry->RegisterStringPref(ai_prefs::kSessionListJson, std::string());
   registry->RegisterStringPref(ai_prefs::kApprovalPolicy, "prompt");
   registry->RegisterBooleanPref(ai_prefs::kSessionPersistenceEnabled, true);
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
   registry->RegisterStringPref(ai_prefs::kAiViewMode, "sidebar");
+  registry->RegisterBooleanPref(ai_prefs::kAttachBrowserContext, true);
+  registry->RegisterStringPref(ai_prefs::kTranslationProvider, std::string());
   registry->RegisterStringPref(ai_prefs::kByokOpenAIEncryptedB64,
                                 std::string());
   registry->RegisterStringPref(ai_prefs::kByokAnthropicEncryptedB64,

@@ -153,12 +153,21 @@ pub use maho_types::tool::ToolDescriptor;
 pub struct TabInfo {
     /// Browser-internal tab ID.
     pub id: i64,
+    /// Stable sidebar/core tab identity when the browser exposes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_id: Option<String>,
     /// Tab title.
     pub title: String,
     /// Tab URL.
     pub url: String,
     /// Whether this tab is the currently active/foreground tab.
     pub is_active: bool,
+    /// Whether `id` can be used by action/page tools in the current session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targetable: Option<bool>,
+    /// Chromium tab-strip index when known; `-1` for sidebar/core-only rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_strip_index: Option<i64>,
 }
 
 /// Result for `browser_tab_list`.
@@ -567,34 +576,97 @@ mod tests {
     fn tab_info_roundtrip() {
         let tab = TabInfo {
             id: 1,
+            stable_id: None,
             title: "GitHub".to_string(),
             url: "https://github.com".to_string(),
             is_active: true,
+            targetable: None,
+            tab_strip_index: None,
         };
         let val = serde_json::to_value(&tab).unwrap();
         assert_eq!(val["id"], 1);
         assert_eq!(val["is_active"], true);
+        assert!(val.get("stable_id").is_none());
+        assert!(val.get("targetable").is_none());
+        assert!(val.get("tab_strip_index").is_none());
         let back: TabInfo = serde_json::from_value(val).unwrap();
         assert_eq!(back, tab);
+    }
+
+    #[test]
+    fn tab_info_sidebar_metadata_roundtrip() {
+        let tab = TabInfo {
+            id: 0,
+            stable_id: Some("stable-suspended".to_string()),
+            title: "Suspended".to_string(),
+            url: "https://example.com/suspended".to_string(),
+            is_active: false,
+            targetable: Some(false),
+            tab_strip_index: Some(-1),
+        };
+        let val = serde_json::to_value(&tab).unwrap();
+        assert_eq!(val["id"], 0);
+        assert_eq!(val["stable_id"], "stable-suspended");
+        assert_eq!(val["targetable"], false);
+        assert_eq!(val["tab_strip_index"], -1);
+        let back: TabInfo = serde_json::from_value(val).unwrap();
+        assert_eq!(back, tab);
+    }
+
+    #[test]
+    fn tab_info_legacy_json_defaults_optional_metadata() {
+        let val = json!({
+            "id": 5,
+            "title": "Legacy",
+            "url": "https://example.com/legacy",
+            "is_active": true
+        });
+        let back: TabInfo = serde_json::from_value(val).unwrap();
+        assert_eq!(back.id, 5);
+        assert_eq!(back.stable_id, None);
+        assert_eq!(back.targetable, None);
+        assert_eq!(back.tab_strip_index, None);
     }
 
     #[test]
     fn tab_list_result_roundtrip() {
         let result = TabListResult {
             tabs: vec![
-                TabInfo { id: 1, title: "A".into(), url: "https://a.com".into(), is_active: true },
-                TabInfo { id: 2, title: "B".into(), url: "https://b.com".into(), is_active: false },
+                TabInfo {
+                    id: 1,
+                    stable_id: Some("stable-a".into()),
+                    title: "A".into(),
+                    url: "https://a.com".into(),
+                    is_active: true,
+                    targetable: Some(true),
+                    tab_strip_index: Some(0),
+                },
+                TabInfo {
+                    id: 0,
+                    stable_id: Some("stable-b".into()),
+                    title: "B".into(),
+                    url: "https://b.com".into(),
+                    is_active: false,
+                    targetable: Some(false),
+                    tab_strip_index: Some(-1),
+                },
             ],
         };
         let val = serde_json::to_value(&result).unwrap();
         assert_eq!(val["tabs"].as_array().unwrap().len(), 2);
+        assert_eq!(val["tabs"][0]["targetable"], true);
+        assert_eq!(val["tabs"][1]["id"], 0);
+        assert_eq!(val["tabs"][1]["tab_strip_index"], -1);
         let back: TabListResult = serde_json::from_value(val).unwrap();
         assert_eq!(back, result);
     }
 
     #[test]
     fn navigate_params_roundtrip() {
-        let params = NavigateParams { tab_id: Some(5), url: "https://x.com".into() };
+        let params = NavigateParams {
+            tab_id: Some(5),
+            url: "https://x.com".into(),
+        };
         let val = serde_json::to_value(&params).unwrap();
         assert_eq!(val["tab_id"], 5);
         let back: NavigateParams = serde_json::from_value(val).unwrap();

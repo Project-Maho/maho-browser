@@ -4,7 +4,9 @@
 #define MAHO_BROWSER_AI_MAHO_BROWSER_TOOL_EXECUTOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -12,8 +14,18 @@
 #include "base/sequence_checker.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
+#include "ui/accessibility/ax_node_id_forward.h"
 
 class Browser;
+
+namespace maho {
+class MahoMcpLeaseRegistry;
+class MahoMcpBrowserDelegate;
+}
+
+namespace maho::ai {
+struct BrowserActionContract;
+}
 
 namespace content {
 class WebContents;
@@ -21,12 +33,39 @@ class WebContents;
 
 class MahoBrowserToolExecutor {
  public:
+  struct BrowserActionAuthorization {
+    std::string tool_name;
+    std::string kind;
+    std::string sensitivity;
+    bool requires_approval = false;
+    bool requires_lease = false;
+    std::string domain_policy;
+    std::string empty_allowlist_policy;
+    std::string active_origin;
+    std::string destination_origin;
+    bool page_derived_justification = false;
+  };
+
+  struct BrowserActionApprovalDecision {
+    bool approved = false;
+    std::string error;
+  };
+
   using ToolResultCallback = base::OnceCallback<void(base::DictValue result)>;
+  using BrowserActionApprovalCallback = base::RepeatingCallback<
+      BrowserActionApprovalDecision(const BrowserActionAuthorization& metadata)>;
 
   explicit MahoBrowserToolExecutor(
       Browser* browser,
       bool browser_tools_v1_enabled = true,
-      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>());
+      base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>(),
+      BrowserActionApprovalCallback action_approval_callback =
+          BrowserActionApprovalCallback(),
+      maho::MahoMcpBrowserDelegate* browser_action_delegate_for_testing =
+          nullptr,
+      maho::MahoMcpLeaseRegistry* browser_action_lease_registry_for_testing =
+          nullptr,
+      std::string browser_action_lease_holder_id = std::string());
   MahoBrowserToolExecutor(const MahoBrowserToolExecutor&) = delete;
   MahoBrowserToolExecutor& operator=(const MahoBrowserToolExecutor&) = delete;
   ~MahoBrowserToolExecutor();
@@ -45,6 +84,9 @@ class MahoBrowserToolExecutor {
   void ExecuteSearchInPage(const base::DictValue& arguments,
                            ToolResultCallback callback);
   void ExecuteExtractStructuredPageContext(ToolResultCallback callback);
+  void ExecuteBrowserAction(const maho::ai::BrowserActionContract& contract,
+                            const base::DictValue& arguments,
+                            ToolResultCallback callback);
 
   void OnReadCurrentPageContext(ToolResultCallback callback,
                                MahoAiPageContextExtractor::PageContextResult result);
@@ -67,16 +109,94 @@ class MahoBrowserToolExecutor {
   static std::string GetStringArgument(const base::DictValue& arguments,
                                        const std::string& key);
   static int GetIntArgument(const base::DictValue& arguments,
-                            const std::string& key,
-                            int default_value);
+                             const std::string& key,
+                             int default_value);
+  static base::DictValue BuildBrowserActionErrorResult(
+      const std::string& tool_name,
+      int error_code,
+      const std::string& error);
+  static base::DictValue BuildBrowserActionSuccessResult(
+      const std::string& tool_name,
+      base::DictValue action_result);
+
+ public:
+  enum class FallbackTier {
+    kTypedDomainApi,
+    kDomRefLocator,
+    kAccessibilitySnapshot,
+    kScreenshotCua,
+  };
+
+  enum class FallbackSafetyState {
+    kSafe,
+    kDowngraded,
+    kBlocked,
+    kEscalationApprovalRequired,
+    kEscalationApproved,
+  };
+
+  struct BrowserActionFallbackDecision {
+    FallbackTier attempted_tier = FallbackTier::kTypedDomainApi;
+    FallbackTier selected_tier = FallbackTier::kTypedDomainApi;
+    std::string reason;
+    FallbackSafetyState safety_state = FallbackSafetyState::kSafe;
+    bool approval_required = false;
+  };
+
+  struct BrowserActionFallbackProgress {
+    bool typed_domain_succeeded = false;
+    bool dom_ref_selected = false;
+    bool accessibility_snapshot_selected = false;
+  };
+
+  static const char* FallbackTierName(FallbackTier tier);
+  static const char* FallbackSafetyStateName(FallbackSafetyState state);
+  static void AttachFallbackDecision(
+      base::DictValue& result,
+      const BrowserActionFallbackDecision& decision);
+  bool EnforceBrowserActionFallback(
+      const maho::ai::BrowserActionContract& contract,
+      const base::DictValue& arguments,
+      BrowserActionFallbackDecision& decision,
+      std::string& error);
+  void RecordBrowserActionFallbackSuccess(
+      const maho::ai::BrowserActionContract& contract,
+      const BrowserActionFallbackDecision& decision);
+
+ private:
 
   content::WebContents* GetActiveWebContents() const;
+  maho::MahoMcpBrowserDelegate* GetBrowserActionDelegate() const;
+  std::optional<int> ResolveBrowserActionTabId(
+      maho::MahoMcpBrowserDelegate* delegate,
+      const base::DictValue& arguments,
+      std::string& error) const;
+  std::optional<std::string> GetActiveTabOrigin(
+      maho::MahoMcpBrowserDelegate* delegate,
+      int tab_id) const;
+  bool AuthorizeBrowserAction(const maho::ai::BrowserActionContract& contract,
+                              const base::DictValue& arguments,
+                              int tab_id,
+                              maho::MahoMcpBrowserDelegate* delegate,
+                              std::string& error);
+  bool EnsureBrowserActionLease(const maho::ai::BrowserActionContract& contract,
+                                int tab_id,
+                                std::string& error);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   raw_ptr<Browser> browser_;
   bool browser_tools_v1_enabled_ = true;
   base::RepeatingCallback<bool()> ai_gate_;
+  BrowserActionApprovalCallback action_approval_callback_;
+  raw_ptr<maho::MahoMcpBrowserDelegate> browser_action_delegate_for_testing_;
+  raw_ptr<maho::MahoMcpLeaseRegistry>
+      browser_action_lease_registry_for_testing_;
+  std::string browser_action_lease_holder_id_;
+  std::unordered_map<int, ui::AXNodeID> browser_action_refs_;
+  std::unordered_map<int, int> browser_action_scroll_positions_;
+  std::unordered_map<std::string, BrowserActionFallbackProgress>
+      browser_action_fallback_progress_;
   std::unique_ptr<MahoAiPageContextExtractor> page_context_extractor_;
   base::WeakPtrFactory<MahoBrowserToolExecutor> weak_factory_{this};
 };

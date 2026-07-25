@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "base/sequence_checker.h"
+#include "base/synchronization/lock.h"
 #include "base/time/time.h"
 
 namespace maho {
@@ -113,7 +113,7 @@ class MahoMcpLeaseRegistry {
   std::map<int64_t, LeaseInfo> leases_;
   std::vector<AuditEntry> audit_log_;
 
-  SEQUENCE_CHECKER(sequence_checker_);
+  mutable base::Lock lock_;
 };
 
 }  // namespace maho

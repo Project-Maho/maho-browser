@@ -4,6 +4,22 @@ import {cn} from '@lib/utils';
 import {Button} from '@ui/button';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
 
+function chipClassName(tone: NonNullable<ConversationItem['chips']>[number]['tone']): string {
+  switch (tone) {
+    case 'accent':
+      return 'border-primary/40 bg-primary/10 text-primary';
+    case 'success':
+      return 'border-success/40 bg-success/10 text-success';
+    case 'warning':
+      return 'border-warning/40 bg-warning/10 text-warning';
+    case 'danger':
+      return 'border-destructive/40 bg-destructive/10 text-destructive';
+    case 'neutral':
+    default:
+      return 'border-border/70 bg-secondary/50 text-muted-foreground';
+  }
+}
+
 export function ConversationSystemItem(
     {
       item,
@@ -29,7 +45,7 @@ export function ConversationSystemItem(
       <div className={cn(
           'grid gap-3',
           isApproval ?
-            'rounded-2xl border border-border/80 bg-card/90 p-4 shadow-[0_18px_40px_-32px_rgba(8,12,24,0.85)]' :
+            'rounded-2xl border border-border/80 bg-card/90 p-4 shadow-[var(--shadow-raised)]' :
             'border-l pl-4',
           toneClassName)}>
         <div className="flex flex-wrap items-start gap-3">
@@ -55,8 +71,38 @@ export function ConversationSystemItem(
         {!isApproval && item.note ? (
           <div className="text-xs leading-5 text-muted-foreground">{item.note}</div>
         ) : null}
+        {item.chips?.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {item.chips.map(chip => (
+              <span
+                key={`${chip.tone}:${chip.text}`}
+                className={cn(
+                    'rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                    chipClassName(chip.tone))}>
+                {chip.text}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {isApproval ? (
           <>
+            {!item.chips?.length ? <div className="flex flex-wrap items-center gap-1.5">
+              {approval.sensitivity ? (
+                <span className="rounded-full border border-border/70 bg-secondary/45 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {approval.sensitivity}
+                </span>
+              ) : null}
+              {approval.approvalPolicy ? (
+                <span className="rounded-full border border-border/70 bg-secondary/45 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {approval.approvalPolicy}
+                </span>
+              ) : null}
+              {approval.pageDerivedJustification ? (
+                <span className="rounded-full border border-warning/45 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning-foreground">
+                  Page-derived justification
+                </span>
+              ) : null}
+            </div> : null}
             {approval.reason ? (
               <div className="rounded-xl border border-border/80 bg-secondary/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
                 {approval.reason}

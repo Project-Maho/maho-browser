@@ -1,9 +1,10 @@
-use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
-use maho_agent::{AgentRuntime, AgentStorage, SwiftideBackend, PermissionDecision, PermissionRequest};
-use maho_types::chat::{ChatMessage, ChatContent};
-use swiftide_core::{
-    chat_completion::{ChatCompletion, ChatCompletionRequest, ChatCompletionResponse, ToolCall, errors::LanguageModelError},
+use maho_agent::{AgentRuntime, AgentStorage, PermissionDecision, SwiftideBackend};
+use maho_types::chat::{ChatContent, ChatMessage};
+use std::sync::{Arc, Mutex};
+use swiftide_core::chat_completion::{
+    errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
+    ToolCall,
 };
 
 #[derive(Clone)]
@@ -13,22 +14,43 @@ struct MockAgentStorage {
 
 #[async_trait]
 impl AgentStorage for MockAgentStorage {
-    async fn get_byok_key(&self, _provider: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
-        Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
+    async fn get_byok_key(
+        &self,
+        _provider: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(Some(maho_agent::ZeroizedString::new(
+            "mock-key".to_string(),
+        )))
     }
 
-    async fn get_setting(&self, _key: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+    async fn get_setting(
+        &self,
+        _key: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
         Ok(None)
     }
 
-    async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), maho_agent::AgentError> {
-        self.messages.lock().unwrap().push((session_id.to_string(), role.to_string(), content.to_string()));
+    async fn save_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<(), maho_agent::AgentError> {
+        self.messages.lock().unwrap().push((
+            session_id.to_string(),
+            role.to_string(),
+            content.to_string(),
+        ));
         Ok(())
     }
 
-    async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
+    async fn get_history(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
         let lock = self.messages.lock().unwrap();
-        let history: Vec<ChatMessage> = lock.iter()
+        let history: Vec<ChatMessage> = lock
+            .iter()
             .filter(|(sid, _, _)| sid == session_id)
             .map(|(_, role, content)| {
                 if role == "user" {
@@ -75,7 +97,7 @@ impl ChatCompletion for DynamicMockLLM {
     ) -> Result<ChatCompletionResponse, LanguageModelError> {
         let mut calls_lock = self.calls.lock().unwrap();
         calls_lock.push(request.clone());
-        
+
         if calls_lock.len() == 1 {
             // First call: return a tool call
             let args = if self.tool_name == "shell_exec" {
@@ -111,7 +133,9 @@ async fn test_agent_turn_integration() {
 
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
@@ -129,7 +153,10 @@ async fn test_agent_turn_integration() {
     backend.set_llm_override(Box::new(mock_llm) as Box<dyn ChatCompletion>);
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello agent".to_string()));
-    let response_msg = backend.run_turn("session-123", user_msg, None).await.unwrap();
+    let response_msg = backend
+        .run_turn("session-123", user_msg, None, None)
+        .await
+        .unwrap();
 
     assert_eq!(response_msg.role.as_str(), "assistant");
     let content = match response_msg.content {
@@ -152,7 +179,9 @@ async fn test_agent_tool_integration() {
 
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
@@ -165,7 +194,10 @@ async fn test_agent_tool_integration() {
     backend.set_llm_override(Box::new(mock_llm) as Box<dyn ChatCompletion>);
 
     let user_msg = ChatMessage::user(ChatContent::text("read file".to_string()));
-    let response_msg = backend.run_turn("session-123", user_msg, None).await.unwrap();
+    let response_msg = backend
+        .run_turn("session-123", user_msg, None, None)
+        .await
+        .unwrap();
 
     let content = match response_msg.content {
         ChatContent::Text(t) => t,
@@ -189,13 +221,15 @@ async fn test_agent_permission_deny() {
 
     let perm_call_count = Arc::new(Mutex::new(0usize));
     let perm_call_count_clone = Arc::clone(&perm_call_count);
-    backend.set_permission_callback(Box::new(move |_req| {
-        let count = Arc::clone(&perm_call_count_clone);
-        Box::pin(async move {
-            *count.lock().unwrap() += 1;
-            PermissionDecision::Deny
-        })
-    })).unwrap();
+    backend
+        .set_permission_callback(Box::new(move |_req| {
+            let count = Arc::clone(&perm_call_count_clone);
+            Box::pin(async move {
+                *count.lock().unwrap() += 1;
+                PermissionDecision::Deny
+            })
+        }))
+        .unwrap();
 
     let mock_llm = DynamicMockLLM {
         calls: Arc::new(Mutex::new(Vec::new())),
@@ -206,7 +240,7 @@ async fn test_agent_permission_deny() {
 
     let user_msg = ChatMessage::user(ChatContent::text("read file".to_string()));
     let response_msg = backend
-        .run_turn("session-123", user_msg, None)
+        .run_turn("session-123", user_msg, None, None)
         .await
         .expect("turn completes: a denied tool returns a ToolError to the model (#2/#3-A), it does not abort the turn");
 
@@ -239,7 +273,7 @@ async fn test_agent_fails_without_byok_key() {
     );
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
-    let res = backend.run_turn("session-123", user_msg, None).await;
+    let res = backend.run_turn("session-123", user_msg, None, None).await;
 
     assert!(res.is_err());
     let err_str = res.unwrap_err().to_string();
@@ -261,13 +295,15 @@ async fn test_agent_denies_unauthorized_tool() {
 
     let perm_call_count = Arc::new(Mutex::new(0usize));
     let perm_call_count_clone = Arc::clone(&perm_call_count);
-    backend.set_permission_callback(Box::new(move |_req| {
-        let count = Arc::clone(&perm_call_count_clone);
-        Box::pin(async move {
-            *count.lock().unwrap() += 1;
-            PermissionDecision::Deny
-        })
-    })).unwrap();
+    backend
+        .set_permission_callback(Box::new(move |_req| {
+            let count = Arc::clone(&perm_call_count_clone);
+            Box::pin(async move {
+                *count.lock().unwrap() += 1;
+                PermissionDecision::Deny
+            })
+        }))
+        .unwrap();
 
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mock_llm = DynamicMockLLM {
@@ -278,7 +314,7 @@ async fn test_agent_denies_unauthorized_tool() {
 
     let user_msg = ChatMessage::user(ChatContent::text("read file".to_string()));
     let response_msg = backend
-        .run_turn("session-123", user_msg, None)
+        .run_turn("session-123", user_msg, None, None)
         .await
         .expect("turn completes: denied shell_exec returns a ToolError to the model (#2/#3-A)");
 
@@ -325,21 +361,25 @@ async fn test_secure_storage_callback_invoked() {
     let callback_invoked = Arc::new(Mutex::new(false));
     let callback_invoked_clone = Arc::clone(&callback_invoked);
 
-    backend.set_secure_storage_callback(Box::new(move |provider| {
-        if provider == "openai" {
-            *callback_invoked_clone.lock().unwrap() = true;
-            Ok(maho_agent::SecureKeyBundle {
-                key: maho_agent::ZeroizedString::new("openai-key".to_string()),
-                base_url: None,
-                model: None,
-            })
-        } else {
-            Err(maho_agent::AgentError::ExecutionError("not found".to_string()))
-        }
-    })).unwrap();
+    backend
+        .set_secure_storage_callback(Box::new(move |provider| {
+            if provider == "openai" {
+                *callback_invoked_clone.lock().unwrap() = true;
+                Ok(maho_agent::SecureKeyBundle {
+                    key: maho_agent::ZeroizedString::new("openai-key".to_string()),
+                    base_url: None,
+                    model: None,
+                })
+            } else {
+                Err(maho_agent::AgentError::ExecutionError(
+                    "not found".to_string(),
+                ))
+            }
+        }))
+        .unwrap();
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
-    let _ = backend.run_turn("session-123", user_msg, None).await;
+    let _ = backend.run_turn("session-123", user_msg, None, None).await;
 
     assert!(*callback_invoked.lock().unwrap());
 }
@@ -357,14 +397,21 @@ async fn test_secure_storage_callback_failure_fails_closed() {
         false,
     );
 
-    backend.set_secure_storage_callback(Box::new(move |_provider| {
-        Err(maho_agent::AgentError::ExecutionError("simulated keychain failure".to_string()))
-    })).unwrap();
+    backend
+        .set_secure_storage_callback(Box::new(move |_provider| {
+            Err(maho_agent::AgentError::ExecutionError(
+                "simulated keychain failure".to_string(),
+            ))
+        }))
+        .unwrap();
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
-    let res = backend.run_turn("session-fail", user_msg, None).await;
+    let res = backend.run_turn("session-fail", user_msg, None, None).await;
 
-    assert!(res.is_err(), "Agent must fail-closed when secure storage returns error");
+    assert!(
+        res.is_err(),
+        "Agent must fail-closed when secure storage returns error"
+    );
     let err_str = res.unwrap_err().to_string();
     assert!(
         err_str.contains("Secure storage callback") || err_str.contains("No BYOK API key"),
@@ -388,27 +435,37 @@ async fn test_secure_storage_callback_provider_routing() {
     let invocations = Arc::new(Mutex::new(Vec::<String>::new()));
     let invocations_clone = Arc::clone(&invocations);
 
-    backend.set_secure_storage_callback(Box::new(move |provider| {
-        invocations_clone.lock().unwrap().push(provider.to_string());
-        if provider == "anthropic" {
-            Ok(maho_agent::SecureKeyBundle {
-                key: maho_agent::ZeroizedString::new("anthropic-key".to_string()),
-                base_url: None,
-                model: None,
-            })
-        } else {
-            Err(maho_agent::AgentError::ExecutionError("no key for provider".to_string()))
-        }
-    })).unwrap();
+    backend
+        .set_secure_storage_callback(Box::new(move |provider| {
+            invocations_clone.lock().unwrap().push(provider.to_string());
+            if provider == "anthropic" {
+                Ok(maho_agent::SecureKeyBundle {
+                    key: maho_agent::ZeroizedString::new("anthropic-key".to_string()),
+                    base_url: None,
+                    model: None,
+                })
+            } else {
+                Err(maho_agent::AgentError::ExecutionError(
+                    "no key for provider".to_string(),
+                ))
+            }
+        }))
+        .unwrap();
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
-    let _ = backend.run_turn("session-routing", user_msg, None).await;
+    let _ = backend
+        .run_turn("session-routing", user_msg, None, None)
+        .await;
 
     let calls = invocations.lock().unwrap().clone();
-    assert!(calls.contains(&"openai".to_string()),
-        "Backend must try 'openai' provider; got calls: {calls:?}");
-    assert!(calls.contains(&"anthropic".to_string()),
-        "Backend must fall through to 'anthropic' when 'openai' fails; got calls: {calls:?}");
+    assert!(
+        calls.contains(&"openai".to_string()),
+        "Backend must try 'openai' provider; got calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"anthropic".to_string()),
+        "Backend must fall through to 'anthropic' when 'openai' fails; got calls: {calls:?}"
+    );
 }
 
 #[tokio::test]
@@ -429,24 +486,32 @@ async fn test_byok_key_access_audit_emitted() {
     let observed = Arc::new(AtomicBool::new(false));
     let observed_clone = Arc::clone(&observed);
 
-    backend.set_secure_storage_callback(Box::new(move |provider| {
-        if provider == "openai" {
-            observed_clone.store(true, Ordering::SeqCst);
-            Ok(maho_agent::SecureKeyBundle {
-                key: maho_agent::ZeroizedString::new("audit-test-key".to_string()),
-                base_url: None,
-                model: None,
-            })
-        } else {
-            Err(maho_agent::AgentError::ExecutionError("not found".to_string()))
-        }
-    })).unwrap();
+    backend
+        .set_secure_storage_callback(Box::new(move |provider| {
+            if provider == "openai" {
+                observed_clone.store(true, Ordering::SeqCst);
+                Ok(maho_agent::SecureKeyBundle {
+                    key: maho_agent::ZeroizedString::new("audit-test-key".to_string()),
+                    base_url: None,
+                    model: None,
+                })
+            } else {
+                Err(maho_agent::AgentError::ExecutionError(
+                    "not found".to_string(),
+                ))
+            }
+        }))
+        .unwrap();
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
-    let _ = backend.run_turn("session-audit", user_msg, None).await;
+    let _ = backend
+        .run_turn("session-audit", user_msg, None, None)
+        .await;
 
-    assert!(observed.load(Ordering::SeqCst),
-        "Secure storage callback must be invoked at least once for openai provider");
+    assert!(
+        observed.load(Ordering::SeqCst),
+        "Secure storage callback must be invoked at least once for openai provider"
+    );
 }
 
 #[tokio::test]
@@ -457,7 +522,9 @@ async fn test_agent_system_prompt_integration() {
 
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
@@ -476,14 +543,19 @@ async fn test_agent_system_prompt_integration() {
     backend.set_system_prompt("You are a code reviewer");
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello agent".to_string()));
-    let _response_msg = backend.run_turn("session-123", user_msg, None).await.unwrap();
+    let _response_msg = backend
+        .run_turn("session-123", user_msg, None, None)
+        .await
+        .unwrap();
 
     // Check that system prompt was prepended to the LLM call history
     let calls = mock_llm.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let messages = &calls[0].messages;
     assert!(messages.len() >= 2);
-    assert!(matches!(&messages[0], swiftide_core::chat_completion::ChatMessage::System(prompt) if prompt == "You are a code reviewer"));
+    assert!(
+        matches!(&messages[0], swiftide_core::chat_completion::ChatMessage::System(prompt) if prompt == "You are a code reviewer")
+    );
 
     // Check that system prompt is NOT present in the persisted history
     let history = storage.get_history("session-123").await.unwrap();
@@ -494,8 +566,8 @@ async fn test_agent_system_prompt_integration() {
 
 #[tokio::test]
 async fn test_mcp_client_stdio_integration() {
-    use maho_types::ai::{AiMcpServer, McpTransport};
     use maho_agent::mcp_client::McpClient;
+    use maho_types::ai::{AiMcpServer, McpTransport};
     use serde_json::json;
 
     // Write mock MCP server script to a temp file
@@ -585,7 +657,9 @@ if __name__ == "__main__":
     main()
 "#;
 
-    tokio::fs::write(&script_path, script_content).await.unwrap();
+    tokio::fs::write(&script_path, script_content)
+        .await
+        .unwrap();
 
     // Configure commands to run the script via python3
     let command_json = format!("[\"python3\", \"{}\"]", script_path.display());
@@ -607,7 +681,9 @@ if __name__ == "__main__":
         updated_at: "".to_string(),
     };
 
-    let client = McpClient::connect(&server_config, None::<String>).await.unwrap();
+    let client = McpClient::connect(&server_config, None::<String>)
+        .await
+        .unwrap();
 
     // 1. Test listing tools
     let tools = client.list_tools().await.unwrap();
@@ -617,8 +693,11 @@ if __name__ == "__main__":
 
     // 2. Test calling tool
     let args = json!({ "message": "hello from test" });
-    let result = client.call_tool("mcp:mock-server/echo", args).await.unwrap();
-    
+    let result = client
+        .call_tool("mcp:mock-server/echo", args)
+        .await
+        .unwrap();
+
     // Check that we got the expected Echo response inside CallToolResult
     let content = result.get("content").unwrap().as_array().unwrap();
     assert_eq!(content.len(), 1);
@@ -628,9 +707,14 @@ if __name__ == "__main__":
     // 3. Test truncation (R-2)
     let mut small_server_config = server_config.clone();
     small_server_config.output_cap_bytes = 10;
-    let small_client = McpClient::connect(&small_server_config, None::<String>).await.unwrap();
+    let small_client = McpClient::connect(&small_server_config, None::<String>)
+        .await
+        .unwrap();
     let args = json!({ "message": "this_is_a_very_long_message" });
-    let result = small_client.call_tool("mcp:mock-server/echo", args).await.unwrap();
+    let result = small_client
+        .call_tool("mcp:mock-server/echo", args)
+        .await
+        .unwrap();
     let content = result.get("content").unwrap().as_array().unwrap();
     let text = content[0].get("text").unwrap().as_str().unwrap();
     assert!(text.contains("output truncated"));
@@ -685,21 +769,25 @@ def main():
 if __name__ == "__main__":
     main()
 "#;
-    tokio::fs::write(&empty_script_path, empty_script_content).await.unwrap();
+    tokio::fs::write(&empty_script_path, empty_script_content)
+        .await
+        .unwrap();
     let empty_command_json = format!("[\"python3\", \"{}\"]", empty_script_path.display());
     let mut empty_server_config = server_config.clone();
     empty_server_config.command = Some(empty_command_json);
     empty_server_config.name = "empty-mock".to_string();
-    
-    let empty_client = McpClient::connect(&empty_server_config, None::<String>).await.unwrap();
+
+    let empty_client = McpClient::connect(&empty_server_config, None::<String>)
+        .await
+        .unwrap();
     let err = empty_client.list_tools().await.unwrap_err();
     assert!(err.to_string().contains("server exposes no callable tools"));
 }
 
 #[tokio::test]
 async fn test_cli_tool_executor_integration() {
-    use maho_types::ai::AiCliTool;
     use maho_agent::cli_tool_executor::CliToolExecutor;
+    use maho_types::ai::AiCliTool;
     use serde_json::json;
 
     let tool_config = AiCliTool {
@@ -728,7 +816,7 @@ async fn test_cli_tool_executor_integration() {
     // 1. Valid invocation
     let args = json!({ "message": "hello CLI" });
     let result = executor.execute(args).await.unwrap();
-    
+
     let stdout = result.get("stdout").unwrap().as_str().unwrap().trim();
     assert_eq!(stdout, "hello CLI");
     assert_eq!(result.get("exit_code").unwrap().as_i64().unwrap(), 0);
@@ -755,20 +843,42 @@ struct ProfileScopingStorage {
 
 #[async_trait]
 impl AgentStorage for ProfileScopingStorage {
-    async fn get_byok_key(&self, _provider: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
-        Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
+    async fn get_byok_key(
+        &self,
+        _provider: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(Some(maho_agent::ZeroizedString::new(
+            "mock-key".to_string(),
+        )))
     }
-    async fn get_setting(&self, _key: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+    async fn get_setting(
+        &self,
+        _key: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
         Ok(None)
     }
-    async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), maho_agent::AgentError> {
-        self.messages.lock().unwrap().push((session_id.to_string(), role.to_string(), content.to_string()));
+    async fn save_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<(), maho_agent::AgentError> {
+        self.messages.lock().unwrap().push((
+            session_id.to_string(),
+            role.to_string(),
+            content.to_string(),
+        ));
         Ok(())
     }
-    async fn get_history(&self, _session_id: &str) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
+    async fn get_history(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
         Ok(vec![])
     }
-    async fn list_workspaces(&self) -> Result<Vec<maho_types::ai::AiWorkspace>, maho_agent::AgentError> {
+    async fn list_workspaces(
+        &self,
+    ) -> Result<Vec<maho_types::ai::AiWorkspace>, maho_agent::AgentError> {
         Ok(vec![maho_types::ai::AiWorkspace {
             id: "ws1".to_string(),
             name: "WS".to_string(),
@@ -779,7 +889,10 @@ impl AgentStorage for ProfileScopingStorage {
             updated_at: String::new(),
         }])
     }
-    async fn get_profile(&self, id: &str) -> Result<Option<maho_types::ai::AiProfile>, maho_agent::AgentError> {
+    async fn get_profile(
+        &self,
+        id: &str,
+    ) -> Result<Option<maho_types::ai::AiProfile>, maho_agent::AgentError> {
         if id == "prof1" {
             Ok(Some(maho_types::ai::AiProfile {
                 id: "prof1".to_string(),
@@ -810,7 +923,11 @@ impl ChatCompletion for CapturingLLM {
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, LanguageModelError> {
-        let mut names: Vec<String> = request.tools_spec().iter().map(|t| t.name.clone()).collect();
+        let mut names: Vec<String> = request
+            .tools_spec()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
         names.sort();
         *self.tool_names.lock().unwrap() = names;
         Ok(ChatCompletionResponse::builder()
@@ -829,15 +946,19 @@ async fn run_turn_capturing_tools(profile_tools: Vec<String>) -> Vec<String> {
     });
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
     let captured = Arc::new(Mutex::new(Vec::new()));
-    backend.set_llm_override(Box::new(CapturingLLM { tool_names: Arc::clone(&captured) }) as Box<dyn ChatCompletion>);
+    backend.set_llm_override(Box::new(CapturingLLM {
+        tool_names: Arc::clone(&captured),
+    }) as Box<dyn ChatCompletion>);
 
     let user_msg = ChatMessage::user(ChatContent::text("hi".to_string()));
-    backend.run_turn("s1", user_msg, None).await.unwrap();
+    backend.run_turn("s1", user_msg, None, None).await.unwrap();
     let names = captured.lock().unwrap().clone();
     names
 }
@@ -888,10 +1009,16 @@ impl ChatCompletion for FsReadCaptureLLM {
                 .args(format!("{{\"path\": \"{}\"}}", self.path))
                 .build()
                 .unwrap();
-            Ok(ChatCompletionResponse::builder().tool_calls(vec![tc]).build().unwrap())
+            Ok(ChatCompletionResponse::builder()
+                .tool_calls(vec![tc])
+                .build()
+                .unwrap())
         } else {
             *self.captured.lock().unwrap() = format!("{request:?}");
-            Ok(ChatCompletionResponse::builder().message("done".to_string()).build().unwrap())
+            Ok(ChatCompletionResponse::builder()
+                .message("done".to_string())
+                .build()
+                .unwrap())
         }
     }
 }
@@ -906,7 +1033,9 @@ async fn run_fsread_turn(policy: Option<&str>) -> String {
     });
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         dir.clone(),
         true,
     );
@@ -921,7 +1050,7 @@ async fn run_fsread_turn(policy: Option<&str>) -> String {
     }) as Box<dyn ChatCompletion>);
 
     let user_msg = ChatMessage::user(ChatContent::text("read it".to_string()));
-    backend.run_turn("s1", user_msg, None).await.unwrap();
+    backend.run_turn("s1", user_msg, None, None).await.unwrap();
     let _ = std::fs::remove_file(&path);
     let out = captured.lock().unwrap().clone();
     out
@@ -947,6 +1076,15 @@ async fn test_approval_policy_deny_blocks_nonsensitive_tool() {
     );
 }
 
+#[tokio::test]
+async fn typed_approval_unknown_legacy_policy_blocks_nonsensitive_tool() {
+    let denied = run_fsread_turn(Some("surprise-new-policy")).await;
+    assert!(
+        !denied.contains("SECRET_CONTENT_XYZ"),
+        "unknown legacy approval-policy strings must map to most-restrictive deny-all; leaked: {denied}",
+    );
+}
+
 // Storage that returns a workspace/profile with a distinct "resolved" system
 // prompt AND a distinct persisted snapshot, so the #13 precedence can be
 // observed unambiguously.
@@ -957,19 +1095,34 @@ struct SnapshotStorage {
 
 #[async_trait]
 impl AgentStorage for SnapshotStorage {
-    async fn get_byok_key(&self, _p: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
-        Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
+    async fn get_byok_key(
+        &self,
+        _p: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(Some(maho_agent::ZeroizedString::new(
+            "mock-key".to_string(),
+        )))
     }
-    async fn get_setting(&self, _k: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+    async fn get_setting(
+        &self,
+        _k: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
         Ok(None)
     }
-    async fn save_message(&self, _s: &str, _r: &str, _c: &str) -> Result<(), maho_agent::AgentError> {
+    async fn save_message(
+        &self,
+        _s: &str,
+        _r: &str,
+        _c: &str,
+    ) -> Result<(), maho_agent::AgentError> {
         Ok(())
     }
     async fn get_history(&self, _s: &str) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
         Ok(vec![])
     }
-    async fn list_workspaces(&self) -> Result<Vec<maho_types::ai::AiWorkspace>, maho_agent::AgentError> {
+    async fn list_workspaces(
+        &self,
+    ) -> Result<Vec<maho_types::ai::AiWorkspace>, maho_agent::AgentError> {
         Ok(vec![maho_types::ai::AiWorkspace {
             id: "ws1".to_string(),
             name: "WS".to_string(),
@@ -980,7 +1133,10 @@ impl AgentStorage for SnapshotStorage {
             updated_at: String::new(),
         }])
     }
-    async fn get_profile(&self, id: &str) -> Result<Option<maho_types::ai::AiProfile>, maho_agent::AgentError> {
+    async fn get_profile(
+        &self,
+        id: &str,
+    ) -> Result<Option<maho_types::ai::AiProfile>, maho_agent::AgentError> {
         if id == "prof1" {
             Ok(Some(maho_types::ai::AiProfile {
                 id: "prof1".to_string(),
@@ -997,7 +1153,10 @@ impl AgentStorage for SnapshotStorage {
             Ok(None)
         }
     }
-    async fn get_system_prompt_snapshot(&self, _c: &str) -> Result<Option<String>, maho_agent::AgentError> {
+    async fn get_system_prompt_snapshot(
+        &self,
+        _c: &str,
+    ) -> Result<Option<String>, maho_agent::AgentError> {
         Ok(Some("SNAPSHOT_PROMPT_MARKER".to_string()))
     }
 }
@@ -1014,7 +1173,10 @@ impl ChatCompletion for FirstRequestDumpLLM {
         request: &ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, LanguageModelError> {
         *self.dump.lock().unwrap() = format!("{request:?}");
-        Ok(ChatCompletionResponse::builder().message("done".to_string()).build().unwrap())
+        Ok(ChatCompletionResponse::builder()
+            .message("done".to_string())
+            .build()
+            .unwrap())
     }
 }
 
@@ -1024,16 +1186,20 @@ async fn test_system_prompt_snapshot_takes_precedence_over_resolved() {
     let storage = Arc::new(SnapshotStorage { root });
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
     // No set_system_prompt override, so precedence is snapshot > resolved.
     let dump = Arc::new(Mutex::new(String::new()));
-    backend.set_llm_override(Box::new(FirstRequestDumpLLM { dump: Arc::clone(&dump) }) as Box<dyn ChatCompletion>);
+    backend.set_llm_override(Box::new(FirstRequestDumpLLM {
+        dump: Arc::clone(&dump),
+    }) as Box<dyn ChatCompletion>);
 
     let user_msg = ChatMessage::user(ChatContent::text("hi".to_string()));
-    backend.run_turn("s1", user_msg, None).await.unwrap();
+    backend.run_turn("s1", user_msg, None, None).await.unwrap();
 
     let seen = dump.lock().unwrap().clone();
     assert!(
@@ -1076,19 +1242,34 @@ fn make_mcp_server(id: &str, name: &str) -> maho_types::ai::AiMcpServer {
 
 #[async_trait]
 impl AgentStorage for McpScopingStorage {
-    async fn get_byok_key(&self, _p: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
-        Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
+    async fn get_byok_key(
+        &self,
+        _p: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(Some(maho_agent::ZeroizedString::new(
+            "mock-key".to_string(),
+        )))
     }
-    async fn get_setting(&self, _k: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+    async fn get_setting(
+        &self,
+        _k: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
         Ok(None)
     }
-    async fn save_message(&self, _s: &str, _r: &str, _c: &str) -> Result<(), maho_agent::AgentError> {
+    async fn save_message(
+        &self,
+        _s: &str,
+        _r: &str,
+        _c: &str,
+    ) -> Result<(), maho_agent::AgentError> {
         Ok(())
     }
     async fn get_history(&self, _s: &str) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
         Ok(vec![])
     }
-    async fn list_workspaces(&self) -> Result<Vec<maho_types::ai::AiWorkspace>, maho_agent::AgentError> {
+    async fn list_workspaces(
+        &self,
+    ) -> Result<Vec<maho_types::ai::AiWorkspace>, maho_agent::AgentError> {
         Ok(vec![maho_types::ai::AiWorkspace {
             id: "ws1".to_string(),
             name: "WS".to_string(),
@@ -1099,7 +1280,10 @@ impl AgentStorage for McpScopingStorage {
             updated_at: String::new(),
         }])
     }
-    async fn get_profile(&self, id: &str) -> Result<Option<maho_types::ai::AiProfile>, maho_agent::AgentError> {
+    async fn get_profile(
+        &self,
+        id: &str,
+    ) -> Result<Option<maho_types::ai::AiProfile>, maho_agent::AgentError> {
         if id == "prof1" {
             Ok(Some(maho_types::ai::AiProfile {
                 id: "prof1".to_string(),
@@ -1116,8 +1300,14 @@ impl AgentStorage for McpScopingStorage {
             Ok(None)
         }
     }
-    async fn list_mcp_servers(&self, _ws: &str) -> Result<Vec<maho_types::ai::AiMcpServer>, maho_agent::AgentError> {
-        Ok(vec![make_mcp_server("srv-a", "SrvA"), make_mcp_server("srv-b", "SrvB")])
+    async fn list_mcp_servers(
+        &self,
+        _ws: &str,
+    ) -> Result<Vec<maho_types::ai::AiMcpServer>, maho_agent::AgentError> {
+        Ok(vec![
+            make_mcp_server("srv-a", "SrvA"),
+            make_mcp_server("srv-b", "SrvB"),
+        ])
     }
 }
 
@@ -1127,15 +1317,19 @@ async fn test_profile_mcp_servers_scoping() {
     let storage = Arc::new(McpScopingStorage { root });
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
     let captured = Arc::new(Mutex::new(Vec::new()));
-    backend.set_llm_override(Box::new(CapturingLLM { tool_names: Arc::clone(&captured) }) as Box<dyn ChatCompletion>);
+    backend.set_llm_override(Box::new(CapturingLLM {
+        tool_names: Arc::clone(&captured),
+    }) as Box<dyn ChatCompletion>);
 
     let user_msg = ChatMessage::user(ChatContent::text("hi".to_string()));
-    backend.run_turn("s1", user_msg, None).await.unwrap();
+    backend.run_turn("s1", user_msg, None, None).await.unwrap();
     let names = captured.lock().unwrap().clone();
 
     // srv-a is in profile.mcp_servers → attempted → offline-shim tool offered.
@@ -1152,8 +1346,8 @@ async fn test_profile_mcp_servers_scoping() {
 
 #[tokio::test]
 async fn test_mcp_client_is_alive_transitions() {
-    use maho_types::ai::{AiMcpServer, McpTransport};
     use maho_agent::mcp_client::McpClient;
+    use maho_types::ai::{AiMcpServer, McpTransport};
     use std::time::Duration;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -1200,9 +1394,14 @@ if __name__ == "__main__":
         updated_at: String::new(),
     };
 
-    let mut client = McpClient::connect(&server_config, None::<String>).await.unwrap();
+    let mut client = McpClient::connect(&server_config, None::<String>)
+        .await
+        .unwrap();
     // #12: a freshly connected client's transport is open.
-    assert!(client.is_alive(), "freshly connected MCP client must report alive");
+    assert!(
+        client.is_alive(),
+        "freshly connected MCP client must report alive"
+    );
 
     client.disconnect().await;
 
@@ -1229,22 +1428,43 @@ struct RAGMockAgentStorage {
 
 #[async_trait]
 impl AgentStorage for RAGMockAgentStorage {
-    async fn get_byok_key(&self, _provider: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
-        Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
+    async fn get_byok_key(
+        &self,
+        _provider: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(Some(maho_agent::ZeroizedString::new(
+            "mock-key".to_string(),
+        )))
     }
 
-    async fn get_setting(&self, _key: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+    async fn get_setting(
+        &self,
+        _key: &str,
+    ) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
         Ok(None)
     }
 
-    async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), maho_agent::AgentError> {
-        self.messages.lock().unwrap().push((session_id.to_string(), role.to_string(), content.to_string()));
+    async fn save_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<(), maho_agent::AgentError> {
+        self.messages.lock().unwrap().push((
+            session_id.to_string(),
+            role.to_string(),
+            content.to_string(),
+        ));
         Ok(())
     }
 
-    async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
+    async fn get_history(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
         let lock = self.messages.lock().unwrap();
-        let history: Vec<ChatMessage> = lock.iter()
+        let history: Vec<ChatMessage> = lock
+            .iter()
             .filter(|(sid, _, _)| sid == session_id)
             .map(|(_, role, content)| {
                 if role == "user" {
@@ -1259,10 +1479,22 @@ impl AgentStorage for RAGMockAgentStorage {
         Ok(history)
     }
 
-    async fn fts_relevant_memories(&self, _query: &str, _top_k: usize) -> Result<Vec<(String, String, f64)>, maho_agent::AgentError> {
+    async fn fts_relevant_memories(
+        &self,
+        _query: &str,
+        _top_k: usize,
+    ) -> Result<Vec<(String, String, f64)>, maho_agent::AgentError> {
         Ok(vec![
-            ("f1".to_string(), "Mock memory: Rust is super fast.".to_string(), -1.5),
-            ("f2".to_string(), "Mock memory: RAG is awesome.".to_string(), -1.2),
+            (
+                "f1".to_string(),
+                "Mock memory: Rust is super fast.".to_string(),
+                -1.5,
+            ),
+            (
+                "f2".to_string(),
+                "Mock memory: RAG is awesome.".to_string(),
+                -1.2,
+            ),
         ])
     }
 }
@@ -1275,7 +1507,9 @@ async fn test_agent_rag_integration() {
 
     let backend = SwiftideBackend::new(
         Arc::clone(&storage) as Arc<dyn AgentStorage>,
-        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
         std::env::temp_dir(),
         true,
     );
@@ -1294,25 +1528,150 @@ async fn test_agent_rag_integration() {
     backend.set_system_prompt("System Prompt Base");
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello agent".to_string()));
-    let _response_msg = backend.run_turn("session-123", user_msg, None).await.unwrap();
+    let _response_msg = backend
+        .run_turn("session-123", user_msg, None, None)
+        .await
+        .unwrap();
 
     let calls = mock_llm.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let messages = &calls[0].messages;
     assert!(messages.len() >= 2);
-    
+
     // Find the system prompt message
-    let system_message = messages.iter().find_map(|msg| {
-        if let swiftide_core::chat_completion::ChatMessage::System(prompt) = msg {
-            Some(prompt)
-        } else {
-            None
-        }
-    }).expect("System message must be present");
-    
+    let system_message = messages
+        .iter()
+        .find_map(|msg| {
+            if let swiftide_core::chat_completion::ChatMessage::System(prompt) = msg {
+                Some(prompt)
+            } else {
+                None
+            }
+        })
+        .expect("System message must be present");
+
     assert!(system_message.contains("System Prompt Base"));
     assert!(system_message.contains("Retrieved Memories:"));
     assert!(system_message.contains("Mock memory: Rust is super fast."));
     assert!(system_message.contains("Mock memory: RAG is awesome."));
 }
 
+#[tokio::test]
+async fn test_agent_event_order() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
+        std::env::temp_dir(),
+        true,
+    );
+
+    let mock_llm = DynamicMockLLM {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        tool_name: "fs_read".to_string(),
+    };
+
+    backend.set_llm_override(Box::new(mock_llm) as Box<dyn ChatCompletion>);
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_clone = Arc::clone(&events);
+    let on_event = Arc::new(move |event: maho_agent::AgentStreamEvent| {
+        events_clone.lock().unwrap().push(event);
+    });
+
+    let user_msg = ChatMessage::user(ChatContent::text("read file".to_string()));
+    let _response_msg = backend
+        .run_turn("session-123", user_msg, None, Some(on_event))
+        .await
+        .unwrap();
+
+    let recorded = events.lock().unwrap().clone();
+    assert!(!recorded.is_empty(), "Events must be emitted");
+
+    let mut tool_call_seen = false;
+    let mut tool_result_seen = false;
+    for event in &recorded {
+        match event {
+            maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "fs_read");
+                assert!(args.contains("nonexistent"));
+                tool_call_seen = true;
+            }
+            maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "fs_read");
+                assert!(
+                    result.contains("does not exist")
+                        || result.contains("not found")
+                        || result.contains("failed")
+                        || result.contains("No such file")
+                        || result.contains("Error")
+                        || result.contains("error")
+                        || result.contains("REDACTED_INVALID_RESULT")
+                );
+                assert!(tool_call_seen, "ToolCall must come before ToolResult");
+                tool_result_seen = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(tool_call_seen, "Should emit ToolCall event");
+    assert!(tool_result_seen, "Should emit ToolResult event");
+}
+
+#[tokio::test]
+async fn test_agent_control_tools_filtered() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        Some(Box::new(|_req| {
+            Box::pin(async { PermissionDecision::Allow })
+        })),
+        std::env::temp_dir(),
+        true,
+    );
+
+    let mock_llm = DynamicMockLLM {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        tool_name: "stop".to_string(),
+    };
+
+    backend.set_llm_override(Box::new(mock_llm) as Box<dyn ChatCompletion>);
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_clone = Arc::clone(&events);
+    let on_event = Arc::new(move |event: maho_agent::AgentStreamEvent| {
+        events_clone.lock().unwrap().push(event);
+    });
+
+    let user_msg = ChatMessage::user(ChatContent::text("stop now".to_string()));
+    let _ = backend
+        .run_turn("session-stop", user_msg, None, Some(on_event))
+        .await;
+
+    let recorded = events.lock().unwrap().clone();
+
+    // Assert that no ToolCall or ToolResult events were emitted for "stop"
+    for event in &recorded {
+        match event {
+            maho_agent::AgentStreamEvent::ToolCall { name, .. } => {
+                assert_ne!(name, "stop");
+                assert_ne!(name, "task_failed");
+            }
+            maho_agent::AgentStreamEvent::ToolResult { name, .. } => {
+                assert_ne!(name, "stop");
+                assert_ne!(name, "task_failed");
+            }
+            _ => {}
+        }
+    }
+}

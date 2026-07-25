@@ -111,6 +111,25 @@ enum InteractionMode {
   kDeveloper,
 };
 
+enum AskMahoSource {
+  kCommandPalette,
+};
+
+enum AskMahoContextIntent {
+  kNone,
+  kCurrentPage,
+};
+
+struct AskMahoDispatch {
+  string request_id;
+  string query;
+  AskMahoSource source;
+  bool submit;
+  InteractionMode mode;
+  AskMahoContextIntent context_intent;
+  string? target_session_id;
+};
+
 enum ViewMode {
   kSidebar,
   kFloating,
@@ -247,12 +266,43 @@ struct ToolResultInfo {
   string? error_message;
 };
 
+enum ApprovalPolicy {
+  kPrompt,
+  kAllowAll,
+  kAllowMcp,
+  kDenySensitive,
+  kDenyAll,
+};
+
+enum ApprovalSensitivity {
+  kReadOnly,
+  kSensitive,
+};
+
+enum ApprovalState {
+  kPending,
+  kApproved,
+  kDenied,
+  kCancelled,
+};
+
+enum ApprovalDecision {
+  kNone,
+  kAllow,
+  kAllowOnce,
+  kDeny,
+};
+
 // Describes an approval request from the runtime.
 struct ApprovalRequestInfo {
   // Unique ID for this approval within the session.
   string approval_id;
   // Human-readable description of what needs approval.
   string description;
+  ApprovalPolicy approval_policy;
+  ApprovalSensitivity sensitivity;
+  ApprovalState state;
+  bool page_derived_justification;
   // The tool call that triggered the approval, if any.
   ToolCallInfo? related_tool_call;
 };
@@ -261,6 +311,9 @@ struct ApprovalRequestInfo {
 struct RuntimeEvent {
   // What kind of event this is.
   RuntimeEventKind kind;
+
+  string session_id;
+  string? request_id;
 
   // Monotonically increasing sequence number within the session.
   uint64 sequence;
@@ -305,6 +358,11 @@ struct ApprovalResultInfo {
   bool approved;
   // Optional explanation from the user.
   string? reason;
+  ApprovalPolicy approval_policy;
+  ApprovalSensitivity sensitivity;
+  ApprovalState state;
+  ApprovalDecision decision;
+  bool page_derived_justification;
 };
 
 // Lightweight session metadata for the session list.
@@ -563,4 +621,7 @@ interface Page {
 
   // A voice session error (model load failure, transcription error, etc.).
   OnVoiceError(string message);
+
+  // Emitted when C++ accepts an Ask Maho request and creates a session for it.
+  OnAskMahoSessionAccepted(string request_id, SessionInfo session);
 };

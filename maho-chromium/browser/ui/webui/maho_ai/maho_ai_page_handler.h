@@ -7,19 +7,21 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 #include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
-#include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
@@ -27,6 +29,7 @@ class Browser;
 class PrefRegistrySimple;
 class PrefService;
 class MahoAiVoiceSession;
+class MahoAIPageHandlerTestPeer;
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -49,8 +52,6 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
-
-
   // maho_ai::mojom::PageHandler — session-oriented methods:
   void GetConnectionState(GetConnectionStateCallback callback) override;
   void GetSessionList(GetSessionListCallback callback) override;
@@ -71,7 +72,8 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                        uint32_t max_results,
                        SearchBookmarksCallback callback) override;
 
-  void SubmitPrompt(const std::string& session_id,
+  void SubmitPrompt(
+      const std::string& session_id,
                     const std::string& prompt,
                     bool attach_browser_context,
                     maho_ai::mojom::InteractionMode mode,
@@ -88,8 +90,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void SetViewMode(maho_ai::mojom::ViewMode mode) override;
 
   // Tab Tidy — default-ON, no pref gate.
-  void RequestTabTidy(
-      std::vector<maho_ai::mojom::TabInfoPtr> tabs,
+  void RequestTabTidy(std::vector<maho_ai::mojom::TabInfoPtr> tabs,
       RequestTabTidyCallback callback) override;
   void ApplyTabTidyFolders(
       std::vector<maho_ai::mojom::TidyFolderPtr> folders) override;
@@ -146,8 +147,9 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void GetCliTools(const std::string& workspace_id,
                    GetCliToolsCallback callback) override;
 
-  void GetWorkspaceEffectiveTools(const std::string& workspace_id,
-                                  GetWorkspaceEffectiveToolsCallback callback) override;
+  void GetWorkspaceEffectiveTools(
+      const std::string& workspace_id,
+      GetWorkspaceEffectiveToolsCallback callback) override;
 
   // Voice input (desktop on-device STT).
   void StartVoiceSession(StartVoiceSessionCallback callback) override;
@@ -155,14 +157,44 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void StopVoiceSession() override;
 
  private:
+  friend class MahoAIPageHandlerTestPeer;
+
+  struct Correlation {
+    std::string session_id;
+    std::optional<std::string> request_id;
+  };
+
+  void SettleIngressRequest(const std::string& request_id,
+                            bool post_terminal = false);
+  void InterruptActiveIngressRequest(bool post_terminal = false);
+
+  maho_ai::mojom::SessionInfoPtr StartSessionInternal(
+      const std::optional<std::string>& initial_prompt,
+      maho_ai::mojom::InteractionMode mode);
+
+  void SubmitPromptInternal(
+      const std::string& session_id,
+      const std::string& prompt,
+      bool attach_browser_context,
+      maho_ai::mojom::InteractionMode mode,
+      std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
+          attachments,
+      Correlation correlation,
+      base::OnceClosure before_runtime_submit);
+
   // Translates internal runtime events into Mojo and pushes them to the Page
   // remote. Also maintains chat history for the simple chat UI.
   void OnRuntimeEvent(MahoAiRuntimeEvent event);
+  void OnRuntimeEventForSession(const std::string& session_id,
+                                std::optional<std::string> request_id,
+                                MahoAiRuntimeEvent event);
 
   // Async continuation: called once page-context extraction completes for the
   // legacy |attach_browser_context| path. Builds the augmented prompt (or
   // falls back to the original) and forwards to the active adapter.
   void OnContextExtractedThenSubmit(
+      Correlation correlation,
+      base::OnceClosure before_runtime_submit,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
       MahoAiPageContextExtractor::PageContextResult ctx);
@@ -171,6 +203,8 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   // specific open tab chosen via |GetOpenTabs|. |tab_label| is the human-
   // readable label for the injected context event.
   void OnTabContextExtractedThenSubmit(
+      Correlation correlation,
+      base::OnceClosure before_runtime_submit,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
       std::string tab_label,
@@ -195,6 +229,8 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
     ~PendingAttachmentBatch();
     std::string user_prompt;
     maho_ai::mojom::InteractionMode mode;
+    Correlation correlation;
+    base::OnceClosure before_runtime_submit;
     std::vector<AttachmentSlot> slots;
     size_t completed_count = 0;
   };
@@ -205,8 +241,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
       MahoAiPageContextExtractor::PageContextResult ctx);
 
   // Builds a Mojo RuntimeEvent from an internal event struct.
-  maho_ai::mojom::RuntimeEventPtr ToMojoEvent(
-      const MahoAiRuntimeEvent& event);
+  maho_ai::mojom::RuntimeEventPtr ToMojoEvent(const MahoAiRuntimeEvent& event);
 
   // Creates a SessionInfo for the current active session.
   maho_ai::mojom::SessionInfoPtr MakeActiveSessionInfo() const;
@@ -226,10 +261,15 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void PersistSessionList(bool synchronous = false);
   void LoadPersistedSessions();
   void PersistEventLog(const std::string& session_id, bool synchronous = false);
+  void PersistEventLogForSession(
+      const std::string& session_id,
+      const std::vector<maho_ai::mojom::RuntimeEventPtr>& log,
+      bool synchronous = false);
   std::vector<maho_ai::mojom::RuntimeEventPtr> LoadPersistedEventLog(
       const std::string& session_id);
   void OnEventLogSerialized(const std::string& session_id, std::string json);
-  void OnSessionListSerialized(std::vector<std::string> kept_ids, std::string json);
+  void OnSessionListSerialized(std::vector<std::string> kept_ids,
+                               std::string json);
   void ClearPersistedEventLog(const std::string& session_id);
   void UpdateSessionTitle(const std::string& text);
 
@@ -251,8 +291,8 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   bool IsAiAllowed();
   void DenyAndResetConnection();
   static bool RevalidateAiThunk(base::WeakPtr<MahoAIPageHandler> self);
-  static Browser* ResolveBoundBrowserThunk(base::WeakPtr<MahoAIPageHandler> self);
-
+  static Browser* ResolveBoundBrowserThunk(
+      base::WeakPtr<MahoAIPageHandler> self);
 
   // Session state for the new contract.
   std::string active_session_id_;
@@ -281,6 +321,15 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void OnVoiceFinalTranscript(const std::string& transcript);
   void OnVoiceSessionError(const std::string& message);
   std::unique_ptr<MahoAiVoiceSession> voice_session_;
+
+  void OnAskMahoDispatch(
+      const maho_ai::mojom::AskMahoDispatch& dispatch,
+      uint64_t delivery_id,
+      maho::MahoAiIngressCoordinator::AcceptanceCallback accept_callback);
+  base::WeakPtr<maho::MahoAiIngressCoordinator> ask_maho_coordinator_;
+  maho::MahoAiIngressCoordinator::ConsumerRegistration ask_maho_registration_;
+  std::string active_ingress_request_id_;
+  uint64_t active_ingress_delivery_id_ = 0;
 
   base::WeakPtrFactory<MahoAIPageHandler> weak_factory_{this};
   base::WeakPtrFactory<MahoAIPageHandler> session_list_weak_factory_{this};

@@ -23,6 +23,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
 
@@ -103,11 +104,18 @@ std::wstring MahoMcpPipeServer::GetCurrentUserSidString() {
 }
 
 MahoMcpPipeServer::MahoMcpPipeServer(MahoMcpSessionToken* session_token)
-    : pipe_name_(ComputePipeName()), session_token_(session_token) {
+    : pipe_name_(ComputePipeName()),
+      session_token_(session_token),
+      lease_registry_(std::make_unique<MahoMcpLeaseRegistry>()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
+  MahoMcpSession::SetLeaseRegistryForBrowserActions(lease_registry_.get());
 }
 
 MahoMcpPipeServer::~MahoMcpPipeServer() {
+  if (MahoMcpSession::GetLeaseRegistryForBrowserActions() ==
+      lease_registry_.get()) {
+    MahoMcpSession::SetLeaseRegistryForBrowserActions(nullptr);
+  }
   Stop();
 }
 
@@ -272,7 +280,8 @@ void MahoMcpPipeServer::OnClientConnected() {
   auto conn = std::make_unique<PipeConnection>();
   conn->connection_id = next_connection_id_++;
   conn->pipe_handle = std::move(listen_handle_);
-  conn->session = std::make_unique<MahoMcpSession>(session_token_);
+  conn->session =
+      std::make_unique<MahoMcpSession>(session_token_, lease_registry_.get());
   conn->read_buffer.resize(kReadBufferSize);
 
   conn->read_event.Set(::CreateEventW(nullptr, TRUE, FALSE, nullptr));

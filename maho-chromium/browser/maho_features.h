@@ -62,6 +62,17 @@ BASE_DECLARE_FEATURE(kMahoSidebarVibrancy);
 // Kill-switch pending end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoSidebarActionPlaceholder);
 
+// Gates in-browser agent action-tool schema advertisement and action dispatch.
+// Read-only browser tools stay available; action tools remain hidden and fail
+// closed unless this feature is explicitly enabled for QA/rollout.
+BASE_DECLARE_FEATURE(kMahoAgentBrowserActions);
+
+// When enabled, the location-bar utility panel turns the "Block Ads &
+// Trackers" row into a launcher for the native Shields bubble instead of an
+// inline site-exception toggle. Disabled by default as a rollback-safe staged
+// rollout while the redesigned Shields surface finishes end-to-end QA.
+BASE_DECLARE_FEATURE(kMahoShieldLauncherPanel);
+
 }  // namespace maho::features
 
 #endif  // MAHO_BROWSER_MAHO_FEATURES_H_

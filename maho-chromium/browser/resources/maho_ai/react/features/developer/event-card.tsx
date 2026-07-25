@@ -1,6 +1,13 @@
 import React from 'react';
 import type {RuntimeEventRecord} from '../../../types.js';
-import {getEventText, getRuntimeStateLabel, RuntimeEventKind} from '../../../types.js';
+import {
+  getApprovalDecisionLabel,
+  getApprovalPolicyLabel,
+  getApprovalSensitivityLabel,
+  getEventText,
+  getRuntimeStateLabel,
+  RuntimeEventKind,
+} from '../../../types.js';
 import {formatTimestamp} from '../../lib/format-timestamp.js';
 import {Markdown} from '../../components/markdown.js';
 import {Badge} from '@ui/badge';
@@ -109,10 +116,20 @@ export function EventCard({event}: {event: RuntimeEventRecord}) {
   }
 
   if (event.kind === RuntimeEventKind.kApprovalRequest) {
+    const approval = event.approvalRequest;
     return (
       <EventShell
         badge={<Badge variant="warning">Pending</Badge>}
-        body={<div className="text-sm leading-6 text-muted-foreground break-words">{event.approvalRequest?.description || 'The runtime is waiting for approval.'}</div>}
+        body={(
+          <div className="grid gap-2 text-sm leading-6 text-muted-foreground break-words">
+            <div>{approval?.description || 'The runtime is waiting for approval.'}</div>
+            <div className="flex flex-wrap gap-1.5 text-[11px] leading-4">
+              <Badge variant="secondary">{getApprovalSensitivityLabel(approval?.sensitivity)}</Badge>
+              <Badge variant="secondary">{getApprovalPolicyLabel(approval?.approvalPolicy)}</Badge>
+              {approval?.pageDerivedJustification ? <Badge variant="warning">Page-derived</Badge> : null}
+            </div>
+          </div>
+        )}
         meta={meta}
         title="Approval required"
       />
@@ -121,10 +138,20 @@ export function EventCard({event}: {event: RuntimeEventRecord}) {
 
   if (event.kind === RuntimeEventKind.kApprovalResult) {
     const approved = !!event.approvalResult?.approved;
+    const result = event.approvalResult;
     return (
       <EventShell
         badge={<Badge variant={approved ? 'success' : 'destructive'}>{approved ? 'Approved' : 'Denied'}</Badge>}
-        body={<div className="text-sm leading-6 text-muted-foreground break-words">{event.approvalResult?.reason || 'Approval response recorded'}</div>}
+        body={(
+          <div className="grid gap-2 text-sm leading-6 text-muted-foreground break-words">
+            <div>{result?.reason || getApprovalDecisionLabel(result?.decision)}</div>
+            <div className="flex flex-wrap gap-1.5 text-[11px] leading-4">
+              <Badge variant="secondary">{getApprovalSensitivityLabel(result?.sensitivity)}</Badge>
+              <Badge variant="secondary">{getApprovalPolicyLabel(result?.approvalPolicy)}</Badge>
+              {result?.pageDerivedJustification ? <Badge variant="warning">Page-derived</Badge> : null}
+            </div>
+          </div>
+        )}
         meta={meta}
         title="Approval decision"
       />

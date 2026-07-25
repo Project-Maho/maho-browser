@@ -1,20 +1,39 @@
+use async_trait::async_trait;
+use maho_types::chat::{ChatContent, ChatMessage as MahoChatMessage};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, MutexGuard};
-use async_trait::async_trait;
-use maho_types::chat::{ChatMessage as MahoChatMessage, ChatContent};
 use swiftide_core::{
-    AgentContext, Tool,
     chat_completion::{ChatMessage as SwiftideChatMessage, ToolCall, ToolOutput, ToolSpec},
+    AgentContext, Tool,
 };
 
+use crate::approval::{
+    emit_audit_record, ApprovalAuditEventKind, ApprovalAuditRecord, ApprovalDecisionMetadata,
+    ApprovalDecisionReason, ApprovalDecisionSource, ApprovalPolicy, ToolSensitivity,
+    ToolSensitivityDowngrade, ToolSensitivityResolution,
+};
+use crate::browser_action_contract::{
+    canonical_browser_action_contracts, BrowserActionContract, BrowserToolKind,
+    BrowserToolSensitivity,
+};
+use crate::fallback_ladder::{FallbackLadderError, FallbackLadderState};
+use crate::fallback_ladder_browser::browser_tool_fallback_request;
 use crate::{
-    AgentRuntime, AgentStorage, ToolDefinition, AgentError, PermissionCallback,
-    PermissionDecision, PermissionRequest,
+    AgentError, AgentRuntime, AgentStorage, AgentStreamEvent, PermissionCallback,
+    PermissionDecision, PermissionRequest, ToolDefinition,
 };
 use maho_types::tool::{ToolPermission, ToolProvenance};
 
 const FS_READ_MAX_BYTES: u64 = 1024 * 1024;
 const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
+const PERMISSION_DECISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Internal swiftide control-flow tools — never surfaced to the UI as tool_call/tool_result.
+const INTERNAL_CONTROL_TOOLS: &[&str] = &["stop", "task_failed"];
+
+fn is_internal_control_tool(name: &str) -> bool {
+    INTERNAL_CONTROL_TOOLS.contains(&name)
+}
 
 trait MutexExt<T> {
     fn lock_unpoison(&self) -> MutexGuard<'_, T>;
@@ -60,7 +79,7 @@ fn mcp_tool_is_sensitive(
         && crate::mcp_client::is_readonly_dogfood_tool(raw_name);
     let explicitly_trusted = server_trusted
         && match trusted_tools {
-            None => true,
+            Option::None => true,
             Some(list) => list.iter().any(|n| n == raw_name || n == tool_name),
         };
     !(dogfood_readonly || explicitly_trusted)
@@ -137,11 +156,120 @@ impl async_openai::config::Config for MahoOpenAIConfig {
 #[derive(Clone)]
 struct PermissionGatedTool {
     inner_tool: Arc<dyn Tool>,
-    sensitive: bool,
+    sensitivity: ToolSensitivity,
+    sensitivity_downgrade: Option<ToolSensitivityDowngrade>,
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
     denied_flag: Arc<Mutex<bool>>,
     session_id: String,
-    approval_policy: Arc<Mutex<String>>,
+    approval_policy: Arc<Mutex<ApprovalPolicy>>,
+}
+
+fn permission_error(reason: &str) -> swiftide_core::chat_completion::errors::ToolError {
+    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+        "Permission Denied: {reason}"
+    ))
+}
+
+fn audit_decision(
+    kind: ApprovalAuditEventKind,
+    session_id: &str,
+    tool_name: &str,
+    sensitivity: ToolSensitivity,
+    metadata: ApprovalDecisionMetadata,
+) {
+    emit_audit_record(&ApprovalAuditRecord::decision(
+        kind,
+        session_id,
+        tool_name,
+        sensitivity,
+        metadata,
+    ));
+}
+
+fn audit_execution_result(
+    session_id: &str,
+    tool_name: &str,
+    sensitivity: ToolSensitivity,
+    policy: ApprovalPolicy,
+    result: &Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError>,
+) {
+    let raw_result = match result {
+        Ok(output) => format!("{output}"),
+        Err(error) => error.to_string(),
+    };
+    let sanitized_result = crate::permission::sanitize_tool_result(&raw_result);
+    emit_audit_record(&ApprovalAuditRecord::execution_result(
+        session_id,
+        tool_name,
+        sensitivity,
+        policy,
+        &sanitized_result,
+    ));
+}
+
+fn audit_fallback_decision(
+    session_id: &str,
+    tool_name: &str,
+    sensitivity: ToolSensitivity,
+    policy: ApprovalPolicy,
+    decision: &crate::fallback_ladder::FallbackDecision,
+) {
+    emit_audit_record(&ApprovalAuditRecord::fallback_decision(
+        session_id,
+        tool_name,
+        sensitivity,
+        policy,
+        decision,
+    ));
+}
+
+fn fallback_error(error: &FallbackLadderError) -> swiftide_core::chat_completion::errors::ToolError {
+    let reason = error.decision().reason.as_str();
+    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+        "Browser fallback ladder denied dispatch: {reason}"
+    ))
+}
+
+struct PermissionCancelAuditGuard {
+    session_id: String,
+    tool_name: String,
+    sensitivity: ToolSensitivity,
+    policy: ApprovalPolicy,
+    armed: bool,
+}
+
+impl PermissionCancelAuditGuard {
+    fn new(
+        session_id: &str,
+        tool_name: &str,
+        sensitivity: ToolSensitivity,
+        policy: ApprovalPolicy,
+    ) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            sensitivity,
+            policy,
+            armed: true,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PermissionCancelAuditGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            emit_audit_record(&ApprovalAuditRecord::cancellation(
+                &self.session_id,
+                &self.tool_name,
+                self.sensitivity,
+                self.policy,
+            ));
+        }
+    }
 }
 
 #[async_trait]
@@ -151,62 +279,172 @@ impl Tool for PermissionGatedTool {
         agent_context: &dyn AgentContext,
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+        let tool_name = self.name().to_string();
+        let policy = *self.approval_policy.lock_unpoison();
+        let sanitized_arguments =
+            crate::permission::sanitize_tool_arguments(tool_call.args().unwrap_or("{}"));
+        if let Some(downgrade) = self.sensitivity_downgrade {
+            emit_audit_record(&ApprovalAuditRecord::sensitivity_downgrade(
+                &self.session_id,
+                &tool_name,
+                downgrade.from,
+                downgrade.to,
+                policy,
+            ));
+        }
+        emit_audit_record(&ApprovalAuditRecord::permission_request(
+            &self.session_id,
+            &tool_name,
+            self.sensitivity,
+            policy,
+            &sanitized_arguments,
+        ));
+        let mut cancel_guard =
+            PermissionCancelAuditGuard::new(&self.session_id, &tool_name, self.sensitivity, policy);
+
         if *self.denied_flag.lock_unpoison() {
-            return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Permission Denied"),
-            ));
+            let metadata = ApprovalDecisionMetadata::new(
+                PermissionDecision::Deny,
+                policy,
+                ApprovalDecisionSource::PriorDeny,
+                ApprovalDecisionReason::PriorDeny,
+            );
+            audit_decision(
+                ApprovalAuditEventKind::PermissionDefaultFailClosed,
+                &self.session_id,
+                &tool_name,
+                self.sensitivity,
+                metadata,
+            );
+            cancel_guard.complete();
+            return Err(permission_error("prior tool denial in this turn"));
         }
 
-        if self.approval_policy.lock_unpoison().as_str() == "deny" {
-            return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Permission Denied: global approval policy is 'deny'"),
-            ));
-        }
-
-        if !self.sensitive {
-            return self.inner_tool.invoke(agent_context, tool_call).await;
+        if let Some(metadata) = policy.immediate_decision(&tool_name, self.sensitivity) {
+            match metadata.decision {
+                PermissionDecision::Allow => {
+                    audit_decision(
+                        ApprovalAuditEventKind::PermissionAllow,
+                        &self.session_id,
+                        &tool_name,
+                        self.sensitivity,
+                        metadata,
+                    );
+                    let result = self.inner_tool.invoke(agent_context, tool_call).await;
+                    audit_execution_result(
+                        &self.session_id,
+                        &tool_name,
+                        self.sensitivity,
+                        policy,
+                        &result,
+                    );
+                    cancel_guard.complete();
+                    return result;
+                }
+                PermissionDecision::Deny => {
+                    audit_decision(
+                        ApprovalAuditEventKind::PermissionDeny,
+                        &self.session_id,
+                        &tool_name,
+                        self.sensitivity,
+                        metadata,
+                    );
+                    *self.denied_flag.lock_unpoison() = true;
+                    cancel_guard.complete();
+                    return Err(permission_error("approval policy denied the tool"));
+                }
+            }
         }
 
         let decision_fut = {
             let callback_opt = self.permission_callback.lock_unpoison();
             if let Some(ref callback) = *callback_opt {
-                let request = PermissionRequest {
-                    tool_name: self.name().to_string(),
-                    arguments: tool_call.args().unwrap_or("{}").to_string(),
-                };
+                let request = PermissionRequest::new(
+                    tool_name.clone(),
+                    tool_call.args().unwrap_or("{}"),
+                    self.sensitivity,
+                );
                 Some(callback(request))
             } else {
                 None
             }
         };
 
-        let decision = if let Some(fut) = decision_fut {
-            fut.await
+        let decision_metadata = if let Some(fut) = decision_fut {
+            match tokio::time::timeout(PERMISSION_DECISION_TIMEOUT, fut).await {
+                Ok(PermissionDecision::Allow) => ApprovalDecisionMetadata::new(
+                    PermissionDecision::Allow,
+                    policy,
+                    ApprovalDecisionSource::Callback,
+                    ApprovalDecisionReason::UserAllow,
+                ),
+                Ok(PermissionDecision::Deny) => ApprovalDecisionMetadata::new(
+                    PermissionDecision::Deny,
+                    policy,
+                    ApprovalDecisionSource::Callback,
+                    ApprovalDecisionReason::UserDeny,
+                ),
+                Err(_) => ApprovalDecisionMetadata::new(
+                    PermissionDecision::Deny,
+                    policy,
+                    ApprovalDecisionSource::Timeout,
+                    ApprovalDecisionReason::CallbackTimeout,
+                ),
+            }
         } else {
-            PermissionDecision::Deny
+            ApprovalDecisionMetadata::new(
+                PermissionDecision::Deny,
+                policy,
+                ApprovalDecisionSource::MissingCallback,
+                ApprovalDecisionReason::MissingCallback,
+            )
         };
 
-        if decision == PermissionDecision::Deny {
-            tracing::warn!(
-                tool = %self.name(),
-                "Tool invocation denied by permission callback; session denied_flag set",
-            );
-            *self.denied_flag.lock_unpoison() = true;
-            return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Permission Denied"),
-            ));
+        match decision_metadata.decision {
+            PermissionDecision::Allow => {
+                audit_decision(
+                    ApprovalAuditEventKind::PermissionAllow,
+                    &self.session_id,
+                    &tool_name,
+                    self.sensitivity,
+                    decision_metadata,
+                );
+                let result = self.inner_tool.invoke(agent_context, tool_call).await;
+                audit_execution_result(
+                    &self.session_id,
+                    &tool_name,
+                    self.sensitivity,
+                    policy,
+                    &result,
+                );
+                cancel_guard.complete();
+                result
+            }
+            PermissionDecision::Deny => {
+                let event_kind = match decision_metadata.source {
+                    ApprovalDecisionSource::Policy => ApprovalAuditEventKind::PermissionDeny,
+                    ApprovalDecisionSource::Callback => ApprovalAuditEventKind::PermissionDeny,
+                    ApprovalDecisionSource::MissingCallback => {
+                        ApprovalAuditEventKind::PermissionDefaultFailClosed
+                    }
+                    ApprovalDecisionSource::Timeout => ApprovalAuditEventKind::PermissionTimeout,
+                    ApprovalDecisionSource::PriorDeny => {
+                        ApprovalAuditEventKind::PermissionDefaultFailClosed
+                    }
+                    ApprovalDecisionSource::Runtime => ApprovalAuditEventKind::PermissionCancel,
+                };
+                audit_decision(
+                    event_kind,
+                    &self.session_id,
+                    &tool_name,
+                    self.sensitivity,
+                    decision_metadata,
+                );
+                *self.denied_flag.lock_unpoison() = true;
+                cancel_guard.complete();
+                Err(permission_error("approval decision denied the tool"))
+            }
         }
-
-        if decision == PermissionDecision::Allow {
-            tracing::info!(
-                target = "maho_agent::audit",
-                tool = %self.name(),
-                session_id = %self.session_id,
-                "Tool invocation allowed; proceeding",
-            );
-        }
-
-        self.inner_tool.invoke(agent_context, tool_call).await
     }
 
     fn name(&self) -> Cow<'_, str> {
@@ -233,8 +471,11 @@ impl Tool for FsReadTool {
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
-        let path_str = args.get("path").and_then(|v| v.as_str())
-            .ok_or_else(|| swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!("Missing 'path' parameter")))?;
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                "Missing 'path' parameter"
+            ))
+        })?;
 
         let target_path = std::path::Path::new(path_str);
         let target_path_absolute = if target_path.is_absolute() {
@@ -243,33 +484,44 @@ impl Tool for FsReadTool {
             self.workspace_root.join(target_path)
         };
 
-        let canonical_workspace = self.workspace_root.canonicalize()
-            .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!("Workspace error: {e}")))?;
+        let canonical_workspace = self.workspace_root.canonicalize().map_err(|e| {
+            swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                "Workspace error: {e}"
+            ))
+        })?;
 
         let canonical_target = match target_path_absolute.canonicalize() {
             Ok(p) => p,
-            Err(e) => return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Invalid path or file does not exist: {e}")
-            )),
+            Err(e) => {
+                return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                    anyhow::anyhow!("Invalid path or file does not exist: {e}"),
+                ))
+            }
         };
 
         if !canonical_target.starts_with(&canonical_workspace) {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Security violation: Access denied to path outside workspace")
+                anyhow::anyhow!("Security violation: Access denied to path outside workspace"),
             ));
         }
 
-        let metadata = tokio::fs::metadata(&canonical_target).await
+        let metadata = tokio::fs::metadata(&canonical_target)
+            .await
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
         if metadata.len() > FS_READ_MAX_BYTES {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("File too large: {} bytes (max {} bytes)", metadata.len(), FS_READ_MAX_BYTES)
+                anyhow::anyhow!(
+                    "File too large: {} bytes (max {} bytes)",
+                    metadata.len(),
+                    FS_READ_MAX_BYTES
+                ),
             ));
         }
 
-        let content = tokio::fs::read_to_string(canonical_target).await
+        let content = tokio::fs::read_to_string(canonical_target)
+            .await
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
-        
+
         Ok(ToolOutput::Text(content))
     }
 
@@ -281,13 +533,16 @@ impl Tool for FsReadTool {
         ToolSpec {
             name: "fs_read".to_string(),
             description: "Read a file from the filesystem".to_string(),
-            parameters_schema: Some(serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string" }
-                },
-                "required": ["path"]
-            })).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }))
+                .unwrap(),
+            ),
         }
     }
 }
@@ -306,14 +561,20 @@ impl Tool for ShellExecTool {
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
-        let command = args.get("command").and_then(|v| v.as_str())
-            .ok_or_else(|| swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!("Missing 'command' parameter")))?;
-        
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                    "Missing 'command' parameter"
+                ))
+            })?;
+
         // 1. Safety check: reject shell metacharacters
         let forbidden_chars = ['|', ';', '&', '$', '`', '>', '<', '(', ')', '*', '?', '\\'];
         if command.chars().any(|c| forbidden_chars.contains(&c)) {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Security violation: Shell metacharacters are not allowed")
+                anyhow::anyhow!("Security violation: Shell metacharacters are not allowed"),
             ));
         }
 
@@ -321,7 +582,7 @@ impl Tool for ShellExecTool {
         let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Empty command")
+                anyhow::anyhow!("Empty command"),
             ));
         }
         let exe = parts[0];
@@ -329,21 +590,25 @@ impl Tool for ShellExecTool {
         // Strict validation: drop cargo, python3, bun. Only allow git and lsof.
         if exe != "git" && exe != "lsof" {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!(format!("Security violation: Command '{exe}' is not allowed"))
+                anyhow::anyhow!(format!(
+                    "Security violation: Command '{exe}' is not allowed"
+                )),
             ));
         }
 
         if exe == "git" {
             if parts.len() < 2 {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                    anyhow::anyhow!("Security violation: git subcommand required")
+                    anyhow::anyhow!("Security violation: git subcommand required"),
                 ));
             }
             let sub = parts[1];
             let allowed_subs = ["status", "diff", "log", "rev-parse"];
             if !allowed_subs.contains(&sub) {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                    anyhow::anyhow!(format!("Security violation: git subcommand '{sub}' is not allowed"))
+                    anyhow::anyhow!(format!(
+                        "Security violation: git subcommand '{sub}' is not allowed"
+                    )),
                 ));
             }
             if sub == "diff" {
@@ -363,13 +628,19 @@ impl Tool for ShellExecTool {
             for arg in &parts[2..] {
                 if arg.starts_with('-') {
                     let allowed_flags = ["-n", "--oneline", "--show-toplevel"];
-                    if !allowed_flags.contains(arg) && !arg.chars().skip(1).all(|c| c.is_ascii_digit()) {
+                    if !allowed_flags.contains(arg)
+                        && !arg.chars().skip(1).all(|c| c.is_ascii_digit())
+                    {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                            anyhow::anyhow!(format!("Security violation: git argument '{arg}' is not allowed"))
+                            anyhow::anyhow!(format!(
+                                "Security violation: git argument '{arg}' is not allowed"
+                            )),
                         ));
                     }
                 } else {
-                    if !arg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '/') {
+                    if !arg.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '/'
+                    }) {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                             anyhow::anyhow!(format!("Security violation: git argument '{arg}' contains invalid characters"))
                         ));
@@ -379,14 +650,18 @@ impl Tool for ShellExecTool {
         } else if exe == "lsof" {
             if parts.len() != 2 {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                    anyhow::anyhow!("Security violation: lsof must be run with exactly one argument")
+                    anyhow::anyhow!(
+                        "Security violation: lsof must be run with exactly one argument"
+                    ),
                 ));
             }
             let arg = parts[1];
             let lock_path_1 = format!("{}/.build.lock", self.workspace_root.display());
             if arg != ".build.lock" && arg != lock_path_1 {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                    anyhow::anyhow!("Security violation: lsof is only allowed on the workspace lock file")
+                    anyhow::anyhow!(
+                        "Security violation: lsof is only allowed on the workspace lock file"
+                    ),
                 ));
             }
         }
@@ -402,12 +677,19 @@ impl Tool for ShellExecTool {
             .env("PATH", path_env);
 
         let output_fut = cmd.output();
-        let output = match tokio::time::timeout(std::time::Duration::from_secs(5), output_fut).await {
+        let output = match tokio::time::timeout(std::time::Duration::from_secs(5), output_fut).await
+        {
             Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Err(swiftide_core::chat_completion::errors::ToolError::unknown(e)),
-            Err(_) => return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Command execution timed out after 5 seconds")
-            )),
+            Ok(Err(e)) => {
+                return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                    e,
+                ))
+            }
+            Err(_) => {
+                return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                    anyhow::anyhow!("Command execution timed out after 5 seconds"),
+                ))
+            }
         };
 
         let mut result = String::from_utf8_lossy(&output.stdout).into_owned()
@@ -430,13 +712,16 @@ impl Tool for ShellExecTool {
         ToolSpec {
             name: "shell_exec".to_string(),
             description: "Execute a command in the shell".to_string(),
-            parameters_schema: Some(serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" }
-                },
-                "required": ["command"]
-            })).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    },
+                    "required": ["command"]
+                }))
+                .unwrap(),
+            ),
         }
     }
 }
@@ -451,7 +736,9 @@ impl Tool for CameraTool {
         _agent_context: &dyn AgentContext,
         _tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
-        Ok(ToolOutput::Text("Picture captured successfully. [Mock Image Data]".to_string()))
+        Ok(ToolOutput::Text(
+            "Picture captured successfully. [Mock Image Data]".to_string(),
+        ))
     }
 
     fn name(&self) -> Cow<'_, str> {
@@ -462,10 +749,13 @@ impl Tool for CameraTool {
         ToolSpec {
             name: "camera".to_string(),
             description: "Capture a photo using the mobile camera".to_string(),
-            parameters_schema: Some(serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {}
-            })).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))
+                .unwrap(),
+            ),
         }
     }
 }
@@ -480,7 +770,9 @@ impl Tool for PhotoLibraryTool {
         _agent_context: &dyn AgentContext,
         _tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
-        Ok(ToolOutput::Text("Photo selected from mobile library. [Mock Photo]".to_string()))
+        Ok(ToolOutput::Text(
+            "Photo selected from mobile library. [Mock Photo]".to_string(),
+        ))
     }
 
     fn name(&self) -> Cow<'_, str> {
@@ -491,10 +783,13 @@ impl Tool for PhotoLibraryTool {
         ToolSpec {
             name: "photo_library".to_string(),
             description: "Select a photo from the mobile photo library".to_string(),
-            parameters_schema: Some(serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {}
-            })).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))
+                .unwrap(),
+            ),
         }
     }
 }
@@ -511,14 +806,22 @@ impl Tool for ClipboardTool {
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
-        let action = args.get("action").and_then(|v| v.as_str())
-            .ok_or_else(|| swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!("Missing 'action' parameter")))?;
-        
+        let action = args.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
+            swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                "Missing 'action' parameter"
+            ))
+        })?;
+
         if action == "write" {
-            let text = args.get("text").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("");
+            let text = args
+                .get("text")
+                .and_then(|v: &serde_json::Value| v.as_str())
+                .unwrap_or("");
             Ok(ToolOutput::Text(format!("Copied to clipboard: {text}")))
         } else {
-            Ok(ToolOutput::Text("Content read from clipboard: [Mock Clipboard Content]".to_string()))
+            Ok(ToolOutput::Text(
+                "Content read from clipboard: [Mock Clipboard Content]".to_string(),
+            ))
         }
     }
 
@@ -530,26 +833,86 @@ impl Tool for ClipboardTool {
         ToolSpec {
             name: "clipboard".to_string(),
             description: "Read or write to the system clipboard".to_string(),
-            parameters_schema: Some(serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["read", "write"] },
-                    "text": { "type": "string" }
-                },
-                "required": ["action"]
-            })).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["read", "write"] },
+                        "text": { "type": "string" }
+                    },
+                    "required": ["action"]
+                }))
+                .unwrap(),
+            ),
         }
     }
 }
 
-use crate::{SecureKeyBundle, BrowserToolBridge};
+use crate::{BrowserToolBridge, SecureKeyBundle};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserActionToolsState {
+    Disabled,
+    Enabled,
+}
+
+impl BrowserActionToolsState {
+    pub const fn from_enabled(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+impl Default for BrowserActionToolsState {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
 
 #[derive(Clone)]
 struct BrowserToolShim {
     name: &'static str,
     description: &'static str,
     parameters_schema: serde_json::Value,
+    sensitivity: ToolSensitivity,
     bridge: Arc<dyn BrowserToolBridge>,
+    context: BrowserToolShimContext,
+}
+
+#[derive(Clone)]
+struct BrowserToolShimContext {
+    session_id: String,
+    approval_policy: Arc<Mutex<ApprovalPolicy>>,
+    fallback_ladder: Option<Arc<Mutex<FallbackLadderState>>>,
+}
+
+impl BrowserToolShimContext {
+    fn discovery(approval_policy: Arc<Mutex<ApprovalPolicy>>) -> Self {
+        Self {
+            session_id: "browser-tool-discovery".to_string(),
+            approval_policy,
+            fallback_ladder: Option::None,
+        }
+    }
+
+    fn turn(
+        session_id: &str,
+        approval_policy: Arc<Mutex<ApprovalPolicy>>,
+        fallback_ladder: Arc<Mutex<FallbackLadderState>>,
+    ) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            approval_policy,
+            fallback_ladder: Some(fallback_ladder),
+        }
+    }
 }
 
 #[async_trait]
@@ -560,16 +923,21 @@ impl Tool for BrowserToolShim {
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args = tool_call.args().unwrap_or("{}").to_string();
+        self.enforce_fallback_ladder(&args)?;
         let name = self.name.to_string();
         let bridge = Arc::clone(&self.bridge);
         let result = tokio::task::spawn_blocking(move || bridge.invoke(&name, &args))
             .await
-            .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("spawn_blocking join failed: {e}")))?;
+            .map_err(|e| {
+                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                    "spawn_blocking join failed: {e}"
+                ))
+            })?;
         match result {
             Ok(json) => Ok(ToolOutput::Text(json)),
             Err(msg) => Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Browser tool `{}` failed: {msg}", self.name))),
+                anyhow::anyhow!("Browser tool `{}` failed: {msg}", self.name),
+            )),
         }
     }
 
@@ -578,11 +946,207 @@ impl Tool for BrowserToolShim {
     }
 
     fn tool_spec(&self) -> ToolSpec {
+        let parameters_schema = match serde_json::from_value(self.parameters_schema.clone()) {
+            Ok(schema) => Some(schema),
+            Err(error) => {
+                tracing::error!(
+                    target: "maho_agent::swiftide_backend",
+                    tool = %self.name,
+                    error = %error,
+                    "invalid browser tool schema"
+                );
+                None
+            }
+        };
         ToolSpec {
             name: self.name.to_string(),
             description: self.description.to_string(),
-            parameters_schema: Some(serde_json::from_value(self.parameters_schema.clone()).unwrap()),
+            parameters_schema,
         }
+    }
+}
+
+impl BrowserToolShim {
+    fn enforce_fallback_ladder(
+        &self,
+        args: &str,
+    ) -> Result<(), swiftide_core::chat_completion::errors::ToolError> {
+        let Some(ref fallback_ladder) = self.context.fallback_ladder else {
+            return Ok(());
+        };
+        let request = browser_tool_fallback_request(self.name, args, self.sensitivity);
+        let policy = *self.context.approval_policy.lock_unpoison();
+        let mut ladder = fallback_ladder.lock_unpoison();
+        match ladder.decide(request) {
+            Ok(decision) => {
+                audit_fallback_decision(
+                    &self.context.session_id,
+                    self.name,
+                    self.sensitivity,
+                    policy,
+                    &decision,
+                );
+                Ok(())
+            }
+            Err(error) => {
+                audit_fallback_decision(
+                    &self.context.session_id,
+                    self.name,
+                    self.sensitivity,
+                    policy,
+                    error.decision(),
+                );
+                Err(fallback_error(&error))
+            }
+        }
+    }
+
+    fn tool_definition(&self) -> ToolDefinition {
+        let sensitive = self.sensitivity == ToolSensitivity::Sensitive;
+        ToolDefinition {
+            name: self.name.to_string(),
+            description: self.description.to_string(),
+            parameters_schema: self.parameters_schema.clone(),
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive,
+            permission: if sensitive {
+                ToolPermission::AlwaysAsk
+            } else {
+                ToolPermission::AutoApprove
+            },
+        }
+    }
+}
+
+struct BrowserActionToolMetadata {
+    description: &'static str,
+    parameters_schema: serde_json::Value,
+}
+
+fn tool_sensitivity_from_browser_contract(sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
+    match sensitivity {
+        BrowserToolSensitivity::Low => ToolSensitivity::ReadOnly,
+        BrowserToolSensitivity::Sensitive => ToolSensitivity::Sensitive,
+    }
+}
+
+fn browser_action_tool_metadata(tool_name: &str) -> BrowserActionToolMetadata {
+    match tool_name {
+        "browser_navigate" => BrowserActionToolMetadata {
+            description: "Navigate the active browser tab, or a supplied tab id, to a URL.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."},
+                    "url": {"type": "string", "description": "URL to navigate to."}
+                },
+                "required": ["url"]
+            }),
+        },
+        "browser_click" => BrowserActionToolMetadata {
+            description: "Click an element by its @ref label from the accessibility snapshot.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ref": {"type": "integer", "description": "Accessibility @ref of the element to click."},
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+                },
+                "required": ["ref"]
+            }),
+        },
+        "browser_type" => BrowserActionToolMetadata {
+            description: "Type text into an element by its @ref label.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ref": {"type": "integer", "description": "Accessibility @ref of the input element."},
+                    "text": {"type": "string", "description": "Text to type into the element."},
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+                },
+                "required": ["ref", "text"]
+            }),
+        },
+        "browser_select" => BrowserActionToolMetadata {
+            description: "Select a value on a <select> element by its @ref label.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ref": {"type": "integer", "description": "Accessibility @ref of the select element."},
+                    "value": {"type": "string", "description": "Option value to select."},
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+                },
+                "required": ["ref", "value"]
+            }),
+        },
+        "browser_scroll" => BrowserActionToolMetadata {
+            description: "Scroll the main viewport or an element.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction."},
+                    "pixels": {"type": "integer", "minimum": 1, "description": "Pixels to scroll. Defaults to 300 browser-side."},
+                    "ref": {"type": "integer", "description": "Optional accessibility @ref to anchor the scroll origin."},
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+                },
+                "required": ["direction"]
+            }),
+        },
+        "browser_hover" => BrowserActionToolMetadata {
+            description: "Hover the mouse over an element by its @ref label.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ref": {"type": "integer", "description": "Accessibility @ref of the element to hover."},
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+                },
+                "required": ["ref"]
+            }),
+        },
+        "browser_key_press" => BrowserActionToolMetadata {
+            description: "Press a keyboard key in the active browser tab, or a supplied tab id.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "key": {"type": "string", "description": "Key name such as Enter, Tab, Escape, ArrowUp, F5, Space, or a single character."},
+                    "modifiers": {"type": "array", "items": {"type": "string", "enum": ["shift", "ctrl", "alt", "meta"]}, "description": "Modifier keys."},
+                    "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+                },
+                "required": ["key"]
+            }),
+        },
+        _ => BrowserActionToolMetadata {
+            description:
+                "Invoke a flag-gated browser action tool from the canonical action contract.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {},
+                "required": []
+            }),
+        },
+    }
+}
+
+fn browser_action_shim(
+    contract: BrowserActionContract<'static>,
+    bridge: Arc<dyn BrowserToolBridge>,
+    context: BrowserToolShimContext,
+) -> BrowserToolShim {
+    let metadata = browser_action_tool_metadata(contract.tool_name);
+    BrowserToolShim {
+        name: contract.tool_name,
+        description: metadata.description,
+        parameters_schema: metadata.parameters_schema,
+        sensitivity: tool_sensitivity_from_browser_contract(contract.sensitivity),
+        bridge,
+        context,
     }
 }
 
@@ -597,7 +1161,11 @@ fn truncate_at_char_boundary(s: &mut String, max_bytes: usize) {
     s.truncate(end);
 }
 
-fn browser_tool_shims(bridge: Arc<dyn BrowserToolBridge>) -> Vec<BrowserToolShim> {
+fn browser_tool_shims(
+    bridge: Arc<dyn BrowserToolBridge>,
+    action_state: BrowserActionToolsState,
+    context: BrowserToolShimContext,
+) -> Vec<BrowserToolShim> {
     let no_args = serde_json::json!({
         "type": "object",
         "additionalProperties": false,
@@ -613,44 +1181,80 @@ fn browser_tool_shims(bridge: Arc<dyn BrowserToolBridge>) -> Vec<BrowserToolShim
         },
         "required": ["query"]
     });
-    vec![
+    let mut shims = vec![
         BrowserToolShim {
             name: "list_browser_tabs",
             description: "List every open browser tab and return each tab's id, title, url, and whether it is active, as structured JSON. Use this to enumerate all tabs.",
             parameters_schema: no_args.clone(),
+            sensitivity: ToolSensitivity::ReadOnly,
             bridge: Arc::clone(&bridge),
+            context: context.clone(),
         },
         BrowserToolShim {
             name: "read_current_page",
             description: "Read the currently active browser tab and return its main content (title, url, text) as structured JSON.",
             parameters_schema: no_args.clone(),
+            sensitivity: ToolSensitivity::ReadOnly,
             bridge: Arc::clone(&bridge),
+            context: context.clone(),
         },
         BrowserToolShim {
             name: "get_selected_text",
             description: "Return the current text selection from the active browser tab.",
             parameters_schema: no_args.clone(),
+            sensitivity: ToolSensitivity::ReadOnly,
             bridge: Arc::clone(&bridge),
+            context: context.clone(),
         },
         BrowserToolShim {
             name: "get_active_tab",
             description: "Return metadata (title, url, id) for the currently active browser tab.",
             parameters_schema: no_args.clone(),
+            sensitivity: ToolSensitivity::ReadOnly,
             bridge: Arc::clone(&bridge),
+            context: context.clone(),
         },
         BrowserToolShim {
             name: "search_in_page",
             description: "Search the active page content for a query string and return matching excerpts.",
             parameters_schema: search_args,
+            sensitivity: ToolSensitivity::ReadOnly,
             bridge: Arc::clone(&bridge),
+            context: context.clone(),
         },
         BrowserToolShim {
             name: "extract_structured_page_context",
             description: "Extract a rich structured context object from the active page (headings, links, main text).",
             parameters_schema: no_args,
-            bridge,
+            sensitivity: ToolSensitivity::ReadOnly,
+            bridge: Arc::clone(&bridge),
+            context: context.clone(),
         },
-    ]
+    ];
+
+    if action_state.is_enabled() {
+        match canonical_browser_action_contracts() {
+            Ok(contracts) => {
+                shims.extend(
+                    contracts
+                        .into_iter()
+                        .filter(|contract| contract.kind == BrowserToolKind::Action)
+                        .map(|contract| {
+                            browser_action_shim(contract, Arc::clone(&bridge), context.clone())
+                        }),
+                );
+            }
+            Err(error) => {
+                tracing::error!(
+                    target: "maho_agent::swiftide_backend",
+                    error = %error,
+                    "browser action contract parse failed; action shims disabled"
+                );
+            }
+        }
+    }
+
+    shims
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -679,7 +1283,13 @@ pub fn resolve_byok_client<F>(
     preferred: Option<&str>,
     secure_cb: &F,
     resolved_model: &str,
-) -> Result<(Box<dyn swiftide_core::chat_completion::ChatCompletion>, LlmProviderKind), AgentError>
+) -> Result<
+    (
+        Box<dyn swiftide_core::chat_completion::ChatCompletion>,
+        LlmProviderKind,
+    ),
+    AgentError,
+>
 where
     F: Fn(&str) -> Result<SecureKeyBundle, AgentError> + ?Sized,
 {
@@ -688,8 +1298,8 @@ where
         _ => ["openai", "anthropic"],
     };
 
-    let mut found: Option<(&'static str, SecureKeyBundle)> = None;
-    let mut last_err: Option<AgentError> = None;
+    let mut found: Option<(&'static str, SecureKeyBundle)> = Option::None;
+    let mut last_err: Option<AgentError> = Option::None;
     for provider in order {
         match secure_cb(provider) {
             Ok(bundle) => {
@@ -701,7 +1311,7 @@ where
     }
     let (provider, bundle) = match found {
         Some(pair) => pair,
-        None => {
+        Option::None => {
             return Err(last_err.unwrap_or_else(|| {
                 AgentError::ExecutionError(
                     "Secure storage callback is missing or returned no keys for the requested provider"
@@ -718,50 +1328,51 @@ fn build_byok_client(
     provider: &str,
     bundle: SecureKeyBundle,
     resolved_model: &str,
-) -> Result<(Box<dyn swiftide_core::chat_completion::ChatCompletion>, LlmProviderKind), AgentError> {
+) -> Result<
+    (
+        Box<dyn swiftide_core::chat_completion::ChatCompletion>,
+        LlmProviderKind,
+    ),
+    AgentError,
+> {
     let api_key = bundle.key;
     let base_url_override = bundle.base_url;
     let model_override = bundle.model;
 
     if normalize_provider(provider) == "anthropic" {
-        let default_model = model_override
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                if resolved_model.is_empty() {
-                    "claude-3-5-sonnet".to_string()
-                } else {
-                    resolved_model.to_string()
-                }
-            });
+        let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            if resolved_model.is_empty() {
+                "claude-3-5-sonnet".to_string()
+            } else {
+                resolved_model.to_string()
+            }
+        });
         let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
         let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
             .default_prompt_model(default_model)
             .client(client)
             .build()
-            .map_err(|e| AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}")))?;
+            .map_err(|e| {
+                AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}"))
+            })?;
         Ok((Box::new(swiftide_anthropic), LlmProviderKind::Anthropic))
     } else {
         let api_base = base_url_override
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
-        let default_model = model_override
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                if resolved_model.is_empty() {
-                    "gpt-4o".to_string()
-                } else {
-                    resolved_model.to_string()
-                }
-            });
-        let config = MahoOpenAIConfig {
-            api_key: Arc::new(api_key.secret().clone()),
+        let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            if resolved_model.is_empty() {
+                "gpt-4o".to_string()
+            } else {
+                resolved_model.to_string()
+            }
+        });
+        let secret_key = secrecy::SecretString::new(api_key.as_str().to_string().into_boxed_str());
+        let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
+            secret_key,
             api_base,
-        };
-        let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
-            .default_prompt_model(default_model)
-            .client(async_openai::Client::with_config(config))
-            .build()
-            .map_err(|e| AgentError::ExecutionError(format!("Failed to build OpenAI client: {e}")))?;
+            default_model,
+        );
         Ok((Box::new(client), LlmProviderKind::OpenAi))
     }
 }
@@ -771,14 +1382,22 @@ pub struct SwiftideBackend {
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
     active_sessions: Arc<Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>>,
     llm_override: Arc<Mutex<Option<Box<dyn swiftide_core::chat_completion::ChatCompletion>>>>,
-    secure_storage_callback: Arc<Mutex<Option<Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>>>>,
+    secure_storage_callback: Arc<
+        Mutex<
+            Option<
+                Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
+            >,
+        >,
+    >,
     browser_tool_bridge: Arc<Mutex<Option<Arc<dyn BrowserToolBridge>>>>,
     workspace_root: std::path::PathBuf,
     allow_insecure_key_storage: bool,
     system_prompt: Arc<Mutex<String>>,
-    mcp_client_cache: Arc<Mutex<std::collections::HashMap<String, Arc<crate::mcp_client::McpClient>>>>,
+    mcp_client_cache:
+        Arc<Mutex<std::collections::HashMap<String, Arc<crate::mcp_client::McpClient>>>>,
     active_space_id: Arc<Mutex<Option<String>>>,
-    approval_policy: Arc<Mutex<String>>,
+    approval_policy: Arc<Mutex<ApprovalPolicy>>,
+    browser_action_tools_state: Arc<Mutex<BrowserActionToolsState>>,
     preferred_provider: Arc<Mutex<Option<String>>>,
     allowed_tools: Arc<Mutex<Option<Vec<String>>>>,
 }
@@ -798,6 +1417,7 @@ impl Clone for SwiftideBackend {
             mcp_client_cache: Arc::clone(&self.mcp_client_cache),
             active_space_id: Arc::clone(&self.active_space_id),
             approval_policy: Arc::clone(&self.approval_policy),
+            browser_action_tools_state: Arc::clone(&self.browser_action_tools_state),
             preferred_provider: Arc::clone(&self.preferred_provider),
             allowed_tools: Arc::clone(&self.allowed_tools),
         }
@@ -824,7 +1444,8 @@ impl SwiftideBackend {
             allow_insecure_key_storage,
             system_prompt: Arc::new(Mutex::new(String::new())),
             active_space_id: Arc::new(Mutex::new(None)),
-            approval_policy: Arc::new(Mutex::new(String::from("prompt"))),
+            approval_policy: Arc::new(Mutex::new(ApprovalPolicy::default())),
+            browser_action_tools_state: Arc::new(Mutex::new(BrowserActionToolsState::default())),
             preferred_provider: Arc::new(Mutex::new(None)),
             allowed_tools: Arc::new(Mutex::new(None)),
         }
@@ -839,7 +1460,19 @@ impl SwiftideBackend {
     }
 
     pub fn set_approval_policy(&self, policy: String) {
-        *self.approval_policy.lock_unpoison() = policy;
+        *self.approval_policy.lock_unpoison() = ApprovalPolicy::from_legacy_pref(&policy);
+    }
+
+    pub fn set_browser_action_tools_state(&self, state: BrowserActionToolsState) {
+        *self.browser_action_tools_state.lock_unpoison() = state;
+    }
+
+    pub fn set_browser_action_tools_enabled(&self, enabled: bool) {
+        self.set_browser_action_tools_state(BrowserActionToolsState::from_enabled(enabled));
+    }
+
+    fn browser_action_tools_state(&self) -> BrowserActionToolsState {
+        *self.browser_action_tools_state.lock_unpoison()
     }
 
     pub fn set_preferred_provider(&self, provider: Option<String>) {
@@ -851,7 +1484,7 @@ impl SwiftideBackend {
         let denied_flag = Arc::new(Mutex::new(false));
         let message = MahoChatMessage::user(ChatContent::text(prompt.to_string()));
         let result = self
-            .run_turn_internal(&session_id, message, denied_flag, None)
+            .run_turn_internal(&session_id, message, denied_flag, None, None)
             .await?;
         match result.content {
             ChatContent::Text(text) => Ok(text),
@@ -870,17 +1503,29 @@ impl SwiftideBackend {
                 return Some(ws.clone());
             }
         }
-        workspaces.into_iter().find(|w| w.workspace_root.as_ref() == Some(&root_str))
+        workspaces
+            .into_iter()
+            .find(|w| w.workspace_root.as_ref() == Some(&root_str))
     }
 
     pub fn set_llm_override(&self, llm: Box<dyn swiftide_core::chat_completion::ChatCompletion>) {
         *self.llm_override.lock_unpoison() = Some(llm);
     }
 
-    fn build_gated_tool(&self, tool: Arc<dyn Tool>, sensitive: bool, denied_flag: Arc<Mutex<bool>>, session_id: &str) -> Box<dyn Tool> {
+    fn build_gated_tool(
+        &self,
+        tool: Arc<dyn Tool>,
+        sensitive: bool,
+        denied_flag: Arc<Mutex<bool>>,
+        session_id: &str,
+    ) -> Box<dyn Tool> {
+        let tool_name = tool.name().to_string();
+        let resolution = ToolSensitivityResolution::for_tool_name(&tool_name, sensitive);
+        let sensitivity = resolution.effective;
         Box::new(PermissionGatedTool {
             inner_tool: tool,
-            sensitive,
+            sensitivity,
+            sensitivity_downgrade: resolution.downgrade,
             permission_callback: Arc::clone(&self.permission_callback),
             denied_flag,
             session_id: session_id.to_string(),
@@ -894,19 +1539,26 @@ impl SwiftideBackend {
         message: MahoChatMessage,
         denied_flag: Arc<Mutex<bool>>,
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+        on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let content_str = match &message.content {
             ChatContent::Text(t) => t.clone(),
             ChatContent::Image { .. } => {
-                return Err(AgentError::ExecutionError("Multimodal image content is not supported yet".to_string()));
+                return Err(AgentError::ExecutionError(
+                    "Multimodal image content is not supported yet".to_string(),
+                ));
             }
             ChatContent::Mixed(_) => {
-                return Err(AgentError::ExecutionError("Multimodal mixed content is not supported yet".to_string()));
+                return Err(AgentError::ExecutionError(
+                    "Multimodal mixed content is not supported yet".to_string(),
+                ));
             }
         };
 
         // Save user message to storage
-        self.storage.save_message(session_id, &message.role, &content_str).await?;
+        self.storage
+            .save_message(session_id, &message.role, &content_str)
+            .await?;
 
         // Fetch active workspace and profile to resolve configuration
         let active_workspace = self.find_active_workspace().await;
@@ -914,16 +1566,14 @@ impl SwiftideBackend {
 
         let workspace_is_real = active_workspace.is_some();
 
-        let ws = active_workspace.unwrap_or_else(|| {
-            maho_types::ai::AiWorkspace {
-                id: "default".to_string(),
-                name: "Default Workspace".to_string(),
-                profile_id: Some("default".to_string()),
-                space_id: None,
-                workspace_root: Some(root_str),
-                created_at: String::new(),
-                updated_at: String::new(),
-            }
+        let ws = active_workspace.unwrap_or_else(|| maho_types::ai::AiWorkspace {
+            id: "default".to_string(),
+            name: "Default Workspace".to_string(),
+            profile_id: Some("default".to_string()),
+            space_id: None,
+            workspace_root: Some(root_str),
+            created_at: String::new(),
+            updated_at: String::new(),
         });
 
         let mut profile = None;
@@ -942,29 +1592,31 @@ impl SwiftideBackend {
             }
         }
 
-        let profile = profile.unwrap_or_else(|| {
-            maho_types::ai::AiProfile {
-                id: "default".to_string(),
-                name: "Default Profile".to_string(),
-                system_prompt: String::new(),
-                preferred_model: None,
-                tools: vec![],
-                mcp_servers: vec![],
-                is_default: true,
-                created_at: String::new(),
-                updated_at: String::new(),
-            }
+        let profile = profile.unwrap_or_else(|| maho_types::ai::AiProfile {
+            id: "default".to_string(),
+            name: "Default Profile".to_string(),
+            system_prompt: String::new(),
+            preferred_model: None,
+            tools: vec![],
+            mcp_servers: vec![],
+            is_default: true,
+            created_at: String::new(),
+            updated_at: String::new(),
         });
 
         let resolved = maho_core::config_resolver::resolve_config(None, &profile, &ws);
 
-        let _ = self.storage
+        let _ = self
+            .storage
             .set_system_prompt_snapshot_if_absent(session_id, &resolved.system_prompt)
             .await;
 
         if profile_deleted_notice {
             let notice = "System notice: The active agent profile was deleted. Falling back to the default Blank profile.";
-            let _ = self.storage.save_message(session_id, "system", notice).await;
+            let _ = self
+                .storage
+                .save_message(session_id, "system", notice)
+                .await;
         }
 
         // Determine LLM client
@@ -973,24 +1625,22 @@ impl SwiftideBackend {
             lock.as_ref().map(|llm| dyn_clone::clone_box(&**llm))
         };
 
-        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) = llm_override_opt {
+        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) =
+            llm_override_opt
+        {
             llm
         } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
             let api_base = crate::proxy_url();
-            let config = MahoOpenAIConfig {
-                api_key: Arc::new(access_token.secret().clone()),
-                api_base,
-            };
             let model_name = if profile.preferred_model.is_none() {
-                "google/gemini-2.5-flash".to_string()
+                crate::DEFAULT_MANAGED_MODEL.to_string()
             } else {
                 resolved.model.clone()
             };
-            let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
-                .default_prompt_model(&model_name)
-                .client(async_openai::Client::with_config(config))
-                .build()
-                .map_err(|e| AgentError::ExecutionError(format!("Failed to build MahoManaged OpenAI client: {e}")))?;
+            let secret_key =
+                secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
+            let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
+                secret_key, api_base, model_name,
+            );
             Box::new(client)
         } else {
             let preferred = self.preferred_provider.lock_unpoison().clone();
@@ -1006,13 +1656,16 @@ impl SwiftideBackend {
                 if !self.allow_insecure_key_storage {
                     return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
                 }
-                let (provider, bundle) = if let Some(key) = self.storage.get_byok_key("openai").await? {
-                    ("openai", SecureKeyBundle::from_key(key))
-                } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
-                    ("anthropic", SecureKeyBundle::from_key(key))
-                } else {
-                    return Err(AgentError::ExecutionError("No BYOK API key configured".to_string()));
-                };
+                let (provider, bundle) =
+                    if let Some(key) = self.storage.get_byok_key("openai").await? {
+                        ("openai", SecureKeyBundle::from_key(key))
+                    } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
+                        ("anthropic", SecureKeyBundle::from_key(key))
+                    } else {
+                        return Err(AgentError::ExecutionError(
+                            "No BYOK API key configured".to_string(),
+                        ));
+                    };
                 let (client, _kind) = build_byok_client(provider, bundle, &resolved.model)?;
                 client
             }
@@ -1060,10 +1713,14 @@ impl SwiftideBackend {
             let text_content = match &msg.content {
                 ChatContent::Text(t) => t.clone(),
                 ChatContent::Image { .. } => {
-                    return Err(AgentError::ExecutionError("Multimodal image content is not supported in history".to_string()));
+                    return Err(AgentError::ExecutionError(
+                        "Multimodal image content is not supported in history".to_string(),
+                    ));
                 }
                 ChatContent::Mixed(_) => {
-                    return Err(AgentError::ExecutionError("Multimodal mixed content is not supported in history".to_string()));
+                    return Err(AgentError::ExecutionError(
+                        "Multimodal mixed content is not supported in history".to_string(),
+                    ));
                 }
             };
             let swiftide_msg = match msg.role.as_str() {
@@ -1079,14 +1736,43 @@ impl SwiftideBackend {
         let mut platform_tools = Vec::new();
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            platform_tools.push(self.build_gated_tool(Arc::new(CameraTool), false, denied_flag.clone(), session_id));
-            platform_tools.push(self.build_gated_tool(Arc::new(PhotoLibraryTool), false, denied_flag.clone(), session_id));
-            platform_tools.push(self.build_gated_tool(Arc::new(ClipboardTool), false, denied_flag.clone(), session_id));
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(CameraTool),
+                false,
+                denied_flag.clone(),
+                session_id,
+            ));
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(PhotoLibraryTool),
+                false,
+                denied_flag.clone(),
+                session_id,
+            ));
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(ClipboardTool),
+                false,
+                denied_flag.clone(),
+                session_id,
+            ));
         }
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            platform_tools.push(self.build_gated_tool(Arc::new(FsReadTool { workspace_root: self.workspace_root.clone() }), false, denied_flag.clone(), session_id));
-            platform_tools.push(self.build_gated_tool(Arc::new(ShellExecTool { workspace_root: self.workspace_root.clone() }), true, denied_flag.clone(), session_id));
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(FsReadTool {
+                    workspace_root: self.workspace_root.clone(),
+                }),
+                false,
+                denied_flag.clone(),
+                session_id,
+            ));
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(ShellExecTool {
+                    workspace_root: self.workspace_root.clone(),
+                }),
+                true,
+                denied_flag.clone(),
+                session_id,
+            ));
 
             // Dynamic loading of MCP and CLI tools.
             // NOTE: SwiftideBackend is the Source of Truth (SoT) for discovering,
@@ -1130,8 +1816,7 @@ impl SwiftideBackend {
                 if !should_attempt_mcp_connect(&server) {
                     continue;
                 }
-                if !profile.mcp_servers.is_empty()
-                    && !profile.mcp_servers.contains(&server.id) {
+                if !profile.mcp_servers.is_empty() && !profile.mcp_servers.contains(&server.id) {
                     continue;
                 }
                 let auth_token = keychain_lookup(&server.auth_keychain_id);
@@ -1145,9 +1830,9 @@ impl SwiftideBackend {
                     Some(dead) => {
                         dead.emit_unavailable();
                         self.mcp_client_cache.lock_unpoison().remove(&cache_key);
-                        None
+                        Option::None
                     }
-                    None => None,
+                    Option::None => Option::None,
                 };
 
                 let client_arc = if let Some(cached) = client_arc {
@@ -1182,14 +1867,19 @@ impl SwiftideBackend {
                                         writeln!(f, "{}", dbg_msg)
                                     });
                             }
-                            
+
                             if let Some(ref list) = server.trusted_tools {
                                 for tool_name in list {
                                     let shim = OfflineMcpToolShim {
                                         name: format!("mcp:{}/{}", server.name, tool_name),
                                         server_name: server.name.clone(),
                                     };
-                                    platform_tools.push(self.build_gated_tool(Arc::new(shim), false, denied_flag.clone(), session_id));
+                                    platform_tools.push(self.build_gated_tool(
+                                        Arc::new(shim),
+                                        false,
+                                        denied_flag.clone(),
+                                        session_id,
+                                    ));
                                 }
                             }
                             continue;
@@ -1200,29 +1890,35 @@ impl SwiftideBackend {
                 match client_arc.list_tools().await {
                     Ok(tools) => {
                         for tool in tools {
-                        // Per-tool sensitivity: a dogfood (AutoApprove) tool
-                        // auto-runs only if READ-ONLY; sensitive browser actions
-                        // stay gated. Explicit server trust is preserved. See
-                        // mcp_tool_is_sensitive (FIX-9a #3).
-                        let raw_name = tool.name
-                            .split_once('/')
-                            .map(|(_, name)| name)
-                            .unwrap_or(&tool.name);
-                        let sensitive = mcp_tool_is_sensitive(
-                            tool.permission,
-                            raw_name,
-                            &tool.name,
-                            server.trusted,
-                            server.trusted_tools.as_ref(),
-                        );
-                        let shim = McpToolShim {
-                            name: llm_safe_tool_name(&tool.name),
-                            dispatch_name: tool.name.clone(),
-                            description: tool.description.clone(),
-                            parameters_schema: tool.parameters_schema.clone(),
-                            client: Arc::clone(&client_arc),
-                        };
-                            platform_tools.push(self.build_gated_tool(Arc::new(shim), sensitive, denied_flag.clone(), session_id));
+                            // Per-tool sensitivity: a dogfood (AutoApprove) tool
+                            // auto-runs only if READ-ONLY; sensitive browser actions
+                            // stay gated. Explicit server trust is preserved. See
+                            // mcp_tool_is_sensitive (FIX-9a #3).
+                            let raw_name = tool
+                                .name
+                                .split_once('/')
+                                .map(|(_, name)| name)
+                                .unwrap_or(&tool.name);
+                            let sensitive = mcp_tool_is_sensitive(
+                                tool.permission,
+                                raw_name,
+                                &tool.name,
+                                server.trusted,
+                                server.trusted_tools.as_ref(),
+                            );
+                            let shim = McpToolShim {
+                                name: llm_safe_tool_name(&tool.name),
+                                dispatch_name: tool.name.clone(),
+                                description: tool.description.clone(),
+                                parameters_schema: tool.parameters_schema.clone(),
+                                client: Arc::clone(&client_arc),
+                            };
+                            platform_tools.push(self.build_gated_tool(
+                                Arc::new(shim),
+                                sensitive,
+                                denied_flag.clone(),
+                                session_id,
+                            ));
                         }
                     }
                     Err(e) => {
@@ -1237,12 +1933,18 @@ impl SwiftideBackend {
             }
 
             for tool in cli_tools {
-                let executor = CliToolExecutor::new(tool.clone(), Some(self.workspace_root.clone()));
+                let executor =
+                    CliToolExecutor::new(tool.clone(), Some(self.workspace_root.clone()));
                 let shim = CliToolShim {
                     name: format!("sh:{}", tool.name),
                     executor: Arc::new(executor),
                 };
-                platform_tools.push(self.build_gated_tool(Arc::new(shim), tool.sensitive, denied_flag.clone(), session_id));
+                platform_tools.push(self.build_gated_tool(
+                    Arc::new(shim),
+                    tool.sensitive,
+                    denied_flag.clone(),
+                    session_id,
+                ));
             }
         }
 
@@ -1263,11 +1965,27 @@ impl SwiftideBackend {
                 });
         };
         if let Some(bridge) = browser_bridge_opt {
-            let shims = browser_tool_shims(bridge);
+            let fallback_ladder = Arc::new(Mutex::new(FallbackLadderState::new(session_id)));
+            let shim_context = BrowserToolShimContext::turn(
+                session_id,
+                Arc::clone(&self.approval_policy),
+                fallback_ladder,
+            );
+            let shims = browser_tool_shims(bridge, self.browser_action_tools_state(), shim_context);
             let names: Vec<_> = shims.iter().map(|s| s.name).collect();
-            dbg_log(&format!("[swiftide_backend] Registering {} browser tools: {:?}", shims.len(), names));
+            dbg_log(&format!(
+                "[swiftide_backend] Registering {} browser tools: {:?}",
+                shims.len(),
+                names
+            ));
             for shim in shims {
-                platform_tools.push(self.build_gated_tool(Arc::new(shim), false, denied_flag.clone(), session_id));
+                let sensitive = shim.sensitivity == ToolSensitivity::Sensitive;
+                platform_tools.push(self.build_gated_tool(
+                    Arc::new(shim),
+                    sensitive,
+                    denied_flag.clone(),
+                    session_id,
+                ));
             }
         } else {
             dbg_log("[swiftide_backend] No browser_tool_bridge set");
@@ -1287,42 +2005,98 @@ impl SwiftideBackend {
                 platform_tools.retain(|t| {
                     let name_cow = t.name();
                     let name_str = name_cow.as_ref();
-                    let raw_name = name_str.split_once('/').map(|(_, name)| name).unwrap_or(name_str);
-                    allowed.iter().any(|a| a.as_str() == name_str || a.as_str() == raw_name)
+                    let raw_name = name_str
+                        .split_once('/')
+                        .map(|(_, name)| name)
+                        .unwrap_or(name_str);
+                    allowed
+                        .iter()
+                        .any(|a| a.as_str() == name_str || a.as_str() == raw_name)
                 });
             }
         }
 
-
-        let final_names: Vec<_> = platform_tools.iter().map(|t| t.name().to_string()).collect();
-        dbg_log(&format!("[swiftide_backend] Final platform_tools count: {} names: {:?}",
-            platform_tools.len(), final_names));
+        let final_names: Vec<_> = platform_tools
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        dbg_log(&format!(
+            "[swiftide_backend] Final platform_tools count: {} names: {:?}",
+            platform_tools.len(),
+            final_names
+        ));
 
         // Load DefaultContext with history
         let mut context = swiftide_agents::DefaultContext::default();
-        context.with_existing_messages(swiftide_history).await
+        context
+            .with_existing_messages(swiftide_history)
+            .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Instantiate Agent Builder
         let mut builder = swiftide_agents::Agent::builder();
-        builder.llm(&llm)
-            .context(context)
-            .tools(platform_tools);
+        builder.llm(&llm).context(context).tools(platform_tools);
 
-        if let Some(on_token_cb) = on_token {
-            let on_token_cb = Arc::new(on_token_cb);
+        if let Some(ref cb) = on_event {
+            let cb_before = cb.clone();
+            builder.before_tool(move |_agent, tool_call| {
+                let cb = cb_before.clone();
+                let name = tool_call.name().to_string();
+                if is_internal_control_tool(&name) {
+                    return Box::pin(async move { Ok(()) });
+                }
+                let id = tool_call.id().to_string();
+                let args =
+                    crate::permission::sanitize_tool_arguments(tool_call.args().unwrap_or("{}"));
+                cb(AgentStreamEvent::ToolCall { id, name, args });
+                Box::pin(async move { Ok(()) })
+            });
+
+            let cb_after = cb.clone();
+            builder.after_tool(move |_agent, tool_call, result| {
+                let cb = cb_after.clone();
+                let name = tool_call.name().to_string();
+                if is_internal_control_tool(&name) {
+                    return Box::pin(async move { Ok(()) });
+                }
+                let id = tool_call.id().to_string();
+                let result_str = match result {
+                    Ok(output) => format!("{}", output),
+                    Err(err) => format!("{}", err),
+                };
+                let result = crate::permission::sanitize_tool_result(&result_str);
+                cb(AgentStreamEvent::ToolResult { id, name, result });
+                Box::pin(async move { Ok(()) })
+            });
+        }
+
+        if on_token.is_some() || on_event.is_some() {
+            let on_token_cb = on_token.map(Arc::new);
+            let on_event_cb = on_event.clone();
             builder.on_stream(move |_agent, response| {
-                let cb = Arc::clone(&on_token_cb);
+                let on_token_cb = on_token_cb.clone();
+                let on_event_cb = on_event_cb.clone();
                 if let Some(ref delta) = response.delta {
                     if let Some(ref chunk) = delta.message_chunk {
-                        cb(chunk);
+                        if let Some(ref cb) = on_token_cb {
+                            cb(chunk);
+                        }
+                        if let Some(ref cb) = on_event_cb {
+                            cb(AgentStreamEvent::Token(chunk.clone()));
+                        }
+                    }
+                    if let Some(ref reasoning) = delta.reasoning_chunk {
+                        if let Some(ref cb) = on_event_cb {
+                            cb(AgentStreamEvent::Thinking(reasoning.clone()));
+                        }
                     }
                 }
                 Box::pin(async move { Ok(()) })
             });
         }
 
-        let mut agent = builder.build()
+        let mut agent = builder
+            .build()
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Turn safety-net timeout (600s). Per-tool timeouts (MCP 60s, browser
@@ -1330,17 +2104,23 @@ impl SwiftideBackend {
         // govern real waits; this outer cap only catches a genuinely runaway
         // agent loop and does NOT count human permission-response time against
         // the turn.
-        tokio::time::timeout(std::time::Duration::from_secs(600), agent.query(content_str.clone()))
-            .await
-            .map_err(|_| AgentError::ExecutionError("Agent query timed out".to_string()))?
-            .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            agent.query(content_str.clone()),
+        )
+        .await
+        .map_err(|_| AgentError::ExecutionError("Agent query timed out".to_string()))?
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // A denied tool returns a ToolError to the model (see PermissionGatedTool),
         // which lets the model produce a normal response instead of aborting the
         // whole turn. We no longer discard the turn on denial.
 
         // Retrieve the last message from the context
-        let result_history = agent.context().history().await
+        let result_history = agent
+            .context()
+            .history()
+            .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         let last_assistant_text = result_history.iter().rev().find_map(|msg| {
@@ -1352,24 +2132,32 @@ impl SwiftideBackend {
         });
 
         if let Some(res_text) = last_assistant_text {
-            self.storage.save_message(session_id, "assistant", &res_text).await?;
+            self.storage
+                .save_message(session_id, "assistant", &res_text)
+                .await?;
             Ok(MahoChatMessage::assistant(ChatContent::text(res_text)))
         } else {
-            let last_role = result_history.last().map(|m| match m {
-                SwiftideChatMessage::System(_) => "System",
-                SwiftideChatMessage::User(_) => "User",
-                SwiftideChatMessage::Assistant(_, _) => "Assistant",
-                SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
-                SwiftideChatMessage::Summary(_) => "Summary",
-            }).unwrap_or("<empty>");
-            if cfg!(debug_assertions) {
-                let history_summary: Vec<&str> = result_history.iter().map(|m| match m {
+            let last_role = result_history
+                .last()
+                .map(|m| match m {
                     SwiftideChatMessage::System(_) => "System",
                     SwiftideChatMessage::User(_) => "User",
                     SwiftideChatMessage::Assistant(_, _) => "Assistant",
                     SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
                     SwiftideChatMessage::Summary(_) => "Summary",
-                }).collect();
+                })
+                .unwrap_or("<empty>");
+            if cfg!(debug_assertions) {
+                let history_summary: Vec<&str> = result_history
+                    .iter()
+                    .map(|m| match m {
+                        SwiftideChatMessage::System(_) => "System",
+                        SwiftideChatMessage::User(_) => "User",
+                        SwiftideChatMessage::Assistant(_, _) => "Assistant",
+                        SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
+                        SwiftideChatMessage::Summary(_) => "Summary",
+                    })
+                    .collect();
                 let _ = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -1391,6 +2179,19 @@ impl SwiftideBackend {
         let mut platform_tools = crate::tool_registry::get_platform_tools();
 
         let active_workspace = self.find_active_workspace().await;
+        let mut active_profile = None;
+        if let Some(ws) = active_workspace.as_ref() {
+            if let Some(profile_id) = ws.profile_id.as_ref() {
+                if let Ok(Some(profile)) = self.storage.get_profile(profile_id).await {
+                    active_profile = Some(profile);
+                }
+            }
+            if active_profile.is_none() {
+                if let Ok(Some(profile)) = self.storage.get_profile("blank").await {
+                    active_profile = Some(profile);
+                }
+            }
+        }
 
         let workspace_id = active_workspace.as_ref().map(|ws| ws.id.clone());
         let mut mcp_servers = Vec::new();
@@ -1432,9 +2233,9 @@ impl SwiftideBackend {
                 Some(dead) => {
                     dead.emit_unavailable();
                     self.mcp_client_cache.lock_unpoison().remove(&cache_key);
-                    None
+                    Option::None
                 }
-                None => None,
+                Option::None => Option::None,
             };
 
             let client_arc = if let Some(cached) = client_arc {
@@ -1453,7 +2254,10 @@ impl SwiftideBackend {
                             for tool_name in list {
                                 platform_tools.push(ToolDefinition {
                                     name: format!("mcp:{}/{}", server.name, tool_name),
-                                    description: format!("Unavailable: MCP server '{}' is offline.", server.name),
+                                    description: format!(
+                                        "Unavailable: MCP server '{}' is offline.",
+                                        server.name
+                                    ),
                                     parameters_schema: serde_json::json!({
                                         "type": "object",
                                         "properties": {}
@@ -1471,14 +2275,16 @@ impl SwiftideBackend {
 
             if let Ok(tools) = client_arc.list_tools().await {
                 for tool in tools {
-                    let raw_name = tool.name
+                    let raw_name = tool
+                        .name
                         .split_once('/')
                         .map(|(_, name)| name)
                         .unwrap_or(&tool.name);
-                    let per_tool_trusted = server.trusted && match &server.trusted_tools {
-                        None => true,
-                        Some(list) => list.iter().any(|n| n == raw_name || n == &tool.name),
-                    };
+                    let per_tool_trusted = server.trusted
+                        && match &server.trusted_tools {
+                            Option::None => true,
+                            Some(list) => list.iter().any(|n| n == raw_name || n == &tool.name),
+                        };
                     let sensitive = !per_tool_trusted;
                     platform_tools.push(ToolDefinition {
                         name: tool.name.clone(),
@@ -1486,7 +2292,11 @@ impl SwiftideBackend {
                         parameters_schema: tool.parameters_schema.clone(),
                         provenance: ToolProvenance::External(server.name.clone()),
                         sensitive,
-                        permission: if sensitive { ToolPermission::AlwaysAsk } else { ToolPermission::AutoApprove },
+                        permission: if sensitive {
+                            ToolPermission::AlwaysAsk
+                        } else {
+                            ToolPermission::AutoApprove
+                        },
                     });
                 }
             }
@@ -1499,15 +2309,38 @@ impl SwiftideBackend {
                 parameters_schema: tool.parameters_schema.clone(),
                 provenance: ToolProvenance::AgentLocal,
                 sensitive: tool.sensitive,
-                permission: if tool.sensitive { ToolPermission::AlwaysAsk } else { ToolPermission::AutoApprove },
+                permission: if tool.sensitive {
+                    ToolPermission::AlwaysAsk
+                } else {
+                    ToolPermission::AutoApprove
+                },
             });
+        }
+
+        if let Some(bridge) = self.browser_tool_bridge.lock_unpoison().clone() {
+            let shim_context =
+                BrowserToolShimContext::discovery(Arc::clone(&self.approval_policy));
+            for shim in browser_tool_shims(bridge, self.browser_action_tools_state(), shim_context)
+            {
+                platform_tools.push(shim.tool_definition());
+            }
+        }
+
+        if let Some(ref profile) = active_profile {
+            if !profile.tools.is_empty() {
+                platform_tools.retain(|tool| profile.tools.contains(&tool.name));
+            }
         }
 
         {
             let filter_lock = self.allowed_tools.lock_unpoison();
             if let Some(ref allowed) = *filter_lock {
                 platform_tools.retain(|t| {
-                    let raw_name = t.name.split_once('/').map(|(_, name)| name).unwrap_or(&t.name);
+                    let raw_name = t
+                        .name
+                        .split_once('/')
+                        .map(|(_, name)| name)
+                        .unwrap_or(&t.name);
                     allowed.iter().any(|a| a == &t.name || a == raw_name)
                 });
             }
@@ -1521,34 +2354,39 @@ impl SwiftideBackend {
         session_id: &str,
         message: MahoChatMessage,
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+        on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let content_str = match &message.content {
             ChatContent::Text(t) => t.clone(),
             ChatContent::Image { .. } => {
-                return Err(AgentError::ExecutionError("Multimodal image content is not supported yet".to_string()));
+                return Err(AgentError::ExecutionError(
+                    "Multimodal image content is not supported yet".to_string(),
+                ));
             }
             ChatContent::Mixed(_) => {
-                return Err(AgentError::ExecutionError("Multimodal mixed content is not supported yet".to_string()));
+                return Err(AgentError::ExecutionError(
+                    "Multimodal mixed content is not supported yet".to_string(),
+                ));
             }
         };
 
         // Save user message to storage
-        self.storage.save_message(session_id, &message.role, &content_str).await?;
+        self.storage
+            .save_message(session_id, &message.role, &content_str)
+            .await?;
 
         // Fetch active workspace and profile to resolve configuration
         let active_workspace = self.find_active_workspace().await;
         let root_str = self.workspace_root.to_string_lossy().to_string();
 
-        let ws = active_workspace.unwrap_or_else(|| {
-            maho_types::ai::AiWorkspace {
-                id: "default".to_string(),
-                name: "Default Workspace".to_string(),
-                profile_id: Some("default".to_string()),
-                space_id: None,
-                workspace_root: Some(root_str),
-                created_at: String::new(),
-                updated_at: String::new(),
-            }
+        let ws = active_workspace.unwrap_or_else(|| maho_types::ai::AiWorkspace {
+            id: "default".to_string(),
+            name: "Default Workspace".to_string(),
+            profile_id: Some("default".to_string()),
+            space_id: None,
+            workspace_root: Some(root_str),
+            created_at: String::new(),
+            updated_at: String::new(),
         });
 
         let mut profile = None;
@@ -1564,23 +2402,22 @@ impl SwiftideBackend {
             }
         }
 
-        let profile = profile.unwrap_or_else(|| {
-            maho_types::ai::AiProfile {
-                id: "default".to_string(),
-                name: "Default Profile".to_string(),
-                system_prompt: String::new(),
-                preferred_model: None,
-                tools: vec![],
-                mcp_servers: vec![],
-                is_default: true,
-                created_at: String::new(),
-                updated_at: String::new(),
-            }
+        let profile = profile.unwrap_or_else(|| maho_types::ai::AiProfile {
+            id: "default".to_string(),
+            name: "Default Profile".to_string(),
+            system_prompt: String::new(),
+            preferred_model: None,
+            tools: vec![],
+            mcp_servers: vec![],
+            is_default: true,
+            created_at: String::new(),
+            updated_at: String::new(),
         });
 
         let resolved = maho_core::config_resolver::resolve_config(None, &profile, &ws);
 
-        let _ = self.storage
+        let _ = self
+            .storage
             .set_system_prompt_snapshot_if_absent(session_id, &resolved.system_prompt)
             .await;
 
@@ -1605,24 +2442,22 @@ impl SwiftideBackend {
             }
         };
 
-        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) = llm_override_opt {
+        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) =
+            llm_override_opt
+        {
             llm
         } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
             let api_base = crate::proxy_url();
-            let config = MahoOpenAIConfig {
-                api_key: Arc::new(access_token.secret().clone()),
-                api_base,
-            };
             let model_name = if profile.preferred_model.is_none() {
-                "google/gemini-2.5-flash".to_string()
+                crate::DEFAULT_MANAGED_MODEL.to_string()
             } else {
                 resolved.model.clone()
             };
-            let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
-                .default_prompt_model(&model_name)
-                .client(async_openai::Client::with_config(config))
-                .build()
-                .map_err(|e| AgentError::ExecutionError(format!("Failed to build MahoManaged OpenAI client: {e}")))?;
+            let secret_key =
+                secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
+            let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
+                secret_key, api_base, model_name,
+            );
             Box::new(client)
         } else {
             let (provider, bundle) = if let Some(res) = secure_cb_opt {
@@ -1636,7 +2471,9 @@ impl SwiftideBackend {
                 } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
                     ("anthropic", SecureKeyBundle::from_key(key))
                 } else {
-                    return Err(AgentError::ExecutionError("No BYOK API key configured".to_string()));
+                    return Err(AgentError::ExecutionError(
+                        "No BYOK API key configured".to_string(),
+                    ));
                 }
             };
 
@@ -1648,41 +2485,37 @@ impl SwiftideBackend {
                 let api_base = base_url_override
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
-                let default_model = model_override
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        if resolved.model.is_empty() {
-                            "gpt-4o".to_string()
-                        } else {
-                            resolved.model.clone()
-                        }
-                    });
-                let config = MahoOpenAIConfig {
-                    api_key: Arc::new(api_key.secret().clone()),
+                let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                    if resolved.model.is_empty() {
+                        "gpt-4o".to_string()
+                    } else {
+                        resolved.model.clone()
+                    }
+                });
+                let secret_key =
+                    secrecy::SecretString::new(api_key.as_str().to_string().into_boxed_str());
+                let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
+                    secret_key,
                     api_base,
-                };
-                let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
-                    .default_prompt_model(default_model)
-                    .client(async_openai::Client::with_config(config))
-                    .build()
-                    .map_err(|e| AgentError::ExecutionError(format!("Failed to build OpenAI client: {e}")))?;
+                    default_model,
+                );
                 Box::new(client)
             } else {
-                let default_model = model_override
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        if resolved.model.is_empty() {
-                            "claude-3-5-sonnet".to_string()
-                        } else {
-                            resolved.model.clone()
-                        }
-                    });
+                let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                    if resolved.model.is_empty() {
+                        "claude-3-5-sonnet".to_string()
+                    } else {
+                        resolved.model.clone()
+                    }
+                });
                 let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
                 let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
                     .default_prompt_model(default_model)
                     .client(client)
                     .build()
-                    .map_err(|e| AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}")))?;
+                    .map_err(|e| {
+                        AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}"))
+                    })?;
                 Box::new(swiftide_anthropic)
             }
         };
@@ -1728,10 +2561,14 @@ impl SwiftideBackend {
             let text_content = match &msg.content {
                 ChatContent::Text(t) => t.clone(),
                 ChatContent::Image { .. } => {
-                    return Err(AgentError::ExecutionError("Multimodal image content is not supported in history".to_string()));
+                    return Err(AgentError::ExecutionError(
+                        "Multimodal image content is not supported in history".to_string(),
+                    ));
                 }
                 ChatContent::Mixed(_) => {
-                    return Err(AgentError::ExecutionError("Multimodal mixed content is not supported in history".to_string()));
+                    return Err(AgentError::ExecutionError(
+                        "Multimodal mixed content is not supported in history".to_string(),
+                    ));
                 }
             };
             let swiftide_msg = match msg.role.as_str() {
@@ -1745,38 +2582,58 @@ impl SwiftideBackend {
 
         // Load DefaultContext with history
         let mut context = swiftide_agents::DefaultContext::default();
-        context.with_existing_messages(swiftide_history).await
+        context
+            .with_existing_messages(swiftide_history)
+            .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Instantiate Agent Builder
         let mut builder = swiftide_agents::Agent::builder();
-        builder.llm(&llm)
-            .context(context);
+        builder.llm(&llm).context(context);
 
-        if let Some(on_token_cb) = on_token {
-            let on_token_cb = Arc::new(on_token_cb);
+        if on_token.is_some() || on_event.is_some() {
+            let on_token_cb = on_token.map(Arc::new);
+            let on_event_cb = on_event.clone();
             builder.on_stream(move |_agent, response| {
-                let cb = Arc::clone(&on_token_cb);
+                let on_token_cb = on_token_cb.clone();
+                let on_event_cb = on_event_cb.clone();
                 if let Some(ref delta) = response.delta {
                     if let Some(ref chunk) = delta.message_chunk {
-                        cb(chunk);
+                        if let Some(ref cb) = on_token_cb {
+                            cb(chunk);
+                        }
+                        if let Some(ref cb) = on_event_cb {
+                            cb(AgentStreamEvent::Token(chunk.clone()));
+                        }
+                    }
+                    if let Some(ref reasoning) = delta.reasoning_chunk {
+                        if let Some(ref cb) = on_event_cb {
+                            cb(AgentStreamEvent::Thinking(reasoning.clone()));
+                        }
                     }
                 }
                 Box::pin(async move { Ok(()) })
             });
         }
 
-        let mut agent = builder.build()
+        let mut agent = builder
+            .build()
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Simple path has no tools; 600s safety-net only (see run_turn_internal).
-        tokio::time::timeout(std::time::Duration::from_secs(600), agent.query(content_str.clone()))
-            .await
-            .map_err(|_| AgentError::ExecutionError("Agent query timed out".to_string()))?
-            .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            agent.query(content_str.clone()),
+        )
+        .await
+        .map_err(|_| AgentError::ExecutionError("Agent query timed out".to_string()))?
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Retrieve the last message from the context
-        let result_history = agent.context().history().await
+        let result_history = agent
+            .context()
+            .history()
+            .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         let last_assistant_text = result_history.iter().rev().find_map(|msg| {
@@ -1788,7 +2645,9 @@ impl SwiftideBackend {
         });
 
         if let Some(text) = last_assistant_text {
-            self.storage.save_message(session_id, "assistant", &text).await?;
+            self.storage
+                .save_message(session_id, "assistant", &text)
+                .await?;
             Ok(MahoChatMessage::assistant(ChatContent::text(text)))
         } else {
             let history_summary: Vec<_> = result_history
@@ -1820,6 +2679,7 @@ impl AgentRuntime for SwiftideBackend {
         session_id: &str,
         message: MahoChatMessage,
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+        on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let start_time = std::time::Instant::now();
         tracing::info!(
@@ -1833,11 +2693,21 @@ impl AgentRuntime for SwiftideBackend {
         let denied_flag_clone = denied_flag.clone();
 
         let join_handle = tokio::spawn(async move {
-            self_clone.run_turn_internal(&session_id_str, message, denied_flag_clone, on_token).await
+            self_clone
+                .run_turn_internal(
+                    &session_id_str,
+                    message,
+                    denied_flag_clone,
+                    on_token,
+                    on_event,
+                )
+                .await
         });
 
         let abort_handle = join_handle.abort_handle();
-        self.active_sessions.lock_unpoison().insert(session_id.to_string(), abort_handle);
+        self.active_sessions
+            .lock_unpoison()
+            .insert(session_id.to_string(), abort_handle);
 
         let res = join_handle.await;
         self.active_sessions.lock_unpoison().remove(session_id);
@@ -1867,6 +2737,7 @@ impl AgentRuntime for SwiftideBackend {
         session_id: &str,
         message: MahoChatMessage,
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+        on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let start_time = std::time::Instant::now();
         tracing::info!(
@@ -1878,11 +2749,15 @@ impl AgentRuntime for SwiftideBackend {
         let session_id_str = session_id.to_string();
 
         let join_handle = tokio::spawn(async move {
-            self_clone.run_turn_internal_simple(&session_id_str, message, on_token).await
+            self_clone
+                .run_turn_internal_simple(&session_id_str, message, on_token, on_event)
+                .await
         });
 
         let abort_handle = join_handle.abort_handle();
-        self.active_sessions.lock_unpoison().insert(session_id.to_string(), abort_handle);
+        self.active_sessions
+            .lock_unpoison()
+            .insert(session_id.to_string(), abort_handle);
 
         let res = join_handle.await;
         self.active_sessions.lock_unpoison().remove(session_id);
@@ -1908,9 +2783,11 @@ impl AgentRuntime for SwiftideBackend {
     }
 
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError> {
-        let mut active = self.active_sessions.lock_unpoison();
-        if let Some(abort_handle) = active.remove(session_id) {
+        let abort_handle = self.active_sessions.lock_unpoison().remove(session_id);
+        if let Some(abort_handle) = abort_handle {
             abort_handle.abort();
+            let policy = *self.approval_policy.lock_unpoison();
+            emit_audit_record(&ApprovalAuditRecord::permission_cancel(session_id, policy));
             Ok(())
         } else {
             Err(AgentError::SessionNotFound(session_id.to_string()))
@@ -1921,10 +2798,17 @@ impl AgentRuntime for SwiftideBackend {
         Ok(self.discover_tools().await)
     }
 
-
     fn set_permission_callback(
         &self,
-        callback: Box<dyn Fn(PermissionRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send>> + Send + Sync + 'static>,
+        callback: Box<
+            dyn Fn(
+                    PermissionRequest,
+                ) -> std::pin::Pin<
+                    Box<dyn std::future::Future<Output = PermissionDecision> + Send>,
+                > + Send
+                + Sync
+                + 'static,
+        >,
     ) -> Result<(), AgentError> {
         let mut lock = self.permission_callback.lock_unpoison();
         *lock = Some(callback);
@@ -1949,6 +2833,10 @@ impl AgentRuntime for SwiftideBackend {
         Ok(())
     }
 
+    fn set_browser_action_tools_state(&self, state: BrowserActionToolsState) {
+        SwiftideBackend::set_browser_action_tools_state(self, state);
+    }
+
     fn set_system_prompt(&self, prompt: &str) {
         *self.system_prompt.lock_unpoison() = prompt.to_string();
     }
@@ -1958,8 +2846,8 @@ impl AgentRuntime for SwiftideBackend {
     }
 }
 
-use crate::mcp_client::McpClient;
 use crate::cli_tool_executor::CliToolExecutor;
+use crate::mcp_client::McpClient;
 
 #[derive(Clone)]
 struct McpToolShim {
@@ -1972,7 +2860,13 @@ struct McpToolShim {
 
 fn llm_safe_tool_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -1982,15 +2876,23 @@ impl swiftide_core::Tool for McpToolShim {
         &self,
         _agent_context: &dyn swiftide_core::AgentContext,
         tool_call: &swiftide_core::chat_completion::ToolCall,
-    ) -> anyhow::Result<swiftide_core::chat_completion::ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+    ) -> anyhow::Result<
+        swiftide_core::chat_completion::ToolOutput,
+        swiftide_core::chat_completion::errors::ToolError,
+    > {
         let args_str = tool_call.args().unwrap_or("{}");
         let args_json: serde_json::Value = serde_json::from_str(args_str)
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
-        
-        let result = self.client.call_tool(&self.dispatch_name, args_json).await
+
+        let result = self
+            .client
+            .call_tool(&self.dispatch_name, args_json)
+            .await
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
-            
-        Ok(swiftide_core::chat_completion::ToolOutput::Text(result.to_string()))
+
+        Ok(swiftide_core::chat_completion::ToolOutput::Text(
+            result.to_string(),
+        ))
     }
 
     fn name(&self) -> Cow<'_, str> {
@@ -2001,7 +2903,9 @@ impl swiftide_core::Tool for McpToolShim {
         swiftide_core::chat_completion::ToolSpec {
             name: self.name.clone(),
             description: self.description.clone(),
-            parameters_schema: Some(serde_json::from_value(self.parameters_schema.clone()).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(self.parameters_schema.clone()).unwrap(),
+            ),
         }
     }
 }
@@ -2018,9 +2922,15 @@ impl swiftide_core::Tool for OfflineMcpToolShim {
         &self,
         _agent_context: &dyn swiftide_core::AgentContext,
         _tool_call: &swiftide_core::chat_completion::ToolCall,
-    ) -> anyhow::Result<swiftide_core::chat_completion::ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+    ) -> anyhow::Result<
+        swiftide_core::chat_completion::ToolOutput,
+        swiftide_core::chat_completion::errors::ToolError,
+    > {
         Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-            anyhow::anyhow!("ToolUnavailable: MCP server '{}' is offline, please reconnect.", self.server_name)
+            anyhow::anyhow!(
+                "ToolUnavailable: MCP server '{}' is offline, please reconnect.",
+                self.server_name
+            ),
         ))
     }
 
@@ -2032,14 +2942,16 @@ impl swiftide_core::Tool for OfflineMcpToolShim {
         swiftide_core::chat_completion::ToolSpec {
             name: self.name.clone(),
             description: format!("Unavailable: MCP server '{}' is offline.", self.server_name),
-            parameters_schema: Some(serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {}
-            })).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))
+                .unwrap(),
+            ),
         }
     }
 }
-
 
 #[derive(Clone)]
 struct CliToolShim {
@@ -2053,15 +2965,23 @@ impl swiftide_core::Tool for CliToolShim {
         &self,
         _agent_context: &dyn swiftide_core::AgentContext,
         tool_call: &swiftide_core::chat_completion::ToolCall,
-    ) -> anyhow::Result<swiftide_core::chat_completion::ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+    ) -> anyhow::Result<
+        swiftide_core::chat_completion::ToolOutput,
+        swiftide_core::chat_completion::errors::ToolError,
+    > {
         let args_str = tool_call.args().unwrap_or("{}");
         let args_json: serde_json::Value = serde_json::from_str(args_str)
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
-        
-        let result = self.executor.execute(args_json).await
+
+        let result = self
+            .executor
+            .execute(args_json)
+            .await
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
-            
-        Ok(swiftide_core::chat_completion::ToolOutput::Text(result.to_string()))
+
+        Ok(swiftide_core::chat_completion::ToolOutput::Text(
+            result.to_string(),
+        ))
     }
 
     fn name(&self) -> Cow<'_, str> {
@@ -2073,7 +2993,9 @@ impl swiftide_core::Tool for CliToolShim {
         swiftide_core::chat_completion::ToolSpec {
             name: self.name.clone(),
             description: tool_config.description.clone(),
-            parameters_schema: Some(serde_json::from_value(tool_config.parameters_schema.clone()).unwrap()),
+            parameters_schema: Some(
+                serde_json::from_value(tool_config.parameters_schema.clone()).unwrap(),
+            ),
         }
     }
 }
@@ -2082,6 +3004,8 @@ impl swiftide_core::Tool for CliToolShim {
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Poll;
 
     fn test_mcp_server(
         transport: maho_types::ai::McpTransport,
@@ -2104,6 +3028,370 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    #[derive(Clone)]
+    struct CountingTool {
+        name: &'static str,
+        invocations: Arc<AtomicUsize>,
+        output: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for CountingTool {
+        async fn invoke(
+            &self,
+            _agent_context: &dyn AgentContext,
+            _tool_call: &ToolCall,
+        ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput::Text(self.output.to_string()))
+        }
+
+        fn name(&self) -> Cow<'_, str> {
+            Cow::Borrowed(self.name)
+        }
+
+        fn tool_spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: self.name.to_string(),
+                description: "test tool".to_string(),
+                parameters_schema: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {}
+                    }))
+                    .expect("test schema is valid"),
+                ),
+            }
+        }
+    }
+
+    fn test_tool_call(name: &str, args: String) -> ToolCall {
+        ToolCall::builder()
+            .id("call-test".to_string())
+            .name(name.to_string())
+            .args(args)
+            .build()
+            .expect("test tool call builds")
+    }
+
+    fn gated_counting_tool(
+        name: &'static str,
+        sensitivity: ToolSensitivity,
+        policy: ApprovalPolicy,
+        permission_callback: Option<PermissionCallback>,
+        invocations: Arc<AtomicUsize>,
+    ) -> PermissionGatedTool {
+        PermissionGatedTool {
+            inner_tool: Arc::new(CountingTool {
+                name,
+                invocations,
+                output: r#"{"ok":true}"#,
+            }),
+            sensitivity,
+            sensitivity_downgrade: Option::None,
+            permission_callback: Arc::new(Mutex::new(permission_callback)),
+            denied_flag: Arc::new(Mutex::new(false)),
+            session_id: "session-permission-test".to_string(),
+            approval_policy: Arc::new(Mutex::new(policy)),
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBrowserBridge {
+        invocations: AtomicUsize,
+    }
+
+    impl BrowserToolBridge for RecordingBrowserBridge {
+        fn invoke(&self, _tool_name: &str, _args_json: &str) -> Result<String, String> {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            Ok(r#"{"ok":true}"#.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_action_shims_audit_records_action_sensitivity() {
+        let session_id = "session-browser-action-audit";
+        let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let contract = canonical_browser_action_contracts()
+            .expect("canonical browser action contract parses")
+            .into_iter()
+            .find(|contract| contract.tool_name == "browser_scroll")
+            .expect("browser_scroll action contract exists");
+        let bridge = Arc::new(RecordingBrowserBridge::default());
+        let callback: PermissionCallback =
+            Box::new(move |_request| Box::pin(async move { PermissionDecision::Allow }));
+        let shim_context = BrowserToolShimContext::turn(
+            session_id,
+            Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+            Arc::new(Mutex::new(FallbackLadderState::new(session_id))),
+        );
+        let shim = browser_action_shim(
+            contract,
+            Arc::clone(&bridge) as Arc<dyn BrowserToolBridge>,
+            shim_context,
+        );
+        let tool = PermissionGatedTool {
+            inner_tool: Arc::new(shim),
+            sensitivity: ToolSensitivity::Sensitive,
+            sensitivity_downgrade: Option::None,
+            permission_callback: Arc::new(Mutex::new(Some(callback))),
+            denied_flag: Arc::new(Mutex::new(false)),
+            session_id: session_id.to_string(),
+            approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+        };
+        let tool_call = test_tool_call(
+            "browser_scroll",
+            r#"{"direction":"down","pixels":200}"#.to_string(),
+        );
+        let context = swiftide_agents::DefaultContext::default();
+
+        let result = tool.invoke(&context, &tool_call).await;
+
+        assert!(result.is_ok(), "allowed browser action should execute");
+        assert_eq!(bridge.invocations.load(Ordering::SeqCst), 1);
+        let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let sensitive_records = records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.kind,
+                    ApprovalAuditEventKind::PermissionRequest
+                        | ApprovalAuditEventKind::PermissionAllow
+                        | ApprovalAuditEventKind::ToolExecutionResult
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sensitive_records.len(), 3);
+        for record in sensitive_records {
+            assert_eq!(record.tool_name, "browser_scroll");
+            assert_eq!(record.sensitivity, ToolSensitivity::Sensitive);
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_approval_sensitive_request_carries_sanitized_args_and_metadata() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::new(Mutex::new(None::<PermissionRequest>));
+        let captured_request = Arc::clone(&captured);
+        let callback: PermissionCallback = Box::new(move |request| {
+            let captured_request = Arc::clone(&captured_request);
+            Box::pin(async move {
+                *captured_request.lock_unpoison() = Some(request);
+                PermissionDecision::Allow
+            })
+        });
+        let tool = gated_counting_tool(
+            "browser_type",
+            ToolSensitivity::Sensitive,
+            ApprovalPolicy::Prompt,
+            Some(callback),
+            Arc::clone(&invocations),
+        );
+        let sentinel = "S3NTINEL-maho-vault-9F4C";
+        let tool_call = test_tool_call(
+            "browser_type",
+            format!(r#"{{"text":"hello","password":"{sentinel}"}}"#),
+        );
+        let context = swiftide_agents::DefaultContext::default();
+
+        let result = tool.invoke(&context, &tool_call).await;
+
+        assert!(
+            result.is_ok(),
+            "allowed sensitive tool should execute: {result:?}"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        let request = captured
+            .lock_unpoison()
+            .clone()
+            .expect("permission callback captures request");
+        assert_eq!(request.tool_name, "browser_type");
+        assert_eq!(request.sensitivity, ToolSensitivity::Sensitive);
+        assert!(!request.arguments.contains(sentinel));
+        assert!(request.arguments.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn permission_missing_callback_denies_sensitive_tool_fail_closed() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = gated_counting_tool(
+            "browser_click",
+            ToolSensitivity::Sensitive,
+            ApprovalPolicy::Prompt,
+            None,
+            Arc::clone(&invocations),
+        );
+        let tool_call = test_tool_call("browser_click", r#"{"ref":1}"#.to_string());
+        let context = swiftide_agents::DefaultContext::default();
+
+        let result = tool.invoke(&context, &tool_call).await;
+
+        assert!(
+            result.is_err(),
+            "missing callback must deny sensitive tools"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+        assert!(*tool.denied_flag.lock_unpoison());
+    }
+
+    #[tokio::test]
+    async fn permission_cancel_audit_emits_when_invoke_future_is_dropped() {
+        let session_id = "session-permission-test";
+        let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let callback: PermissionCallback =
+            Box::new(move |_request| Box::pin(std::future::pending::<PermissionDecision>()));
+        let tool = gated_counting_tool(
+            "browser_type",
+            ToolSensitivity::Sensitive,
+            ApprovalPolicy::Prompt,
+            Some(callback),
+            Arc::clone(&invocations),
+        );
+        let sentinel = "S3NTINEL-maho-vault-9F4C";
+        let tool_call = test_tool_call(
+            "browser_type",
+            format!(r#"{{"text":"hello","password":"{sentinel}"}}"#),
+        );
+        let context = swiftide_agents::DefaultContext::default();
+
+        let mut future = tool.invoke(&context, &tool_call);
+        assert!(matches!(futures::poll!(future.as_mut()), Poll::Pending));
+        drop(future);
+
+        let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let cancel = records
+            .iter()
+            .find(|record| {
+                record.kind == ApprovalAuditEventKind::PermissionCancel
+                    && record.session_id == session_id
+                    && record.tool_name == "browser_type"
+            })
+            .expect("dropping an in-flight permission-gated invoke future emits PermissionCancel");
+        assert_eq!(cancel.sensitivity, ToolSensitivity::Sensitive);
+        assert_eq!(cancel.policy, ApprovalPolicy::Prompt);
+        assert_eq!(cancel.decision, Some(PermissionDecision::Deny));
+        let metadata = cancel
+            .decision_metadata
+            .expect("cancel audit carries runtime metadata");
+        assert_eq!(metadata.source, ApprovalDecisionSource::Runtime);
+        assert_eq!(metadata.reason, ApprovalDecisionReason::SessionCancel);
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+
+        let json = serde_json::to_string(cancel).expect("cancel audit record serializes");
+        assert!(!json.contains(sentinel));
+    }
+
+    #[tokio::test]
+    async fn permission_downgrade_audit_emits_on_invocation_before_decision() {
+        let session_id = "session-downgrade-invoke";
+        let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = PermissionGatedTool {
+            inner_tool: Arc::new(CountingTool {
+                name: "browser_accessibility_snapshot",
+                invocations: Arc::clone(&invocations),
+                output: r#"{"snapshot":true}"#,
+            }),
+            sensitivity: ToolSensitivity::ReadOnly,
+            sensitivity_downgrade: Some(ToolSensitivityDowngrade {
+                from: ToolSensitivity::Sensitive,
+                to: ToolSensitivity::ReadOnly,
+            }),
+            permission_callback: Arc::new(Mutex::new(None)),
+            denied_flag: Arc::new(Mutex::new(false)),
+            session_id: session_id.to_string(),
+            approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+        };
+        let sentinel = "S3NTINEL-maho-vault-9F4C";
+        let tool_call = test_tool_call(
+            "browser_accessibility_snapshot",
+            format!(r#"{{"password":"{sentinel}"}}"#),
+        );
+        let context = swiftide_agents::DefaultContext::default();
+
+        let result = tool.invoke(&context, &tool_call).await;
+
+        assert!(result.is_ok(), "read-only downgraded tool should execute");
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let downgrade_index = records
+            .iter()
+            .position(|record| record.kind == ApprovalAuditEventKind::PermissionDowngrade)
+            .expect("downgrade audit record is emitted");
+        let request_index = records
+            .iter()
+            .position(|record| record.kind == ApprovalAuditEventKind::PermissionRequest)
+            .expect("permission request audit record is emitted");
+        let allow_index = records
+            .iter()
+            .position(|record| record.kind == ApprovalAuditEventKind::PermissionAllow)
+            .expect("permission allow audit record is emitted");
+        assert!(downgrade_index < request_index);
+        assert!(downgrade_index < allow_index);
+        let downgrade = &records[downgrade_index];
+        assert_eq!(downgrade.tool_name, "browser_accessibility_snapshot");
+        assert_eq!(downgrade.session_id, "session-downgrade-invoke");
+        assert_eq!(downgrade.sensitivity, ToolSensitivity::ReadOnly);
+        assert_eq!(
+            downgrade.attempted_sensitivity,
+            Some(ToolSensitivity::Sensitive)
+        );
+        assert_eq!(
+            downgrade.selected_sensitivity,
+            Some(ToolSensitivity::ReadOnly)
+        );
+        assert_eq!(downgrade.decision, Option::None);
+        let json = serde_json::to_string(&records).expect("audit records serialize");
+        assert!(!json.contains(sentinel));
+    }
+
+    #[tokio::test]
+    async fn permission_read_only_auto_runs_only_when_policy_allows() {
+        let context = swiftide_agents::DefaultContext::default();
+        let allowed_invocations = Arc::new(AtomicUsize::new(0));
+        let allowed_tool = gated_counting_tool(
+            "fs_read",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::Prompt,
+            None,
+            Arc::clone(&allowed_invocations),
+        );
+        let tool_call = test_tool_call("fs_read", r#"{"path":"Cargo.toml"}"#.to_string());
+
+        let allowed = allowed_tool.invoke(&context, &tool_call).await;
+
+        assert!(
+            allowed.is_ok(),
+            "read-only tools auto-run under prompt policy"
+        );
+        assert_eq!(allowed_invocations.load(Ordering::SeqCst), 1);
+
+        let denied_invocations = Arc::new(AtomicUsize::new(0));
+        let denied_tool = gated_counting_tool(
+            "fs_read",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::DenyAll,
+            None,
+            Arc::clone(&denied_invocations),
+        );
+
+        let denied = denied_tool.invoke(&context, &tool_call).await;
+
+        assert!(denied.is_err(), "deny-all blocks even read-only tools");
+        assert_eq!(denied_invocations.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn internal_control_tools_are_filtered_from_ui_events() {
+        assert!(is_internal_control_tool("stop"));
+        assert!(is_internal_control_tool("task_failed"));
+        assert!(!is_internal_control_tool("clipboard"));
+        assert!(!is_internal_control_tool("camera"));
+        assert!(!is_internal_control_tool("photo_library"));
+        assert!(!is_internal_control_tool("Stop"));
     }
 
     #[test]
@@ -2153,7 +3441,12 @@ mod tests {
 
     #[test]
     fn dogfood_sensitive_action_stays_gated() {
-        for name in ["browser_click", "browser_type", "browser_navigate", "browser_tab_new"] {
+        for name in [
+            "browser_click",
+            "browser_type",
+            "browser_navigate",
+            "browser_tab_new",
+        ] {
             assert!(
                 mcp_tool_is_sensitive(
                     ToolPermission::AutoApprove,

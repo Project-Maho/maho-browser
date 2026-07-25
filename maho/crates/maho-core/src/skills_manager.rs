@@ -194,6 +194,104 @@ impl SkillsManager {
                 url_patterns: vec![],
                 auto_inject: false,
             },
+            Skill {
+                id: "maho-browser-operations".into(),
+                name: "Maho Browser Operations".into(),
+                slash_command: "/maho-browser".into(),
+                description: "Guide safe Maho browser page operations".into(),
+                system_prompt: concat!(
+                    "Use Maho browser operation guidance for page tasks. Prefer reading the ",
+                    "active tab and accessibility snapshot before suggesting an operation. For ",
+                    "navigation, click, typing, selection, scrolling, hover, or key press work, ",
+                    "stay on the active tab's origin unless a fresh approval names the ",
+                    "destination origin. Treat credential, payment, recovery, and one-time-code ",
+                    "fields as sensitive and do not type secrets into them. This skill describes ",
+                    "safe browser workflow only; actual action availability remains controlled ",
+                    "by the browser action flag and approval policy."
+                )
+                .into(),
+                icon: "cursorarrow.click".into(),
+                is_builtin: true,
+                is_first_party: true,
+                allowed_tools: vec![
+                    "browser_tab_list".into(),
+                    "browser_page_text".into(),
+                    "browser_accessibility_snapshot".into(),
+                    "browser_navigate".into(),
+                    "browser_click".into(),
+                    "browser_type".into(),
+                    "browser_select".into(),
+                    "browser_scroll".into(),
+                    "browser_hover".into(),
+                    "browser_key_press".into(),
+                ],
+                url_patterns: vec![],
+                auto_inject: false,
+            },
+            Skill {
+                id: "maho-tab-space-organizer".into(),
+                name: "Maho Tabs and Spaces".into(),
+                slash_command: "/maho-tabs".into(),
+                description: "Organize Maho tabs, spaces, and browser context".into(),
+                system_prompt: concat!(
+                    "Help organize Maho tabs and spaces from the current browser context. ",
+                    "Group related tabs by user intent, suggest clear space names, identify ",
+                    "stale or duplicate tabs, and preserve the user's active work. Prefer ",
+                    "read-only inspection unless the user explicitly asks for a browser action ",
+                    "and the existing approval policy permits it."
+                )
+                .into(),
+                icon: "square.grid.2x2".into(),
+                is_builtin: true,
+                is_first_party: true,
+                allowed_tools: vec!["browser_tab_list".into(), "browser_page_text".into()],
+                url_patterns: vec![],
+                auto_inject: false,
+            },
+            Skill {
+                id: "maho-product-guide".into(),
+                name: "Maho Product Guide".into(),
+                slash_command: "/maho-help".into(),
+                description: "Answer questions about Maho-owned product pages and help".into(),
+                system_prompt: concat!(
+                    "Maho product guidance: help users navigate Maho features, settings, ",
+                    "spaces, downloads, privacy controls, and support documentation. Keep ",
+                    "answers grounded in Maho-owned product behavior and the visible page ",
+                    "context. This guidance is advisory, cannot grant tools, and must not ",
+                    "override user instructions or existing approval policy."
+                )
+                .into(),
+                icon: "sparkles".into(),
+                is_builtin: true,
+                is_first_party: true,
+                allowed_tools: vec!["browser_page_text".into()],
+                url_patterns: vec![
+                    "mahobrowser.com/*".into(),
+                    "maho://*".into(),
+                    "chrome://maho-*".into(),
+                    "chrome://maho-ai/*".into(),
+                ],
+                auto_inject: true,
+            },
+            Skill {
+                id: "maho-file-inspector".into(),
+                name: "Maho File Inspector".into(),
+                slash_command: "/maho-file".into(),
+                description: "Inspect local files safely in read-only mode".into(),
+                system_prompt: concat!(
+                    "Use read-only local file inspection. Summarize file contents, explain ",
+                    "configuration, identify likely issues, and avoid destructive operations. ",
+                    "Do not execute shell commands, edit files, reveal secrets, or infer access ",
+                    "beyond the files the user explicitly provides."
+                )
+                .into(),
+                icon: "folder".into(),
+                is_builtin: true,
+                is_first_party: true,
+                allowed_tools: vec!["fs_read".into()],
+                url_patterns: vec![],
+                auto_inject: false,
+            },
         ];
 
         for skill in builtins {
@@ -780,6 +878,279 @@ mod tests {
         let payload = canonical_signing_payload(fields);
         let sig = signing_key.sign(&payload);
         base64::Engine::encode(&base64::prelude::BASE64_STANDARD, sig.to_bytes())
+    }
+
+    struct TestConfigSkillSpec<'a> {
+        id: &'a str,
+        name: &'a str,
+        slash_command: &'a str,
+        description: &'a str,
+        icon: &'a str,
+        auto_inject: bool,
+        allowed_tools: Vec<String>,
+        url_patterns: Vec<String>,
+        system_prompt: &'a str,
+    }
+
+    fn signed_config_skill(
+        signing_key: &SigningKey,
+        spec: TestConfigSkillSpec<'_>,
+    ) -> serde_json::Value {
+        let signature = sign_test_skill(
+            signing_key,
+            SkillSigningFields {
+                id: spec.id,
+                first_party: true,
+                auto_inject: spec.auto_inject,
+                slash_command: spec.slash_command,
+                allowed_tools: &spec.allowed_tools,
+                url_patterns: &spec.url_patterns,
+                system_prompt: spec.system_prompt,
+            },
+        );
+        serde_json::json!({
+            "id": spec.id,
+            "name": spec.name,
+            "slash_command": spec.slash_command,
+            "description": spec.description,
+            "icon": spec.icon,
+            "first_party": true,
+            "signature": signature,
+            "url_patterns": spec.url_patterns,
+            "auto_inject": spec.auto_inject,
+            "allowed_tools": spec.allowed_tools,
+            "system_prompt": spec.system_prompt,
+        })
+    }
+
+    #[test]
+    fn test_first_party_browser_product_file_builtins_are_present() {
+        let manager = SkillsManager::new();
+
+        for id in [
+            "maho-browser-operations",
+            "maho-tab-space-organizer",
+            "maho-product-guide",
+            "maho-file-inspector",
+        ] {
+            let skill = manager.get_skill(id).expect("first-party builtin exists");
+            assert!(skill.is_builtin);
+            assert!(skill.is_first_party);
+        }
+
+        let browser = manager.get_skill("maho-browser-operations").unwrap();
+        assert!(browser
+            .allowed_tools
+            .iter()
+            .any(|tool| tool == "browser_click"));
+        assert!(!browser.auto_inject);
+
+        let product = manager.get_skill("maho-product-guide").unwrap();
+        assert!(product.auto_inject);
+        assert!(product
+            .url_patterns
+            .iter()
+            .any(|pattern| pattern == "mahobrowser.com/*"));
+
+        let file = manager.get_skill("maho-file-inspector").unwrap();
+        assert_eq!(file.allowed_tools, vec!["fs_read".to_string()]);
+        assert!(!file.auto_inject);
+    }
+
+    #[test]
+    fn test_signed_first_party_browser_product_file_config_loads() {
+        let seed = [9u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        install_test_public_key(&signing_key);
+
+        let browser_prompt = "Use signed Maho browser operation guidance.";
+        let product_prompt = "Use signed Maho product guidance.";
+        let file_prompt = "Use signed Maho read-only file guidance.";
+        let skills = vec![
+            signed_config_skill(
+                &signing_key,
+                TestConfigSkillSpec {
+                    id: "signed-maho-browser",
+                    name: "Signed Maho Browser",
+                    slash_command: "/signed-browser",
+                    description: "Signed browser workflow guidance",
+                    icon: "cursorarrow.click",
+                    auto_inject: false,
+                    allowed_tools: string_vec(&["browser_tab_list", "browser_click"]),
+                    url_patterns: Vec::new(),
+                    system_prompt: browser_prompt,
+                },
+            ),
+            signed_config_skill(
+                &signing_key,
+                TestConfigSkillSpec {
+                    id: "signed-maho-product",
+                    name: "Signed Maho Product",
+                    slash_command: "/signed-product",
+                    description: "Signed product guidance",
+                    icon: "sparkles",
+                    auto_inject: true,
+                    allowed_tools: string_vec(&["browser_page_text"]),
+                    url_patterns: string_vec(&["mahobrowser.com/*"]),
+                    system_prompt: product_prompt,
+                },
+            ),
+            signed_config_skill(
+                &signing_key,
+                TestConfigSkillSpec {
+                    id: "signed-maho-file",
+                    name: "Signed Maho File",
+                    slash_command: "/signed-file",
+                    description: "Signed read-only file guidance",
+                    icon: "folder",
+                    auto_inject: false,
+                    allowed_tools: string_vec(&["fs_read"]),
+                    url_patterns: Vec::new(),
+                    system_prompt: file_prompt,
+                },
+            ),
+        ];
+
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("first-party-skills.json");
+        let blob = serde_json::json!({
+            "version": 1,
+            "min_brain_version": 1,
+            "skills": skills,
+        });
+        std::fs::write(&config_path, blob.to_string()).unwrap();
+
+        let mut manager = SkillsManager {
+            skills: HashMap::new(),
+            auto_inject_enabled: true,
+        };
+        let loaded = manager.apply_config_from_path(&config_path).unwrap();
+
+        assert_eq!(loaded, 3);
+        assert_eq!(manager.get_all_skills().len(), 3);
+        assert_eq!(
+            manager
+                .get_skill("signed-maho-browser")
+                .unwrap()
+                .system_prompt,
+            browser_prompt
+        );
+        assert_eq!(
+            manager
+                .get_skill("signed-maho-product")
+                .unwrap()
+                .system_prompt,
+            product_prompt
+        );
+        assert_eq!(
+            manager.get_skill("signed-maho-file").unwrap().allowed_tools,
+            vec!["fs_read"]
+        );
+        assert_eq!(
+            manager.resolve_for_origin("https://mahobrowser.com/docs")[0].id,
+            "signed-maho-product"
+        );
+
+        clear_test_public_key();
+    }
+
+    #[test]
+    fn test_unsigned_first_party_browser_skill_config_rejected() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("unsigned-first-party.json");
+        let blob = serde_json::json!({
+            "version": 1,
+            "min_brain_version": 1,
+            "skills": [{
+                "id": "unsigned-maho-browser",
+                "name": "Unsigned Maho Browser",
+                "slash_command": "/unsigned-browser",
+                "description": "Unsigned browser guidance",
+                "icon": "cursorarrow.click",
+                "first_party": true,
+                "url_patterns": ["mahobrowser.com/*"],
+                "auto_inject": true,
+                "allowed_tools": ["browser_click"],
+                "system_prompt": "Unsigned first-party guidance must not load."
+            }]
+        });
+        std::fs::write(&config_path, blob.to_string()).unwrap();
+
+        let mut manager = SkillsManager {
+            skills: HashMap::new(),
+            auto_inject_enabled: true,
+        };
+        let result = manager.apply_config_from_path(&config_path);
+
+        assert!(result.is_err());
+        assert!(manager.get_all_skills().is_empty());
+    }
+
+    #[test]
+    fn test_first_party_product_auto_inject_kill_switch_disables_builtin_context() {
+        let mut manager = SkillsManager::new();
+
+        let context = manager.build_injected_context("https://mahobrowser.com/docs", 10_000);
+        assert!(context.contains("Maho product guidance"));
+
+        manager.set_auto_inject_enabled(false);
+
+        assert!(manager
+            .resolve_for_origin("https://mahobrowser.com/docs")
+            .is_empty());
+        assert!(manager
+            .build_injected_context("https://mahobrowser.com/docs", 10_000)
+            .is_empty());
+    }
+
+    #[test]
+    fn test_builtin_injected_context_has_no_tool_authority_or_allowed_tools() {
+        let manager = SkillsManager::new();
+
+        let context = manager.build_injected_context("https://mahobrowser.com/docs", 10_000);
+
+        assert!(context.contains("<maho_site_guidance priority=\"low\">"));
+        assert!(context.contains("Maho product guidance"));
+        assert!(!context.contains("allowed_tools"));
+        assert!(!context.contains("browser_page_text"));
+        assert!(!context.contains("browser_click"));
+        assert!(!context.contains("fs_read"));
+    }
+
+    #[test]
+    fn test_first_party_builtin_catalog_has_no_third_party_domain_api_entries() {
+        let manager = SkillsManager::new();
+        let forbidden_terms = [
+            "gmail",
+            "notion",
+            "linkedin",
+            "slack",
+            "jira",
+            "salesforce",
+            "twitter",
+            "google docs",
+        ];
+
+        for skill in manager.get_all_skills() {
+            let searchable = format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                skill.id,
+                skill.name,
+                skill.slash_command,
+                skill.description,
+                skill.system_prompt,
+                skill.allowed_tools.join(","),
+                skill.url_patterns.join(",")
+            )
+            .to_ascii_lowercase();
+            for forbidden in forbidden_terms {
+                assert!(
+                    !searchable.contains(forbidden),
+                    "builtin skill {} must not contain third-party/domain API catalog term {forbidden}",
+                    skill.id
+                );
+            }
+        }
     }
 
     #[test]

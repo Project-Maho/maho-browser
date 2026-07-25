@@ -1,5 +1,9 @@
 import type {AppState, SessionRecord} from '../../../types.js';
 import {
+  getApprovalDecisionLabel,
+  getApprovalPolicyLabel,
+  getApprovalSensitivityLabel,
+  getApprovalStateLabel,
   getBrowserContextStatusLabel,
   getBrowserContextStatusTone,
   redactUrlForDisplay,
@@ -45,7 +49,7 @@ function KeyValueRow({label, value}: {label: string; value: string}) {
 function InspectorCard(
     {children}: {children: React.ReactNode}) {
   return (
-    <section className="grid gap-3 rounded-2xl border border-border/80 bg-secondary/35 p-4 shadow-sm">
+    <section className="grid gap-3 rounded-2xl border border-border/80 bg-secondary/35 p-4 shadow-[var(--shadow-raised)]">
       {children}
     </section>
   );
@@ -81,7 +85,7 @@ export function Inspector(
   const tabDefs: Array<AppState['selectedInspector']['kind']> = ['session', 'context', 'tool', 'approval'];
 
   return (
-    <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+    <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)]">
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold tracking-tight text-foreground">Inspector</h2>
         <p className="text-sm leading-6 text-muted-foreground">
@@ -217,6 +221,13 @@ export function Inspector(
                       <SectionLabel text="Approval request" />
                       <KeyValueRow label="Approval ID" value={approval.approvalId} />
                       <KeyValueRow label="Description" value={approval.description} />
+                      <KeyValueRow label="Policy" value={getApprovalPolicyLabel(approval.approvalPolicy)} />
+                      <KeyValueRow label="Sensitivity" value={getApprovalSensitivityLabel(approval.sensitivity)} />
+                      <KeyValueRow label="State" value={getApprovalStateLabel(approval.state)} />
+                      <KeyValueRow
+                        label="Justification source"
+                        value={approval.pageDerivedJustification ? 'Page-derived' : 'User/runtime'}
+                      />
                       {approval.relatedToolCall ? (
                         <KeyValueRow label="Related tool" value={approval.relatedToolCall.toolName} />
                       ) : null}
@@ -226,6 +237,14 @@ export function Inspector(
                             {result.approved ? 'Approved' : 'Denied'}
                           </Badge>
                           {result.reason ? <KeyValueRow label="Reason" value={result.reason} /> : null}
+                          <KeyValueRow label="Decision policy" value={getApprovalPolicyLabel(result.approvalPolicy)} />
+                          <KeyValueRow label="Decision sensitivity" value={getApprovalSensitivityLabel(result.sensitivity)} />
+                          <KeyValueRow label="Decision" value={getApprovalDecisionLabel(result.decision)} />
+                          <KeyValueRow label="State" value={getApprovalStateLabel(result.state)} />
+                          <KeyValueRow
+                            label="Decision source"
+                            value={result.pageDerivedJustification ? 'Page-derived' : 'User/runtime'}
+                          />
                         </>
                       ) : (
                         <>

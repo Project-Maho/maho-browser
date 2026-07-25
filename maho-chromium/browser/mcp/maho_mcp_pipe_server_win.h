@@ -26,6 +26,7 @@
 namespace maho {
 
 class MahoMcpSession;
+class MahoMcpLeaseRegistry;
 class MahoMcpSessionToken;
 
 // Windows Named Pipe server for the Maho MCP (Model Context Protocol).
@@ -147,6 +148,7 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
 
   // Session token for DPAPI authentication (not owned).
   raw_ptr<MahoMcpSessionToken> session_token_;
+  std::unique_ptr<MahoMcpLeaseRegistry> lease_registry_;
 
   // Listening pipe state.
   base::win::ScopedHandle listen_handle_;

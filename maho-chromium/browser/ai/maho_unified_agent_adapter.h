@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_AI_MAHO_UNIFIED_AGENT_ADAPTER_H_
 #define MAHO_BROWSER_AI_MAHO_UNIFIED_AGENT_ADAPTER_H_
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -15,6 +16,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
@@ -27,7 +29,6 @@
 
 
 struct MahoAcpHandle;
-struct PermissionCallState;
 class Browser;
 class PrefService;
 
@@ -49,7 +50,20 @@ enum class PromptDecision {
   kAllowOnce = 2
 };
 
-struct PermissionCallState;
+// Cross-thread rendezvous for one permission decision. A synchronous Rust
+// worker thread blocks on |event| inside OnAgentPermission while the owning
+// sequence resolves the decision (auto-policy, native dialog, or the canonical
+// WebUI approval broker). |cancelled| lets the worker abandon the wait (timeout
+// / teardown) so a late resolution can never mutate a dead call.
+struct PermissionCallState {
+  base::WaitableEvent event{base::WaitableEvent::ResetPolicy::MANUAL,
+                            base::WaitableEvent::InitialState::NOT_SIGNALED};
+  std::atomic<bool> cancelled{false};
+  PromptDecision decision{PromptDecision::kDeny};
+  std::string approval_policy = "prompt";
+  std::string sensitivity = "sensitive";
+  bool page_derived_justification = false;
+};
 
 // Injectable table of the maho-agent C FFI entry points the adapter calls.
 // Production uses GetProductionMahoAgentFfi() (forwards to the real symbols);
@@ -72,6 +86,9 @@ struct MahoAgentFfi {
   bool (*send_message)(MahoAgentSession* session,
                        const char* message,
                        void (*on_token)(void*, const char*),
+                       void (*on_thinking)(void*, const char*),
+                       void (*on_tool_call)(void*, const char*, const char*, const char*),
+                       void (*on_tool_result)(void*, const char*, const char*, const char*),
                        void (*on_complete)(void*, const char*, const char*),
                        void (*on_error)(void*, const char*),
                        void* user_data);
@@ -225,12 +242,30 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
       const std::string& extension_id);
   void DecidePermissionOnUiThread(const std::string& tool,
                                   const std::string& extension_id,
-                                  std::shared_ptr<PermissionCallState> state);
+                                  std::shared_ptr<PermissionCallState> state,
+                                  bool page_derived_justification = false);
   // Test-only: drives DecidePermissionOnUiThread synchronously (paired with
   // permission_prompt_override_for_testing_) and returns the resolved decision.
   MahoAgentPermissionDecision RunPermissionDialogForTest(
       const std::string& tool,
       const std::string& extension_id);
+
+  // Canonical WebUI approval broker. When a live runtime event consumer exists,
+  // a decision that needs the user is published as a kApprovalRequest event and
+  // its PermissionCallState parked here keyed by an unguessable approval id;
+  // RespondToApproval resolves and erases it exactly once. The native Views
+  // dialog is used only as a fallback when no event consumer is attached.
+  std::unordered_map<std::string, std::shared_ptr<PermissionCallState>>
+      pending_approvals_;
+  static std::string GenerateApprovalId();
+  // Resolve every parked approval as deny and signal its waiter exactly once.
+  // Called on turn cancel, reset, and destruction so a blocked worker fails
+  // closed instead of hanging.
+  void DenyAllPendingApprovals();
+  // Test-only accessor for the count of parked approvals.
+  size_t PendingApprovalCountForTesting() const {
+    return pending_approvals_.size();
+  }
 
   std::shared_ptr<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);

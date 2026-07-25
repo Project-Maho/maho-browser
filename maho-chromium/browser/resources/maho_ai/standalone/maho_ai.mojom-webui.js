@@ -28,6 +28,43 @@ function readNullableString(value) {
   return typeof value === 'string' ? value : null;
 }
 
+function approvalPolicyFromPayload(value) {
+  switch (readString(value, 'prompt').replaceAll('-', '_')) {
+    case 'allow_all':
+    case 'allow':
+      return ApprovalPolicy.kAllowAll;
+    case 'allow_mcp':
+      return ApprovalPolicy.kAllowMcp;
+    case 'deny_sensitive':
+      return ApprovalPolicy.kDenySensitive;
+    case 'deny_all':
+    case 'deny':
+      return ApprovalPolicy.kDenyAll;
+    case 'prompt':
+    default:
+      return ApprovalPolicy.kPrompt;
+  }
+}
+
+function approvalSensitivityFromPayload(value) {
+  return readString(value) === 'read_only' ?
+    ApprovalSensitivity.kReadOnly : ApprovalSensitivity.kSensitive;
+}
+
+function approvalDecisionFromReply(reply) {
+  if (reply === 'always' || reply === 'allow') {
+    return ApprovalDecision.kAllow;
+  }
+  if (reply === 'once' || reply === 'yes' || reply === 'approve') {
+    return ApprovalDecision.kAllowOnce;
+  }
+  return ApprovalDecision.kDeny;
+}
+
+function approvalStateFromReply(approved) {
+  return approved ? ApprovalState.kApproved : ApprovalState.kDenied;
+}
+
 function readNumber(value, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -131,6 +168,33 @@ export const ToolCallStatus = {
   kCancelled: 4,
 };
 
+export const ApprovalPolicy = {
+  kPrompt: 0,
+  kAllowAll: 1,
+  kAllowMcp: 2,
+  kDenySensitive: 3,
+  kDenyAll: 4,
+};
+
+export const ApprovalSensitivity = {
+  kReadOnly: 0,
+  kSensitive: 1,
+};
+
+export const ApprovalState = {
+  kPending: 0,
+  kApproved: 1,
+  kDenied: 2,
+  kCancelled: 3,
+};
+
+export const ApprovalDecision = {
+  kNone: 0,
+  kAllow: 1,
+  kAllowOnce: 2,
+  kDeny: 3,
+};
+
 export const SessionStatus = {
   kCreated: 0,
   kActive: 1,
@@ -185,6 +249,8 @@ export class PageCallbackRouter {
     this.onRuntimeEvent = new ListenerList();
     this.onConnectionStateChanged = new ListenerList();
     this.onSessionUpdated = new ListenerList();
+    this.onAISettingsChanged = new ListenerList();
+    this.onAskMahoSessionAccepted = new ListenerList();
   }
 }
 
@@ -591,10 +657,14 @@ export class PageHandlerRemote {
         this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalRequest, {
           approvalRequest: {
             approvalId,
+            approvalPolicy: approvalPolicyFromPayload(payload.approval_policy || payload.approvalPolicy),
             description: readString(
                 payload.description || payload.title || payload.method,
                 'Approval required'),
-            relatedToolCall: toolCall,
+            pageDerivedJustification: Boolean(payload.page_derived_justification || payload.pageDerivedJustification),
+            relatedToolCall: toolCall ? {...toolCall, argumentsJson: ''} : null,
+            sensitivity: approvalSensitivityFromPayload(payload.sensitivity),
+            state: ApprovalState.kPending,
           },
         });
         this.upsertSession(sessionId, {
@@ -609,11 +679,17 @@ export class PageHandlerRemote {
       }
       case 'permission.replied': {
         const reply = readString(payload.reply);
+        const approved = reply === 'once' || reply === 'always' || reply === 'yes' || reply === 'approve';
         this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalResult, {
           approvalResult: {
             approvalId: readString(payload.requestID || payload.requestId || payload.id),
-            approved: reply === 'once' || reply === 'always' || reply === 'yes' || reply === 'approve',
+            approvalPolicy: approvalPolicyFromPayload(payload.approval_policy || payload.approvalPolicy),
+            approved,
+            decision: approvalDecisionFromReply(reply),
+            pageDerivedJustification: Boolean(payload.page_derived_justification || payload.pageDerivedJustification),
             reason: readNullableString(payload.reason),
+            sensitivity: approvalSensitivityFromPayload(payload.sensitivity),
+            state: approvalStateFromReply(approved),
           },
         });
         this.upsertSession(sessionId, {

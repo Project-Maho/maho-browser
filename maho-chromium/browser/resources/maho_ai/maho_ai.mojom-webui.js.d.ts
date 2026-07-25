@@ -1,5 +1,24 @@
 
 
+export enum AskMahoSource {
+  kCommandPalette,
+}
+
+export enum AskMahoContextIntent {
+  kNone,
+  kCurrentPage,
+}
+
+export interface AskMahoDispatch {
+  requestId: string;
+  query: string;
+  source: AskMahoSource;
+  submit: boolean;
+  mode: InteractionMode;
+  contextIntent: AskMahoContextIntent;
+  targetSessionId: string | null;
+}
+
 export enum ChatIntent {
   kFreeform,
   kAnalyzeCurrentPage,
@@ -142,9 +161,40 @@ export interface ToolResultInfo {
   errorMessage?: string | null;
 }
 
+export enum ApprovalPolicy {
+  kPrompt,
+  kAllowAll,
+  kAllowMcp,
+  kDenySensitive,
+  kDenyAll,
+}
+
+export enum ApprovalSensitivity {
+  kReadOnly,
+  kSensitive,
+}
+
+export enum ApprovalState {
+  kPending,
+  kApproved,
+  kDenied,
+  kCancelled,
+}
+
+export enum ApprovalDecision {
+  kNone,
+  kAllow,
+  kAllowOnce,
+  kDeny,
+}
+
 export interface ApprovalRequestInfo {
   approvalId: string;
   description: string;
+  approvalPolicy: ApprovalPolicy;
+  sensitivity: ApprovalSensitivity;
+  state: ApprovalState;
+  pageDerivedJustification: boolean;
   relatedToolCall?: ToolCallInfo | null;
 }
 
@@ -152,6 +202,11 @@ export interface ApprovalResultInfo {
   approvalId: string;
   approved: boolean;
   reason?: string | null;
+  approvalPolicy: ApprovalPolicy;
+  sensitivity: ApprovalSensitivity;
+  state: ApprovalState;
+  decision: ApprovalDecision;
+  pageDerivedJustification: boolean;
 }
 
 export interface RuntimeEvent {
@@ -164,6 +219,8 @@ export interface RuntimeEvent {
   approvalRequest?: ApprovalRequestInfo | null;
   approvalResult?: ApprovalResultInfo | null;
   browserContext?: BrowserContextPayload | null;
+  sessionId: string;
+  requestId?: string | null;
 }
 
 export enum SessionStatus {
@@ -207,6 +264,9 @@ export class PageCallbackRouter {
   };
   onAISettingsChanged: {
     addListener(listener: (info: AISettingsInfo) => void): void;
+  };
+  onAskMahoSessionAccepted: {
+    addListener(listener: (requestId: string, sessionInfo: SessionInfo) => void): void;
   };
   onVoicePartial: {
     addListener(listener: (transcript: string) => void): number;

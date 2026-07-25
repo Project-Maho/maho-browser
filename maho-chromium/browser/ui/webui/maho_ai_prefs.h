@@ -17,7 +17,6 @@ inline constexpr char kChatOrchestratorV2Enabled[] =
 inline constexpr char kProviderAdapterV2Enabled[] =
     "maho.ai.provider_adapter_v2_enabled";
 inline constexpr char kUiThinModeEnabled[] = "maho.ai.ui_thin_mode_enabled";
-inline constexpr char kPendingInitialQuery[] = "maho.ai.pending_initial_query";
 inline constexpr char kSessionListJson[] = "maho.ai.session_list_json";
 inline constexpr char kApprovalPolicy[] = "maho.ai.approval_policy";
 inline constexpr char kSessionPersistenceEnabled[] =
@@ -25,6 +24,11 @@ inline constexpr char kSessionPersistenceEnabled[] =
 inline constexpr char kSessionEventLogs[] =
     "maho.ai.session_event_logs";
 inline constexpr char kAiViewMode[] = "maho.ai.view_mode";
+inline constexpr char kAttachBrowserContext[] = "maho.ai.attach_browser_context";
+
+// Translation onboarding choice. Cloud-backed (BYOK) — NO local model.
+// Values: "byok" | "skip". Empty = not chosen yet.
+inline constexpr char kTranslationProvider[] = "maho.translation.provider";
 
 // BYOK API keys encrypted at rest via Chromium OSCrypt + base64-encoded for
 // safe JSON storage. Populated by the desktop settings UI (write side TBD)

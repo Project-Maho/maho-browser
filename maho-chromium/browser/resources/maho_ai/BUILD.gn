@@ -17,6 +17,7 @@ tailwind_css("build_tailwind") {
     "../maho_common/react/ui/checkbox.tsx",
     "../maho_common/react/ui/dialog.tsx",
     "../maho_common/react/ui/dropdown-menu.tsx",
+    "../maho_common/react/ui/glass-ambient.tsx",
     "../maho_common/react/ui/input.tsx",
     "../maho_common/react/ui/popover.tsx",
     "../maho_common/react/ui/select.tsx",
@@ -91,6 +92,7 @@ action("bundle_react") {
     "views/cards.ts",
     "views/conversation_thread.ts",
     "views/icons.ts",
+    "../maho_common/react/ui/glass-ambient.tsx",
     "bundle_react.mjs",
   ]
   outputs = [ "$target_gen_dir/app_bundle.js" ]

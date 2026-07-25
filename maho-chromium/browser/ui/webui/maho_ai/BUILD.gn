@@ -1,6 +1,7 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
 import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
 
 mojom("mojo_bindings") {
   sources = [ "maho_ai.mojom" ]
@@ -18,6 +19,17 @@ source_set("maho_ai_prefs") {
   ]
 
   deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_ai_runtime_event_persistence") {
+  sources = [
+    "maho_ai_runtime_event_persistence.cc",
+    "maho_ai_runtime_event_persistence.h",
+  ]
+  deps = [
+    ":mojo_bindings",
     "//base",
   ]
 }
@@ -42,6 +54,8 @@ source_set("maho_ai") {
   ]
 
   deps = [
+    ":maho_ai_runtime_event_persistence",
+    "//maho/browser:maho_ai_ingress_coordinator",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
@@ -59,5 +73,34 @@ source_set("maho_ai") {
     "//net",
     "//ui/webui",
     "//url",
+  ]
+}
+
+test("maho_ai_egress_redaction_test") {
+  sources = [
+    "maho_ai_egress_redaction_test_main.cc",
+    "maho_ai_egress_redaction_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai_runtime_event_persistence",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser:maho_browser_ai_tools",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_ai_unittests") {
+  testonly = true
+  sources = [
+    "maho_ai_page_handler_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/test:test_support",
+    "//testing/gtest",
   ]
 }

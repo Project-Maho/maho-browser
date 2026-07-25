@@ -83,6 +83,9 @@ void FakeSetApprovalPolicy(MahoAgentSession*, const char*) {}
 bool FakeSendMessage(MahoAgentSession*,
                      const char* message,
                      void (*on_token)(void*, const char*),
+                     void (*on_thinking)(void*, const char*),
+                     void (*on_tool_call)(void*, const char*, const char*, const char*),
+                     void (*on_tool_result)(void*, const char*, const char*, const char*),
                      void (*on_complete)(void*, const char*, const char*),
                      void (*on_error)(void*, const char*),
                      void* user_data) {
@@ -151,6 +154,64 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
   void SetAgentFfiForTesting(MahoUnifiedAgentAdapter* adapter,
                              const MahoAgentFfi* ffi) {
     adapter->set_agent_ffi_for_testing(ffi);
+  }
+
+  // Drives one permission decision through the same path OnAgentPermission's
+  // posted task uses, minus the cross-thread wait. Returns the shared call
+  // state so the test can observe the resolved decision.
+  std::shared_ptr<PermissionCallState> DriveDecision(
+      MahoUnifiedAgentAdapter* adapter,
+      const std::string& tool,
+      const std::string& extension_id,
+      bool page_derived_justification = false) {
+    auto state = std::make_shared<PermissionCallState>();
+    adapter->DecidePermissionOnUiThread(tool, extension_id, state,
+                                        page_derived_justification);
+    return state;
+  }
+
+  size_t PendingApprovalCount(MahoUnifiedAgentAdapter* adapter) {
+    return adapter->PendingApprovalCountForTesting();
+  }
+
+  std::string FirstApprovalId() const {
+    for (const auto& ev : events_) {
+      if (ev.type == MahoAiRuntimeEventType::kApprovalRequest) {
+        const std::string* id = ev.payload.FindString("approval_id");
+        if (id) {
+          return *id;
+        }
+      }
+    }
+    return std::string();
+  }
+
+  const MahoAiRuntimeEvent* FirstApprovalRequestEvent() const {
+    for (const auto& ev : events_) {
+      if (ev.type == MahoAiRuntimeEventType::kApprovalRequest) {
+        return &ev;
+      }
+    }
+    return nullptr;
+  }
+
+  size_t CountEvents(MahoAiRuntimeEventType type) const {
+    size_t count = 0;
+    for (const auto& ev : events_) {
+      if (ev.type == type) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  const MahoAiRuntimeEvent* LastEventOfType(MahoAiRuntimeEventType type) const {
+    for (auto it = events_.rbegin(); it != events_.rend(); ++it) {
+      if (it->type == type) {
+        return &*it;
+      }
+    }
+    return nullptr;
   }
 
   base::test::TaskEnvironment task_environment_;
@@ -231,4 +292,253 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, OtrTokenCancelsLateFfiCallbacks) {
   task_environment_.RunUntilIdle();
 
   EXPECT_TRUE(events_.empty());
+}
+
+// Todo 6: an approval that needs the user is published as a kApprovalRequest
+// event and parked; WebUI approve resolves the waiting permission exactly once.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, WebUiApproveResolvesOnce) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+  const std::string approval_id = FirstApprovalId();
+  EXPECT_FALSE(approval_id.empty());
+  EXPECT_FALSE(state->event.IsSignaled());
+
+  adapter_->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kAllowOnce);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+
+  // Duplicate / stale reply does nothing: no second resolution, no crash.
+  adapter_->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ApprovalRequestCarriesTypedMetadataAndNoRawArguments) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "browser_click", "ext_sample");
+  EXPECT_FALSE(state->event.IsSignaled());
+
+  const MahoAiRuntimeEvent* event = FirstApprovalRequestEvent();
+  ASSERT_TRUE(event);
+  EXPECT_EQ(event->text, "browser_click");
+  const std::string* policy = event->payload.FindString("approval_policy");
+  ASSERT_TRUE(policy);
+  EXPECT_EQ(*policy, "prompt");
+  const std::string* sensitivity = event->payload.FindString("sensitivity");
+  ASSERT_TRUE(sensitivity);
+  EXPECT_EQ(*sensitivity, "sensitive");
+  const std::string* state_text = event->payload.FindString("approval_state");
+  ASSERT_TRUE(state_text);
+  EXPECT_EQ(*state_text, "pending");
+  EXPECT_FALSE(
+      event->payload.FindBool("page_derived_justification").value_or(true));
+  EXPECT_FALSE(event->payload.FindString("related_tool_arguments"));
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       PageDerivedJustificationFlagReachesApprovalRequest) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "browser_click", "ext_sample",
+                             /*page_derived_justification=*/true);
+  EXPECT_FALSE(state->event.IsSignaled());
+
+  const MahoAiRuntimeEvent* event = FirstApprovalRequestEvent();
+  ASSERT_TRUE(event);
+  EXPECT_TRUE(
+      event->payload.FindBool("page_derived_justification").value_or(false));
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       WebUiApprovalResultCarriesTypedDecisionAndEmitsOnce) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+
+  adapter_->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kAllowOnce);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 1u);
+  const MahoAiRuntimeEvent& result = events_.back();
+  const std::string* state_text = result.payload.FindString("approval_state");
+  ASSERT_TRUE(state_text);
+  EXPECT_EQ(*state_text, "approved");
+  const std::string* decision = result.payload.FindString("approval_decision");
+  ASSERT_TRUE(decision);
+  EXPECT_EQ(*decision, "allow_once");
+
+  adapter_->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       WebUiApprovalRequestCarriesTypedContractMetadataWithoutArgs) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "browser_click", "browser-agent");
+  ASSERT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+  EXPECT_FALSE(state->event.IsSignaled());
+
+  const MahoAiRuntimeEvent* request =
+      LastEventOfType(MahoAiRuntimeEventType::kApprovalRequest);
+  ASSERT_TRUE(request);
+  EXPECT_EQ("browser_click", request->text);
+  EXPECT_EQ("browser_click",
+            *request->payload.FindString("related_tool_name"));
+  EXPECT_EQ("prompt", *request->payload.FindString("approval_policy"));
+  EXPECT_EQ("sensitive", *request->payload.FindString("sensitivity"));
+  EXPECT_EQ("pending", *request->payload.FindString("approval_state"));
+  EXPECT_FALSE(request->payload.FindBool("page_derived_justification")
+                   .value_or(true));
+  EXPECT_FALSE(request->payload.FindString("related_tool_arguments"));
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       WebUiApprovalResultCarriesDecisionMetadata) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "browser_click", "browser-agent");
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+
+  adapter_->RespondToApproval(approval_id, /*approved=*/false);
+  EXPECT_TRUE(state->event.IsSignaled());
+
+  const MahoAiRuntimeEvent* result =
+      LastEventOfType(MahoAiRuntimeEventType::kApprovalResult);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(approval_id, *result->payload.FindString("approval_id"));
+  EXPECT_FALSE(result->payload.FindBool("approved").value_or(true));
+  EXPECT_EQ("denied", *result->payload.FindString("approval_state"));
+  EXPECT_EQ("deny", *result->payload.FindString("approval_decision"));
+  EXPECT_EQ("prompt", *result->payload.FindString("approval_policy"));
+  EXPECT_EQ("sensitive", *result->payload.FindString("sensitivity"));
+  EXPECT_FALSE(result->payload.FindBool("page_derived_justification")
+                   .value_or(true));
+}
+
+// Todo 6: WebUI deny resolves the waiting permission as deny exactly once.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, WebUiDenyResolvesAsDeny) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+
+  adapter_->RespondToApproval(approval_id, /*approved=*/false);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kDeny);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+// Todo 6: an unknown/stale approval id is a no-op and never resolves a waiter.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, StaleApprovalIdIsNoOp) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  ASSERT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+
+  adapter_->RespondToApproval("not-a-real-approval-id", /*approved=*/true);
+  EXPECT_FALSE(state->event.IsSignaled());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 0u);
+}
+
+// Todo 6: cancelling the turn fails a pending approval closed (deny) and
+// signals the blocked worker exactly once with no execution.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, CancelTurnDeniesPendingApproval) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  ASSERT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+
+  adapter_->CancelCurrentTurn();
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kDeny);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+// Todo 6: Reset() (panel close / session teardown) fails pending approvals
+// closed so a blocked worker never hangs.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, ResetDeniesPendingApproval) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  ASSERT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+
+  adapter_->Reset();
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kDeny);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, DestructorDeniesPendingApproval) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter_.get(), "browser_click", "browser-agent");
+  ASSERT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+
+  adapter_.reset();
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kDeny);
+}
+
+// Todo 6: with no runtime event consumer attached, the broker is not used and
+// the native dialog fallback denies (no bound browser in the test), so a
+// decision still resolves closed.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, NoEventConsumerFallsBackClosed) {
+  auto state = DriveDecision(adapter_.get(), "fs_read", std::string());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kDeny);
 }

@@ -53,6 +53,10 @@ name = "allowed_domains_test"
 path = "tests/integration/allowed_domains_test.rs"
 
 [[test]]
+name = "agent_actions_e2e"
+path = "tests/integration/agent_actions_e2e.rs"
+
+[[test]]
 name = "headless_test"
 path = "tests/integration/headless_test.rs"
 

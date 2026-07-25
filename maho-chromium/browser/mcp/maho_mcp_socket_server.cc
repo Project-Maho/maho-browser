@@ -62,9 +62,14 @@ MahoMcpSocketServer::MahoMcpSocketServer(const base::FilePath& user_data_dir)
       socket_path_(ComputeSocketPath(user_data_dir)),
       lease_registry_(std::make_unique<MahoMcpLeaseRegistry>()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
+  MahoMcpSession::SetLeaseRegistryForBrowserActions(lease_registry_.get());
 }
 
 MahoMcpSocketServer::~MahoMcpSocketServer() {
+  if (MahoMcpSession::GetLeaseRegistryForBrowserActions() ==
+      lease_registry_.get()) {
+    MahoMcpSession::SetLeaseRegistryForBrowserActions(nullptr);
+  }
   Stop();
 }
 
@@ -360,6 +365,11 @@ void MahoMcpSocketServer::RemoveConnection(uint64_t connection_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   for (auto it = sessions_.begin(); it != sessions_.end(); ++it) {
     if (it->connection_id == connection_id) {
+      // Todo 6: tell the lease registry this holder dropped so its leases enter
+      // the grace period and auto-release, keeping disconnect semantics honest.
+      if (lease_registry_ && it->session) {
+        lease_registry_->OnSessionDropped(it->session->session_id());
+      }
       sessions_.erase(it);
       return;
     }

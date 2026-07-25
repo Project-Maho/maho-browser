@@ -40,13 +40,11 @@ base::TimeDelta ClampTtl(base::TimeDelta ttl) {
 }  // namespace
 
 MahoMcpLeaseRegistry::MahoMcpLeaseRegistry() {
-  DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
 MahoMcpLeaseRegistry::~MahoMcpLeaseRegistry() = default;
 
 bool MahoMcpLeaseRegistry::SweepAndCheck(int64_t tab_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = leases_.find(tab_id);
   if (it == leases_.end()) {
     return false;
@@ -75,7 +73,7 @@ MahoMcpLeaseRegistry::AcquireResult MahoMcpLeaseRegistry::Acquire(
     const std::string& session_id,
     base::TimeDelta ttl,
     bool force_steal) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::AutoLock lock(lock_);
   const base::TimeDelta clamped = ClampTtl(ttl);
   const base::TimeTicks now = base::TimeTicks::Now();
 
@@ -128,7 +126,7 @@ base::TimeTicks MahoMcpLeaseRegistry::Heartbeat(
     int64_t tab_id,
     const std::string& session_id,
     base::TimeDelta ttl) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::AutoLock lock(lock_);
   if (!SweepAndCheck(tab_id)) {
     return {};
   }
@@ -142,8 +140,8 @@ base::TimeTicks MahoMcpLeaseRegistry::Heartbeat(
 }
 
 bool MahoMcpLeaseRegistry::Release(int64_t tab_id,
-                                   const std::string& session_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+                                    const std::string& session_id) {
+  base::AutoLock lock(lock_);
   auto it = leases_.find(tab_id);
   if (it == leases_.end() || it->second.session_id != session_id) {
     return false;
@@ -160,7 +158,7 @@ bool MahoMcpLeaseRegistry::Release(int64_t tab_id,
 }
 
 void MahoMcpLeaseRegistry::OnSessionDropped(const std::string& session_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::AutoLock lock(lock_);
   const base::TimeTicks now = base::TimeTicks::Now();
   for (auto& [tab_id, info] : leases_) {
     if (info.session_id == session_id && info.grace_until.is_null()) {
@@ -170,8 +168,8 @@ void MahoMcpLeaseRegistry::OnSessionDropped(const std::string& session_id) {
 }
 
 bool MahoMcpLeaseRegistry::IsHeldBy(int64_t tab_id,
-                                    const std::string& session_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+                                     const std::string& session_id) {
+  base::AutoLock lock(lock_);
   if (!SweepAndCheck(tab_id)) {
     return false;
   }
@@ -179,13 +177,13 @@ bool MahoMcpLeaseRegistry::IsHeldBy(int64_t tab_id,
 }
 
 size_t MahoMcpLeaseRegistry::active_lease_count() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::AutoLock lock(lock_);
   return leases_.size();
 }
 
 std::vector<MahoMcpLeaseRegistry::AuditEntry>
 MahoMcpLeaseRegistry::GetAuditLog() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::AutoLock lock(lock_);
   return audit_log_;
 }
 
