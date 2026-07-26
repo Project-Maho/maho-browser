@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -4298,28 +4299,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Register MahoMailUIConfig and MahoRoutinesUIConfig before MahoSettingsUIConfig",
             guard='MahoMailUIConfig',
         ),
-        Replacement(
-            old='#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n',
-            new=(
-                '#include "build/buildflag.h"\n'
-                '#include "maho/build/config/maho_test_buildflags.h"\n'
-                '#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n'
-                '#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n'
-                '#endif\n'
-            ),
-            description="Conditionally include maho_test_ui.h using buildflag",
-            guard='#include "maho/build/config/maho_test_buildflags.h"',
-        ),
-        Replacement(
-            old='  map.AddWebUIConfig(std::make_unique<MahoTestUIConfig>());\n',
-            new=(
-                '#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n'
-                '  map.AddWebUIConfig(std::make_unique<MahoTestUIConfig>());\n'
-                '#endif\n'
-            ),
-            description="Conditionally register MahoTestUIConfig using buildflag",
-            guard='#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n  map.AddWebUIConfig',
-        ),
     ],
     # ── chrome/browser/ui/webui/BUILD.gn ──────────────────────────────────────
     "chrome/browser/ui/webui/BUILD.gn": [
@@ -6216,10 +6195,68 @@ def default_chromium_src() -> Path:
     return repo_root().parent / "chromium" / "src"
 
 
+def normalize_maho_test_webui_config(text: str) -> tuple[str, int]:
+    text, include_count = re.subn(
+        r'#include "build/buildflag\.h"\n'
+        r'#include "[^"]*buildflags\.h"\n'
+        r'#if [^\n]+\n'
+        r'(#include "maho/browser/ui/webui/maho_test/maho_test_ui\.h"\n)'
+        r'#endif\n',
+        r'\1',
+        text,
+    )
+    text, registration_count = re.subn(
+        r'#if [^\n]+\n'
+        r'(  map\.AddWebUIConfig\(std::make_unique<MahoTestUIConfig>\(\)\);\n)'
+        r'#endif\n',
+        r'\1',
+        text,
+    )
+    return text, include_count + registration_count
+
+
+def normalize_browser_view_features(text: str) -> tuple[str, int]:
+    text, include_count = re.subn(
+        r'#include "[^"]*/maho_features\.h"\n',
+        "",
+        text,
+    )
+    text, focus_count = re.subn(
+        r'if \(is_user_initiated && maho_sidebar_container_ &&\n'
+        r'      base::FeatureList::IsEnabled\([^\n]+\)\) \{',
+        "if (is_user_initiated && maho_sidebar_container_) {",
+        text,
+    )
+    text, toolbar_count = re.subn(
+        r'  if \(!maho_toolbar_button_provider_ &&\n'
+        r'      !ToolbarButtonProvider::From\(browser_\.get\(\)\) &&\n'
+        r'      IsMahoArcLayoutActive\(\) &&\n'
+        r'      base::FeatureList::IsEnabled\(\n'
+        r'          maho::features::k[A-Za-z0-9_]+\)\) \{',
+        "  if (!maho_toolbar_button_provider_ &&\n"
+        "      !ToolbarButtonProvider::From(browser_.get()) &&\n"
+        "      IsMahoArcLayoutActive()) {",
+        text,
+    )
+    return text, include_count + focus_count + toolbar_count
+
+
 def apply_replacements(target_file: Path, replacements: list[Replacement], dry_run: bool = False) -> tuple[bool, list[str]]:
     text = target_file.read_text()
     changed = False
     applied: list[str] = []
+
+    if target_file.name == "chrome_web_ui_configs.cc":
+        text, normalized_count = normalize_maho_test_webui_config(text)
+        if normalized_count:
+            changed = True
+            applied.append("patched: Make MahoTestUIConfig registration unconditional")
+
+    if target_file.name == "browser_view.cc":
+        text, normalized_count = normalize_browser_view_features(text)
+        if normalized_count:
+            changed = True
+            applied.append("patched: Make Maho browser-view paths unconditional")
 
     for replacement in replacements:
         if replacement.new and replacement.new in text and (

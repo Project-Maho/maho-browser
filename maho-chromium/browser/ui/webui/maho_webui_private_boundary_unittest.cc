@@ -10,7 +10,6 @@
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/webui_config_map.h"
-#include "maho/build/config/maho_test_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #include "content/public/browser/webui_config.h"
@@ -42,7 +41,7 @@ class MahoWebUiPrivateBoundaryTest : public ChromeRenderViewHostTestHarness {
   }
 };
 
-TEST_F(MahoWebUiPrivateBoundaryTest, RegisteredSurfaceInventoryMatchesBuildFlag) {
+TEST_F(MahoWebUiPrivateBoundaryTest, RegisteredSurfaceInventoryIsComplete) {
   auto& map = content::WebUIConfigMap::GetInstance();
   std::vector<content::WebUIConfigInfo> configs = map.GetWebUIConfigList(profile());
   int maho_count = 0;
@@ -54,13 +53,9 @@ TEST_F(MahoWebUiPrivateBoundaryTest, RegisteredSurfaceInventoryMatchesBuildFlag)
 
   // Counted trusted surfaces: maho-ai, maho-live-folders, maho-mail,
   // maho-routines, maho-settings, maho-space-config, maho-space-create,
-  // maho-sync, maho-welcome (9), plus maho-test when the test WebUI build
-  // flag is set, plus the chrome-untrusted maho-boost dummy added in SetUp.
-#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)
+  // maho-sync, maho-welcome, and maho-test (10), plus the chrome-untrusted
+  // maho-boost dummy added in SetUp.
   EXPECT_EQ(maho_count, 11);
-#else
-  EXPECT_EQ(maho_count, 10);
-#endif
 }
 
 TEST_F(MahoWebUiPrivateBoundaryTest, ConfigMatrixFailsClosedForAllOtrClasses) {

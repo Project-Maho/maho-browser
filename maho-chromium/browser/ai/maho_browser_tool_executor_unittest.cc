@@ -8,11 +8,9 @@
 
 #include "base/functional/callback.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -240,15 +238,6 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
 
 class MahoBrowserToolExecutorTest : public testing::Test {
  protected:
-  void EnableBrowserActions() {
-    feature_list_.InitAndEnableFeature(maho::features::kMahoAgentBrowserActions);
-  }
-
-  void DisableBrowserActions() {
-    feature_list_.InitAndDisableFeature(
-        maho::features::kMahoAgentBrowserActions);
-  }
-
   MahoBrowserToolExecutor MakeExecutor(
       MahoBrowserToolExecutor::BrowserActionApprovalCallback approval_callback =
           MahoBrowserToolExecutor::BrowserActionApprovalCallback(),
@@ -286,26 +275,11 @@ class MahoBrowserToolExecutorTest : public testing::Test {
   }
 
   base::test::TaskEnvironment task_environment_;
-  base::test::ScopedFeatureList feature_list_;
   maho::MahoMcpLeaseRegistry lease_registry_;
   FakeBrowserActionDelegate delegate_;
 };
 
-TEST_F(MahoBrowserToolExecutorTest, ActionDispatchFailsClosedWithFlagDisabled) {
-  DisableBrowserActions();
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
-
-  base::DictValue arguments;
-  arguments.Set("ref", 1);
-  base::DictValue result = Execute(executor, "browser_click", std::move(arguments));
-
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_NE(result.FindString("error")->find("disabled"), std::string::npos);
-  EXPECT_EQ(delegate_.click_count, 0);
-}
-
 TEST_F(MahoBrowserToolExecutorTest, SensitiveActionDeniesWithoutAuthorization) {
-  EnableBrowserActions();
   auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
@@ -319,7 +293,6 @@ TEST_F(MahoBrowserToolExecutorTest, SensitiveActionDeniesWithoutAuthorization) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, ApprovalDenialBlocksLeaseAndDispatch) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(
       [](const Authorization& metadata) {
         ApprovalDecision decision;
@@ -340,7 +313,6 @@ TEST_F(MahoBrowserToolExecutorTest, ApprovalDenialBlocksLeaseAndDispatch) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, ApprovedClickDispatchesViaMcpHandler) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 1, 101);
 
@@ -356,7 +328,6 @@ TEST_F(MahoBrowserToolExecutorTest, ApprovedClickDispatchesViaMcpHandler) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionFailsWithoutSteal) {
-  EnableBrowserActions();
   auto external_lease = lease_registry_.Acquire(
       7, "external-session", base::Seconds(60), false);
   ASSERT_TRUE(external_lease.ok);
@@ -376,7 +347,6 @@ TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionFailsWithoutSteal) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionFailsWithoutLeaseHolder) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction),
                                &lease_registry_, std::string());
   PopulateRef(executor, 1, 101);
@@ -392,7 +362,6 @@ TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionFailsWithoutLeaseHolder) 
 }
 
 TEST_F(MahoBrowserToolExecutorTest, UnknownRefUsesMcpCompatibleError) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 1, 101);
 
@@ -411,7 +380,6 @@ class MahoBrowserToolExecutorFallbackTest
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        DirectRefActionRequiresAccessibilitySnapshotState) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   delegate_.snapshot_refs[1] = 101;
 
@@ -433,7 +401,6 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        SnapshotSelectedTierStillRunsApprovalAndLease) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 1, 101);
 
@@ -453,7 +420,6 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        ScreenshotCuaRequiresExplicitApprovalBeforeDispatch) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 1, 101);
 
@@ -477,7 +443,6 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        ApprovalDenialStillBlocksSelectedFallbackTier) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(
       [](const Authorization& metadata) {
         ApprovalDecision decision;
@@ -502,7 +467,6 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 }
 
 TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 2, 202);
   maho::MahoMcpFieldMetadata metadata;
@@ -521,7 +485,6 @@ TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, InvalidDirectionAndKeyFailBeforeDispatch) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
 
   base::DictValue scroll_arguments;
@@ -542,7 +505,6 @@ TEST_F(MahoBrowserToolExecutorTest, InvalidDirectionAndKeyFailBeforeDispatch) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, NavigateEmptyActiveOriginFailsClosed) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   delegate_.active_url = "about:blank";
 
@@ -558,7 +520,6 @@ TEST_F(MahoBrowserToolExecutorTest, NavigateEmptyActiveOriginFailsClosed) {
 
 TEST_F(MahoBrowserToolExecutorTest,
        AuthorizationReceivesTypedMetadataForCrossOriginNavigate) {
-  EnableBrowserActions();
   std::optional<Authorization> captured;
   auto executor = MakeExecutor(base::BindRepeating(
       [](std::optional<Authorization>* out, const Authorization& metadata) {
@@ -586,7 +547,6 @@ TEST_F(MahoBrowserToolExecutorTest,
 }
 
 TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
 
   base::DictValue result = Execute(executor, "vault_fill_credential");
@@ -602,7 +562,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
        NavigateEmptyAllowedDomainFailsClosed_NotAdr0016Divergence) {
   // ADR 0016 states empty allowed-domain state fails closed on both MCP and
   // in-browser paths; this is parity, not an intentional divergence.
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   delegate_.active_url = "about:blank";
 
@@ -620,7 +579,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        AccessibilitySnapshotRequiredBeforeRefActionMatchesMcp) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   delegate_.snapshot_refs[1] = 101;
 
@@ -638,7 +596,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        ClickUnknownRefFailureMatchesMcpErrorCode) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 1, 101);
 
@@ -658,7 +615,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 TEST_F(MahoBrowserToolExecutorParityTest,
        TypeCredentialFieldDenialMatchesMcpAndDoesNotEchoText) {
   static constexpr char kSecret[] = "S3NTINEL-parity-secret";
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 2, 202);
   maho::MahoMcpFieldMetadata metadata;
@@ -682,7 +638,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest, SelectResultValueMatchesMcp) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 3, 303);
 
@@ -702,7 +657,6 @@ TEST_F(MahoBrowserToolExecutorParityTest, SelectResultValueMatchesMcp) {
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        ScrollDirectionAndPixelBehaviorMatchesMcp) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
 
   base::DictValue down;
@@ -736,7 +690,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
        Adr0016BrowserHoverSensitiveApprovalWithoutLease) {
   // ADR 0016: hover mirrors MCP's no-lease boundary, but the in-browser path
   // intentionally adds sensitive approval gating before dispatch.
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
   PopulateRef(executor, 4, 404);
 
@@ -754,7 +707,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest, KeyPressValidationMatchesMcp) {
-  EnableBrowserActions();
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
 
   base::DictValue valid;
@@ -804,7 +756,6 @@ TEST_F(MahoBrowserToolExecutorParityTest, KeyPressValidationMatchesMcp) {
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        MutationApprovalDefaultDenyPreventsDispatch) {
-  EnableBrowserActions();
   auto executor = MakeExecutor();
   PopulateRef(executor, 5, 505);
 
@@ -827,7 +778,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   // ADR 0016 intentionally specializes MCP's session allowlist: the agent uses
   // the active tab origin for the turn and cross-origin navigation must carry a
   // fresh approval request naming the destination origin.
-  EnableBrowserActions();
   std::optional<Authorization> captured;
   auto executor = MakeExecutor(base::BindRepeating(
       [](std::optional<Authorization>* out, const Authorization& metadata) {
@@ -860,7 +810,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
        Adr0016ExternalLeaseConflictDoesNotForceSteal) {
   // ADR 0016 forbids force-steal: an external MCP holder remains the holder and
   // the in-browser action reports the conflict instead of taking the tab.
-  EnableBrowserActions();
   auto external_lease = lease_registry_.Acquire(
       7, "external-session", base::Seconds(60), false);
   ASSERT_TRUE(external_lease.ok);

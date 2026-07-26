@@ -11,8 +11,8 @@
 //
 // LAZY-INIT CONTRACT: maho_command_overlay_controller_ is null until the first
 // call to ShowMahoCommandOverlayForCurrentTab() (reached via
-// SetFocusToLocationBar(true), LocationBarView::RequestFocus() with
-// kMahoUnifiedClickPath, or any other overlay entry point).
+// SetFocusToLocationBar(true), LocationBarView::RequestFocus(), or any other
+// overlay entry point).
 // GetMahoCommandOverlayControllerForTesting() therefore returns null before
 // any triggering call.  Tests must trigger first, then read the controller.
 //
@@ -25,12 +25,11 @@
 //      cycles through the real Hide() path (not a manual state reset).
 //   6. FocusPath_OverlayHidesOnDeactivation — overlay hides when a second
 //      browser window steals native window activation.
-//   7. FocusPath_FlagEnabledOnFocusInterceptOpensOverlay (Wave 1 gap closure)
-//      — exercises the actual chromium_src OnFocus() intercept: when
-//      kMahoUnifiedClickPath is enabled, calling RequestFocus() on the real
+//   7. FocusPath_OnFocusInterceptOpensOverlay (Wave 1 gap closure)
+//      — exercises the actual chromium_src OnFocus() intercept: calling
+//      RequestFocus() on the real
 //      LocationBarView triggers OnFocus(), which the overlay intercepts and
-//      routes to ShowMahoCommandOverlayForCurrentTab(). This is the enabled-
-//      path behavior that the feature flag contract tests cannot reach without
+//      routes to ShowMahoCommandOverlayForCurrentTab(). This behavior requires
 //      a live Browser + real LocationBarView.
 //
 // Access pattern: all BrowserView and controller state is read through
@@ -54,7 +53,6 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
@@ -119,23 +117,6 @@ class MahoCommandOverlayInteractiveUiTest : public InProcessBrowserTest {
   content::WebContents* GetActiveWebContents() {
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
-};
-
-class MahoCommandOverlayUnifiedClickPathEnabledTest
-    : public MahoCommandOverlayInteractiveUiTest {
- public:
-  MahoCommandOverlayUnifiedClickPathEnabledTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        maho::features::kMahoUnifiedClickPath);
-  }
-  MahoCommandOverlayUnifiedClickPathEnabledTest(
-      const MahoCommandOverlayUnifiedClickPathEnabledTest&) = delete;
-  MahoCommandOverlayUnifiedClickPathEnabledTest& operator=(
-      const MahoCommandOverlayUnifiedClickPathEnabledTest&) = delete;
-  ~MahoCommandOverlayUnifiedClickPathEnabledTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 }  // namespace
@@ -811,10 +792,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   CloseBrowserSynchronously(second_browser);
 }
 
-IN_PROC_BROWSER_TEST_F(MahoCommandOverlayUnifiedClickPathEnabledTest,
-                       FocusPath_FlagEnabledOnFocusInterceptOpensOverlay) {
-  ASSERT_TRUE(
-      base::FeatureList::IsEnabled(maho::features::kMahoUnifiedClickPath));
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
+                       FocusPath_OnFocusInterceptOpensOverlay) {
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/title1.html")));
@@ -826,7 +805,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayUnifiedClickPathEnabledTest,
   ASSERT_TRUE(base::test::RunUntil([&]() {
     maho::MahoCommandOverlayController* c = GetController();
     return c && c->IsVisible();
-  })) << "With kMahoUnifiedClickPath enabled, SetFocusToLocationBar(true) "
+  })) << "SetFocusToLocationBar(true) "
          "(the convergence point of the OnFocus() intercept) must open the "
          "overlay via ShowMahoCommandOverlayForCurrentTab().";
 
@@ -853,27 +832,6 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayUnifiedClickPathEnabledTest,
   controller->Hide();
   ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
 }
-
-namespace {
-
-class MahoCommandOverlayFlagDisabledTest
-    : public MahoCommandOverlayInteractiveUiTest {
- public:
-  MahoCommandOverlayFlagDisabledTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        maho::features::kMahoUnifiedClickPath);
-  }
-  MahoCommandOverlayFlagDisabledTest(
-      const MahoCommandOverlayFlagDisabledTest&) = delete;
-  MahoCommandOverlayFlagDisabledTest& operator=(
-      const MahoCommandOverlayFlagDisabledTest&) = delete;
-  ~MahoCommandOverlayFlagDisabledTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-}  // namespace
 
 IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
                        FocusPath_EscapeRestoresFocusToPreviousView) {
@@ -973,30 +931,6 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
     drain.Run();
   }
   CloseBrowserSynchronously(second_browser);
-}
-
-IN_PROC_BROWSER_TEST_F(MahoCommandOverlayFlagDisabledTest,
-                       FocusPath_FlagDisabledLocationBarFocusDoesNotOpenOverlay) {
-  ASSERT_FALSE(
-      base::FeatureList::IsEnabled(maho::features::kMahoUnifiedClickPath));
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
-  base::RunLoop().RunUntilIdle();
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
-
-  ASSERT_EQ(nullptr, GetController())
-      << "Controller must be null before any Show() call (lazy-init contract)";
-
-  BrowserView* bv = GetBrowserView();
-  ASSERT_TRUE(bv);
-  bv->SetFocusToLocationBar(/*is_user_initiated=*/true);
-  base::RunLoop().RunUntilIdle();
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_EQ(nullptr, GetController())
-      << "With kMahoUnifiedClickPath disabled, SetFocusToLocationBar(true) "
-         "must not open the overlay; the controller must remain null.";
 }
 
 namespace {

@@ -4,18 +4,13 @@
 
 #include <dwmapi.h>
 
-#include "base/feature_list.h"
 #include "base/win/windows_version.h"
-#include "maho/browser/maho_features.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/win/hwnd_util.h"
 
 namespace maho {
 
 void ApplyVibrancyToCommandOverlay(views::Widget* widget) {
-  if (!base::FeatureList::IsEnabled(features::kMahoCommandPaletteVibrancy))
-    return;
-
   if (base::win::GetVersion() < base::win::Version::WIN11_22H2)
     return;
 

@@ -4,7 +4,6 @@
 
 #include <memory>
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/strings/string_util.h"
@@ -27,7 +26,6 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
@@ -280,8 +278,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   const bool arc_active =
       browser_ && browser_->is_type_normal() && browser_->profile() &&
       sidebar_prefs::IsSidebarLayoutEnabled(browser_->profile()->GetPrefs());
-  if (arc_active && base::FeatureList::IsEnabled(
-                        features::kMahoArcToolbarButtonProvider)) {
+  if (arc_active) {
     secondary_label_->SetProperty(views::kElementIdentifierKey,
                                    kTranslatePageActionElementId);
   }

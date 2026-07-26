@@ -8,7 +8,7 @@
 // (Tab-key traversal, Cmd+L before the shortcut interceptor, programmatic
 // RequestFocus()) through:
 //
-//   LocationBarView::OnFocus()          [chromium_src overlay, flag-gated]
+//   LocationBarView::OnFocus()          [chromium_src overlay]
 //       └─> BrowserView::SetFocusToLocationBar(is_user_initiated=true)
 //               └─> BrowserView::ShowMahoCommandOverlayForCurrentTab()
 //                       └─> MahoCommandOverlayController::Show(
@@ -35,25 +35,14 @@
 //      the production controller wires to Hide(). After Hide() the overlay
 //      is no longer visible and focus-restore state is cleared.
 //
-//   4. ShowCurrentTabPath_FlagDisabledStillAllowsDirectShow
-//      The kMahoUnifiedClickPath flag only gates the OnFocus() intercept
-//      in the chromium_src overlay; it does NOT suppress the controller's
-//      Show() method itself. ShowMahoCommandOverlayForCurrentTab() calls
-//      Show() unconditionally after the intercept is reached. This test
-//      verifies that Show() → IsVisible() works regardless of flag state,
-//      so that callers who reach the controller via other paths (Cmd+L
-//      shortcut interceptor, sidebar new-tab button) are unaffected by the
-//      flag.
-//
-//   5. ShowCurrentTabPath_FlagEnabledInterceptRouteMatchesDirectCall
-//      Simulates the flag-enabled intercept: when kMahoUnifiedClickPath is
-//      enabled, the chromium_src overlay calls
+//   4. ShowCurrentTabPath_InterceptRouteMatchesDirectCall
+//      The chromium_src overlay calls
 //        browser_view->SetFocusToLocationBar(/*is_user_initiated=*/true)
 //      which immediately calls ShowMahoCommandOverlayForCurrentTab(). That
 //      method invokes Show(anchor, kCurrentTab, url, /*select_initial=*/true).
 //      We replicate this exact call signature and verify overlay visibility
 //      + kCurrentTab textfield state, proving the intercept path produces
-//      the same externally visible result as the non-flag left-click path.
+//      the same externally visible result as the left-click path.
 //
 //   6. ShowCurrentTabPath_RepeatedFocusReopensOverlay
 //      Each user-initiated focus event (e.g., repeated Cmd+L presses) must
@@ -77,8 +66,6 @@
 #include <string>
 
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -91,10 +78,10 @@ namespace maho {
 
 // Fixture is outside the anonymous namespace so the `friend class` declaration
 // in MahoCommandOverlayController refers to the same class (maho:: scope).
-class MahoUnifiedClickPathBehaviorTest : public views::ViewsTestBase {
+class MahoLocationBarCommandOverlayBehaviorTest : public views::ViewsTestBase {
  protected:
-  MahoUnifiedClickPathBehaviorTest() = default;
-  ~MahoUnifiedClickPathBehaviorTest() override = default;
+  MahoLocationBarCommandOverlayBehaviorTest() = default;
+  ~MahoLocationBarCommandOverlayBehaviorTest() override = default;
 
   // Create a controller (browser=nullptr is fine for unit tests).
   std::unique_ptr<MahoCommandOverlayController> MakeController() {
@@ -166,7 +153,7 @@ namespace {
 
 // Proves: calling Show() with kCurrentTab mode (the unified click path
 // terminal call) makes the overlay immediately visible.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_OverlayBecomesVisible) {
   auto parent = MakeParentWidget();
   auto controller = MakeController();
@@ -185,7 +172,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // Proves: the URL passed to Show() in kCurrentTab mode is pre-filled in the
 // textfield with a full selection — this is the "edit the current URL"
 // affordance that distinguishes the unified click path from kSearch mode.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_PreFillsUrlAndSelectsAll) {
   const std::string url = "https://maho.browser/unified-click";
   auto parent = MakeParentWidget();
@@ -219,7 +206,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // which the production controller wires to Hide(). After that, IsVisible()
 // must return false. This validates the dismiss → hide contract that every
 // location-bar-click session ends with.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_DismissHidesOverlay) {
   auto parent = MakeParentWidget();
   auto controller = MakeController();
@@ -247,56 +234,23 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 }
 
 // ---------------------------------------------------------------------------
-// 4. Flag does not suppress direct Show() calls
+// 4. Intercept route matches direct-call behavior
 // ---------------------------------------------------------------------------
 
-// Proves: kMahoUnifiedClickPath only gates the OnFocus() intercept in the
-// chromium_src overlay. Other callers (shortcut interceptor, sidebar) reach
-// Show() directly and must work regardless of flag state. Disabling the flag
-// must NOT prevent the overlay from opening.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
-       ShowCurrentTabPath_FlagDisabledStillAllowsDirectShow) {
-  base::test::ScopedFeatureList scoped;
-  scoped.InitAndDisableFeature(features::kMahoUnifiedClickPath);
-  ASSERT_FALSE(
-      base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
-
-  auto parent = MakeParentWidget();
-  auto controller = MakeController();
-
-  CallShowCurrentTab(*controller, parent.get(), "https://example.com");
-
-  EXPECT_TRUE(controller->IsVisible())
-      << "Show() must open the overlay regardless of kMahoUnifiedClickPath "
-         "state — the flag only gates the OnFocus() intercept path";
-
-  ReleaseController(*controller);
-}
-
-// ---------------------------------------------------------------------------
-// 5. Flag-enabled intercept route matches direct-call behavior
-// ---------------------------------------------------------------------------
-
-// Proves: when the feature flag is enabled the intercept produces the same
-// externally visible result as a direct Show() call. Concretely: enabling
-// the flag and calling Show() with the intercept's exact parameters
+// Proves: the intercept produces the same externally visible result as a
+// direct Show() call. Concretely, calling Show() with the intercept's exact parameters
 // (kCurrentTab, url, select_all=true) yields IsVisible()==true and the
 // textfield contains the URL with a full selection. This confirms that the
 // intercept "contract" — documented in the chromium_src overlay comments —
 // is actually satisfied by the controller/view layer.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
-       ShowCurrentTabPath_FlagEnabledInterceptRouteMatchesDirectCall) {
-  base::test::ScopedFeatureList scoped;
-  scoped.InitAndEnableFeature(features::kMahoUnifiedClickPath);
-  ASSERT_TRUE(
-      base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath));
-
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
+       ShowCurrentTabPath_InterceptRouteMatchesDirectCall) {
   const std::string current_url = "https://maho.browser/tab/42";
   auto parent = MakeParentWidget();
   auto controller = MakeController();
 
   // Replicate the exact call BrowserView::ShowMahoCommandOverlayForCurrentTab
-  // makes when reached from the flag-enabled OnFocus() intercept.
+  // makes when reached from the OnFocus() intercept.
   CallShowCurrentTab(*controller, parent.get(), current_url);
 
   // --- Observable behavior checks ---
@@ -325,7 +279,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // overlay. When Show() is called while the overlay is already open (e.g.,
 // user presses Cmd+L twice), the controller must replace the existing widget
 // and leave is_hiding_=false and IsVisible()==true.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_RepeatedFocusReopensOverlay) {
   auto parent = MakeParentWidget();
   auto controller = MakeController();
@@ -361,7 +315,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // untested repeated open→close→open cycle for the unified click path
 // specifically (distinct from the generic lifecycle test in the controller
 // unit tests, which uses InjectVisibleWidget and does not go through Show()).
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_HideThenShowRestoresCleanState) {
   auto parent = MakeParentWidget();
   auto controller = MakeController();
@@ -392,7 +346,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // Proves: when the active tab has no committed URL (new tab, about:blank,
 // or an error page), ShowMahoCommandOverlayForCurrentTab() passes an empty
 // string as the initial_text. The overlay must still open successfully.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_EmptyUrlIsAccepted) {
   auto parent = MakeParentWidget();
   auto controller = MakeController();
@@ -415,7 +369,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // 9. chrome:// URL passes through the denylist (regression for allowlist fix)
 // ---------------------------------------------------------------------------
 
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        ShowCurrentTabPath_ChromeUrlPreFillsTextfield) {
   const std::string url = "chrome://settings/";
   auto parent = MakeParentWidget();
@@ -446,7 +400,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 // select_initial_text=false. This contrast test confirms that choosing
 // kCurrentTab for the intercept is load-bearing — a wrong mode would produce
 // a different (empty) textfield, breaking the "edit current URL" affordance.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        SearchModeDoesNotPreFillUrl_ConfirmingCurrentTabModeIsSpecific) {
   const std::string url = "https://maho.browser/contrast-check";
   auto parent = MakeParentWidget();
@@ -497,7 +451,7 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 //   (a) The overlay becomes visible — no native chrome::NewTab is called.
 //   (b) The textfield is empty — no URL is pre-filled (new tab, no URL yet).
 //   (c) The overlay is not in kCurrentTab or kSearch mode; it is kNewTab.
-TEST_F(MahoUnifiedClickPathBehaviorTest,
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
        NewTabCommandAction_OpensOverlayInNewTabMode) {
   auto parent = MakeParentWidget();
   auto controller = MakeController();
@@ -527,87 +481,6 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
   EXPECT_FALSE(GetIsHiding(*controller));
 
   ReleaseController(*controller);
-}
-
-// ---------------------------------------------------------------------------
-// Phase 3 (flag-gate parity): kMahoUnifiedClickPath default state and
-// flag-gating invariants for the SetFocusToLocationBar() intercept.
-//
-// The intercept in the chromium_src overlay is:
-//   if (is_user_initiated && maho_sidebar_container_ &&
-//       base::FeatureList::IsEnabled(kMahoUnifiedClickPath)) { ... }
-//
-// These tests verify that:
-//   a) The flag is enabled by default; disabling it is a kill-switch that
-//      restores the upstream location-bar focus path.
-//   b) When the flag is disabled, direct Show() calls still open the overlay
-//      (non-intercept callers — Cmd+L, Cmd+T — are unaffected by the flag).
-//   c) When the flag is enabled, direct Show() calls still open the overlay.
-//   d) A null sidebar container (maho_sidebar_container_ == nullptr) is safe
-//      because the flag check is short-circuited.
-// ---------------------------------------------------------------------------
-
-TEST_F(MahoUnifiedClickPathBehaviorTest,
-       FlagOn_DefaultState_IsEnabled) {
-  EXPECT_TRUE(base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath))
-      << "kMahoUnifiedClickPath must be enabled by default; it is retained as "
-         "a kill-switch for the SetFocusToLocationBar() intercept";
-}
-
-TEST_F(MahoUnifiedClickPathBehaviorTest,
-       FlagOff_DirectShowCurrentTab_StillOpensOverlay) {
-  base::test::ScopedFeatureList scoped;
-  scoped.InitAndDisableFeature(features::kMahoUnifiedClickPath);
-
-  auto parent = MakeParentWidget();
-  auto controller = MakeController();
-
-  CallShowCurrentTab(*controller, parent.get(), "https://example.com");
-
-  EXPECT_TRUE(controller->IsVisible())
-      << "Flag-off must not block direct Show() — only the OnFocus() intercept "
-         "is gated, not the controller itself";
-
-  ReleaseController(*controller);
-}
-
-TEST_F(MahoUnifiedClickPathBehaviorTest,
-       FlagOn_DirectShowCurrentTab_OpensOverlay) {
-  base::test::ScopedFeatureList scoped;
-  scoped.InitAndEnableFeature(features::kMahoUnifiedClickPath);
-
-  auto parent = MakeParentWidget();
-  auto controller = MakeController();
-
-  CallShowCurrentTab(*controller, parent.get(), "https://example.com");
-
-  EXPECT_TRUE(controller->IsVisible())
-      << "Flag-on must allow direct Show() to open the overlay";
-
-  ReleaseController(*controller);
-}
-
-TEST_F(MahoUnifiedClickPathBehaviorTest,
-       FlagOnOff_NullSidebarContainer_DirectShowDoesNotCrash) {
-  for (bool flag_on : {false, true}) {
-    SCOPED_TRACE(testing::Message() << "flag_on=" << flag_on);
-
-    base::test::ScopedFeatureList scoped;
-    if (flag_on)
-      scoped.InitAndEnableFeature(features::kMahoUnifiedClickPath);
-    else
-      scoped.InitAndDisableFeature(features::kMahoUnifiedClickPath);
-
-    auto parent = MakeParentWidget();
-    auto controller = MakeController();
-
-    ASSERT_NO_FATAL_FAILURE(
-        CallShowCurrentTab(*controller, parent.get(), "https://example.com"))
-        << "Show() must not crash regardless of flag state or sidebar presence";
-
-    EXPECT_TRUE(controller->IsVisible());
-    ReleaseController(*controller);
-  }
 }
 
 }  // namespace

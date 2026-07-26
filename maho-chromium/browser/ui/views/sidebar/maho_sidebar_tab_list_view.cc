@@ -67,7 +67,6 @@
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/ai/maho_tab_tidy_orchestrator.h"
 #include "maho/browser/maho_core_holder.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -6932,11 +6931,8 @@ void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {
   }
   LOG(INFO) << "[maho-tidy] starting orchestrator";
 
-  if (base::FeatureList::IsEnabled(
-          maho::features::kMahoSidebarActionPlaceholder)) {
-    StartActionProcessing(MahoSidebarProcessingPlaceholderView::Mode::kLoop,
-                          tidy_button_);
-  }
+  StartActionProcessing(MahoSidebarProcessingPlaceholderView::Mode::kLoop,
+                        tidy_button_);
 
   content::WebContents* active_wc =
       browser_->tab_strip_model()
@@ -6961,9 +6957,7 @@ void MahoSidebarTabListView::OnTidyFinished(int folder_count, const std::string&
 
   const bool tidy_success = folder_count > 0 || error_message.empty();
   base::ScopedClosureRunner resolve_on_exit;
-  if (base::FeatureList::IsEnabled(
-          maho::features::kMahoSidebarActionPlaceholder) &&
-      action_placeholder_active_) {
+  if (action_placeholder_active_) {
     resolve_on_exit.ReplaceClosure(base::BindOnce(
         [](base::WeakPtr<MahoSidebarTabListView> self, bool success) {
           if (!self) {
@@ -7081,9 +7075,7 @@ void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
   if (!IsClearCommand(command_id)) {
     return;
   }
-  if (base::FeatureList::IsEnabled(
-          maho::features::kMahoSidebarActionPlaceholder) &&
-      !action_placeholder_active_) {
+  if (!action_placeholder_active_) {
     StartActionProcessing(
         MahoSidebarProcessingPlaceholderView::Mode::kSingleCycle,
         clear_button_);

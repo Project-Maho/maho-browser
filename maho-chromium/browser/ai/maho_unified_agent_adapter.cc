@@ -14,7 +14,6 @@
 #include "base/base64.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -26,7 +25,6 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_executor.h"  // nogncheck
-#include "maho/browser/maho_features.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -977,8 +975,7 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
       maho::ai::FindBrowserActionContract(tool_name_str);
   const bool browser_action_requires_approval =
       browser_action_contract &&
-      maho::ai::RequiresApproval(*browser_action_contract) &&
-      base::FeatureList::IsEnabled(maho::features::kMahoAgentBrowserActions);
+      maho::ai::RequiresApproval(*browser_action_contract);
   if (browser_action_requires_approval) {
     MahoAgentPermissionDecision permission =
         OnAgentPermission(user_data, tool_name, args_json);

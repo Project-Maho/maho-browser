@@ -62,23 +62,17 @@
 // transferred. OnFocus() is NOT called on a context-menu open, so the guard
 // below has no effect on right-click behavior.
 //
-// 6. #include "base/feature_list.h"
-//    #include "maho/browser/maho_features.h"
-//    #include "chrome/browser/ui/views/frame/browser_view.h"
+// 6. #include "chrome/browser/ui/views/frame/browser_view.h"
 //
 // 7. Override LocationBarView::OnFocus():
 //
 //      void LocationBarView::OnFocus() {
-//        if (base::FeatureList::IsEnabled(
-//                maho::features::kMahoUnifiedClickPath)) {
-//          BrowserView* browser_view =
-//              BrowserView::GetBrowserViewForBrowser(browser_);
-//          if (browser_view) {
-//            browser_view->SetFocusToLocationBar(/*is_user_initiated=*/true);
-//            return;
-//          }
+//        BrowserView* browser_view =
+//            BrowserView::GetBrowserViewForBrowser(browser_);
+//        if (browser_view) {
+//          browser_view->SetFocusToLocationBar(/*is_user_initiated=*/true);
+//          return;
 //        }
-//        // Feature disabled or no browser view — fall through to upstream.
 //        LocationBarView_OnFocus(this);
 //      }
 //
@@ -93,5 +87,4 @@
 //    LocationBarView_OnFocus(this).
 //
 //    GN dep added to the location_bar_views source_set in browser/BUILD.gn:
-//      "//maho/browser:maho_features",
 //      "//chrome/browser/ui/tabs:tab_strip",

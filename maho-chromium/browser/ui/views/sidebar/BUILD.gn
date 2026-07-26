@@ -161,7 +161,6 @@ source_set("maho_sidebar_core") {
     "//components/version_info",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
-    "//maho/browser:maho_features",
     "//maho/browser:maho_space_profile_bridge",
     "//maho/browser:maho_tab_id_helper",
     "//maho/browser:maho_tab_tidy_orchestrator",

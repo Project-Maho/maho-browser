@@ -237,7 +237,6 @@ source_set("maho_browser_ai_tools") {
     "ai/maho_browser_tool_registry.h",
   ]
   deps = [
-    ":maho_features",
     "//base",
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
@@ -255,7 +254,6 @@ source_set("maho_browser_tool_executor_unittests") {
   ]
   deps = [
     ":maho_browser_ai_tools",
-    ":maho_features",
     "//base",
     "//base/test:test_support",
     "//chrome/browser/ui/tabs:tab_strip",
@@ -275,7 +273,6 @@ test("maho_browser_tool_executor_test") {
   ]
   deps = [
     ":maho_browser_ai_tools",
-    ":maho_features",
     "//base",
     "//base/test:test_support",
     "//chrome/browser/ui/tabs:tab_strip",
@@ -375,8 +372,6 @@ source_set("maho_location_bar_views") {
   sources = [
     "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
     "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
-    "ui/views/location_bar/maho_dom_screenshot_features.cc",
-    "ui/views/location_bar/maho_dom_screenshot_features.h",
     "ui/views/location_bar/maho_dom_screenshot_handler.cc",
     "ui/views/location_bar/maho_dom_screenshot_handler.h",
     "ui/views/location_bar/maho_dom_screenshot_script_string.h",
@@ -730,16 +725,6 @@ source_set("maho_browser_main_extra_parts") {
     "//skia",
     "//ui/accessibility",
     "//ui/color",
-  ]
-}
-
-source_set("maho_features") {
-  sources = [
-    "maho_features.cc",
-    "maho_features.h",
-  ]
-  public_deps = [
-    "//base",
   ]
 }
 

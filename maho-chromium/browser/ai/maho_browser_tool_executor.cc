@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <utility>
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -18,7 +17,6 @@
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/mcp/maho_mcp_browser_action_handler.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
@@ -186,13 +184,6 @@ void MahoBrowserToolExecutor::Execute(const std::string& tool_name,
   if (!browser_tools_v1_enabled_) {
     std::move(callback).Run(BuildErrorResult(
         tool_name, "Browser tools v1 is disabled."));
-    return;
-  }
-
-  if (MahoBrowserToolRegistry::IsBrowserActionTool(tool_name) &&
-      !base::FeatureList::IsEnabled(maho::features::kMahoAgentBrowserActions)) {
-    std::move(callback).Run(BuildErrorResult(
-        tool_name, "Browser action tools are disabled."));
     return;
   }
 

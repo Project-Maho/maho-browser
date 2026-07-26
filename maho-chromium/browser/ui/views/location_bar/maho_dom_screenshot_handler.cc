@@ -9,7 +9,6 @@
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/containers/span.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "base/json/json_reader.h"
@@ -34,7 +33,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h"
-#include "maho/browser/ui/views/location_bar/maho_dom_screenshot_features.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -59,21 +57,6 @@ std::u16string FilenameForURL(const GURL& url) {
   }
   return base::ASCIIToUTF16(
       base::StrCat({"maho_screenshot_", url.GetHost(), ".png"}));
-}
-
-bool IsScreenshotEditFlagOn() {
-  return base::FeatureList::IsEnabled(
-      maho::features::kMahoScreenshotEditAction);
-}
-
-bool IsImessageShareFlagOn() {
-  return base::FeatureList::IsEnabled(
-      maho::features::kMahoScreenshotImessageShareAction);
-}
-
-bool IsSaveToLibraryFlagOn() {
-  return base::FeatureList::IsEnabled(
-      maho::features::kMahoScreenshotSaveToLibraryAction);
 }
 
 }  // namespace
@@ -371,7 +354,7 @@ void MahoDomScreenshotHandler::ShowResultBubble(
                      weak_factory_.GetWeakPtr()),
   });
 
-  const bool edit_enabled = IsScreenshotEditFlagOn();
+  constexpr bool edit_enabled = true;
   menu.rows.push_back({
       u"Edit", &maho_lucide_icons::kPencilLineIcon, edit_enabled, false,
       edit_enabled
@@ -381,7 +364,7 @@ void MahoDomScreenshotHandler::ShowResultBubble(
   });
 
 #if BUILDFLAG(IS_MAC)
-  const bool imessage_enabled = IsImessageShareFlagOn();
+  constexpr bool imessage_enabled = true;
 #else
   const bool imessage_enabled = false;
 #endif
@@ -394,7 +377,7 @@ void MahoDomScreenshotHandler::ShowResultBubble(
           : base::OnceClosure(),
   });
 
-  const bool save_to_library_enabled = IsSaveToLibraryFlagOn();
+  constexpr bool save_to_library_enabled = true;
   menu.rows.push_back({
       u"Save to Library", &maho_lucide_icons::kArrowDownToLineIcon, save_to_library_enabled,
       false,

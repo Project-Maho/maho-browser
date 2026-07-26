@@ -2,7 +2,6 @@
 
 #include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
-#include "maho/browser/maho_features.h"
 
 #include <algorithm>
 #include <memory>
@@ -393,7 +392,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
 
   bool use_vibrancy = false;
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-  use_vibrancy = base::FeatureList::IsEnabled(features::kMahoCommandPaletteVibrancy);
+  use_vibrancy = true;
 #endif
 
   if (!use_vibrancy) {

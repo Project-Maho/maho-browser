@@ -102,7 +102,7 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   void UnregisterParentEscAccelerator();
 
   friend class MahoCommandOverlayControllerTest;
-  friend class MahoUnifiedClickPathBehaviorTest;
+  friend class MahoLocationBarCommandOverlayBehaviorTest;
 
   raw_ptr<Browser> browser_;
   std::unique_ptr<views::Widget> widget_;

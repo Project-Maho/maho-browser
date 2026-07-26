@@ -386,9 +386,6 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "new_incognito") {
     chrome::NewIncognitoWindow(browser->profile());
   } else if (action_id == "focus_url_bar") {
-    // When kMahoUnifiedClickPath is enabled, SetFocusToLocationBar(true) in
-    // the chromium_src overlay intercepts this and routes to
-    // ShowMahoCommandOverlayForCurrentTab() instead of the upstream omnibox.
     chrome::FocusLocationBar(browser);
   } else if (action_id == "add_split_view") {
     MahoSplitViewController(browser).AddSplit();

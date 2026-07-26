@@ -4,18 +4,12 @@
 
 #import <AppKit/AppKit.h>
 
-#include "base/feature_list.h"
 #include "base/logging.h"
-#include "maho/browser/maho_features.h"
 #include "ui/views/widget/widget.h"
 
 namespace maho {
 
 void ApplyVibrancyToCommandOverlay(views::Widget* widget) {
-  if (!base::FeatureList::IsEnabled(features::kMahoCommandPaletteVibrancy)) {
-    return;
-  }
-
   if ([[NSWorkspace sharedWorkspace]
           accessibilityDisplayShouldReduceTransparency]) {
     return;

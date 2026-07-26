@@ -13,7 +13,6 @@
 #include "components/split_tabs/split_tab_id.h"
 #include "components/tabs/public/split_tab_data.h"
 #include "components/split_tabs/split_tab_visual_data.h"
-#include "maho/browser/maho_features.h"
 #include "ui/base/ui_base_features.h"
 
 #include "ui/compositor/layer.h"
@@ -1014,53 +1013,55 @@ bool MahoSidebarView::ActivateSpaceAndTab(Browser* browser, const std::string& s
     return false;
   }
 
-  if (base::FeatureList::IsEnabled(maho::features::kMahoSpaceSwitchActivatesTab)) {
-    auto* core = maho::GetCore();
-    if (core) {
-      char* target_tab_raw = maho_core_get_activation_target_for_space(core, space_id.c_str());
-      if (target_tab_raw) {
-        std::string target_tab_id(target_tab_raw);
-        maho_core_free_string(target_tab_raw);
+  auto* core = maho::GetCore();
+  if (core) {
+    char* target_tab_raw =
+        maho_core_get_activation_target_for_space(core, space_id.c_str());
+    if (target_tab_raw) {
+      std::string target_tab_id(target_tab_raw);
+      maho_core_free_string(target_tab_raw);
 
-        if (!target_tab_id.empty()) {
-          // Implement split-view teardown policy (T5)
-          MahoSplitViewController split_controller(browser);
-          if (split_controller.IsSplitActive()) {
-            TabStripModel* model = browser->tab_strip_model();
-            if (model) {
-              int active_index = model->active_index();
-              bool target_is_in_split = false;
-              if (active_index != TabStripModel::kNoTab) {
-                std::optional<split_tabs::SplitTabId> split_id = model->GetSplitForTab(active_index);
-                if (split_id.has_value()) {
-                  if (auto* split_data = model->GetSplitData(split_id.value())) {
-                    for (auto* split_tab : split_data->ListTabs()) {
-                      if (split_tab) {
-                        auto* helper = MahoTabIdHelper::FromWebContents(split_tab->GetContents());
-                        if (helper && helper->stable_tab_id() == target_tab_id) {
-                          target_is_in_split = true;
-                          break;
-                        }
+      if (!target_tab_id.empty()) {
+        // Implement split-view teardown policy (T5)
+        MahoSplitViewController split_controller(browser);
+        if (split_controller.IsSplitActive()) {
+          TabStripModel* model = browser->tab_strip_model();
+          if (model) {
+            int active_index = model->active_index();
+            bool target_is_in_split = false;
+            if (active_index != TabStripModel::kNoTab) {
+              std::optional<split_tabs::SplitTabId> split_id =
+                  model->GetSplitForTab(active_index);
+              if (split_id.has_value()) {
+                if (auto* split_data = model->GetSplitData(split_id.value())) {
+                  for (auto* split_tab : split_data->ListTabs()) {
+                    if (split_tab) {
+                      auto* helper = MahoTabIdHelper::FromWebContents(
+                          split_tab->GetContents());
+                      if (helper && helper->stable_tab_id() == target_tab_id) {
+                        target_is_in_split = true;
+                        break;
                       }
                     }
                   }
                 }
               }
-              if (!target_is_in_split) {
-                split_controller.RemoveSplit();
-              }
+            }
+            if (!target_is_in_split) {
+              split_controller.RemoveSplit();
             }
           }
+        }
 
-          // Activate the target tab by ID
-          BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-          if (browser_view && browser_view->maho_sidebar_container()) {
-            auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
-                browser_view->maho_sidebar_container());
-            if (auto* sidebar = static_cast<MahoSidebarView*>(
-                    sidebar_container->sidebar_view())) {
-              sidebar->ActivateTabById(target_tab_id);
-            }
+        // Activate the target tab by ID
+        BrowserView* browser_view =
+            BrowserView::GetBrowserViewForBrowser(browser);
+        if (browser_view && browser_view->maho_sidebar_container()) {
+          auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
+              browser_view->maho_sidebar_container());
+          if (auto* sidebar = static_cast<MahoSidebarView*>(
+                  sidebar_container->sidebar_view())) {
+            sidebar->ActivateTabById(target_tab_id);
           }
         }
       }

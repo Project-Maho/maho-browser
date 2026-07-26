@@ -4,10 +4,8 @@
 
 #include <utility>
 
-#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
-#include "maho/browser/maho_features.h"
 
 namespace {
 
@@ -223,15 +221,6 @@ base::DictValue BuildApprovalMetadata(
   return metadata;
 }
 
-bool BrowserActionsFeatureEnabled() {
-  return base::FeatureList::IsEnabled(maho::features::kMahoAgentBrowserActions);
-}
-
-bool IsVisibleSchema(const MahoBrowserToolRegistry::ToolSchema& schema,
-                     bool browser_actions_enabled) {
-  return !schema.browser_action_contract || browser_actions_enabled;
-}
-
 std::vector<MahoBrowserToolRegistry::ToolSchema> BuildPhase1ToolSchemas() {
   std::vector<MahoBrowserToolRegistry::ToolSchema> tools;
   tools.push_back({
@@ -288,10 +277,8 @@ MahoBrowserToolRegistry::GetPhase1ToolSchemas() {
 // static
 const MahoBrowserToolRegistry::ToolSchema* MahoBrowserToolRegistry::FindToolSchema(
     const std::string& tool_name) {
-  const bool browser_actions_enabled = BrowserActionsFeatureEnabled();
   for (const ToolSchema& schema : GetPhase1ToolSchemas()) {
-    if (schema.name == tool_name &&
-        IsVisibleSchema(schema, browser_actions_enabled)) {
+    if (schema.name == tool_name) {
       return &schema;
     }
   }
@@ -305,12 +292,8 @@ base::ListValue MahoBrowserToolRegistry::SerializePhase1ToolSchemas(
     return base::ListValue();
   }
 
-  const bool browser_actions_enabled = BrowserActionsFeatureEnabled();
   base::ListValue tools;
   for (const ToolSchema& schema : GetPhase1ToolSchemas()) {
-    if (!IsVisibleSchema(schema, browser_actions_enabled)) {
-      continue;
-    }
     base::DictValue tool;
     tool.Set("name", schema.name);
     tool.Set("description", schema.description);

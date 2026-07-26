@@ -3,10 +3,8 @@
 #include <set>
 #include <string>
 
-#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
-#include "maho/browser/maho_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -46,10 +44,7 @@ const base::DictValue* FindSerializedTool(const base::ListValue& tools,
 }
 
 TEST(MahoBrowserToolRegistryTest,
-     DefaultFlagAdvertisesReadOnlyToolsAndNoVaultTools) {
-  base::test::ScopedFeatureList scoped_features;
-  scoped_features.InitAndDisableFeature(maho::features::kMahoAgentBrowserActions);
-
+     AdvertisesBrowserActionContractsAndNoVaultTools) {
   base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
   std::set<std::string> names = ToolNames(tools);
 
@@ -59,16 +54,13 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(names.count("get_active_tab"), 1u);
   EXPECT_EQ(names.count("search_in_page"), 1u);
   EXPECT_EQ(names.count("extract_structured_page_context"), 1u);
-  EXPECT_EQ(names.count("browser_click"), 0u);
-  EXPECT_EQ(names.count("browser_navigate"), 0u);
-  EXPECT_EQ(names.count("browser_accessibility_snapshot"), 0u);
+  EXPECT_EQ(names.count("browser_click"), 1u);
+  EXPECT_EQ(names.count("browser_navigate"), 1u);
+  EXPECT_EQ(names.count("browser_accessibility_snapshot"), 1u);
 }
 
 TEST(MahoBrowserToolRegistryTest,
-     EnabledFlagAdvertisesCanonicalBrowserActionContracts) {
-  base::test::ScopedFeatureList scoped_features;
-  scoped_features.InitAndEnableFeature(maho::features::kMahoAgentBrowserActions);
-
+      SerializedBrowserActionsExposeCanonicalContracts) {
   base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
   std::set<std::string> names = ToolNames(tools);
 
@@ -99,9 +91,6 @@ TEST(MahoBrowserToolRegistryTest,
 }
 
 TEST(MahoBrowserToolRegistryTest, DisabledRegistryReturnsZeroSchemas) {
-  base::test::ScopedFeatureList scoped_features;
-  scoped_features.InitAndEnableFeature(maho::features::kMahoAgentBrowserActions);
-
   base::ListValue tools =
       MahoBrowserToolRegistry::SerializePhase1ToolSchemas(false);
 

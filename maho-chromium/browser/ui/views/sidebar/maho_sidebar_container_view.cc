@@ -10,9 +10,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "components/prefs/pref_service.h"
 #include "base/time/time.h"
-#include "base/feature_list.h"
 #include "build/build_config.h"
-#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
@@ -43,12 +41,9 @@ namespace {
 
 // Applies a translucent DWM Acrylic backdrop to the browser window on Windows
 // 11 22H2+ so the alpha-encoded sidebar background reveals it (macOS gets
-// passive NSWindow vibrancy). No-op elsewhere and when the flag is disabled.
+// passive NSWindow vibrancy). No-op elsewhere.
 void ApplySidebarWindowVibrancy(views::Widget* widget) {
 #if BUILDFLAG(IS_WIN)
-  if (!base::FeatureList::IsEnabled(features::kMahoSidebarVibrancy)) {
-    return;
-  }
   if (base::win::GetVersion() < base::win::Version::WIN11_22H2) {
     return;
   }

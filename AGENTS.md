@@ -76,6 +76,7 @@ maho-workspace/
 - No direct FFI/business-logic mixing in `maho-ffi`
 - **NEVER delete `.build.lock`** — see BUILD LOCK below
 - **빌드 실패 시 GN 파일 강제 수정 금지** — 빌드 (특히 `build_maho.py`) 가 GN regen 단계 또는 그 이후에서 실패하면 즉시 중단하고 사용자에게 보고. `chromium/src/**/BUILD.gn`, `maho-chromium/**/BUILD.gn`, `chromium/src/chrome/test/BUILD.gn` 등의 GN 파일을 우회 fix 목적으로 직접 수정하지 말 것. 다른 세션의 미완 작업이나 working tree dirty state 인 경우가 많고, 임의 cleanup 은 추후 충돌·revert·데이터 손실을 부른다. fix 가 필요해 보여도 **사용자 명시 승인 없이는 GN 편집·삭제 금지**.
+- **Chromium/GN/build feature flags 또는 build flags 추가·변경 전에는 반드시 사용자 명시 승인을 받을 것.**
 
 ## BUILD LOCK — `.build.lock`
 
