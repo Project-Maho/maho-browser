@@ -33,6 +33,12 @@
   E_CPONLY(kMahoColorTitlebarGlass) \
   E_CPONLY(kMahoColorTitlebarEdge) \
   E_CPONLY(kMahoColorTitlebarControlTint) \
+  E_CPONLY(kMahoColorMiniFrameWash) \
+  E_CPONLY(kMahoColorMiniFrameEdge) \
+  E_CPONLY(kMahoColorMiniControlBackground) \
+  E_CPONLY(kMahoColorMiniControlBorder) \
+  E_CPONLY(kMahoColorMiniPrimaryText) \
+  E_CPONLY(kMahoColorMiniSecondaryText) \
   /* Canvas */ \
   E_CPONLY(kMahoColorCanvasAccent) \
   E_CPONLY(kMahoColorCanvasInnerGlow) \

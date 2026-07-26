@@ -27,3 +27,11 @@ pub enum DefaultLinkBehavior {
     MostRecentSpace,
     SpecificSpace { space_id: SpaceId },
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "type", content = "space_id")]
+pub enum LinkDestination {
+    Normal,
+    MahoMini,
+    Space(SpaceId),
+}

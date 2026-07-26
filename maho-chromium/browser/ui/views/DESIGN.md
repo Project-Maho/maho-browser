@@ -61,6 +61,26 @@ Accessibility guidelines:
 * **State Reset:** Window bounds, maximize/restore, fullscreen, removal, and destruction reset the caption controls to hidden and stop any hover monitor/timer.
 * **Platform Scope:** macOS traffic lights and Linux frame behavior are unchanged.
 
+## Maho Mini Top Bar
+
+### Layout Contract
+* **Reference baseline:** Verify against fresh captures of the recovered Arc references at a 600×760dp Mini window. The default top bar is 46dp tall across the Views top bar, popup content offset/minimum height, and macOS native titlebar override.
+* **Three-zone composition:** Reserve 8dp as the outer inset and 60dp for native macOS traffic lights. The left zone is the compact active-Space chip within the integrated chrome surface. The focal zone is the full-window-centered editable hostname. The right zone is the copy icon inside that same surface plus the separate promote control.
+* **Integrated chrome surface:** At the 600dp default width, the continuous chrome surface is approximately `x=74dp`, `y=7dp`, `w=302dp`, `h=32dp`, with a `10dp` corner radius. It contains the Space chip, editable address field, and copy control as one bounded surface, not detached pills.
+* **Material:** The integrated surface is stable dark plum/purple low-alpha glass with a restrained edge and highlight. This material is independent of the active-Space hue. Only the Space marker uses the active Space color. It is not neutral gray, and it must not become a full-width saturated Space-tinted titlebar.
+* **Space chip:** Keep the current Space compact and left-aligned inside the integrated surface, with its label and marker intact. The marker alone may use the active Space color. The chip backing, border, and label remain part of the stable glass material.
+* **Centered editable hostname:** The address field remains editable, accepts normal address-field pointer and keyboard interaction, and displays its hostname centered against the full 600dp window width within 1dp. Preserve this full-window centering while allowing the field's internal available width to shrink before it overlaps the Space chip, copy control, or promote control.
+* **Copy control:** Place the link-copy icon inside the right end of the integrated chrome surface. It is a distinct compact control within the surface, not a standalone pill between the address field and promote control.
+* **Promote control:** Place a separate compact segmented control at approximately `x=382dp`, `y=9dp`, `w=210dp`, `h=28dp`, with an `8dp` corner radius. Its primary segment names the destination, for example `Open in Personal`, and exposes the `⌘O` hint. Its trailing dropdown segment is `30dp` wide with a centered `1×18dp` divider/caret slot, opens the Space picker, and remains visually and hit-test distinct from the primary promote action.
+* **Responsive priorities:** Preserve, in order, traffic-light reservation, the active-Space marker and readable identity, an editable centered hostname, the copy control, and the primary promote action. Under horizontal pressure, tighten internal gaps and labels first, then compact the promote segments while retaining its dropdown affordance. Never let controls overlap or replace the hostname with a non-editable label.
+
+### Component and Accessibility Contract
+* Space, address, copy, and promote controls use dedicated Mini color IDs: `kMahoColorMiniFrameWash`, `kMahoColorMiniFrameEdge`, `kMahoColorMiniControlBackground`, `kMahoColorMiniControlBorder`, `kMahoColorMiniPrimaryText`, and `kMahoColorMiniSecondaryText`. The Mini frame and integrated surface tokens resolve to the stable dark-plum/purple glass described above, not a neutral-gray palette and not an active-Space tint.
+* Mini top-bar paint and control surfaces must not use `kMahoColorTitlebarGlass`, `kMahoColorCardBackground`, or `kMahoColorTitlebarEdge`, because those broad shell tokens may inherit active Space tint.
+* Preserve explicit accessible names: the Space chip exposes the current Space name, the editable address field is named `Address`, the copy control is named `Copy link`, the promote primary action is named `Open in <Space name>`, and the trailing selector is named `Choose Space`. The selector remains separately focusable and operable from the primary promote action.
+* The hostname and all labels painted over translucent surfaces keep subpixel rendering disabled. Focus indicators must remain visible against the dark glass, and every interaction remains keyboard-operable.
+* Completion requires a fresh 600×760dp capture comparison against `maho-mini-reference-arc.png`, `maho-mini-reference-design.png`, `maho-mini-reference-comparison.png`, and `maho-mini-reference-later.png` before visual parity is claimed.
+
 ## Sidebar Ellipsis Spark Action Row
 
 ### Overview

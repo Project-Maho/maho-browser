@@ -111,6 +111,24 @@ void AddChromeSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorTitlebarControlTint] = {dark_mode
       ? SkColorSetARGB(255, 231, 231, 239)
       : SkColorSetARGB(255, 67, 73, 99)};
+  mixer[kMahoColorMiniFrameWash] = {dark_mode
+      ? SkColorSetARGB(224, 42, 25, 47)
+      : SkColorSetARGB(24, 255, 255, 255)};
+  mixer[kMahoColorMiniFrameEdge] = {dark_mode
+      ? SkColorSetARGB(46, 214, 177, 224)
+      : SkColorSetARGB(30, 0, 0, 0)};
+  mixer[kMahoColorMiniControlBackground] = {dark_mode
+      ? SkColorSetARGB(196, 58, 39, 68)
+      : SkColorSetARGB(222, 255, 255, 255)};
+  mixer[kMahoColorMiniControlBorder] = {dark_mode
+      ? SkColorSetARGB(54, 225, 195, 232)
+      : SkColorSetARGB(46, 0, 0, 0)};
+  mixer[kMahoColorMiniPrimaryText] = {dark_mode
+      ? SkColorSetARGB(255, 245, 241, 247)
+      : SkColorSetARGB(255, 38, 40, 45)};
+  mixer[kMahoColorMiniSecondaryText] = {dark_mode
+      ? SkColorSetARGB(255, 196, 181, 202)
+      : SkColorSetARGB(255, 96, 100, 108)};
 }
 
 void AddCanvasColors(ui::ColorMixer& mixer, bool dark_mode) {

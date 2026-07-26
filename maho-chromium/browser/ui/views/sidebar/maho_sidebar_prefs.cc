@@ -18,6 +18,14 @@ const char kFavoritesDragHintDismissed[] =
     "maho.sidebar.favorites_drag_hint_dismissed";
 const char kLiveFolders[] = "maho.live_folders";
 const char kSpacesFullViewport[] = "maho.spaces.full_viewport";
+const char kMahoMiniGlobalShortcutEnabled[] =
+    "maho.maho_mini.global_shortcut_enabled";
+const char kMahoMiniClickOverrideEnabled[] =
+    "maho.maho_mini.click_override_enabled";
+const char kOpenExternalLinksInMahoMini[] =
+    "maho.maho_mini.open_external_links_in_maho_mini";
+const char kMahoMiniWindowWidth[] = "maho.maho_mini.window_width";
+const char kMahoMiniWindowHeight[] = "maho.maho_mini.window_height";
 
 int ClampSidebarWidthForLayout(int width) {
   if (width <= sidebar_layout::kLegacyRailWidthResetThresholdDp) {
@@ -59,6 +67,11 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kFavoritesDragHintDismissed, false);
   registry->RegisterListPref(kLiveFolders);
   registry->RegisterBooleanPref(kSpacesFullViewport, true);
+  registry->RegisterBooleanPref(kMahoMiniGlobalShortcutEnabled, true);
+  registry->RegisterBooleanPref(kMahoMiniClickOverrideEnabled, true);
+  registry->RegisterBooleanPref(kOpenExternalLinksInMahoMini, false);
+  registry->RegisterIntegerPref(kMahoMiniWindowWidth, 0);
+  registry->RegisterIntegerPref(kMahoMiniWindowHeight, 0);
 }
 
 void MigrateFromLegacyVisiblePref(PrefService* prefs) {

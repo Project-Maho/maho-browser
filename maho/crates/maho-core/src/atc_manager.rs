@@ -1,4 +1,4 @@
-use maho_types::air_traffic::{DefaultLinkBehavior, MatchType, TrafficRule};
+use maho_types::air_traffic::{DefaultLinkBehavior, LinkDestination, MatchType, TrafficRule};
 use maho_types::identifiers::{SpaceId, TabId};
 
 pub struct TabInfo {
@@ -23,6 +23,7 @@ pub struct ATCManager {
     rules: Vec<ATCRule>,
     traffic_rules: Vec<TrafficRule>,
     default_link_behavior: DefaultLinkBehavior,
+    open_external_links_in_maho_mini: bool,
 }
 
 impl ATCManager {
@@ -31,6 +32,7 @@ impl ATCManager {
             rules: Vec::new(),
             traffic_rules: Vec::new(),
             default_link_behavior: DefaultLinkBehavior::CurrentSpace,
+            open_external_links_in_maho_mini: false,
         }
     }
 
@@ -153,6 +155,38 @@ impl ATCManager {
         &self.default_link_behavior
     }
 
+    pub fn set_open_external_links_in_maho_mini(&mut self, enabled: bool) {
+        self.open_external_links_in_maho_mini = enabled;
+    }
+
+    pub fn get_open_external_links_in_maho_mini(&self) -> bool {
+        self.open_external_links_in_maho_mini
+    }
+
+    pub fn decide_link_destination(
+        &self,
+        url: &str,
+        is_external: bool,
+        space_rules: &[(SpaceId, Vec<maho_types::space::ATCRule>)],
+    ) -> LinkDestination {
+        if let Some(space_id) = self.route_url_by_space_rules(url, space_rules) {
+            LinkDestination::Space(space_id)
+        } else if let Some(space_id) = self.route_url(url) {
+            LinkDestination::Space(space_id)
+        } else if is_external && self.open_external_links_in_maho_mini {
+            LinkDestination::MahoMini
+        } else {
+            match &self.default_link_behavior {
+                DefaultLinkBehavior::CurrentSpace | DefaultLinkBehavior::MostRecentSpace => {
+                    LinkDestination::Normal
+                }
+                DefaultLinkBehavior::SpecificSpace { space_id } => {
+                    LinkDestination::Space(space_id.clone())
+                }
+            }
+        }
+    }
+
     pub fn route_url(&self, url: &str) -> Option<SpaceId> {
         for rule in &self.traffic_rules {
             if !rule.enabled {
@@ -209,5 +243,24 @@ impl ATCManager {
 impl Default for ATCManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_maho_mini_preference_wins_over_default_space() {
+        let mut manager = ATCManager::new();
+        manager.set_open_external_links_in_maho_mini(true);
+        manager.set_default_link_behavior(DefaultLinkBehavior::SpecificSpace {
+            space_id: SpaceId::new("space-default"),
+        });
+
+        assert_eq!(
+            manager.decide_link_destination("https://example.com", true, &[]),
+            LinkDestination::MahoMini
+        );
     }
 }

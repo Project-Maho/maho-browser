@@ -105,4 +105,9 @@ inline int MoveToSpaceIndex(int id) {
   return id - IDC_MAHO_TAB_MOVE_SPACE_BASE;
 }
 
+// Link context menu: 57300-57304
+enum MahoLinkContextMenuCommand {
+  IDC_MAHO_LINK_OPEN_MAHO_MINI = 57300,
+};
+
 #endif  // MAHO_CHROMIUM_BROWSER_UI_CONTEXT_MENU_MAHO_CONTEXT_MENU_IDS_H_
