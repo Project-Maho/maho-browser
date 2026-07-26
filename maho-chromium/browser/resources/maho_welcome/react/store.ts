@@ -11,13 +11,25 @@ import {
   IMPORT_FAVICONS,
 } from '../maho_welcome.mojom-webui.js';
 import type {BrowserProfile, EssentialSite, SearchEngineInfo} from '../maho_welcome.mojom-webui.js';
+import type {
+  PasswordProviderKind,
+  VaultOperationResult,
+} from '../../maho_settings/maho_settings.mojom-webui.js';
 import {notifyListeners} from '../../maho_common/react/store_utils.js';
 import type {Listener} from '../../maho_common/react/store_utils.js';
 import {
   createInitialState,
+  VAULT_LOCK_STATE,
   WelcomePage,
 } from './types.js';
-import type {AppearanceMode, ImportState, ImportStage, WelcomeState, AuthState} from './types.js';
+import type {
+  AppearanceMode,
+  AuthState,
+  ImportStage,
+  ImportState,
+  PasswordSetupState,
+  WelcomeState,
+} from './types.js';
 
 interface MutableWelcomeState {
   currentPage: WelcomePage;
@@ -34,6 +46,7 @@ interface MutableWelcomeState {
   essentialSites: EssentialSite[];
   selectedEssentials: Set<string>;
   auth: AuthState;
+  passwordSetup: PasswordSetupState;
   selectedTheme: string | null;
   localizedStrings: Map<string, string>;
   isLocalDev: boolean;
@@ -166,6 +179,10 @@ export class MahoWelcomeStore {
       return;
     }
 
+    if (this.state.currentPage === WelcomePage.PasswordSetup) {
+      return;
+    }
+
     this.patch(draft => {
       if (draft.currentPage < WelcomePage.Completion) {
         draft.direction = 'forward';
@@ -221,6 +238,98 @@ export class MahoWelcomeStore {
     this.patch(draft => {
       draft.setAsDefaultRequested = value;
     });
+  }
+
+  async refreshPasswordSetup(): Promise<boolean> {
+    this.patch(draft => {
+      draft.passwordSetup = {
+        ...draft.passwordSetup,
+        status: 'loading',
+        errorMessage: '',
+      };
+    });
+
+    try {
+      const [{options}, {status}, {result}] = await Promise.all([
+        this.pageHandler.getPasswordProviderOptions(),
+        this.pageHandler.getPasswordProviderStatus(),
+        this.pageHandler.getVaultStatus(),
+      ]);
+      if (!result.success || !result.status) {
+        this.setPasswordSetupError(
+            result.errorMessage || 'Failed to load the local Vault status.');
+        return false;
+      }
+
+      this.patch(draft => {
+        draft.passwordSetup = {
+          status: 'ready',
+          errorMessage: '',
+          providerOptions: [...options],
+          providerStatus: status,
+          vaultStatus: result.status,
+        };
+      });
+      return true;
+    } catch (error) {
+      this.setPasswordSetupError(
+          error instanceof Error ? error.message : 'Failed to load password setup.');
+      return false;
+    }
+  }
+
+  async setPasswordProvider(provider: PasswordProviderKind): Promise<boolean> {
+    this.setPasswordSetupSubmitting();
+    try {
+      const {success} = await this.pageHandler.setPasswordProvider(provider);
+      if (!success) {
+        this.setPasswordSetupError('Failed to save the password provider.');
+        return false;
+      }
+      return this.refreshPasswordSetup();
+    } catch (error) {
+      this.setPasswordSetupError(
+          error instanceof Error ? error.message : 'Failed to save the password provider.');
+      return false;
+    }
+  }
+
+  async initializeVault(
+      masterPassphrase: string, recoverySecret: string): Promise<boolean> {
+    return this.runVaultOperation(
+        () => this.pageHandler.initializeVault(masterPassphrase, recoverySecret),
+        'Vault initialization failed.');
+  }
+
+  async unlockVault(masterPassphrase: string): Promise<boolean> {
+    return this.runVaultOperation(
+        () => this.pageHandler.unlockVault(masterPassphrase),
+        'Vault unlock failed.');
+  }
+
+  async advanceFromPasswordSetup(provider: PasswordProviderKind): Promise<boolean> {
+    if (this.state.currentPage !== WelcomePage.PasswordSetup) {
+      return false;
+    }
+    if (!await this.setPasswordProvider(provider)) {
+      return false;
+    }
+    if (this.state.passwordSetup.vaultStatus?.lockState !==
+        VAULT_LOCK_STATE.Unlocked) {
+      this.setPasswordSetupError('Unlock your local Vault to continue.');
+      return false;
+    }
+
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.Completion;
+      draft.direction = 'forward';
+      draft.passwordSetup = {
+        ...draft.passwordSetup,
+        status: 'ready',
+        errorMessage: '',
+      };
+    });
+    return true;
   }
 
   setAppearance(mode: AppearanceMode): void {
@@ -397,6 +506,61 @@ export class MahoWelcomeStore {
     this.pageHandler.devSkipOnboarding();
   }
 
+  private setPasswordSetupSubmitting(): void {
+    this.patch(draft => {
+      draft.passwordSetup = {
+        ...draft.passwordSetup,
+        status: 'submitting',
+        errorMessage: '',
+      };
+    });
+  }
+
+  private setPasswordSetupError(errorMessage: string): void {
+    this.patch(draft => {
+      draft.passwordSetup = {
+        ...draft.passwordSetup,
+        status: 'error',
+        errorMessage,
+      };
+    });
+  }
+
+  private async runVaultOperation(
+      operation: () => Promise<{result: VaultOperationResult}>,
+      fallbackError: string): Promise<boolean> {
+    this.setPasswordSetupSubmitting();
+    try {
+      const {result} = await operation();
+      if (!result.success ||
+          result.status?.lockState !== VAULT_LOCK_STATE.Unlocked) {
+        this.patch(draft => {
+          draft.passwordSetup = {
+            ...draft.passwordSetup,
+            status: 'error',
+            errorMessage: result.errorMessage || fallbackError,
+            vaultStatus: result.status,
+          };
+        });
+        return false;
+      }
+
+      this.patch(draft => {
+        draft.passwordSetup = {
+          ...draft.passwordSetup,
+          status: 'ready',
+          errorMessage: '',
+          vaultStatus: result.status,
+        };
+      });
+      return true;
+    } catch (error) {
+      this.setPasswordSetupError(
+          error instanceof Error ? error.message : fallbackError);
+      return false;
+    }
+  }
+
   skip(): void {
     this.applyDefaultBrowserChoice();
     this.pageHandler.finishOnboarding();
@@ -430,6 +594,7 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    passwordSetup: state.passwordSetup,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
     isLocalDev: state.isLocalDev,
@@ -452,6 +617,7 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    passwordSetup: state.passwordSetup,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
     isLocalDev: state.isLocalDev,

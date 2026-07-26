@@ -10,6 +10,7 @@ tailwind_css("build_tailwind") {
   output = "$target_gen_dir/app.generated.css"
   sources = [
     "../maho_common/react/theme/tokens.css",
+    "../maho_common/react/ui/alert.tsx",
     "../maho_common/react/ui/button.tsx",
     "../maho_common/react/ui/card.tsx",
     "../maho_common/react/ui/checkbox.tsx",
@@ -22,6 +23,8 @@ tailwind_css("build_tailwind") {
     "react/pages/completion.tsx",
     "react/pages/essentials.tsx",
     "react/pages/import-data.tsx",
+    "react/pages/password-setup.tsx",
+    "react/pages/password-setup-fields.tsx",
     "react/pages/search-engine.tsx",
     "react/pages/space-theme.tsx",
     "react/pages/welcome-splash.tsx",
@@ -36,6 +39,7 @@ action("bundle_react") {
     "../maho_common/react/icons/lucide.ts",
     "../maho_common/react/lib/utils.ts",
     "../maho_common/react/store_utils.ts",
+    "../maho_common/react/ui/alert.tsx",
     "../maho_common/react/ui/button.tsx",
     "../maho_common/react/ui/card.tsx",
     "../maho_common/react/ui/checkbox.tsx",
@@ -48,6 +52,8 @@ action("bundle_react") {
     "react/pages/welcome-splash.tsx",
     "react/pages/appearance.tsx",
     "react/pages/import-data.tsx",
+    "react/pages/password-setup.tsx",
+    "react/pages/password-setup-fields.tsx",
     "react/pages/search-engine.tsx",
     "react/pages/essentials.tsx",
     "react/pages/space-theme.tsx",
@@ -108,9 +114,14 @@ build_webui("build") {
 
   webui_context_type = "trusted"
 
-  mojo_files_deps =
-      [ "//maho/browser/ui/webui/maho_welcome:mojo_bindings_ts__generator" ]
-  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_welcome/maho_welcome.mojom-webui.ts" ]
+  mojo_files_deps = [
+    "//maho/browser/ui/webui/maho_settings:mojo_bindings_ts__generator",
+    "//maho/browser/ui/webui/maho_welcome:mojo_bindings_ts__generator",
+  ]
+  mojo_files = [
+    "$root_gen_dir/maho/browser/ui/webui/maho_settings/maho_settings.mojom-webui.ts",
+    "$root_gen_dir/maho/browser/ui/webui/maho_welcome/maho_welcome.mojom-webui.ts",
+  ]
 
   extra_grdp_deps = [ ":bundle_grdp" ]
   extra_grdp_files = [ "$target_gen_dir/maho_welcome_bundle.grdp" ]

@@ -2,6 +2,8 @@
 
 module maho_welcome.mojom;
 
+import "maho/browser/ui/webui/maho_settings/maho_settings.mojom";
+
 // Bit-mask values MUST match Rust `ImportServices` constants in
 // maho/crates/maho-import/src/lib.rs — both sides treat the
 // `items` parameter of `StartImport` as a raw u32 with no translation,
@@ -83,6 +85,14 @@ interface PageHandler {
   SignupFromWelcome(string email, string password, string display_name) => (bool ok, string error_message);
   GetRelayAccountStatusFromWelcome() => (bool signed_in, string tier, string subscription_status, bool welcome_completed, bool has_stored_session, bool is_local_dev);
 
+  // Password setup
+  GetPasswordProviderOptions() => (array<maho_settings.mojom.PasswordProviderOption> options);
+  GetPasswordProviderStatus() => (maho_settings.mojom.PasswordProviderStatus status);
+  SetPasswordProvider(maho_settings.mojom.PasswordProviderKind provider) => (bool success);
+  GetVaultStatus() => (maho_settings.mojom.VaultOperationResult result);
+  InitializeVault(string master_passphrase, string recovery_secret) => (maho_settings.mojom.VaultOperationResult result);
+  UnlockVault(string master_passphrase) => (maho_settings.mojom.VaultOperationResult result);
+
   // Completion / FDA
   FinishOnboarding();
   // Local-dev only: finish onboarding without a valid relay session. The
@@ -95,4 +105,3 @@ interface Page {
   // Import progress updates
   OnImportProgress(uint32 type, int32 items_imported, string error, bool complete);
 };
-

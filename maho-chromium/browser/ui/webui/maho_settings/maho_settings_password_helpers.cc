@@ -21,6 +21,7 @@
 #include "base/values.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
+#include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -92,6 +93,11 @@ std::string VaultProviderToken(
     case maho_settings::mojom::PasswordProviderKind::kMahoNative:
       return "maho_native";
   }
+}
+
+bool IsApprovedRawPasswordProvider(const std::string& provider) {
+  return provider == "maho_native" || provider == "bitwarden" ||
+         provider == "onepassword";
 }
 
 std::string VaultItemKindToken(maho_settings::mojom::VaultItemKind kind) {
@@ -787,6 +793,84 @@ MakePasswordProviderCapabilities(
   return capabilities;
 }
 
+std::vector<maho_settings::mojom::PasswordProviderOptionPtr>
+BuildPasswordProviderOptions() {
+  std::vector<maho_settings::mojom::PasswordProviderOptionPtr> options;
+  const std::string registry_json = maho::core::GetPasswordProviderRegistry();
+  const std::optional<base::Value> parsed =
+      base::JSONReader::Read(registry_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return options;
+  }
+
+  for (const base::Value& item : parsed->GetList()) {
+    const base::DictValue* provider = item.GetIfDict();
+    if (!provider) {
+      continue;
+    }
+    const std::string* provider_id = provider->FindString("providerId");
+    if (!provider_id) {
+      continue;
+    }
+    const std::string* display_name = provider->FindString("displayName");
+    const std::string* description = provider->FindString("description");
+
+    auto option = maho_settings::mojom::PasswordProviderOption::New();
+    option->provider = ToPasswordProviderKind(*provider_id);
+    if (display_name) {
+      option->display_name = *display_name;
+    }
+    if (description) {
+      option->description = *description;
+    }
+    if (*provider_id == "maho_native") {
+      option->is_available = true;
+    } else if (*provider_id == "bitwarden") {
+      option->is_available = maho::passwords::IsBitwardenExtensionAvailable();
+    } else if (*provider_id == "onepassword") {
+      option->is_available = maho::passwords::IsOnePasswordExtensionAvailable();
+    }
+    options.push_back(std::move(option));
+  }
+  return options;
+}
+
+maho_settings::mojom::PasswordProviderStatusPtr
+BuildPasswordProviderStatus() {
+  const bool passwords_enabled = ReadPasswordsEnabledFromCore();
+  const std::string mode = ReadSelectedPasswordProviderModeFromCore();
+  auto status = maho_settings::mojom::PasswordProviderStatus::New();
+  status->provider = ToPasswordProviderKind(mode);
+  status->is_enabled = passwords_enabled;
+  status->is_available = maho::passwords::IsPasswordProviderAvailable(mode);
+  status->capabilities = MakePasswordProviderCapabilities(status->provider);
+
+  for (auto& option : BuildPasswordProviderOptions()) {
+    if (option->provider != status->provider) {
+      continue;
+    }
+    if (!option->display_name.empty()) {
+      status->display_name = option->display_name;
+    }
+    if (!option->description.empty()) {
+      status->description =
+          status->is_available
+              ? option->description
+              : option->display_name + " is selected, but the " +
+                    option->display_name +
+                    " extension is not installed or enabled.";
+    }
+    break;
+  }
+  return status;
+}
+
+bool SetPasswordProviderInCore(
+    maho_settings::mojom::PasswordProviderKind provider) {
+  return UpdateAutofillSettingsInCore(ReadPasswordsEnabledFromCore(),
+                                      VaultProviderToken(provider));
+}
+
 std::optional<std::vector<maho_settings::mojom::SavedPasswordPtr>>
 ParseSavedPasswordsJson(const std::string& json) {
   std::optional<base::Value> parsed =
@@ -1455,7 +1539,32 @@ std::string ReadSelectedPasswordProviderModeFromCore() {
                                         : nullptr;
   const std::string* provider =
       autofill ? autofill->FindString("passwordProvider") : nullptr;
-  return NormalizePasswordProviderMode(provider ? *provider : "maho_native");
+  return provider ? *provider : "maho_native";
+}
+
+bool IsPasswordSetupCompleteForTesting(
+    const std::string& raw_selected_provider,
+    const maho_settings::mojom::VaultOperationResult* vault_status) {
+  if (!IsApprovedRawPasswordProvider(raw_selected_provider) || !vault_status ||
+      !vault_status->success || !vault_status->status) {
+    return false;
+  }
+  switch (vault_status->status->lock_state) {
+    case maho_settings::mojom::VaultLockState::kLocked:
+    case maho_settings::mojom::VaultLockState::kUnlocked:
+    case maho_settings::mojom::VaultLockState::kAutoLocked:
+      return true;
+    case maho_settings::mojom::VaultLockState::kUninitialized:
+      return false;
+  }
+}
+
+bool IsPasswordSetupComplete() {
+  const std::string raw_selected_provider =
+      ReadSelectedPasswordProviderModeFromCore();
+  auto vault_status = GetVaultStatusFromCore();
+  return IsPasswordSetupCompleteForTesting(raw_selected_provider,
+                                           vault_status.get());
 }
 
 bool ReadPasswordsEnabledFromCore() {

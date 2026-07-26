@@ -1,3 +1,10 @@
+import type {
+  PasswordProviderKind,
+  PasswordProviderOption,
+  PasswordProviderStatus,
+  VaultOperationResult,
+} from '../maho_settings/maho_settings.mojom-webui.js';
+
 export interface SearchEngineInfo {
   keyword: string;
   name: string;
@@ -51,8 +58,17 @@ export class PageHandlerRemote {
   getLocalizedStrings(): Promise<{strings: Record<string, string>}>;
   signupFromWelcome(email: string, password: string, displayName: string): Promise<{ok: boolean, errorMessage: string}>;
   loginFromWelcome(email: string, password: string): Promise<{ok: boolean, errorMessage: string}>;
-  getRelayAccountStatusFromWelcome(): Promise<{signedIn: boolean, tier: string, subscriptionStatus: string, welcomeCompleted: boolean, hasStoredSession: boolean}>;
+  getRelayAccountStatusFromWelcome(): Promise<{signedIn: boolean, tier: string, subscriptionStatus: string, welcomeCompleted: boolean, hasStoredSession: boolean, isLocalDev: boolean}>;
+  getPasswordProviderOptions(): Promise<{options: PasswordProviderOption[]}>;
+  getPasswordProviderStatus(): Promise<{status: PasswordProviderStatus}>;
+  setPasswordProvider(provider: PasswordProviderKind): Promise<{success: boolean}>;
+  getVaultStatus(): Promise<{result: VaultOperationResult}>;
+  initializeVault(masterPassphrase: string, recoverySecret: string): Promise<{
+    result: VaultOperationResult;
+  }>;
+  unlockVault(masterPassphrase: string): Promise<{result: VaultOperationResult}>;
   finishOnboarding(): void;
+  devSkipOnboarding(): void;
 }
 
 export class PageHandlerFactory {
@@ -60,11 +76,10 @@ export class PageHandlerFactory {
   createPageHandler(page: unknown, handler: unknown): void;
 }
 
-export const IMPORT_BOOKMARKS: number;
-export const IMPORT_PASSWORDS: number;
-export const IMPORT_HISTORY: number;
-export const IMPORT_COOKIES: number;
-export const IMPORT_AUTOFILL: number;
-export const IMPORT_WORKSPACES: number;
-export const IMPORT_FAVICONS: number;
-
+export declare const IMPORT_BOOKMARKS: number;
+export declare const IMPORT_PASSWORDS: number;
+export declare const IMPORT_HISTORY: number;
+export declare const IMPORT_COOKIES: number;
+export declare const IMPORT_AUTOFILL: number;
+export declare const IMPORT_WORKSPACES: number;
+export declare const IMPORT_FAVICONS: number;

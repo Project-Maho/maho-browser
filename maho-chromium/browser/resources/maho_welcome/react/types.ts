@@ -8,6 +8,13 @@ import {
   IMPORT_FAVICONS,
 } from '../maho_welcome.mojom-webui.js';
 import type {BrowserProfile, EssentialSite, SearchEngineInfo} from '../maho_welcome.mojom-webui.js';
+import type {
+  PasswordProviderKind,
+  PasswordProviderOption,
+  PasswordProviderStatus,
+  VaultLockState,
+  VaultStatus,
+} from '../../maho_settings/maho_settings.mojom-webui.js';
 
 export enum WelcomePage {
   Auth = 0,
@@ -17,10 +24,27 @@ export enum WelcomePage {
   ImportProgress = 4,
   SearchEngine = 5,
   Essentials = 6,
-  Completion = 7,
+  PasswordSetup = 7,
+  Completion = 8,
 }
 
-export const TOTAL_PAGES = 8;
+export const TOTAL_PAGES = 9;
+export const PASSWORD_PROVIDER_KIND = {
+  MahoNative: 0,
+  Bitwarden: 1,
+  OnePassword: 2,
+} as const satisfies Record<string, PasswordProviderKind>;
+export const VAULT_LOCK_STATE = {
+  Uninitialized: 0,
+  Locked: 1,
+  Unlocked: 2,
+  AutoLocked: 3,
+} as const satisfies Record<string, VaultLockState>;
+const PASSWORD_PROVIDER_ORDER = [
+  PASSWORD_PROVIDER_KIND.MahoNative,
+  PASSWORD_PROVIDER_KIND.Bitwarden,
+  PASSWORD_PROVIDER_KIND.OnePassword,
+] as const satisfies readonly PasswordProviderKind[];
 
 export type AppearanceMode = 'system' | 'light' | 'dark';
 export type ImportStage = 'A' | 'B';
@@ -50,6 +74,28 @@ export interface ImportState {
   readonly browserIndex: number | null;
 }
 
+export interface PasswordSetupState {
+  readonly status: 'loading' | 'ready' | 'submitting' | 'error';
+  readonly errorMessage: string;
+  readonly providerOptions: readonly PasswordProviderOption[];
+  readonly providerStatus: PasswordProviderStatus | null;
+  readonly vaultStatus: VaultStatus | null;
+}
+
+export function orderProviderOptions(
+    options: readonly PasswordProviderOption[]): readonly PasswordProviderOption[] {
+  return PASSWORD_PROVIDER_ORDER.map(
+      provider => options.find(option => option.provider === provider))
+      .filter((option): option is PasswordProviderOption => option !== undefined);
+}
+
+export function getProviderHelperText(
+    option: PasswordProviderOption, unavailableHelperText: string): string {
+  return option.isAvailable
+    ? option.description
+    : `${option.description} ${unavailableHelperText}`;
+}
+
 export interface WelcomeState {
   readonly currentPage: WelcomePage;
   readonly direction: 'forward' | 'backward';
@@ -69,6 +115,7 @@ export interface WelcomeState {
   readonly selectedEssentials: ReadonlySet<string>;
 
   readonly auth: AuthState;
+  readonly passwordSetup: PasswordSetupState;
 
   readonly selectedTheme: string | null;
   readonly localizedStrings: ReadonlyMap<string, string>;
@@ -99,6 +146,13 @@ export function createInitialState(): WelcomeState {
       errorMessage: '',
       isReauthMode: false,
       hasStoredSession: false,
+    },
+    passwordSetup: {
+      status: 'loading',
+      errorMessage: '',
+      providerOptions: [],
+      providerStatus: null,
+      vaultStatus: null,
     },
     selectedTheme: null,
     localizedStrings: new Map(),

@@ -25,6 +25,15 @@ maho_settings::mojom::PasswordProviderCapabilitiesPtr
 MakePasswordProviderCapabilities(
     maho_settings::mojom::PasswordProviderKind kind);
 
+std::vector<maho_settings::mojom::PasswordProviderOptionPtr>
+BuildPasswordProviderOptions();
+
+maho_settings::mojom::PasswordProviderStatusPtr
+BuildPasswordProviderStatus();
+
+bool SetPasswordProviderInCore(
+    maho_settings::mojom::PasswordProviderKind provider);
+
 // Returns nullopt when the JSON payload is not a list, contains any non-dict
 // element, or any entry is missing/empty for id, domain, username, or
 // createdAt. Plaintext passwords are intentionally omitted from the output.
@@ -95,6 +104,15 @@ std::string ReadPasswordProviderModeFromCore();
 bool ReadPasswordsEnabledFromCore();
 
 std::string ReadSelectedPasswordProviderModeFromCore();
+
+// Password setup is complete when the persisted raw provider token is
+// approved and the Vault has been initialized. Locked, unlocked, and
+// auto-locked Vaults are all initialized.
+bool IsPasswordSetupComplete();
+
+bool IsPasswordSetupCompleteForTesting(
+    const std::string& raw_selected_provider,
+    const maho_settings::mojom::VaultOperationResult* vault_status);
 
 maho_settings::mojom::VaultOperationResultPtr ParseVaultOperationResultJson(
     const std::string& json);

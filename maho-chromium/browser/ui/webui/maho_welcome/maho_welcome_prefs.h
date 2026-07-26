@@ -10,6 +10,10 @@ namespace maho::welcome {
 inline constexpr char kWelcomeCompleted[] = "maho.welcome.completed";
 inline constexpr char kLoginGateActive[] = "maho.auth.login_gate_active";
 
+constexpr bool RequiresPasswordSetup(bool welcome_completed) {
+  return !welcome_completed;
+}
+
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
 }  // namespace maho::welcome

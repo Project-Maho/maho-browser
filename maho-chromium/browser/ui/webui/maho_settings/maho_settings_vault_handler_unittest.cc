@@ -516,6 +516,32 @@ TEST_F(MahoSettingsVaultHandlerTest, ProviderSelectionAvailabilityMatrix) {
 }
 
 TEST_F(MahoSettingsVaultHandlerTest,
+       PasswordSetupCompletionRequiresApprovedProviderAndInitializedVault) {
+  auto vault_status = maho_settings::mojom::VaultOperationResult::New();
+  vault_status->success = true;
+  vault_status->status = maho_settings::mojom::VaultStatus::New();
+
+  vault_status->status->lock_state =
+      maho_settings::mojom::VaultLockState::kUninitialized;
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("maho_native",
+                                                 vault_status.get()));
+
+  for (const auto lock_state : {
+           maho_settings::mojom::VaultLockState::kLocked,
+           maho_settings::mojom::VaultLockState::kUnlocked,
+           maho_settings::mojom::VaultLockState::kAutoLocked,
+       }) {
+    vault_status->status->lock_state = lock_state;
+    EXPECT_TRUE(
+        IsPasswordSetupCompleteForTesting("bitwarden", vault_status.get()));
+    EXPECT_TRUE(
+        IsPasswordSetupCompleteForTesting("onepassword", vault_status.get()));
+  }
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("unsupported",
+                                                 vault_status.get()));
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
        AutoLockedRateLimitedStatusProjectsCanonicalFields) {
   auto result = ParseVaultOperationResultJson(R"({
     "ok": true,

@@ -2455,98 +2455,14 @@ void MahoSettingsPageHandler::GetSpaces(GetSpacesCallback callback) {
 
 void MahoSettingsPageHandler::GetPasswordProviderStatus(
     GetPasswordProviderStatusCallback callback) {
-  const bool passwords_enabled =
-      maho_settings_password_helpers::ReadPasswordsEnabledFromCore();
-  const std::string mode =
-      maho_settings_password_helpers::ReadPasswordProviderModeFromCore();
-  auto status = maho_settings::mojom::PasswordProviderStatus::New();
-  status->provider =
-      maho_settings_password_helpers::ToPasswordProviderKind(mode);
-  status->is_enabled = passwords_enabled;
-  status->is_available = maho::passwords::IsPasswordProviderAvailable(mode);
-
-  std::string registry_json = maho::core::GetPasswordProviderRegistry();
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(registry_json, base::JSON_PARSE_RFC);
-  if (parsed && parsed->is_list()) {
-    for (const auto& item : parsed->GetList()) {
-      if (!item.is_dict()) {
-        continue;
-      }
-      const auto& dict = item.GetDict();
-      const std::string* provider_id = dict.FindString("providerId");
-      if (provider_id && *provider_id == mode) {
-        const std::string* display_name = dict.FindString("displayName");
-        const std::string* description = dict.FindString("description");
-        if (display_name) {
-          status->display_name = *display_name;
-        }
-        if (description) {
-          if (status->is_available) {
-            status->description = *description;
-          } else {
-            status->description = *display_name + " is selected, but the " +
-                                  *display_name +
-                                  " extension is not installed or enabled.";
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  status->capabilities =
-      maho_settings_password_helpers::MakePasswordProviderCapabilities(
-          status->provider);
-  std::move(callback).Run(std::move(status));
+  std::move(callback).Run(
+      maho_settings_password_helpers::BuildPasswordProviderStatus());
 }
 
 void MahoSettingsPageHandler::GetPasswordProviderOptions(
     GetPasswordProviderOptionsCallback callback) {
-  std::vector<maho_settings::mojom::PasswordProviderOptionPtr> options;
-
-  std::string registry_json = maho::core::GetPasswordProviderRegistry();
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(registry_json, base::JSON_PARSE_RFC);
-  if (parsed && parsed->is_list()) {
-    for (const auto& item : parsed->GetList()) {
-      if (!item.is_dict()) {
-        continue;
-      }
-      const auto& dict = item.GetDict();
-      const std::string* provider_id = dict.FindString("providerId");
-      if (!provider_id) {
-        continue;
-      }
-
-      auto opt = maho_settings::mojom::PasswordProviderOption::New();
-      opt->provider =
-          maho_settings_password_helpers::ToPasswordProviderKind(*provider_id);
-
-      const std::string* display_name = dict.FindString("displayName");
-      if (display_name) {
-        opt->display_name = *display_name;
-      }
-
-      const std::string* description = dict.FindString("description");
-      if (description) {
-        opt->description = *description;
-      }
-
-      if (*provider_id == "maho_native") {
-        opt->is_available = true;
-      } else if (*provider_id == "bitwarden") {
-        opt->is_available = maho::passwords::IsBitwardenExtensionAvailable();
-      } else if (*provider_id == "onepassword") {
-        opt->is_available = maho::passwords::IsOnePasswordExtensionAvailable();
-      } else {
-        opt->is_available = false;
-      }
-      options.push_back(std::move(opt));
-    }
-  }
-
-  std::move(callback).Run(std::move(options));
+  std::move(callback).Run(
+      maho_settings_password_helpers::BuildPasswordProviderOptions());
 }
 
 void MahoSettingsPageHandler::GetSavedPasswords(

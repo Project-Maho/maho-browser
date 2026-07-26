@@ -13,6 +13,7 @@
 #include "base/memory/weak_ptr.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "maho/browser/importer/maho_browser_detector.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -75,6 +76,20 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
                          SignupFromWelcomeCallback callback) override;
   void GetRelayAccountStatusFromWelcome(
       GetRelayAccountStatusFromWelcomeCallback callback) override;
+
+  void GetPasswordProviderOptions(
+      GetPasswordProviderOptionsCallback callback) override;
+  void GetPasswordProviderStatus(
+      GetPasswordProviderStatusCallback callback) override;
+  void SetPasswordProvider(
+      maho_settings::mojom::PasswordProviderKind provider,
+      SetPasswordProviderCallback callback) override;
+  void GetVaultStatus(GetVaultStatusCallback callback) override;
+  void InitializeVault(const std::string& master_passphrase,
+                       const std::string& recovery_secret,
+                       InitializeVaultCallback callback) override;
+  void UnlockVault(const std::string& master_passphrase,
+                   UnlockVaultCallback callback) override;
 
   void FinishOnboarding() override;
   void DevSkipOnboarding() override;

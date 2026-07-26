@@ -152,6 +152,8 @@ TEST_F(MahoSettingsProviderAvailabilityTest,
               : Provider::kMahoNative;
       EXPECT_EQ(std::string(ProviderToken(expected_effective)),
                 ReadPasswordProviderModeFromCore());
+      EXPECT_EQ(selection_case.selected,
+                ReadSelectedPasswordProviderModeFromCore());
       ASSERT_EQ(3u, status->providers.size());
       EXPECT_TRUE(status->providers[0]->is_available);
       EXPECT_EQ(install_case.bitwarden_installed,

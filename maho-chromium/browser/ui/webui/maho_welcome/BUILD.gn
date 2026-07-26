@@ -1,8 +1,10 @@
 import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
 
 mojom("mojo_bindings") {
   sources = [ "maho_welcome.mojom" ]
   webui_module_path = "/"
+  deps = [ "//maho/browser/ui/webui/maho_settings:mojo_bindings" ]
 }
 
 source_set("maho_welcome") {
@@ -37,6 +39,7 @@ source_set("maho_welcome") {
     "//components/prefs",
     "//components/search_engines",
     "//maho/browser/importer",
+    "//maho/browser/ui/webui/maho_settings:maho_settings_password_helpers",
     "//maho/browser:maho_theme_support",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
@@ -53,5 +56,18 @@ source_set("maho_welcome") {
     "//ui/views",
     "//ui/webui",
     "//url",
+  ]
+}
+
+test("maho_welcome_completion_policy_test") {
+  sources = [
+    "maho_welcome_completion_policy_test_main.cc",
+    "maho_welcome_completion_policy_unittest.cc",
+  ]
+
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }

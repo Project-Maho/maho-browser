@@ -17,6 +17,7 @@ import {AppearanceContent, AppearanceSidebar} from './pages/appearance.js';
 import {CompletionContent, CompletionSidebar} from './pages/completion.js';
 import {EssentialsContent, EssentialsSidebar} from './pages/essentials.js';
 import {ImportDataContent, ImportDataSidebar} from './pages/import-data.js';
+import {PasswordSetupContent, PasswordSetupSidebar} from './pages/password-setup.js';
 import {SearchEngineContent, SearchEngineSidebar} from './pages/search-engine.js';
 import {WelcomeSplash} from './pages/welcome-splash.js';
 import {
@@ -29,10 +30,10 @@ import {
   PAGE_TRANSITION_EXIT_START_DELAY,
 } from './motion-constants.js';
 import {MahoWelcomeStore} from './store.js';
-import {TOTAL_PAGES, WelcomePage} from './types.js';
+import {WelcomePage} from './types.js';
 import type {AuthState, WelcomeState} from './types.js';
 
-const WIZARD_STEPS = TOTAL_PAGES - 1;
+const WIZARD_STEPS = WelcomePage.PasswordSetup - WelcomePage.Appearance + 1;
 const MAHO_LOGO_SRC = 'chrome://maho-welcome/icons/onboarding/maho-logo.png';
 
 type AuthMode = AuthState['mode'];
@@ -138,6 +139,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
         }
         return;
       }
+      if (state.currentPage === WelcomePage.PasswordSetup) return;
       if (event.key === 'Enter') {
         if (isStandalonePage(state.currentPage)) store.nextPage();
         else if (state.currentPage === WelcomePage.Completion) store.complete();
@@ -212,6 +214,9 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   }, [pageForRender]);
 
   const onSkipClick = useCallback(() => {
+    if (snapshot.currentPage === WelcomePage.PasswordSetup) {
+      return;
+    }
     if (snapshot.currentPage === WelcomePage.SourceSelect) {
       store.skipImport();
     } else {
@@ -232,12 +237,16 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
   const isAuthPage = pageForRender === WelcomePage.Auth;
   const isCompletionPage = pageForRender === WelcomePage.Completion;
+  const isPasswordSetupPage = pageForRender === WelcomePage.PasswordSetup;
   const isSourceSelectPage = pageForRender === WelcomePage.SourceSelect;
   const canGoBack = !isAuthPage && !snapshot.auth.isReauthMode && (pageForRender > WelcomePage.Appearance ||
       (isSourceSelectPage && snapshot.importStage === 'B'));
   const currentStep = pageForRender - WelcomePage.Appearance;
 
   async function onPrimaryClick() {
+    if (isPasswordSetupPage) {
+      return;
+    }
     if (isAuthPage) {
       await submitAuth(store);
       return;
@@ -283,7 +292,12 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   const hideSidebarChrome = isAuthPage || snapshot.auth.isReauthMode;
 
   return (
-    <main id="onboarding-pages" className="fixed inset-0 isolate flex min-h-screen w-full items-center justify-center overflow-hidden bg-background px-6 py-10 text-foreground">
+    <main
+      id="onboarding-pages"
+      className={cn(
+          'fixed inset-0 isolate flex min-h-screen w-full items-center justify-center overflow-hidden bg-background text-foreground',
+          isPasswordSetupPage ? 'px-3 py-4 md:px-6 md:py-10' : 'px-6 py-10')}
+    >
       {snapshot.isLocalDev && <DevSkipButton store={store} />}
       <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted" />
       <div aria-hidden="true" className="absolute left-[18%] top-[12%] h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
@@ -291,12 +305,18 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
       <div
         ref={shellRef}
-        className="relative z-10 grid h-[min(720px,86vh)] w-[min(1040px,92vw)] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl md:grid-cols-[0.42fr_0.58fr]"
+        className={cn(
+            'relative z-10 grid w-[min(1040px,92vw)] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl md:grid-cols-[0.42fr_0.58fr]',
+            isPasswordSetupPage
+              ? 'h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] md:h-[min(720px,86vh)] md:grid-rows-1'
+              : 'h-[min(720px,86vh)]')}
       >
       <section className="flex min-h-0 flex-col border-b border-border bg-muted/30 md:border-b-0 md:border-r">
         <div
           ref={sidebarContentRef}
-          className="flex min-h-0 flex-1 flex-col justify-center gap-4 p-8 lg:p-10 [&>h1]:m-0 [&>h1]:max-w-sm [&>h1]:text-3xl [&>h1]:font-semibold [&>h1]:leading-tight [&>h1]:tracking-tight [&>p]:m-0 [&>p]:max-w-sm [&>p]:text-sm [&>p]:leading-6 [&>p]:text-muted-foreground"
+          className={cn(
+              'flex min-h-0 flex-1 flex-col justify-center gap-4 p-8 lg:p-10 [&>h1]:m-0 [&>h1]:max-w-sm [&>h1]:text-3xl [&>h1]:font-semibold [&>h1]:leading-tight [&>h1]:tracking-tight [&>p]:m-0 [&>p]:max-w-sm [&>p]:text-sm [&>p]:leading-6 [&>p]:text-muted-foreground',
+              isPasswordSetupPage && 'max-md:flex-none max-md:gap-2 max-md:p-5 max-md:[&>h1]:text-xl md:[&>h1]:text-2xl lg:[&>h1]:text-3xl max-md:[&>p]:text-xs max-md:[&>p]:leading-5')}
         >
           {renderSidebar(pageForRender, store, snapshot)}
         </div>
@@ -304,13 +324,18 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
           ref={sidebarNavRef}
           className={cn(
               'flex shrink-0 flex-col items-start gap-2 border-t border-border/80 p-8 pt-6 transition-opacity lg:p-10 lg:pt-6',
+              isPasswordSetupPage && 'max-md:flex-row max-md:items-center max-md:justify-between max-md:px-5 max-md:py-3',
               buttonsInteractive ? 'opacity-100' : 'opacity-70')}
           style={{pointerEvents: buttonsInteractive ? 'auto' : 'none'}}
         >
-          {!hideSidebarChrome && (
-            <StepIndicator current={currentStep} total={WIZARD_STEPS} />
+          {!hideSidebarChrome && !isCompletionPage && (
+            <StepIndicator
+              current={currentStep}
+              total={WIZARD_STEPS}
+              compact={isPasswordSetupPage}
+            />
           )}
-          {!isCompletionPage && !hideSidebarChrome ? (
+          {!isPasswordSetupPage && !isCompletionPage && !hideSidebarChrome ? (
             <Button
               type="button"
               variant="ghost"
@@ -336,7 +361,9 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
       </section>
 
       <section ref={contentRef} className="flex min-h-0 flex-col bg-card">
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8 lg:p-10">
+        <div className={cn(
+            'flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8 lg:p-10',
+            isPasswordSetupPage && 'max-md:p-4')}>
           <div
             ref={pageTransitionRef}
             key={pageForRender}
@@ -347,13 +374,14 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
             {renderContent(pageForRender, snapshot, store)}
           </div>
         </div>
-        <div
-          ref={contentActionsRef}
-          className={cn(
-              'flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-border bg-background/30 px-8 py-5 transition-opacity lg:px-10',
-              buttonsInteractive ? 'opacity-100' : 'opacity-70')}
-          style={{pointerEvents: buttonsInteractive ? 'auto' : 'none'}}
-        >
+        {!isPasswordSetupPage ? (
+          <div
+            ref={contentActionsRef}
+            className={cn(
+                'flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-border bg-background/30 px-8 py-5 transition-opacity lg:px-10',
+                buttonsInteractive ? 'opacity-100' : 'opacity-70')}
+            style={{pointerEvents: buttonsInteractive ? 'auto' : 'none'}}
+          >
           {isSourceSelectPage && snapshot.importStage === 'A' && availableBrowsers.length > 0 && (
             <>
               <Select value={selectedBrowserName || undefined} onValueChange={handleBrowserChange}>
@@ -411,7 +439,8 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
           >
             {primaryLabel}
           </Button>
-        </div>
+          </div>
+        ) : null}
       </section>
       </div>
     </main>
@@ -432,6 +461,7 @@ function renderSidebar(currentPage: WelcomePage, store: MahoWelcomeStore, snapsh
       );
     case WelcomePage.SearchEngine:  return <SearchEngineSidebar store={store} />;
     case WelcomePage.Essentials:    return <EssentialsSidebar />;
+    case WelcomePage.PasswordSetup: return <PasswordSetupSidebar store={store} />;
     case WelcomePage.Completion:    return <CompletionSidebar />;
     case WelcomePage.Splash:        return null;
   }
@@ -477,6 +507,8 @@ function renderContent(
           onToggle={url => store.toggleEssential(url)}
         />
       );
+    case WelcomePage.PasswordSetup:
+      return <PasswordSetupContent store={store} snapshot={snapshot} />;
     case WelcomePage.Completion:
       return <CompletionContent store={store} />;
     case WelcomePage.Splash:
@@ -824,18 +856,32 @@ function DevSkipButton({store}: {store: MahoWelcomeStore}) {
   );
 }
 
-function StepIndicator({current, total}: {current: number; total: number}) {
+function StepIndicator({current, total, compact}: {
+  current: number;
+  total: number;
+  compact: boolean;
+}) {
   return (
-    <div className="mb-4 mt-1 flex gap-1.5">
+    <ul
+      className={cn('flex gap-1.5', compact ? '' : 'mb-4 mt-1')}
+      aria-label={`Setup progress: step ${current + 1} of ${total}`}
+    >
       {Array.from({length: total}, (_, i) => (
-        <div
+        <li
           key={i}
+          aria-current={i === current ? 'step' : undefined}
           className={cn(
-              'size-2 rounded-full bg-foreground transition-opacity',
-              i === current ? 'opacity-80' : i < current ? 'opacity-40' : 'opacity-20')}
-        />
+              'block size-2 rounded-full transition-colors',
+              i === current
+                ? 'w-5 bg-foreground'
+                : i < current
+                ? 'bg-foreground/40'
+                : 'border border-border bg-transparent')}
+        >
+          {i === current ? <span className="sr-only">Current step</span> : null}
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 

@@ -6,12 +6,31 @@ mojom("mojo_bindings") {
   webui_module_path = "/"
 }
 
+source_set("maho_settings_password_helpers") {
+  sources = [
+    "maho_settings_password_helpers.cc",
+    "maho_settings_password_helpers.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+  ]
+
+  deps = [
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_password_provider",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base/clipboard",
+  ]
+}
+
 source_set("maho_settings") {
   sources = [
     "maho_settings_page_handler.cc",
     "maho_settings_page_handler.h",
-    "maho_settings_password_helpers.cc",
-    "maho_settings_password_helpers.h",
     "maho_settings_ui.cc",
     "maho_settings_ui.h",
     "../../../ai/maho_managed_connection_test.cc",
@@ -27,6 +46,7 @@ source_set("maho_settings") {
   ]
 
   deps = [
+    ":maho_settings_password_helpers",
     "//maho/browser:maho_auth_utils",
     "//maho/browser:maho_extension_state_bridge",
     "//maho/browser:maho_password_provider",
@@ -68,7 +88,7 @@ test("maho_settings_vault_handler_test") {
   ]
 
   deps = [
-    ":maho_settings",
+    ":maho_settings_password_helpers",
     "//base",
     "//base/test:test_support",
     "//maho/browser:maho_core_holder",

@@ -56,6 +56,7 @@
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/color/color_provider_manager.h"
 #include "ui/views/widget/root_view.h"
@@ -281,6 +282,31 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
   add("IDS_MAHO_WELCOME_CTA_DONE", "Dive in!");
   add("IDS_MAHO_WELCOME_CTA_SIGN_IN", "Sign in");
   add("IDS_MAHO_WELCOME_CTA_SIGN_UP", "Sign up");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_TITLE",
+      "Choose your password provider");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_BODY",
+      "Select where Maho should manage passwords. Your local Vault must be "
+      "unlocked whichever provider you choose.");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_TITLE", "Password provider");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_BODY",
+      "External providers require their enabled browser extension.");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_LABEL", "Provider");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_ARIA", "Password provider");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_PLACEHOLDER",
+      "Choose a provider");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_UNAVAILABLE_HELPER",
+      "The extension is not installed or is disabled. This selection remains "
+      "saved, and Maho Native will be used until the extension is enabled.");
+  add("IDS_MAHO_WELCOME_VAULT_CARD_TITLE", "Local Vault");
+  add("IDS_MAHO_WELCOME_VAULT_INITIALIZE_BODY",
+      "Create the local Vault used to protect password metadata and provider "
+      "access.");
+  add("IDS_MAHO_WELCOME_VAULT_UNLOCK_BODY",
+      "Unlock the local Vault before continuing.");
+  add("IDS_MAHO_WELCOME_VAULT_READY_BODY",
+      "Your local Vault is unlocked and ready.");
+  add("IDS_MAHO_WELCOME_VAULT_MASTER_LABEL", "Master passphrase");
+  add("IDS_MAHO_WELCOME_VAULT_RECOVERY_LABEL", "Recovery secret");
 
   std::move(callback).Run(std::move(strings));
 }
@@ -505,6 +531,14 @@ void MahoWelcomePageHandler::FinishOnboarding() {
     return;
   }
 
+  if (maho::welcome::RequiresPasswordSetup(
+          profile_->GetPrefs()->GetBoolean(maho::welcome::kWelcomeCompleted)) &&
+      !maho_settings_password_helpers::IsPasswordSetupComplete()) {
+    LOG(ERROR) << "FinishOnboarding: Refusing to finish onboarding before "
+                  "password setup completes.";
+    return;
+  }
+
   DoFinishOnboarding();
 }
 
@@ -651,4 +685,44 @@ void MahoWelcomePageHandler::GetRelayAccountStatusFromWelcome(
   bool is_local_dev = std::getenv("MAHO_RELAY_URL") != nullptr;
   std::move(callback).Run(signed_in, tier, sub_status, welcome_completed,
                           has_stored_session, is_local_dev);
+}
+
+void MahoWelcomePageHandler::GetPasswordProviderOptions(
+    GetPasswordProviderOptionsCallback callback) {
+  std::move(callback).Run(
+      maho_settings_password_helpers::BuildPasswordProviderOptions());
+}
+
+void MahoWelcomePageHandler::GetPasswordProviderStatus(
+    GetPasswordProviderStatusCallback callback) {
+  std::move(callback).Run(
+      maho_settings_password_helpers::BuildPasswordProviderStatus());
+}
+
+void MahoWelcomePageHandler::SetPasswordProvider(
+    maho_settings::mojom::PasswordProviderKind provider,
+    SetPasswordProviderCallback callback) {
+  std::move(callback).Run(
+      maho_settings_password_helpers::SetPasswordProviderInCore(provider));
+}
+
+void MahoWelcomePageHandler::GetVaultStatus(
+    GetVaultStatusCallback callback) {
+  std::move(callback).Run(
+      maho_settings_password_helpers::GetVaultStatusFromCore());
+}
+
+void MahoWelcomePageHandler::InitializeVault(
+    const std::string& master_passphrase,
+    const std::string& recovery_secret,
+    InitializeVaultCallback callback) {
+  std::move(callback).Run(maho_settings_password_helpers::InitializeVaultInCore(
+      master_passphrase, recovery_secret));
+}
+
+void MahoWelcomePageHandler::UnlockVault(
+    const std::string& master_passphrase,
+    UnlockVaultCallback callback) {
+  std::move(callback).Run(
+      maho_settings_password_helpers::UnlockVaultInCore(master_passphrase));
 }
