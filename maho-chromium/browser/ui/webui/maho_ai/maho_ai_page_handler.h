@@ -85,6 +85,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                          bool approved) override;
   void ClosePanel() override;
   void OpenSettings() override;
+  void OpenSettingsPane(const std::string& pane_key) override;
   void GetAISettings(GetAISettingsCallback callback) override;
   void GetViewMode(GetViewModeCallback callback) override;
   void SetViewMode(maho_ai::mojom::ViewMode mode) override;

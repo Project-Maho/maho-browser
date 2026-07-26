@@ -214,6 +214,15 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     contentKind: 'ai',
   },
   {
+    key: 'maho-ai-developers',
+    symbol: 'DEV',
+    navTitle: 'Developers',
+    title: 'Developers',
+    kind: 'live',
+    domain: 'productivity',
+    contentKind: 'ai-developers',
+  },
+  {
     key: 'billing',
     symbol: '$',
     navTitle: 'Billing',

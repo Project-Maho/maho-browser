@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -12,6 +13,8 @@ const __dirname = path.dirname(__filename);
 const mahoAiDir = path.resolve(__dirname, '..');
 const websiteNodeModules = path.resolve(__dirname, '../../../../../website/node_modules');
 const outputFile = path.join(__dirname, 'app_bundle.js');
+const previewOutputDir = path.join(os.tmpdir(), 'maho-ai-standalone-preview');
+const guidancePreviewOutputFile = path.join(previewOutputDir, 'mcp_agent_guidance_preview.js');
 const hostname = process.env.MAHO_AI_STANDALONE_HOST || '127.0.0.1';
 const port = Number(process.env.MAHO_AI_STANDALONE_PORT || '4071');
 const opencodeBaseUrl = new URL(process.env.OPENCODE_BASE_URL || 'http://127.0.0.1:4096/');
@@ -54,7 +57,17 @@ function contentTypeFor(filePath) {
 }
 
 async function serveStatic(requestPath, response) {
-  const normalized = requestPath === '/' ? '/standalone/index.html' : requestPath;
+  const pathname = new URL(requestPath, `http://${hostname}:${port}`).pathname;
+  if (pathname === '/standalone/mcp_agent_guidance_preview.js') {
+    await serveFile(guidancePreviewOutputFile, response);
+    return;
+  }
+  if (pathname === '/standalone/mcp_agent_guidance_preview.js.map') {
+    await serveFile(`${guidancePreviewOutputFile}.map`, response);
+    return;
+  }
+
+  const normalized = pathname === '/' ? '/standalone/index.html' : pathname;
   const filePath = path.resolve(mahoAiDir, `.${normalized}`);
   if (!filePath.startsWith(mahoAiDir)) {
     response.writeHead(403);
@@ -63,13 +76,17 @@ async function serveStatic(requestPath, response) {
   }
 
   try {
-    const contents = await fs.readFile(filePath);
-    response.writeHead(200, {'Content-Type': contentTypeFor(filePath)});
-    response.end(contents);
+    await serveFile(filePath, response);
   } catch {
     response.writeHead(404);
     response.end('Not found');
   }
+}
+
+async function serveFile(filePath, response) {
+  const contents = await fs.readFile(filePath);
+  response.writeHead(200, {'Content-Type': contentTypeFor(filePath)});
+  response.end(contents);
 }
 
 function proxyRequest(request, response) {
@@ -95,26 +112,38 @@ function proxyRequest(request, response) {
   request.pipe(proxy);
 }
 
-const buildContext = await context({
-  absWorkingDir: mahoAiDir,
-  bundle: true,
-  entryPoints: [path.join(__dirname, 'app.ts')],
-  format: 'esm',
-  legalComments: 'none',
-  loader: {
-    '.ts': 'ts',
-    '.tsx': 'tsx',
-  },
-  nodePaths: [websiteNodeModules],
-  outfile: outputFile,
-  platform: 'browser',
-  plugins: [aliasPlugin(), nodeModulesGuardPlugin(websiteNodeModules)],
-  sourcemap: true,
-  target: ['chrome120'],
-});
+function createBuildContext(entryPoint, outfile) {
+  return context({
+    absWorkingDir: mahoAiDir,
+    bundle: true,
+    entryPoints: [entryPoint],
+    format: 'esm',
+    legalComments: 'none',
+    loader: {
+      '.ts': 'ts',
+      '.tsx': 'tsx',
+    },
+    nodePaths: [websiteNodeModules],
+    outfile,
+    platform: 'browser',
+    plugins: [aliasPlugin(), nodeModulesGuardPlugin(websiteNodeModules)],
+    sourcemap: true,
+    target: ['chrome120'],
+    tsconfig: path.join(mahoAiDir, 'react/tsconfig.json'),
+  });
+}
 
-await buildContext.rebuild();
-await buildContext.watch();
+await fs.mkdir(previewOutputDir, {recursive: true});
+
+const buildContexts = await Promise.all([
+  createBuildContext(path.join(__dirname, 'app.ts'), outputFile),
+  createBuildContext(
+      path.join(__dirname, 'mcp_agent_guidance_preview.tsx'),
+      guidancePreviewOutputFile),
+]);
+
+await Promise.all(buildContexts.map(buildContext => buildContext.rebuild()));
+await Promise.all(buildContexts.map(buildContext => buildContext.watch()));
 
 const server = http.createServer((request, response) => {
   if (!request.url) {

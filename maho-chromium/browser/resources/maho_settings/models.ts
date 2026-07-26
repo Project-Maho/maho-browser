@@ -43,7 +43,7 @@ export interface PaneDefinition {
   domain: DomainId;
   groupKeys?: string[];
   embedUrl?: string;
-  contentKind?: 'profiles'|'atc'|'ai'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'content-blocker'|'extensions'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-ai'|'mail-security';
+  contentKind?: 'profiles'|'atc'|'ai'|'ai-developers'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'content-blocker'|'extensions'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-ai'|'mail-security';
   externalAction?: 'openExtensions';
 }
 

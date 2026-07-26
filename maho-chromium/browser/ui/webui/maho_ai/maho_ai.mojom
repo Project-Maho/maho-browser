@@ -504,6 +504,9 @@ interface PageHandler {
   // Open the settings page chrome://maho-settings/
   OpenSettings();
 
+  // Open the settings page to a specific safe Maho AI pane.
+  OpenSettingsPane(string pane_key);
+
   // Get the current AI settings (provider + model) from prefs.
   // Called on mount and on visibility change to reflect changes saved in
   // chrome://maho-settings?pane=maho-ai.

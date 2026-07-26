@@ -79,6 +79,14 @@ std::string GetRuntimeUnavailableMessage() {
          "Please configure the runtime endpoint in settings.";
 }
 
+std::string ResolveMahoAiSettingsPaneKey(const std::string& pane_key) {
+  if (pane_key == "maho-ai-developers") {
+    return pane_key;
+  }
+
+  return "maho-ai";
+}
+
 std::string GenerateSessionId() {
   return "ses_" +
          base::NumberToString(static_cast<uint64_t>(
@@ -1725,6 +1733,14 @@ void MahoAIPageHandler::OpenSettings() {
     return;
   }
   maho::OpenMahoSettingsPane(browser_, "maho-ai");
+}
+
+void MahoAIPageHandler::OpenSettingsPane(const std::string& pane_key) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!browser_) {
+    return;
+  }
+  maho::OpenMahoSettingsPane(browser_, ResolveMahoAiSettingsPaneKey(pane_key));
 }
 
 maho_ai::mojom::AISettingsInfoPtr MahoAIPageHandler::BuildAISettingsInfo()

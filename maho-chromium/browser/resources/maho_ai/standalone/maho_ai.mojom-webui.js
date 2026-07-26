@@ -473,6 +473,11 @@ export class PageHandlerRemote {
     window.open('chrome://maho-settings/', '_blank');
   }
 
+  async openSettingsPane(paneKey) {
+    const safePane = paneKey === 'maho-ai-developers' ? paneKey : 'maho-ai';
+    window.open(`chrome://maho-settings/?pane=${safePane}`, '_blank');
+  }
+
   async getViewMode() {
     return {mode: ViewMode.kSidebar};
   }

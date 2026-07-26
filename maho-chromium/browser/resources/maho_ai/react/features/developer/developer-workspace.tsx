@@ -7,10 +7,12 @@ import {Inspector} from './inspector.js';
 import {LeftRail} from './left-rail.js';
 import {ModeToggle} from './mode-toggle.js';
 import {Timeline} from './timeline.js';
+import {DismissibleMcpGuidanceCard} from '../dismissible-mcp-guidance-card.js';
 
 export function DeveloperWorkspace(
     {
       onNewSession,
+      onConnect,
       onRespondToApproval,
       onResumeSession,
       onSearch,
@@ -19,6 +21,7 @@ export function DeveloperWorkspace(
       state,
     }: {
       onNewSession: () => void;
+      onConnect?: () => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       onResumeSession: (sessionId: string) => void;
       onSearch: (query: string) => void;
@@ -30,7 +33,7 @@ export function DeveloperWorkspace(
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
-      <header className="flex flex-wrap items-center justify-between gap-4 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+      <header className="flex flex-wrap items-center justify-between gap-4 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)]">
         <div className="min-w-0 flex-1">
           <div className="grid gap-1">
             <h1 className="text-lg font-semibold tracking-tight text-foreground">Maho AI Console</h1>
@@ -45,6 +48,7 @@ export function DeveloperWorkspace(
             <Badge variant="secondary">{state.activeAdapterName || 'OpenCode'}</Badge>
             {session ? <Badge variant="success">{getStatusLabel(session.status)}</Badge> : null}
           </div>
+          <DismissibleMcpGuidanceCard className="mt-3" onConnect={onConnect} />
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <ModeToggle

@@ -8,7 +8,7 @@ const sharedNodeModulesDir = path.resolve(featureDir, '../../../../website/node_
 export default defineConfig({
   test: {
     environment: 'jsdom',
-    include: ['react/__tests__/**/*.test.ts'],
+    include: ['react/__tests__/**/*.test.ts', 'react/__tests__/**/*.test.tsx'],
   },
   resolve: {
     alias: [
@@ -45,12 +45,28 @@ export default defineConfig({
         replacement: path.join(sharedNodeModulesDir, 'react-dom/client.js'),
       },
       {
+        find: /^tailwind-merge$/,
+        replacement: path.join(sharedNodeModulesDir, 'tailwind-merge'),
+      },
+      {
         find: /^clsx$/,
         replacement: path.join(sharedNodeModulesDir, 'clsx'),
       },
       {
+        find: /^@lib\/utils$/,
+        replacement: path.join(featureDir, '../maho_common/react/lib/utils.ts'),
+      },
+      {
+        find: /^lucide-react$/,
+        replacement: path.join(sharedNodeModulesDir, 'lucide-react/dist/esm/lucide-react.js'),
+      },
+      {
         find: /^class-variance-authority$/,
         replacement: path.join(sharedNodeModulesDir, 'class-variance-authority'),
+      },
+      {
+        find: /^sonner$/,
+        replacement: path.join(sharedNodeModulesDir, 'sonner/dist/index.mjs'),
       },
       {
         find: /^@radix-ui\/react-slot$/,

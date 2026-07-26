@@ -316,6 +316,7 @@ export class PageHandlerRemote {
       approved: boolean): Promise<void>;
   closePanel(): Promise<void>;
   openSettings(): Promise<void>;
+  openSettingsPane(paneKey: string): Promise<void>;
   getAISettings(): Promise<{info: AISettingsInfo}>;
   getViewMode(): Promise<{mode: ViewMode}>;
   setViewMode(mode: ViewMode): Promise<void>;

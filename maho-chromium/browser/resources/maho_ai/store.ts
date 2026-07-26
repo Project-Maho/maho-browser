@@ -578,7 +578,13 @@ export class MahoAiStore {
     await this.pageHandler.closePanel();
   }
 
-  async openSettings(): Promise<void> {
+  async openSettings(paneKey?: string): Promise<void> {
+    const targetPaneKey = paneKey?.trim();
+    if (targetPaneKey) {
+      await this.pageHandler.openSettingsPane(targetPaneKey);
+      return;
+    }
+
     await this.pageHandler.openSettings();
   }
 

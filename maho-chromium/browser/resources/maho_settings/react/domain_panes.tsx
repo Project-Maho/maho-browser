@@ -13,6 +13,8 @@ import {MailCalendarPane} from './mail_calendar.js';
 import {MailBehaviorPane} from './mail_behavior.js';
 import {MailAiPane} from './mail_ai.js';
 import {MailSecurityPane} from './mail_security.js';
+import {AiDevelopersPane} from './ai_developers.js';
+import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {Input} from '@ui/input';
 import {
@@ -303,6 +305,8 @@ export function DomainPaneContent(
       return <ShortcutsPane store={store} />;
     case 'ai':
       return <AiPane pane={pane} store={store} />;
+    case 'ai-developers':
+      return <AiDevelopersPane pane={pane} />;
     case 'billing':
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
@@ -1590,6 +1594,8 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
               ) : null}
             </SectionCard>
           </div>
+
+          <McpAgentGuidanceSettingsSection store={store} />
 
           <div className="mb-6">
             <SectionCard

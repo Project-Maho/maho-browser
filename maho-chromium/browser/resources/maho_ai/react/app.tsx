@@ -10,6 +10,7 @@ import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
+import {SuggestionChips} from './features/compact/compact-stage.js';
 import {TabTidyModal} from './features/compact/tab-tidy-modal.js';
 import {VoiceInputModal} from './features/compact/voice-input-modal.js';
 import {SlashEditors} from './features/compact/slash-editors.js';
@@ -189,6 +190,12 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [store]);
 
+  const runSubmission = useCallback((submission: Promise<void>) => {
+    void submission.catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  }, []);
+
   const handleComposerSubmit = useCallback(() => {
     const stateSnapshot = store.getSnapshot();
     const prompt = stateSnapshot.composer.prompt.trim();
@@ -268,12 +275,23 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     }
 
     if (!store.getSnapshot().currentSessionId) {
-      void store.startSessionThenSubmit();
+      runSubmission(store.startSessionThenSubmit());
       return;
     }
 
-    void store.submitPrompt();
-  }, [store]);
+    runSubmission(store.submitPrompt());
+  }, [runSubmission, store]);
+
+  const handleSuggestionSelect = useCallback((text: string) => {
+    store.setComposerPrompt(text);
+    const stateSnapshot = store.getSnapshot();
+    if (!stateSnapshot.currentSessionId) {
+      runSubmission(store.startSessionThenSubmit());
+      return;
+    }
+
+    runSubmission(store.submitPrompt());
+  }, [runSubmission, store]);
 
   const handleVoiceFinal = useCallback((transcript: string, controls: VoiceFinalControls) => {
     const text = transcript.trim();
@@ -371,6 +389,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onOpenSettings: () => {
       void store.openSettings();
     },
+    onConnectMcp: () => {
+      void store.openSettings('maho-ai-developers');
+    },
     onGetViewMode: () => store.getViewMode(),
     onResumeSession: (sessionId: string) => {
       void store.resumeSession(sessionId);
@@ -433,6 +454,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                 state.developerMode ? 'block' : 'grid grid-rows-[auto_minmax(0,1fr)] gap-3')}>
               {state.developerMode ? (
                 <DeveloperWorkspace
+                  onConnect={modeHandlers.onConnectMcp}
                   onNewSession={modeHandlers.onNewSession}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
                   onResumeSession={modeHandlers.onResumeSession}
@@ -447,6 +469,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   entries={sessionEvents}
                   hasMessages={hasMessages}
                   onClosePanel={modeHandlers.onClosePanel}
+                  onConnect={modeHandlers.onConnectMcp}
                   onGetViewMode={modeHandlers.onGetViewMode}
                   onOpenSettings={modeHandlers.onOpenSettings}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
@@ -461,6 +484,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
             </div>
             <div className="sticky bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-transparent pt-1">
               <SlashEditors store={store} />
+              {!state.developerMode ? (
+                <SuggestionChips disabled={readOnly || pendingTurn} onSelect={handleSuggestionSelect} />
+              ) : null}
               <Composer handlers={composerHandlers} state={state} />
             </div>
           </>
