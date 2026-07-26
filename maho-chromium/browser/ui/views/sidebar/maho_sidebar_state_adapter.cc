@@ -193,7 +193,8 @@ bool ShouldShowSearchPlaceholderAddress(const GURL& url) {
 }
 
 std::u16string GetTabTitle(content::WebContents* contents) {
-  if (!contents || contents->GetTitle().empty()) {
+  if (!contents || contents->GetTitle().empty() ||
+      MahoDisplayPolicy::IsNtpOrBlankUrl(GetVisibleOrCommittedUrl(contents))) {
     return u"New Tab";
   }
   return contents->GetTitle();
@@ -222,7 +223,8 @@ std::u16string GetTabTitle(TabStripModel* model, int index) {
   }
 
   content::WebContents* contents = model->GetWebContentsAt(index);
-  if (!contents || contents->GetTitle().empty()) {
+  if (!contents || contents->GetTitle().empty() ||
+      MahoDisplayPolicy::IsNtpOrBlankUrl(GetVisibleOrCommittedUrl(contents))) {
     return u"New Tab";
   }
   return contents->GetTitle();

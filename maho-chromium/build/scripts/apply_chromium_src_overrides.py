@@ -50,6 +50,7 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
+    "ui/base/cocoa/command_dispatcher.mm": frozenset({"mac"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_frame_view_win.cc": frozenset({"win"}),
@@ -59,6 +60,62 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "ui/base/cocoa/command_dispatcher.mm": [
+        Replacement(
+            old=(
+                "  if (handler)\n"
+                "    [handler commandDispatch:sender window:_owner];\n"
+                "  else\n"
+                "    [_owner.commandDispatchParent commandDispatch:sender];\n"
+            ),
+            new=(
+                "  if (handler) {\n"
+                "    [handler commandDispatch:sender window:_owner];\n"
+                "  } else if (_owner.commandDispatchParent) {\n"
+                "    [_owner.commandDispatchParent commandDispatch:sender];\n"
+                "  } else {\n"
+                "    // Maho: mirror -validateUserInterfaceItem:'s AppController fallback so a\n"
+                "    // command the app delegate enabled (e.g. New Incognito Window while a\n"
+                "    // non-Browser window such as the login gate is key, with no\n"
+                "    // commandDispatchParent) actually runs instead of no-oping against nil.\n"
+                "    id appController = [NSApp delegate];\n"
+                "    if ([appController respondsToSelector:@selector(commandDispatch:)])\n"
+                "      [appController commandDispatch:sender];\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: route commandDispatch to the AppController when the key window has "
+                "no command handler and no commandDispatchParent (e.g. the login gate), so "
+                "New Incognito Window works with zero Browser windows"
+            ),
+            guard="Maho: mirror -validateUserInterfaceItem:'s AppController fallback",
+        ),
+        Replacement(
+            old=(
+                "  if (handler)\n"
+                "    [handler commandDispatchUsingKeyModifiers:sender window:_owner];\n"
+                "  else\n"
+                "    [_owner.commandDispatchParent commandDispatchUsingKeyModifiers:sender];\n"
+            ),
+            new=(
+                "  if (handler) {\n"
+                "    [handler commandDispatchUsingKeyModifiers:sender window:_owner];\n"
+                "  } else if (_owner.commandDispatchParent) {\n"
+                "    [_owner.commandDispatchParent commandDispatchUsingKeyModifiers:sender];\n"
+                "  } else {\n"
+                "    id appController = [NSApp delegate];\n"
+                "    if ([appController\n"
+                "            respondsToSelector:@selector(commandDispatchUsingKeyModifiers:)])\n"
+                "      [appController commandDispatchUsingKeyModifiers:sender];\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: same AppController fallback for commandDispatchUsingKeyModifiers"
+            ),
+            guard="respondsToSelector:@selector(commandDispatchUsingKeyModifiers:)])",
+        ),
+    ],
+
     "chrome/browser/ui/views/status_bubble_views.h": [
         Replacement(
             old="static const int kTotalVerticalPadding = 7;",
@@ -2864,6 +2921,85 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                "std::u16string Browser::GetWindowTitleForTab(int index) const {\n"
+                "  std::u16string title = base::UTF8ToUTF16(user_title_);\n"
+            ),
+            new=(
+                "std::u16string Browser::GetWindowTitleForTab(int index) const {\n"
+                "  // Maho: incognito windows show \"Incognito\" instead of the raw\n"
+                "  // chrome://newtab URL in the Window menu and title bar.\n"
+                "  if (profile_->IsOffTheRecord()) {\n"
+                "    content::WebContents* otr_contents =\n"
+                "        tab_strip_model_->GetWebContentsAt(index);\n"
+                "    if (otr_contents) {\n"
+                "      const GURL& otr_url = otr_contents->GetVisibleURL();\n"
+                "      if (otr_url.SchemeIs(\"chrome\") && otr_url.host() == \"newtab\") {\n"
+                "        return u\"Incognito\";\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "  std::u16string title = base::UTF8ToUTF16(user_title_);\n"
+            ),
+            description="Maho: show \"Incognito\" as the tab window title for incognito NTP tabs",
+            guard="content::WebContents* otr_contents =",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  // |contents| can be NULL if GetWindowTitleForMenu is called during the\n"
+                "  // window's creation (before tabs have been added).\n"
+                "  if (contents) {\n"
+                "    auto* const app_browser_controller = app_controller();\n"
+                "    title = FormatTitleForDisplay(app_browser_controller\n"
+                "                                      ? app_browser_controller->GetTitle()\n"
+                "                                      : contents->GetTitle());\n"
+                "  }\n"
+            ),
+            new=(
+                "  // |contents| can be NULL if GetWindowTitleForMenu is called during the\n"
+                "  // window's creation (before tabs have been added).\n"
+                "  if (contents) {\n"
+                "    const GURL& otr_url = contents->GetVisibleURL();\n"
+                "    if (profile_->IsOffTheRecord() && otr_url.SchemeIs(\"chrome\") &&\n"
+                "        otr_url.host() == \"newtab\") {\n"
+                "      title = u\"Incognito\";\n"
+                "    } else {\n"
+                "      auto* const app_browser_controller = app_controller();\n"
+                "      title = FormatTitleForDisplay(app_browser_controller\n"
+                "                                        ? app_browser_controller->GetTitle()\n"
+                "                                        : contents->GetTitle());\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description="Maho: show \"Incognito\" as the max-width window title for incognito NTP tabs",
+            guard="title = u\"Incognito\";",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "std::u16string Browser::GetWindowTitleFromWebContents(\n"
+                "    bool include_app_name,\n"
+                "    content::WebContents* contents) const {\n"
+                "  std::u16string title = base::UTF8ToUTF16(user_title_);\n"
+            ),
+            new=(
+                "std::u16string Browser::GetWindowTitleFromWebContents(\n"
+                "    bool include_app_name,\n"
+                "    content::WebContents* contents) const {\n"
+                "  if (profile_->IsOffTheRecord() && contents) {\n"
+                "    const GURL& otr_url = contents->GetVisibleURL();\n"
+                "    if (otr_url.SchemeIs(\"chrome\") && otr_url.host() == \"newtab\") {\n"
+                "      return u\"Incognito\";\n"
+                "    }\n"
+                "  }\n"
+                "  std::u16string title = base::UTF8ToUTF16(user_title_);\n"
+            ),
+            description="Maho: show \"Incognito\" as the from-web-contents window title for incognito NTP tabs",
+            guard="if (profile_->IsOffTheRecord() && contents) {",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
                 "  if (is_type_devtools()) {\n"
                 "    DevToolsWindow* window = DevToolsWindow::AsDevToolsWindow(source);\n"
                 "    DCHECK(window);\n"
@@ -2999,7 +3135,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // UnloadController has already set is_attempting_to_close_browser_ via\n"
                 "  // TryToCloseWindow / GetBrowserClosingStatus).  For every other browser\n"
                 "  // type the original behaviour is preserved.\n"
-                "  if (is_type_normal() &&\n"
+                "  if (is_type_normal() && !profile_->IsOffTheRecord() &&\n"
                 "      !unload_controller_.is_attempting_to_close_browser()) {\n"
                 "    return;\n"
                 "  }\n"
@@ -3446,6 +3582,51 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "redirecting to the onboarding gate"
             ),
             guard="Maho login gate: while active, route New Window",
+            idempotent=True,
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/welcome/maho_welcome_window.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/welcome/maho_welcome_window.h"\n'
+                '#include "chrome/browser/profiles/profile_destroyer.h"\n'
+                '#include "chrome/browser/ui/browser_finder.h"\n'
+            ),
+            description="Add ProfileDestroyer/browser_finder includes for the NewIncognitoWindow stale-OTR fix",
+            guard='#include "chrome/browser/profiles/profile_destroyer.h"',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "void NewIncognitoWindow(Profile* profile) {\n"
+                "  NewEmptyWindow(profile->GetPrimaryOTRProfile(/*create_if_needed=*/true));\n"
+                "}"
+            ),
+            new=(
+                "void NewIncognitoWindow(Profile* profile) {\n"
+                "  Profile* original = profile->GetOriginalProfile();\n"
+                "  if (original->ShutdownStarted()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Maho: a primary OTR profile left in ShutdownStarted() (pending\n"
+                "  // ProfileDestroyer after its last incognito window closed) would be reused\n"
+                "  // by GetPrimaryOTRProfile() and make OpenEmptyWindow() abort, so the new\n"
+                "  // incognito window never appears. Finish destroying the stale OTR first\n"
+                "  // (only when no incognito browser still references it) so a fresh primary\n"
+                "  // OTR is created for the new window.\n"
+                "  if (Profile* existing_otr =\n"
+                "          original->GetPrimaryOTRProfile(/*create_if_needed=*/false);\n"
+                "      existing_otr && existing_otr->ShutdownStarted() &&\n"
+                "      chrome::GetOffTheRecordBrowsersActiveForProfile(existing_otr) == 0) {\n"
+                "    ProfileDestroyer::DestroyOTRProfileImmediately(existing_otr);\n"
+                "  }\n"
+                "  NewEmptyWindow(original->GetPrimaryOTRProfile(/*create_if_needed=*/true));\n"
+                "}"
+            ),
+            description=(
+                "Maho: destroy a stale pending-shutdown primary OTR profile before opening "
+                "a new incognito window so the window is not aborted/destroyed by a race"
+            ),
+            guard="ProfileDestroyer::DestroyOTRProfileImmediately(existing_otr)",
             idempotent=True,
         ),
     ],
