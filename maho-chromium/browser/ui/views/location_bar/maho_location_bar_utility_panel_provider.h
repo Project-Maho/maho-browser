@@ -9,7 +9,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/values.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/gfx/vector_icon_types.h"
 
 class Browser;
@@ -52,6 +52,8 @@ struct MahoLocationBarUtilityPanelAction {
   MahoLocationBarUtilityPanelDataState data_state =
       MahoLocationBarUtilityPanelDataState::kLive;
   base::RepeatingClosure callback;
+  base::RepeatingCallback<void(views::View*)> anchor_callback;
+  bool show_disclosure_indicator = false;
   bool has_toggle = false;
   bool toggle_is_on = false;
   std::u16string toggle_on_subtitle;
@@ -81,9 +83,9 @@ struct MahoLocationBarUtilityPanelFooter {
 };
 
 enum class MahoUtilityPanelZoneId {
-  kToolbar,             // Arc-style toolbar row
-  kExtensions,          // Arc-style extensions chip row
-  kSettings,            // Arc-style settings rows
+  kToolbar,     // Arc-style toolbar row
+  kExtensions,  // Arc-style extensions chip row
+  kSettings,    // Arc-style settings rows
 };
 
 enum class MahoUtilityPanelZoneStyle {
@@ -127,13 +129,10 @@ MahoLocationBarUtilityPanelAction BuildViewfinderAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser);
 
-MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
-    bool blocking_enabled);
-
-void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
-                                            bool blocking_enabled,
-                                            bool& out_toggle_is_on,
-                                            std::u16string& out_subtitle);
+MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForOrigin(
+    Browser* browser,
+    base::WeakPtr<content::WebContents> target_web_contents,
+    const std::string& origin);
 
 void SetAutoPipEnabledForOrigin(const GURL& url,
                                 Profile* profile,
@@ -161,22 +160,16 @@ const gfx::VectorIcon& GetSecurityIconForLevel(int security_level);
 MahoLocationBarUtilityPanelFooter BuildFooterFromWebContents(
     content::WebContents* web_contents);
 
-
 MahoLocationBarUtilityPanelFooter BuildFooter(LocationBar* location_bar);
 
 MahoLocationBarUtilityPanelFooter BuildFooter(Browser* browser);
-
-bool IsOriginExceptedInSiteExceptions(const std::string& exceptions_json,
-                                      const std::string& origin);
-
-
 
 }  // namespace internal
 
 MahoLocationBarUtilityPanelModel BuildMahoLocationBarUtilityPanelModel(
     LocationBar* location_bar);
-MahoLocationBarUtilityPanelModel BuildMahoLocationBarUtilityPanelModelForBrowser(
-    Browser* browser);
+MahoLocationBarUtilityPanelModel
+BuildMahoLocationBarUtilityPanelModelForBrowser(Browser* browser);
 
 }  // namespace maho
 

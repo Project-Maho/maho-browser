@@ -5,19 +5,18 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <optional>
 
-#include "base/json/json_reader.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
-#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/net/maho_ad_block_tab_helper.h"
+#include "maho/browser/net/maho_shield_site_state.h"
+#include "maho/browser/net/maho_shield_site_state_factory.h"
 #include "maho/browser/ui/views/shields/maho_shield_bubble_view.h"
-#include "maho/third_party/maho/maho_bridge.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/widget/widget.h"
 #include "url/origin.h"
@@ -52,29 +51,12 @@ uint32_t GetBlockedCount(content::WebContents* web_contents) {
   return helper ? helper->blocked_count() : 0;
 }
 
-bool IsExceptedOrigin(const std::string& origin) {
-  if (origin.empty()) {
-    return false;
+MahoShieldSiteState* GetShieldSiteState(content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
   }
-
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return false;
-  }
-
-  std::optional<base::Value> parsed = base::JSONReader::Read(
-      maho::core::GetSiteExceptions(core), base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return false;
-  }
-
-  for (const auto& value : parsed->GetList()) {
-    if (value.is_string() && value.GetString() == origin) {
-      return true;
-    }
-  }
-
-  return false;
+  return MahoShieldSiteStateFactory::GetForProfile(
+      Profile::FromBrowserContext(web_contents->GetBrowserContext()));
 }
 
 }  // namespace
@@ -116,9 +98,10 @@ MahoShieldBubbleCoordinator::~MahoShieldBubbleCoordinator() {
   }
 }
 
-void MahoShieldBubbleCoordinator::Show(views::View* anchor_view,
-                                       Browser* browser,
-                                       content::WebContents* target_web_contents) {
+void MahoShieldBubbleCoordinator::Show(
+    views::View* anchor_view,
+    Browser* browser,
+    content::WebContents* target_web_contents) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!anchor_view || !browser) {
@@ -139,8 +122,13 @@ void MahoShieldBubbleCoordinator::Show(views::View* anchor_view,
     return;
   }
 
+  MahoShieldSiteState* state = GetShieldSiteState(web_contents);
+  if (!state) {
+    return;
+  }
+
   Show(anchor_view, origin, GetBlockedCount(web_contents),
-       IsExceptedOrigin(origin), web_contents);
+       state->IsSiteExceptedForOrigin(origin), web_contents);
 }
 
 void MahoShieldBubbleCoordinator::Show(
@@ -150,6 +138,10 @@ void MahoShieldBubbleCoordinator::Show(
     bool is_excepted,
     content::WebContents* target_web_contents) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!anchor_view || !browser_ || origin.empty() || !target_web_contents) {
+    return;
+  }
+
   if (IsShowing()) {
     widget_observation_.Reset();
     content::WebContentsObserver::Observe(nullptr);
@@ -161,20 +153,11 @@ void MahoShieldBubbleCoordinator::Show(
     }
   }
 
-  if (!anchor_view || !browser_) {
-    return;
-  }
-
   anchor_view_tracker_.SetView(anchor_view);
 
-  content::WebContents* bubble_contents = target_web_contents;
-  if (!bubble_contents) {
-    TabStripModel* tab_strip = browser_->tab_strip_model();
-    bubble_contents = tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
-  }
-
-  views::Widget* widget = MahoShieldBubbleView::Show(
-      anchor_view, browser_, origin, blocked_count, is_excepted);
+  views::Widget* widget =
+      MahoShieldBubbleView::Show(anchor_view, browser_, origin, blocked_count,
+                                 is_excepted, target_web_contents);
   if (!widget) {
     anchor_view_tracker_.SetView(nullptr);
     return;
@@ -182,7 +165,43 @@ void MahoShieldBubbleCoordinator::Show(
 
   bubble_widget_ = widget;
   widget_observation_.Observe(widget);
-  content::WebContentsObserver::Observe(bubble_contents);
+  content::WebContentsObserver::Observe(target_web_contents);
+}
+
+void MahoShieldBubbleCoordinator::Show(
+    views::Widget* anchor_widget,
+    const gfx::Rect& anchor_rect,
+    const std::string& origin,
+    uint32_t blocked_count,
+    bool is_excepted,
+    content::WebContents* target_web_contents) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!anchor_widget || anchor_rect.IsEmpty() || !browser_ || origin.empty() ||
+      !target_web_contents) {
+    return;
+  }
+
+  if (IsShowing()) {
+    widget_observation_.Reset();
+    content::WebContentsObserver::Observe(nullptr);
+    views::Widget* old_widget = bubble_widget_;
+    bubble_widget_ = nullptr;
+    anchor_view_tracker_.SetView(nullptr);
+    if (old_widget && !old_widget->IsClosed()) {
+      old_widget->Close();
+    }
+  }
+
+  views::Widget* widget = MahoShieldBubbleView::Show(
+      anchor_widget, anchor_rect, browser_, origin, blocked_count, is_excepted,
+      target_web_contents);
+  if (!widget) {
+    return;
+  }
+
+  bubble_widget_ = widget;
+  widget_observation_.Observe(widget);
+  content::WebContentsObserver::Observe(target_web_contents);
 }
 
 void MahoShieldBubbleCoordinator::Hide() {
@@ -219,19 +238,19 @@ void MahoShieldBubbleCoordinator::OnWidgetDestroying(views::Widget* widget) {
   if (anchor && anchor->GetWidget()) {
     auto tracker = std::make_shared<views::ViewTracker>(anchor);
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](std::shared_ptr<views::ViewTracker> t) {
-              views::View* v = t->view();
-              if (!v || !v->GetWidget()) {
-                return;
-              }
-              views::FocusManager* fm = v->GetWidget()->GetFocusManager();
-              if (fm && fm->ContainsView(v)) {
-                fm->SetFocusedView(v);
-              }
-            },
-            std::move(tracker)));
+        FROM_HERE, base::BindOnce(
+                       [](std::shared_ptr<views::ViewTracker> t) {
+                         views::View* v = t->view();
+                         if (!v || !v->GetWidget()) {
+                           return;
+                         }
+                         views::FocusManager* fm =
+                             v->GetWidget()->GetFocusManager();
+                         if (fm && fm->ContainsView(v)) {
+                           fm->SetFocusedView(v);
+                         }
+                       },
+                       std::move(tracker)));
   }
 }
 

@@ -5,34 +5,42 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/values.h"
-#include "chrome/browser/profiles/profile.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
-#include "components/content_settings/core/browser/host_content_settings_map.h"
-#include "components/content_settings/core/common/content_settings.h"
-#include "components/content_settings/core/common/content_settings_types.h"
-#include "components/permissions/permission_decision_auto_blocker.h"
-#include "chrome/test/base/testing_profile.h"
-#include "chrome/test/base/test_browser_window.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/test/base/test_browser_window.h"
+#include "chrome/test/base/testing_profile.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/omnibox/browser/location_bar_model.h"
-#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/security_state/core/security_state.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/page.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
+#include "content/public/test/web_contents_tester.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension_builder.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/net/maho_ad_block_tab_helper.h"
+#include "maho/browser/net/maho_shield_site_state.h"
+#include "maho/browser/net/maho_shield_site_state_factory.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "url/gurl.h"
@@ -54,6 +62,24 @@ class ScopedCoreOverride {
  private:
   base::raw_ptr<MahoCore> saved_core_ = nullptr;
 };
+
+void SetUnknownContentBlockingModeForTest(MahoCore* core) {
+  char* result = maho_core_handle_event(
+      core, R"({"kind":"set_content_blocking_mode","mode":"unknown"})");
+  ASSERT_NE(result, nullptr);
+  maho_string_free(result);
+  ASSERT_EQ(maho::core::GetContentBlockingMode(core), 3);
+}
+
+MahoBlockedRequestInfo MakeMainFrameDocumentBlockedRequestInfoForTest(
+    content::WebContents* contents) {
+  MahoBlockedRequestInfo info;
+  info.page_id = contents->GetPrimaryPage().GetMainDocument().GetGlobalId();
+  info.destination = network::mojom::RequestDestination::kDocument;
+  info.is_outermost_main_frame = true;
+  info.request_type = "document";
+  return info;
+}
 
 class FakeLocationBarModel : public LocationBarModel {
  public:
@@ -101,12 +127,12 @@ class FakeLocationBarModel : public LocationBarModel {
 //   if (!core) {
 //     return std::nullopt;
 //   }
-// 
+//
 //   char* json_str = maho_core_get_settings(core);
 //   if (!json_str) {
 //     return std::nullopt;
 //   }
-// 
+//
 //   std::string json(json_str);
 //   maho_string_free(json_str);
 //   return ParseJson(json);
@@ -122,8 +148,9 @@ std::vector<std::u16string> TitlesFrom(
   return titles;
 }
 
-const MahoUtilityPanelZone* FindZone(const MahoLocationBarUtilityPanelModel& model,
-                                     MahoUtilityPanelZoneId id) {
+const MahoUtilityPanelZone* FindZone(
+    const MahoLocationBarUtilityPanelModel& model,
+    MahoUtilityPanelZoneId id) {
   for (const auto& zone : model.zones) {
     if (zone.id == id) {
       return &zone;
@@ -132,8 +159,9 @@ const MahoUtilityPanelZone* FindZone(const MahoLocationBarUtilityPanelModel& mod
   return nullptr;
 }
 
-void ExpectActionsEquivalent(const MahoLocationBarUtilityPanelAction& actual,
-                             const MahoLocationBarUtilityPanelAction& expected) {
+void ExpectActionsEquivalent(
+    const MahoLocationBarUtilityPanelAction& actual,
+    const MahoLocationBarUtilityPanelAction& expected) {
   EXPECT_EQ(actual.title, expected.title);
   EXPECT_EQ(actual.subtitle, expected.subtitle);
   EXPECT_EQ(actual.accessible_name, expected.accessible_name);
@@ -144,12 +172,15 @@ void ExpectActionsEquivalent(const MahoLocationBarUtilityPanelAction& actual,
   EXPECT_EQ(actual.toggle_is_on, expected.toggle_is_on);
   EXPECT_EQ(actual.toggle_on_subtitle, expected.toggle_on_subtitle);
   EXPECT_EQ(actual.toggle_off_subtitle, expected.toggle_off_subtitle);
-  EXPECT_EQ(actual.toggle_callback.is_null(), expected.toggle_callback.is_null());
+  EXPECT_EQ(actual.toggle_callback.is_null(),
+            expected.toggle_callback.is_null());
   EXPECT_EQ(actual.close_after_activate, expected.close_after_activate);
   EXPECT_EQ(actual.callback.is_null(), expected.callback.is_null());
+  EXPECT_EQ(actual.anchor_callback.is_null(),
+            expected.anchor_callback.is_null());
+  EXPECT_EQ(actual.show_disclosure_indicator,
+            expected.show_disclosure_indicator);
 }
-
-
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      ShareActionUsesNativeSharingHubSubtitleAndIsUnavailableWithNullBrowser) {
@@ -165,8 +196,6 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_TRUE(share.close_after_activate);
 }
 
-
-
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      AutoPipSettingsRowNullContextIsUnavailable) {
   MahoLocationBarUtilityPanelAction row =
@@ -174,13 +203,10 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_EQ(row.title, u"Automatic Picture-In-Picture");
   EXPECT_EQ(row.subtitle, u"No active page available");
   EXPECT_EQ(row.icon, &maho_lucide_icons::kPictureInPicture2Icon);
-  EXPECT_EQ(row.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
+  EXPECT_EQ(row.data_state, MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(row.enabled);
   EXPECT_FALSE(row.callback);
 }
-
-
 
 // TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 //      SecuritySymbolNameReflectsSecurityLevel) {
@@ -273,8 +299,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_TRUE(action.close_after_activate);
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ToolbarZoneHasNoHeader) {
+TEST(MahoLocationBarUtilityPanelProviderInternalTest, ToolbarZoneHasNoHeader) {
   MahoUtilityPanelZone zone = internal::BuildToolbarZone(nullptr);
   EXPECT_TRUE(zone.header_label.empty());
 }
@@ -306,8 +331,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_EQ(zone.header_label, u"Site controls");
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     SettingsZoneRowsInOrder) {
+TEST(MahoLocationBarUtilityPanelProviderInternalTest, SettingsZoneRowsInOrder) {
   ScopedCoreOverride scoped_core(nullptr);
   MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
   ASSERT_EQ(zone.items.size(), 3u);
@@ -318,72 +342,258 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     SettingsBlockAdsRowUsesSiteExceptionsOriginMatchingHelper) {
-  EXPECT_TRUE(internal::IsOriginExceptedInSiteExceptions(
-      R"(["https://maho.com","https://example.com"])",
-      "https://example.com"));
-  EXPECT_FALSE(internal::IsOriginExceptedInSiteExceptions(
-      R"(["https://maho.com"])", "https://example.com"));
-  EXPECT_FALSE(internal::IsOriginExceptedInSiteExceptions("{}",
-                                                           "https://example.com"));
-
+     SettingsBlockAdsRowIsUnavailableWithoutActiveOrigin) {
   MahoLocationBarUtilityPanelAction row =
       internal::BuildBlockAdsAndTrackersRow(nullptr);
   EXPECT_EQ(row.title, u"Block Ads & Trackers");
   EXPECT_EQ(row.subtitle, u"Current page unavailable");
   EXPECT_EQ(row.icon, &maho_lucide_icons::kShieldHalfIcon);
-  EXPECT_EQ(row.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
+  EXPECT_EQ(row.data_state, MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(row.enabled);
   EXPECT_FALSE(row.has_toggle);
   EXPECT_FALSE(row.toggle_callback);
+  EXPECT_FALSE(row.show_disclosure_indicator);
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BlockAdsAndTrackersRowForStateExposesInlineToggleMetadata) {
-  MahoLocationBarUtilityPanelAction enabled =
-      internal::BuildBlockAdsAndTrackersRowForState(/*blocking_enabled=*/true);
-  EXPECT_EQ(enabled.title, u"Block Ads & Trackers");
-  EXPECT_EQ(enabled.subtitle, u"Blocked on every visit");
-  EXPECT_EQ(enabled.accessible_name,
-            u"Block Ads & Trackers — Blocked on every visit");
-  EXPECT_TRUE(enabled.enabled);
-  EXPECT_TRUE(enabled.has_toggle);
-  EXPECT_TRUE(enabled.toggle_is_on);
-  EXPECT_EQ(enabled.toggle_on_subtitle, u"Blocked on every visit");
-  EXPECT_EQ(enabled.toggle_off_subtitle, u"Allowed on this site");
-  EXPECT_FALSE(enabled.callback);
-  EXPECT_TRUE(enabled.toggle_callback.is_null());
-  EXPECT_FALSE(enabled.close_after_activate);
-
-  MahoLocationBarUtilityPanelAction disabled =
-      internal::BuildBlockAdsAndTrackersRowForState(/*blocking_enabled=*/false);
-  EXPECT_TRUE(disabled.has_toggle);
-  EXPECT_FALSE(disabled.toggle_is_on);
-  EXPECT_EQ(disabled.subtitle, u"Allowed on this site");
-  EXPECT_EQ(disabled.accessible_name,
-            u"Block Ads & Trackers — Allowed on this site");
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     SetBlockAdsAndTrackersEnabledForOriginWritesSiteExceptionsDirectly) {
+     NativeShieldRowForOriginUsesLauncherMetadataByDefault) {
+  content::BrowserTaskEnvironment task_environment;
+  content::RenderViewHostTestEnabler rvh_test_enabler;
   MahoCore* core = maho_core_new();
   ASSERT_TRUE(core);
 
   {
     ScopedCoreOverride scoped_core(core);
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+
+    TestingProfile profile;
+    auto window = std::make_unique<TestBrowserWindow>();
+    Browser::CreateParams params(&profile, true);
+    params.window = window.release();
+    Browser* browser = Browser::Create(params);
+    ASSERT_NE(browser, nullptr);
+
+    std::unique_ptr<content::WebContents> contents =
+        content::WebContentsTester::CreateTestWebContents(&profile, nullptr);
     const std::string origin = "https://example.com";
 
-    bool out_on = false;
-    std::u16string out_sub;
-    internal::SetBlockAdsAndTrackersEnabledForOrigin(
-        origin, /*blocking_enabled=*/false, out_on, out_sub);
-    EXPECT_EQ(maho::core::GetSiteExceptions(core),
-              std::string("[\"") + origin + "\"]");
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRowForOrigin(
+            browser, contents->GetWeakPtr(), origin);
 
-    internal::SetBlockAdsAndTrackersEnabledForOrigin(
-        origin, /*blocking_enabled=*/true, out_on, out_sub);
+    EXPECT_EQ(row.title, u"Block Ads & Trackers");
+    EXPECT_EQ(row.subtitle, u"0 blocked · Shields on");
+    EXPECT_EQ(row.accessible_name,
+              u"Block Ads & Trackers — " + row.subtitle);
+    EXPECT_EQ(row.icon, &maho_lucide_icons::kShieldHalfIcon);
+    EXPECT_EQ(row.data_state, MahoLocationBarUtilityPanelDataState::kLive);
+    EXPECT_TRUE(row.enabled);
+    EXPECT_FALSE(row.has_toggle);
+    EXPECT_FALSE(row.toggle_is_on);
+    EXPECT_TRUE(row.toggle_on_subtitle.empty());
+    EXPECT_TRUE(row.toggle_off_subtitle.empty());
+    EXPECT_FALSE(row.toggle_callback);
+    EXPECT_TRUE(row.close_after_activate);
+    EXPECT_FALSE(row.callback);
+    EXPECT_TRUE(row.anchor_callback);
+    EXPECT_TRUE(row.show_disclosure_indicator);
+  }
+
+  maho_core_free(core);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     ShieldLauncherRowShowsCountAndOpensBubbleByDefault) {
+  content::BrowserTaskEnvironment task_environment;
+  content::RenderViewHostTestEnabler rvh_test_enabler;
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+
+    TestingProfile profile;
+    auto window = std::make_unique<TestBrowserWindow>();
+    Browser::CreateParams params(&profile, true);
+    params.window = window.release();
+    Browser* browser = Browser::Create(params);
+    ASSERT_NE(browser, nullptr);
+
+    const GURL url("https://example.com/");
+    chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
+    content::WebContents* contents =
+        browser->tab_strip_model()->GetActiveWebContents();
+    ASSERT_NE(contents, nullptr);
+
+    MahoAdBlockTabHelper::CreateForWebContents(contents);
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(contents, url);
+    MahoAdBlockTabHelper* helper =
+        MahoAdBlockTabHelper::FromWebContents(contents);
+    ASSERT_NE(helper, nullptr);
+
+    for (int i = 0; i < 3; ++i) {
+      helper->RecordBlockedRequest(
+          MakeMainFrameDocumentBlockedRequestInfoForTest(contents));
+    }
+    ASSERT_EQ(helper->blocked_count(), 3u);
+
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRow(browser);
+
+    EXPECT_EQ(row.title, u"Block Ads & Trackers");
+    EXPECT_FALSE(row.has_toggle);
+    EXPECT_FALSE(row.toggle_callback);
+    EXPECT_TRUE(row.close_after_activate);
+    EXPECT_FALSE(row.callback);
+    EXPECT_TRUE(row.anchor_callback);
+    EXPECT_TRUE(row.show_disclosure_indicator);
+    EXPECT_EQ(row.subtitle, u"3 blocked · Shields on");
+    EXPECT_EQ(row.accessible_name,
+              u"Block Ads & Trackers — " + row.subtitle);
+
+    browser->tab_strip_model()->CloseAllTabs();
+  }
+
+  maho_core_free(core);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     ShieldLauncherRowShowsAllowedStateWithoutInlineToggle) {
+  content::BrowserTaskEnvironment task_environment;
+  content::RenderViewHostTestEnabler rvh_test_enabler;
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+    TestingProfile profile;
+    auto window = std::make_unique<TestBrowserWindow>();
+    Browser::CreateParams params(&profile, true);
+    params.window = window.release();
+    Browser* browser = Browser::Create(params);
+    ASSERT_NE(browser, nullptr);
+
+    const GURL url("https://example.com/");
+    const std::string origin = "https://example.com";
+    MahoShieldSiteState* state =
+        MahoShieldSiteStateFactory::GetForProfile(&profile);
+    ASSERT_NE(state, nullptr);
+    state->AddSiteException(origin);
+
+    chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
+    content::WebContents* contents =
+        browser->tab_strip_model()->GetActiveWebContents();
+    ASSERT_NE(contents, nullptr);
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(contents, url);
+
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRow(browser);
+
+    EXPECT_EQ(row.title, u"Block Ads & Trackers");
+    EXPECT_TRUE(row.enabled);
+    EXPECT_FALSE(row.has_toggle);
+    EXPECT_FALSE(row.toggle_callback);
+    EXPECT_FALSE(row.callback);
+    EXPECT_TRUE(row.anchor_callback);
+    EXPECT_TRUE(row.show_disclosure_indicator);
+    EXPECT_TRUE(row.close_after_activate);
+    EXPECT_EQ(row.subtitle, u"0 blocked · Shields off");
+
+    browser->tab_strip_model()->CloseAllTabs();
+  }
+
+  maho_core_free(core);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     ShieldLauncherRowReadsProfileScopedShieldSiteState) {
+  content::BrowserTaskEnvironment task_environment;
+  content::RenderViewHostTestEnabler rvh_test_enabler;
+  MahoCore* core = maho::core::Create();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+    TestingProfile profile;
+    Profile* otr_profile =
+        profile.GetPrimaryOTRProfile(/*create_if_needed=*/true);
+    std::unique_ptr<content::WebContents> otr_contents =
+        content::WebContentsTester::CreateTestWebContents(otr_profile,
+                                                          nullptr);
+    MahoShieldSiteState* otr_state =
+        MahoShieldSiteStateFactory::GetForProfile(otr_profile);
+    ASSERT_NE(otr_state, nullptr);
+
+    const std::string origin = "https://example.com";
+    otr_state->AddSiteException(origin);
+
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRowForOrigin(
+            nullptr, otr_contents->GetWeakPtr(), origin);
+
+    EXPECT_EQ(row.subtitle, u"0 blocked · Shields off");
+    EXPECT_FALSE(row.enabled);
+    EXPECT_FALSE(row.has_toggle);
+    EXPECT_FALSE(row.toggle_callback);
+    EXPECT_FALSE(row.callback);
+    EXPECT_FALSE(row.anchor_callback);
+    EXPECT_FALSE(row.show_disclosure_indicator);
+    EXPECT_TRUE(row.close_after_activate);
+    EXPECT_TRUE(otr_state->IsSiteExceptedForOrigin(origin));
     EXPECT_EQ(maho::core::GetSiteExceptions(core), "[]");
+  }
+
+  maho::core::Destroy(core);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     NonNativeModesDoNotMutateSiteExceptions) {
+  content::BrowserTaskEnvironment task_environment;
+  content::RenderViewHostTestEnabler rvh_test_enabler;
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    TestingProfile profile;
+    std::unique_ptr<content::WebContents> contents =
+        content::WebContentsTester::CreateTestWebContents(&profile, nullptr);
+    const std::string origin = "https://example.com";
+
+    for (int mode : {1, 2}) {
+      ASSERT_TRUE(maho::core::SetContentBlockingMode(core, mode));
+      const std::string exceptions_before = maho::core::GetSiteExceptions(core);
+      MahoLocationBarUtilityPanelAction row =
+          internal::BuildBlockAdsAndTrackersRowForOrigin(
+              nullptr, contents->GetWeakPtr(), origin);
+
+      EXPECT_EQ(maho::core::GetSiteExceptions(core), exceptions_before);
+      EXPECT_FALSE(row.enabled);
+      EXPECT_FALSE(row.has_toggle);
+      EXPECT_FALSE(row.toggle_callback);
+      EXPECT_FALSE(row.callback);
+      EXPECT_FALSE(row.anchor_callback);
+      EXPECT_FALSE(row.show_disclosure_indicator);
+    }
+
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+    SetUnknownContentBlockingModeForTest(core);
+    const std::string exceptions_before = maho::core::GetSiteExceptions(core);
+
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRowForOrigin(
+            nullptr, contents->GetWeakPtr(), origin);
+
+    EXPECT_EQ(maho::core::GetSiteExceptions(core), exceptions_before);
+    EXPECT_FALSE(row.enabled);
+    EXPECT_FALSE(row.has_toggle);
+    EXPECT_FALSE(row.toggle_callback);
+    EXPECT_FALSE(row.callback);
+    EXPECT_FALSE(row.anchor_callback);
+    EXPECT_FALSE(row.show_disclosure_indicator);
   }
 
   maho_core_free(core);
@@ -395,7 +605,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
   ASSERT_EQ(zone.items.size(), 3u);
   ExpectActionsEquivalent(zone.items[1],
-                           internal::BuildAutoPipSettingsRow(nullptr, nullptr));
+                          internal::BuildAutoPipSettingsRow(nullptr, nullptr));
 }
 
 TEST(MahoLocationBarUtilityPanelProviderTest,
@@ -453,8 +663,6 @@ TEST(MahoLocationBarUtilityPanelProviderTest,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
 }
 
-
-
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      BuildFooterFromWebContentsNullIsUnavailableWithPageSecuritySubtitle) {
   MahoLocationBarUtilityPanelFooter footer =
@@ -466,18 +674,6 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_EQ(footer.security_level, static_cast<int>(security_state::NONE));
 }
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BlockAdsAndTrackersSubtitleIsCorrectlyOrientedForExceptionState) {
-  // is_excepted=true means the origin is in the site exceptions list, so
-  // blocking is OFF (ads allowed). The subtitle should reflect "allowed".
-  EXPECT_TRUE(internal::IsOriginExceptedInSiteExceptions(
-      R"(["https://example.com"])", "https://example.com"));
-  EXPECT_FALSE(internal::IsOriginExceptedInSiteExceptions(
-      R"(["https://other.com"])", "https://example.com"));
-}
-
-
 
 class MahoLocationBarUtilityPanelProviderRegistryTest : public testing::Test {
  protected:
@@ -502,12 +698,12 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   // Add dummy extensions
   auto ext1 = extensions::ExtensionBuilder("Alpha").SetID("alpha_id").Build();
   auto ext2 = extensions::ExtensionBuilder("Beta").SetID("beta_id").Build();
-  
+
   registry->AddEnabled(ext1);
   registry->AddDisabled(ext2);
 
   MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
-  
+
   ASSERT_EQ(zone.items.size(), 2u);
   EXPECT_EQ(zone.items[0].title, u"Alpha");
   EXPECT_EQ(zone.items[0].accessible_name, u"Alpha");
@@ -525,7 +721,8 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   EXPECT_TRUE(zone.items[1].context_menu_callback);
   EXPECT_TRUE(zone.items[1].context_menu_enabled);
 
-  // Verify context menu callbacks can be executed without crash (null/dummy anchor checks)
+  // Verify context menu callbacks can be executed without crash (null/dummy
+  // anchor checks)
   zone.items[0].context_menu_callback.Run(nullptr);
   zone.items[1].context_menu_callback.Run(nullptr);
 }
@@ -539,12 +736,12 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   Browser* browser = Browser::Create(params);
 
   auto* registry = extensions::ExtensionRegistry::Get(&profile);
-  
+
   auto ext = extensions::ExtensionBuilder("Internal Component")
                  .SetLocation(extensions::mojom::ManifestLocation::kComponent)
                  .SetID("internal_id")
                  .Build();
-                 
+
   registry->AddEnabled(ext);
 
   MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
@@ -565,19 +762,155 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   EXPECT_EQ(zone.header_trailing_action->title, u"Manage");
   EXPECT_TRUE(zone.header_trailing_action->enabled);
   EXPECT_TRUE(zone.header_trailing_action->callback);
-  
+
   // Add a dummy tab first
   chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
-  
+
   // Verify it navigates to the extensions settings URL
   zone.header_trailing_action->callback.Run();
 
   EXPECT_EQ(browser->tab_strip_model()->count(), 2);
-  EXPECT_EQ(browser->tab_strip_model()->GetActiveWebContents()->GetVisibleURL().spec(),
+  EXPECT_EQ(browser->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetVisibleURL()
+                .spec(),
             "chrome://maho-settings/?pane=extensions");
 
   // Close all tabs before browser destruction to avoid crash
   browser->tab_strip_model()->CloseAllTabs();
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       ShieldLauncherRowDoesNotInstallReloadingToggle) {
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+    TestingProfile profile;
+    auto window = std::make_unique<TestBrowserWindow>();
+    Browser::CreateParams params(&profile, true);
+    params.window = window.release();
+    Browser* browser = Browser::Create(params);
+    ASSERT_NE(browser, nullptr);
+
+    const GURL captured_url("https://captured.example/");
+    std::unique_ptr<content::WebContents> captured_contents =
+        content::WebContentsTester::CreateTestWebContents(&profile, nullptr);
+    content::WebContentsTester::For(captured_contents.get())
+        ->NavigateAndCommit(captured_url);
+
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRowForOrigin(
+            browser, captured_contents->GetWeakPtr(), captured_url.spec());
+    EXPECT_FALSE(row.has_toggle);
+    EXPECT_FALSE(row.toggle_callback);
+    EXPECT_FALSE(row.callback);
+    EXPECT_TRUE(row.anchor_callback);
+    EXPECT_TRUE(row.show_disclosure_indicator);
+    EXPECT_TRUE(row.close_after_activate);
+
+    const GURL later_url("https://later.example/");
+    std::unique_ptr<content::WebContents> later_contents =
+        content::WebContentsTester::CreateTestWebContents(&profile, nullptr);
+    content::WebContentsTester::For(later_contents.get())
+        ->NavigateAndCommit(later_url);
+
+    ASSERT_EQ(captured_contents->GetController().GetPendingEntry(), nullptr);
+    ASSERT_EQ(later_contents->GetController().GetPendingEntry(), nullptr);
+  }
+
+  maho_core_free(core);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       ExpiredShieldTargetDoesNotFallbackToBrowserProfile) {
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+    TestingProfile profile;
+    auto window = std::make_unique<TestBrowserWindow>();
+    Browser::CreateParams params(&profile, true);
+    params.window = window.release();
+    Browser* browser = Browser::Create(params);
+    ASSERT_NE(browser, nullptr);
+
+    std::unique_ptr<content::WebContents> captured_contents =
+        content::WebContentsTester::CreateTestWebContents(&profile, nullptr);
+    base::WeakPtr<content::WebContents> expired_target =
+        captured_contents->GetWeakPtr();
+    captured_contents.reset();
+
+    chrome::AddTabAt(browser, GURL("https://later.example/"), -1, true);
+    MahoLocationBarUtilityPanelAction row =
+        internal::BuildBlockAdsAndTrackersRowForOrigin(
+            browser, expired_target, "https://captured.example");
+
+    EXPECT_FALSE(row.enabled);
+    EXPECT_EQ(row.subtitle, u"Content blocker unavailable");
+    EXPECT_FALSE(row.callback);
+    EXPECT_FALSE(row.anchor_callback);
+    EXPECT_FALSE(row.show_disclosure_indicator);
+    browser->tab_strip_model()->CloseAllTabs();
+  }
+
+  maho_core_free(core);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       NonNativeRowsNeverExposeSiteExceptionToggle) {
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    TestingProfile profile;
+    auto window = std::make_unique<TestBrowserWindow>();
+    Browser::CreateParams params(&profile, true);
+    params.window = window.release();
+    Browser* browser = Browser::Create(params);
+    ASSERT_NE(browser, nullptr);
+    std::unique_ptr<content::WebContents> contents =
+        content::WebContentsTester::CreateTestWebContents(&profile, nullptr);
+    const std::string origin = "https://example.com/";
+
+    for (const auto& [mode, subtitle] :
+         std::vector<std::pair<int, std::u16string>>{
+             {1, u"Managed by extension"}, {2, u"Content blocking off"}}) {
+      ASSERT_TRUE(maho::core::SetContentBlockingMode(core, mode));
+      MahoLocationBarUtilityPanelAction row =
+          internal::BuildBlockAdsAndTrackersRowForOrigin(
+              browser, contents->GetWeakPtr(), origin);
+      EXPECT_EQ(row.subtitle, subtitle);
+      EXPECT_EQ(row.data_state,
+                MahoLocationBarUtilityPanelDataState::kUnavailable);
+      EXPECT_FALSE(row.enabled);
+      EXPECT_FALSE(row.has_toggle);
+      EXPECT_FALSE(row.toggle_callback);
+      EXPECT_FALSE(row.anchor_callback);
+      EXPECT_FALSE(row.show_disclosure_indicator);
+    }
+
+    ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
+    SetUnknownContentBlockingModeForTest(core);
+    MahoLocationBarUtilityPanelAction unknown_row =
+        internal::BuildBlockAdsAndTrackersRowForOrigin(
+            browser, contents->GetWeakPtr(), origin);
+    EXPECT_EQ(unknown_row.subtitle, u"Content blocker unavailable");
+    EXPECT_EQ(unknown_row.data_state,
+              MahoLocationBarUtilityPanelDataState::kUnavailable);
+    EXPECT_FALSE(unknown_row.enabled);
+    EXPECT_FALSE(unknown_row.has_toggle);
+    EXPECT_FALSE(unknown_row.toggle_callback);
+    EXPECT_FALSE(unknown_row.anchor_callback);
+    EXPECT_FALSE(unknown_row.show_disclosure_indicator);
+  }
+
+  maho_core_free(core);
 }
 
 class MahoLocationBarUtilityPanelProviderAutoPipTest : public ::testing::Test {
@@ -588,8 +921,8 @@ class MahoLocationBarUtilityPanelProviderAutoPipTest : public ::testing::Test {
   ContentSetting GetAutoPipSetting(Profile* profile, const GURL& url) {
     HostContentSettingsMap* map =
         HostContentSettingsMapFactory::GetForProfile(profile);
-    return map->GetContentSetting(
-        url, GURL(), ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
+    return map->GetContentSetting(url, GURL(),
+                                  ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
   }
 
   content::BrowserTaskEnvironment task_environment_;
@@ -632,8 +965,8 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
 
   bool out_on = false;
   std::u16string out_sub;
-  internal::SetAutoPipEnabledForOrigin(url_a, &profile, /*enabled=*/true, out_on,
-                                       out_sub);
+  internal::SetAutoPipEnabledForOrigin(url_a, &profile, /*enabled=*/true,
+                                       out_on, out_sub);
   EXPECT_EQ(GetAutoPipSetting(&profile, url_a), CONTENT_SETTING_ALLOW);
   EXPECT_EQ(GetAutoPipSetting(&profile, url_b), CONTENT_SETTING_ASK);
 }
@@ -653,8 +986,8 @@ TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
   const GURL empty;
   bool out_on = false;
   std::u16string out_sub;
-  internal::SetAutoPipEnabledForOrigin(empty, &profile, /*enabled=*/true, out_on,
-                                       out_sub);
+  internal::SetAutoPipEnabledForOrigin(empty, &profile, /*enabled=*/true,
+                                       out_on, out_sub);
 }
 
 TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,

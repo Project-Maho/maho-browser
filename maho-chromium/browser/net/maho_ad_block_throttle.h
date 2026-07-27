@@ -6,9 +6,16 @@
 #include "base/functional/callback.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
 
+namespace network {
+struct ResourceRequest;
+}  // namespace network
+
+using MahoAdBlockBlockedCallback =
+    base::RepeatingCallback<void(const network::ResourceRequest&)>;
+
 class MahoAdBlockThrottle : public blink::URLLoaderThrottle {
  public:
-  explicit MahoAdBlockThrottle(base::RepeatingClosure on_blocked);
+  explicit MahoAdBlockThrottle(MahoAdBlockBlockedCallback on_blocked);
   ~MahoAdBlockThrottle() override;
 
   MahoAdBlockThrottle(const MahoAdBlockThrottle&) = delete;
@@ -18,7 +25,7 @@ class MahoAdBlockThrottle : public blink::URLLoaderThrottle {
                         bool* defer) override;
 
  private:
-  base::RepeatingClosure on_blocked_;
+  MahoAdBlockBlockedCallback on_blocked_;
 };
 
 #endif  // MAHO_BROWSER_NET_MAHO_AD_BLOCK_THROTTLE_H_

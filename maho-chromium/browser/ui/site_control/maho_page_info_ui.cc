@@ -2,8 +2,7 @@
 
 #include "maho/browser/ui/site_control/maho_page_info_ui.h"
 
-#include "base/json/json_reader.h"
-#include "base/values.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -11,11 +10,11 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/net/maho_ad_block_tab_helper.h"
+#include "maho/browser/net/maho_shield_site_state.h"
+#include "maho/browser/net/maho_shield_site_state_factory.h"
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/shields/maho_shield_bubble_coordinator.h"
-#include "maho/third_party/maho/maho_bridge.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/widget/widget.h"
@@ -46,27 +45,42 @@ views::View* GetLocationBarAnchorView(Browser* browser) {
     }
   }
 
-  views::Widget* widget = views::Widget::GetWidgetForNativeWindow(
-      window->GetNativeWindow());
+  views::Widget* widget =
+      views::Widget::GetWidgetForNativeWindow(window->GetNativeWindow());
   return widget ? widget->GetContentsView() : nullptr;
+}
+
+maho::MahoShieldSiteState* GetShieldSiteState(Browser* browser,
+                                              content::WebContents* contents) {
+  if (contents) {
+    return maho::MahoShieldSiteStateFactory::GetForProfile(
+        Profile::FromBrowserContext(contents->GetBrowserContext()));
+  }
+  return maho::MahoShieldSiteStateFactory::GetForProfile(
+      browser ? browser->profile() : nullptr);
 }
 
 }  // namespace
 
 // static
 void MahoPageInfoUI::ShowShieldBubble(views::View* anchor_view,
-                                      Browser* browser,
-                                      const std::string& origin) {
+                                       Browser* browser,
+                                       const std::string& origin) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  MahoCore* core = maho::GetCore();
-  if (!core || !anchor_view || !browser) {
+  if (!anchor_view || !browser || origin.empty()) {
     return;
   }
 
   uint32_t blocked_count = 0;
-  content::WebContents* wc =
-      browser->tab_strip_model()->GetActiveWebContents();
+  TabStripModel* tab_strip = browser->tab_strip_model();
+  content::WebContents* wc = tab_strip ? tab_strip->GetActiveWebContents()
+                                       : nullptr;
+  maho::MahoShieldSiteState* state = GetShieldSiteState(browser, wc);
+  if (!state) {
+    return;
+  }
+
   if (wc) {
     auto* helper = MahoAdBlockTabHelper::FromWebContents(wc);
     if (helper) {
@@ -74,20 +88,29 @@ void MahoPageInfoUI::ShowShieldBubble(views::View* anchor_view,
     }
   }
 
-  bool is_excepted = false;
-  std::string exceptions_json = maho::core::GetSiteExceptions(core);
-  auto parsed = base::JSONReader::Read(exceptions_json, base::JSON_PARSE_RFC);
-  if (parsed && parsed->is_list()) {
-    for (const auto& val : parsed->GetList()) {
-      if (val.is_string() && val.GetString() == origin) {
-        is_excepted = true;
-        break;
-      }
-    }
+  maho::MahoShieldBubbleCoordinator::GetForBrowser(browser).Show(
+      anchor_view, origin, blocked_count,
+      state->IsSiteExceptedForOrigin(origin), wc);
+}
+
+void MahoPageInfoUI::ShowShieldBubble(
+    views::Widget* anchor_widget,
+    const gfx::Rect& anchor_rect,
+    Browser* browser,
+    const std::string& origin,
+    uint32_t blocked_count,
+    bool is_excepted,
+    content::WebContents* target_web_contents) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (!anchor_widget || anchor_rect.IsEmpty() || !browser || origin.empty() ||
+      !target_web_contents) {
+    return;
   }
 
   maho::MahoShieldBubbleCoordinator::GetForBrowser(browser).Show(
-      anchor_view, origin, blocked_count, is_excepted, wc);
+      anchor_widget, anchor_rect, origin, blocked_count, is_excepted,
+      target_web_contents);
 }
 
 // static

@@ -34,7 +34,7 @@ token-based, and tokens come from the relay auth server.
 
 ---
 
-## 2. Two ways to develop past the gate
+## 2. Three ways to develop past the gate
 
 ### A. Dev Skip (no account, per-session)
 
@@ -69,8 +69,43 @@ the test account (section 4). Real tokens get stored in the profile prefs and
 re-appear on subsequent launches.
 
 `GetRelayBaseUrl()` (`maho_auth_utils.cc:303`) reads `MAHO_RELAY_URL`, falling back
-to the production `sync.mahobrowser.com`. So `MAHO_RELAY_URL` both enables local-dev
+to the production `relay.mahobrowser.com`. So `MAHO_RELAY_URL` both enables local-dev
 mode **and** points auth calls at your local relay.
+
+### C. `--maho-disable-login-gate` switch (CLI / test harness — no relay, no UI, no tokens)
+
+The browser accepts a command-line switch that forces the gate **off** at profile init:
+
+- `maho-chromium/browser/maho_browser_main_extra_parts.cc:2777`
+  ```cpp
+  const bool needs_login_gate =
+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
+          "maho-disable-login-gate") &&
+      !maho::auth::HasValidRelaySession(prefs);
+  ```
+  When `--maho-disable-login-gate` is present, `needs_login_gate` is forced `false`:
+  `kLoginGateActive` is set `false`, `MahoWelcomeWindow::Show()` is skipped, and the
+  `startup_browser_creator_impl.cc` override lets startup browser creation / session
+  restore proceed normally — the browser opens straight to a normal window.
+
+- It suppresses **both** the login wall **and** the onboarding/welcome gate — they are
+  the same gate (`maho.auth.login_gate_active`), so this one switch covers login *and*
+  onboarding.
+- Unlike Dev Skip (A) and real login (B), it needs **no** `MAHO_RELAY_URL`, **no**
+  running relay, and **no** UI click — it works purely from the command line, so it is
+  usable at the harness/CLI level and in automation.
+- It creates **no** tokens and persists nothing: it only skips the gate for launches
+  that pass the switch. It is a **dev/test switch** — checked unconditionally at profile
+  init (not compile-gated behind an official-build flag), so it is not something end
+  users are expected to pass; keep it to local dev, tests, and E2E automation.
+
+**Launch the app straight into the browser (no relay, no login, no onboarding):**
+```bash
+"chromium/src/out/Default/Maho.app/Contents/MacOS/Maho" --maho-disable-login-gate
+```
+Add `--user-data-dir=<temp-profile> --no-first-run` for a throwaway profile (e.g. for
+manual QA). This is the simplest way to get into the browser when you do not need a real
+session; use approach B instead when you need persisted auth/relay behavior.
 
 ---
 
@@ -189,18 +224,32 @@ still hit the gate: with no relay session, `login_gate_active` is set at startup
 `startup_browser_creator_impl.cc:270 "No browser window found for startup"` → SIGSEGV,
 **harness-wide** (even untouched upstream tests like `BrowserTest.Title` crash).
 
-`MAHO_RELAY_URL` does **not** help here (no welcome UI to click). To run these tests
-you must remove the gate at the harness level — e.g. seed the profile prefs in the
-test fixture's `SetUpOnMainThread` / local-state setup so the gate never activates:
-- set `maho.auth.login_gate_active = false`, or
-- seed a valid relay session (`kRelayAccessTokenEncryptedB64` + a future
-  `kRelayAccessTokenExpiresAt`).
+`MAHO_RELAY_URL` does **not** help here (no welcome UI to click). The canonical fix is
+the `--maho-disable-login-gate` switch (section 2C): have the fixture append it in
+`SetUpCommandLine`, so the gate never activates and `InProcessBrowserTest::browser()`
+is non-null. Maho's own interactive test bases already do exactly this:
+- `maho-chromium/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.cc:128`
+- `maho-chromium/browser/ui/views/command/maho_command_incognito_interactive_uitest.cc:53`
+- `maho-chromium/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc:121,608`
+```cpp
+void SetUpCommandLine(base::CommandLine* command_line) override {
+  InProcessBrowserTest::SetUpCommandLine(command_line);
+  command_line->AppendSwitch("maho-disable-login-gate");
+}
+```
+A fixture that does **not** append the switch (and seeds no relay session) crashes
+harness-wide in `SetUpOnMainThread`: with no session, `login_gate_active` is set at
+startup and `RestoreOrCreateBrowser` suppresses window creation → `browser()` is null →
+`startup_browser_creator_impl.cc:270 "No browser window found for startup"` → SIGSEGV,
+hitting even untouched upstream tests like `BrowserTest.Title`.
 
-This is a test-infra change to the base browser-test fixture and is intentionally
-**not** applied by default; treat it as the known path for enabling Maho
-`InProcessBrowserTest` runtime locally or in CI. Pure unit tests
-(`unit_tests`: `MahoTabContextMenuTest.*`, `SidebarSplitGroupRenderTest.*`) do not
-launch a browser and are unaffected by the gate.
+Alternative to the switch (equivalent effect, more setup): seed the profile prefs in the
+fixture — set `maho.auth.login_gate_active = false`, or seed a valid relay session
+(`kRelayAccessTokenEncryptedB64` + a future `kRelayAccessTokenExpiresAt`). Prefer the
+switch unless a test specifically needs a *valid session* rather than just a *skipped
+gate*.
+
+Pure unit tests (`unit_tests`) do not launch a browser and are unaffected by the gate.
 
 ---
 
@@ -209,6 +258,8 @@ launch a browser and are unaffected by the gate.
 | Concern | Location |
 |---------|----------|
 | Gate decision at startup | `maho-chromium/browser/maho_browser_main_extra_parts.cc:2032` |
+| **CLI gate-bypass switch** | **`maho-chromium/browser/maho_browser_main_extra_parts.cc:2777` (`--maho-disable-login-gate`; skips login + onboarding gate)** |
+| Test fixtures using the switch | `maho_sidebar_interactive_test_base.cc:128`, `maho_command_incognito_interactive_uitest.cc:53`, `maho_ai_side_panel_interactive_uitest.cc:121,608` |
 | Session validity check | `maho-chromium/browser/ui/webui/maho_auth_utils.cc:282` (`HasValidRelaySession`) |
 | `MAHO_RELAY_URL` base-url read | `maho-chromium/browser/ui/webui/maho_auth_utils.cc:303` (`GetRelayBaseUrl`) |
 | `login_gate_active` pref | `maho-chromium/browser/ui/webui/maho_welcome/maho_welcome_prefs.h:11` |

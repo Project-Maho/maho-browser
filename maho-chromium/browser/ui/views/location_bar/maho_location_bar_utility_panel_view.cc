@@ -159,6 +159,7 @@ class MahoLocationBarUtilityPanelActionView
     const bool is_icon_chip = display_mode_ == DisplayMode::kExtensionIconChip;
     const bool is_settings = display_mode_ == DisplayMode::kSettingsRow;
     const bool has_inline_toggle = HasInlineToggle();
+    const bool show_disclosure_indicator = ShouldShowDisclosureIndicator();
     const bool show_settings_subtitle = is_settings && !action_.subtitle.empty();
     SetFocusBehavior(action_.enabled && !has_inline_toggle ? FocusBehavior::ALWAYS
                                                            : FocusBehavior::NEVER);
@@ -304,6 +305,16 @@ class MahoLocationBarUtilityPanelActionView
       toggle_button_->SetIsOn(action_.toggle_is_on);
     }
 
+    if (show_disclosure_indicator) {
+      auto* disclosure =
+          content->AddChildView(std::make_unique<views::ImageView>());
+      disclosure->SetImageSize(gfx::Size(kSettingsIconSize, kSettingsIconSize));
+      disclosure->SetImage(ui::ImageModel::FromVectorIcon(
+          maho_lucide_icons::kChevronRightIcon,
+          ui::kColorSysOnSurfaceSubtle, kSettingsIconSize));
+      disclosure->SetCanProcessEventsWithinSubtree(false);
+    }
+
     GetViewAccessibility().SetRole(has_inline_toggle ? ax::mojom::Role::kGroup
                                                      : ax::mojom::Role::kButton);
     GetViewAccessibility().SetName(BuildAccessibleName(action_));
@@ -374,11 +385,11 @@ class MahoLocationBarUtilityPanelActionView
       return true;
     }
 
-    if (action_.callback.is_null()) {
+    if (!HasPrimaryCallback()) {
       return false;
     }
 
-    action_.callback.Run();
+    RunPrimaryCallback();
     if (action_.close_after_activate) {
       if (views::Widget* widget = GetWidget(); widget && !widget->IsClosed()) {
         widget->CloseWithReason(
@@ -389,14 +400,14 @@ class MahoLocationBarUtilityPanelActionView
   }
 
   bool OnKeyPressed(const ui::KeyEvent& event) override {
-    if (HasInlineToggle() || !action_.enabled || action_.callback.is_null()) {
+    if (HasInlineToggle() || !action_.enabled || !HasPrimaryCallback()) {
       return false;
     }
 
     switch (event.key_code()) {
       case ui::VKEY_RETURN:
       case ui::VKEY_SPACE:
-        action_.callback.Run();
+        RunPrimaryCallback();
         if (action_.close_after_activate) {
           if (views::Widget* widget = GetWidget(); widget &&
                                                   !widget->IsClosed()) {
@@ -411,8 +422,26 @@ class MahoLocationBarUtilityPanelActionView
   }
 
  private:
+  bool HasPrimaryCallback() const {
+    return !action_.anchor_callback.is_null() || !action_.callback.is_null();
+  }
+
+  void RunPrimaryCallback() {
+    if (!action_.anchor_callback.is_null()) {
+      action_.anchor_callback.Run(this);
+      return;
+    }
+    action_.callback.Run();
+  }
+
   bool HasInlineToggle() const {
     return display_mode_ == DisplayMode::kSettingsRow && action_.has_toggle;
+  }
+
+  bool ShouldShowDisclosureIndicator() const {
+    return display_mode_ == DisplayMode::kSettingsRow &&
+           action_.show_disclosure_indicator && !HasInlineToggle() &&
+           !action_.anchor_callback.is_null();
   }
 
   std::u16string GetSubtitleForCurrentToggleState() const {

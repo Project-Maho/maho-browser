@@ -35,19 +35,19 @@ ui::ImageModel CreateUtilityButtonImage(ui::ColorId color_id) {
 
 void UpdateUtilityButtonImages(views::ToggleImageButton* button) {
   button->SetImageModel(views::Button::STATE_NORMAL,
-                        CreateUtilityButtonImage(ui::kColorIcon));
+                        CreateUtilityButtonImage(ui::kColorSysOnSurfaceSubtle));
   button->SetImageModel(views::Button::STATE_HOVERED,
-                        CreateUtilityButtonImage(ui::kColorIcon));
+                        CreateUtilityButtonImage(ui::kColorSysOnSurface));
   button->SetImageModel(views::Button::STATE_PRESSED,
-                        CreateUtilityButtonImage(ui::kColorIcon));
+                        CreateUtilityButtonImage(ui::kColorSysOnSurface));
   button->SetImageModel(views::Button::STATE_DISABLED,
                         CreateUtilityButtonImage(ui::kColorIconDisabled));
   button->SetToggledImageModel(views::Button::STATE_NORMAL,
-                               CreateUtilityButtonImage(ui::kColorIcon));
+                               CreateUtilityButtonImage(ui::kColorSysOnSurface));
   button->SetToggledImageModel(views::Button::STATE_HOVERED,
-                               CreateUtilityButtonImage(ui::kColorIcon));
+                               CreateUtilityButtonImage(ui::kColorSysOnSurface));
   button->SetToggledImageModel(views::Button::STATE_PRESSED,
-                               CreateUtilityButtonImage(ui::kColorIcon));
+                               CreateUtilityButtonImage(ui::kColorSysOnSurface));
   button->SetToggledImageModel(views::Button::STATE_DISABLED,
                                CreateUtilityButtonImage(ui::kColorIconDisabled));
 }

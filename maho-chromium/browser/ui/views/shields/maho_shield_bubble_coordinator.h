@@ -11,6 +11,7 @@
 #include "base/sequence_checker.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget_observer.h"
@@ -49,6 +50,12 @@ class MahoShieldBubbleCoordinator : public views::WidgetObserver,
             uint32_t blocked_count,
             bool is_excepted,
             content::WebContents* target_web_contents = nullptr);
+  void Show(views::Widget* anchor_widget,
+            const gfx::Rect& anchor_rect,
+            const std::string& origin,
+            uint32_t blocked_count,
+            bool is_excepted,
+            content::WebContents* target_web_contents);
   void Hide();
   bool IsShowing() const;
   views::Widget* GetBubbleWidgetForTesting() const;

@@ -2,9 +2,11 @@
 
 #include <memory>
 
+#include "base/command_line.h"
 #include "base/test/run_until.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
@@ -25,6 +27,7 @@
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
 #include "maho/browser/ui/views/shields/maho_shield_bubble_coordinator.h"
+#include "maho/browser/ui/views/shields/maho_shield_bubble_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -32,6 +35,7 @@
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
@@ -160,7 +164,7 @@ class UtilityPanelHostView : public views::View,
     model_.footer.subtitle = u"Page security";
 
     icon_ = AddChildView(std::make_unique<maho::MahoLocationBarUtilityIconView>(
-        base::BindRepeating(&UtilityPanelHostView::ShowPanel,
+        base::BindRepeating(base::IgnoreResult(&UtilityPanelHostView::ShowPanel),
                             base::Unretained(this))));
     icon_->SetBounds(90, 50, 20, 20);
     icon_->SetHoverVisible(false);
@@ -215,6 +219,15 @@ class LocationBarUtilityPanelInteractiveUiTest : public InProcessBrowserTest {
   LocationBarUtilityPanelInteractiveUiTest& operator=(
       const LocationBarUtilityPanelInteractiveUiTest&) = delete;
   ~LocationBarUtilityPanelInteractiveUiTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    // Maho suppresses the startup browser while its onboarding login-gate is
+    // active (no relay session in tests), which would leave browser() null and
+    // crash SetUpOnMainThread. Disable the gate so the standard
+    // InProcessBrowserTest window exists.
+    command_line->AppendSwitch("maho-disable-login-gate");
+  }
 
   void SetUpOnMainThread() override {
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
@@ -494,8 +507,11 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
       OpenUtilityPanelFromRealLocationBar(location_bar_view);
   ASSERT_TRUE(panel_view);
 
-  views::View* shields_action = panel_view->GetActionViewForTesting(u"Shields");
+  views::View* shields_action =
+      panel_view->GetActionViewForTesting(u"Block Ads & Trackers");
   ASSERT_TRUE(shields_action);
+  const gfx::Rect shields_action_bounds = shields_action->GetBoundsInScreen();
+  ASSERT_FALSE(shields_action_bounds.IsEmpty());
 
   ClickViewCenter(shields_action);
 
@@ -503,6 +519,24 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
     return shield_coordinator.IsShowing();
   }));
   EXPECT_TRUE(shield_coordinator.IsShowing());
+  views::Widget* shield_widget =
+      shield_coordinator.GetBubbleWidgetForTesting();
+  ASSERT_TRUE(shield_widget);
+  auto* shield_delegate =
+      shield_widget->widget_delegate()->AsBubbleDialogDelegate();
+  ASSERT_TRUE(shield_delegate);
+  EXPECT_EQ(shield_delegate->GetAnchorView(), nullptr);
+  EXPECT_EQ(shield_delegate->GetAnchorRect(), shields_action_bounds);
+  EXPECT_EQ(shield_delegate->anchor_widget(),
+            BrowserView::GetBrowserViewForBrowser(browser())->GetWidget());
+
+  auto* shield_view = static_cast<maho::MahoShieldBubbleView*>(
+      shield_delegate->GetContentsView());
+  ASSERT_TRUE(shield_view);
+  ASSERT_TRUE(shield_view->GetSiteLabelForTesting());
+  EXPECT_EQ(shield_view->GetSiteLabelForTesting()->GetText(),
+            base::UTF8ToUTF16(
+                embedded_test_server()->GetURL("/title1.html").host()));
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return !utility_icon->IsPanelOpenForTesting();
   }));
@@ -535,11 +569,12 @@ IN_PROC_BROWSER_TEST_F(
       OpenUtilityPanelFromRealLocationBar(location_bar_view);
   ASSERT_TRUE(panel_view);
 
-  views::View* shields_action = panel_view->GetActionViewForTesting(u"Shields");
+  views::View* shields_action =
+      panel_view->GetActionViewForTesting(u"Block Ads & Trackers");
   ASSERT_TRUE(shields_action);
 
   views::Label* title_label =
-      FindDescendantLabelWithText(shields_action, u"Shields");
+      FindDescendantLabelWithText(shields_action, u"Block Ads & Trackers");
   ASSERT_TRUE(title_label);
   ASSERT_FALSE(title_label->GetBoundsInScreen().IsEmpty());
 
