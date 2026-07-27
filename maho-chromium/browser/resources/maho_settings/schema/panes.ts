@@ -320,13 +320,19 @@ const MAIL_PANES: PaneDefinition[] = [
   },
 ];
 
+// Mail deferred from this ship: omit the mail settings panes from the nav so
+// the whole "Maho Mail" section disappears (app.tsx skips empty domains). The
+// MAIL_PANES definitions are kept for a one-line revert. Flip to false to
+// restore mail settings.
+const MAIL_DEFERRED = true;
+
 export const ALL_PANE_DEFINITIONS: PaneDefinition[] = [
   ...BROWSING_PANES,
   ...LOOK_AND_FEEL_PANES,
   ...IDENTITY_PANES,
   ...PRODUCTIVITY_PANES,
   ...PROTECTION_PANES,
-  ...MAIL_PANES,
+  ...(MAIL_DEFERRED ? [] : MAIL_PANES),
 ];
 
 export const PANE_DEFINITIONS = ALL_PANE_DEFINITIONS;

@@ -14,6 +14,10 @@ namespace maho {
 
 namespace {
 
+// Mail is deferred from this ship. While true, EnsureHelperLaunched is a no-op
+// so the un-sandboxed mail helper never spawns. Flip to false to re-enable.
+constexpr bool kMahoMailDeferred = true;
+
 // Deterministic error returned when no helper can serve a read (never
 // launched, disconnected, or given up after a crash loop).
 constexpr char kMahoMailHelperUnavailable[] = "mail helper unavailable";
@@ -49,6 +53,14 @@ void MahoMailService::EnsureHelperLaunched(
     const std::string& profile_path,
     const base::FilePath& crashpad_database) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Mail deferred from this ship: never spawn the (un-sandboxed) helper. This
+  // is the sole chokepoint that creates launcher_ and calls Launch(), so
+  // returning here guarantees no helper subprocess and no remote MIME/IMAP
+  // parsing. Reads resolve with the deterministic "unavailable" error. Flip
+  // kMahoMailDeferred to false to re-enable mail.
+  if (kMahoMailDeferred) {
+    return;
+  }
   if (!launcher_) {
     launcher_ = std::make_unique<MahoMailHelperLauncher>();
   }

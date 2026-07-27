@@ -23,8 +23,11 @@
 MahoMailUIConfig::MahoMailUIConfig()
     : DefaultWebUIConfig("chrome", "maho-mail") {}
 
-bool MahoMailUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
-  return true;
+bool MahoMailUIConfig::IsWebUIEnabled(content::BrowserContext*) {
+  // Mail deferred from this ship: unregister chrome://maho-mail so the URL is
+  // unreachable, sealing the un-remediated mail attack surface. Restore the
+  // normal profile gate here to re-enable.
+  return false;
 }
 
 // MahoMailHTMLSource

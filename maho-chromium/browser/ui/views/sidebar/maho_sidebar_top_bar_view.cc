@@ -235,6 +235,9 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       base::BindRepeating(&MahoSidebarTopBarView::OnMailPressed,
                           weak_factory_.GetWeakPtr()),
       maho_lucide_icons::kInboxIcon, u"Mail");
+  // Mail deferred from this ship: wiring kept intact for a one-line revert, but
+  // the entry point stays hidden. Paired with the WebUI + helper defer gates.
+  mail_button_->SetVisible(false);
   ai_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
