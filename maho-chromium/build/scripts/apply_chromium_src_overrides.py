@@ -8,6 +8,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,202 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
 }
 
 
+_BROWSER_WIDGET_LEGACY_INCLUDES: Final[str] = (
+    '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+    '#include "maho/browser/ui/theme/maho_space_theme_state.h"\n'
+    '#include "maho/browser/ui/theme/maho_color_mixer.h"\n'
+    '#include "ui/native_theme/native_theme.h"\n'
+)
+_BROWSER_WIDGET_INCLUDES: Final[str] = (
+    '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+    '#include "maho/browser/ui/theme/maho_color_mixer.h"\n'
+)
+_BROWSER_WIDGET_LEGACY_THEME_OVERRIDE: Final[str] = (
+    '  // Maho: the whole window (sidebar-dominated chrome) follows the active Space\n'
+    '  // theme. Auto / no theme → OS system appearance. Incognito stays forced-dark.\n'
+    '  if (!IsIncognitoBrowser()) {\n'
+    '    const bool os_dark =\n'
+    '        ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==\n'
+    '        ui::NativeTheme::PreferredColorScheme::kDark;\n'
+    '    key.color_mode = MahoSpaceThemeState::ResolveSidebarDarkMode(os_dark)\n'
+    '                         ? ui::ColorProviderKey::ColorMode::kDark\n'
+    '                         : ui::ColorProviderKey::ColorMode::kLight;\n'
+    '  } else {\n'
+    '    key.app_controller = GetMahoOtrSentinel();\n'
+    '  }\n'
+    '\n'
+)
+_BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
+    '  // Maho: tag Incognito windows for private semantic color recipes without\n'
+    '  // changing the Chromium/ThemeService-controlled color mode.\n'
+    '  if (IsIncognitoBrowser()) {\n'
+    '    key.app_controller = GetMahoOtrSentinel();\n'
+    '  }\n'
+    '\n'
+)
+
+
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/common/chrome_content_client.cc": [
+        Replacement(
+            old="#include \"chrome/common/url_constants.h\"\n",
+            new=(
+                "#include \"chrome/common/url_constants.h\"\n"
+                "#include \"maho/components/constants/url_constants.h\"\n"
+            ),
+            description="Maho: include maho url_constants in chrome_content_client.cc",
+            guard="#include \"maho/components/constants/url_constants.h\"",
+        ),
+        Replacement(
+            old=(
+                "void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {\n"
+                "  for (auto* standard_scheme : kChromeStandardURLSchemes)\n"
+                "    schemes->standard_schemes.push_back(standard_scheme);\n"
+            ),
+            new=(
+                "void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {\n"
+                "  for (auto* standard_scheme : kChromeStandardURLSchemes)\n"
+                "    schemes->standard_schemes.push_back(standard_scheme);\n"
+                "  schemes->standard_schemes.push_back(maho::kMahoUIScheme);\n"
+            ),
+            description="Maho: register maho scheme as a standard scheme",
+            guard="schemes->standard_schemes.push_back(maho::kMahoUIScheme);",
+        ),
+    ],
+    "chrome/common/BUILD.gn": [
+        Replacement(
+            old="    \"//chrome/common/profiler\",\n",
+            new=(
+                "    \"//chrome/common/profiler\",\n"
+                "    \"//maho/components/constants\",\n"
+            ),
+            description="Maho: add constants dep to common_lib",
+            # Anchored to the static_library("common_lib") deps list; the guard
+            # keeps the pair adjacent so a //maho dep added to any other target
+            # in this file cannot be mistaken for this replacement.
+            guard=(
+                "    \"//chrome/common/profiler\",\n"
+                "    \"//maho/components/constants\",\n"
+            ),
+        ),
+    ],
+    "chrome/browser/profiles/profile_io_data.cc": [
+        Replacement(
+            old="#include \"chrome/common/url_constants.h\"\n",
+            new=(
+                "#include \"chrome/common/url_constants.h\"\n"
+                "#include \"maho/components/constants/url_constants.h\"\n"
+            ),
+            description="Maho: include maho url_constants in profile_io_data.cc",
+            guard="#include \"maho/components/constants/url_constants.h\"",
+        ),
+        Replacement(
+            old="      chrome::kChromeSearchScheme,\n",
+            new=(
+                "      chrome::kChromeSearchScheme,\n"
+                "      maho::kMahoUIScheme,\n"
+            ),
+            description="Maho: register maho as handled protocol in profile_io_data.cc",
+            guard="maho::kMahoUIScheme,",
+        ),
+    ],
+    "chrome/browser/profiles/BUILD.gn": [
+        Replacement(
+            # "//url" alone appears in several targets in this file; anchor on
+            # the source_set("profile_io_data") deps pair so the dep can only
+            # land in the target that compiles profile_io_data.cc.
+            old=(
+                "    \"//net:buildflags\",\n"
+                "    \"//url\",\n"
+            ),
+            new=(
+                "    \"//net:buildflags\",\n"
+                "    \"//url\",\n"
+                "    \"//maho/components/constants\",\n"
+            ),
+            description="Maho: add constants dep to profile_io_data",
+            guard=(
+                "    \"//url\",\n"
+                "    \"//maho/components/constants\",\n"
+            ),
+        ),
+    ],
+    "chrome/browser/chrome_content_browser_client.cc": [
+        Replacement(
+            old='#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+                '#include "maho/browser/maho_url_scheme.h"\n'
+            ),
+            description="Maho: include maho_url_scheme.h and browser_url_handler.h in chrome_content_browser_client.cc",
+            guard='#include "maho/browser/maho_url_scheme.h"',
+        ),
+        Replacement(
+            old=(
+                "bool g_disable_advanced_protection_caching_for_tests = false;\n"
+            ),
+            new=(
+                "bool g_disable_advanced_protection_caching_for_tests = false;\n"
+                "\n"
+                "// Rewrites stray chrome://newtab navigations (those that reach\n"
+                "// BrowserURLHandlerCreated after policy and extra_parts handlers have\n"
+                "// already had a chance to intercept) to about:blank so that Maho never\n"
+                "// commits a chrome://newtab WebUI frame.\n"
+                "bool MahoRewriteNewTabToBlank(GURL* url,\n"
+                "                              content::BrowserContext* /*context*/) {\n"
+                "  if (url->SchemeIs(\"chrome\") && url->host() == \"newtab\") {\n"
+                "    *url = GURL(\"about:blank\");\n"
+                "    return true;\n"
+                "  }\n"
+                "  return false;\n"
+                "}\n"
+                "\n"
+                "// Maps only approved public Maho aliases to their existing Chrome WebUI\n"
+                "// origins. Returning false leaves malformed, unlisted, and direct legacy\n"
+                "// chrome://maho-* URLs untouched.\n"
+                "bool MahoHandleUrlAlias(GURL* url,\n"
+                "                        content::BrowserContext* /*context*/) {\n"
+                "  return maho::MapMahoUrlAliasToActualUrl(*url, url);\n"
+                "}\n"
+                "\n"
+                "// BrowserURLHandler calls this only after MahoHandleUrlAlias matched the\n"
+                "// original public alias. Always claim that reverse rewrite: an approved\n"
+                "// final WebUI destination becomes its alias, while any external or\n"
+                "// unlisted final URL is intentionally retained to clear a stale alias.\n"
+                "bool MahoHandleUrlAliasReverse(GURL* url,\n"
+                "                               content::BrowserContext* /*context*/) {\n"
+                "  GURL alias;\n"
+                "  if (maho::ResolveActualUrlToMahoAlias(*url, &alias)) {\n"
+                "    *url = alias;\n"
+                "  }\n"
+                "  return true;\n"
+                "}\n"
+            ),
+            description="Maho: add URL alias helpers to chrome_content_browser_client.cc",
+            guard="bool MahoRewriteNewTabToBlank(GURL* url,",
+        ),
+        Replacement(
+            old=(
+                "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
+                "                          BrowserURLHandler::null_handler());\n"
+            ),
+            new=(
+                "  // Maho: rewrite stray chrome://newtab to about:blank before the\n"
+                "  // upstream NTP rewriter runs, so Maho never commits a NTP WebUI frame.\n"
+                "  handler->AddHandlerPair(&MahoRewriteNewTabToBlank,\n"
+                "                          BrowserURLHandler::null_handler());\n"
+                "  // Preserve maho:// aliases as virtual URLs while committing only the\n"
+                "  // approved existing chrome://maho-* WebUI origins.\n"
+                "  handler->AddHandlerPair(&MahoHandleUrlAlias,\n"
+                "                          &MahoHandleUrlAliasReverse);\n"
+                "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
+                "                          BrowserURLHandler::null_handler());\n"
+            ),
+            description="Maho: register URL alias handlers in BrowserURLHandlerCreated",
+            guard="handler->AddHandlerPair(&MahoRewriteNewTabToBlank,",
+        ),
+    ],
     "ui/base/cocoa/command_dispatcher.mm": [
         Replacement(
             old=(
@@ -372,39 +568,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/browser_widget.cc": [
         Replacement(
-            old=(
-                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-            ),
-            new=(
-                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-                '#include "maho/browser/ui/theme/maho_space_theme_state.h"\n'
-                '#include "maho/browser/ui/theme/maho_color_mixer.h"\n'
-                '#include "ui/native_theme/native_theme.h"\n'
-            ),
-            description="Maho: include maho_space_theme_state.h and native_theme.h in browser_widget.cc",
+            old='#include "chrome/browser/ui/views/frame/browser_view.h"\n',
+            new=_BROWSER_WIDGET_INCLUDES,
+            description="Maho: include the OTR color sentinel declaration in browser_widget.cc",
             guard='#include "maho/browser/ui/theme/maho_color_mixer.h"',
         ),
         Replacement(
-            old=(
-                '  // user_color.\n'
-            ),
-            new=(
-                '  // Maho: the whole window (sidebar-dominated chrome) follows the active Space\n'
-                '  // theme. Auto / no theme → OS system appearance. Incognito stays forced-dark.\n'
-                '  if (!IsIncognitoBrowser()) {\n'
-                '    const bool os_dark =\n'
-                '        ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==\n'
-                '        ui::NativeTheme::PreferredColorScheme::kDark;\n'
-                '    key.color_mode = MahoSpaceThemeState::ResolveSidebarDarkMode(os_dark)\n'
-                '                         ? ui::ColorProviderKey::ColorMode::kDark\n'
-                '                         : ui::ColorProviderKey::ColorMode::kLight;\n'
-                '  } else {\n'
-                '    key.app_controller = GetMahoOtrSentinel();\n'
-                '  }\n'
-                '\n'
-                '  // user_color.\n'
-            ),
-            description="Maho: force window color_mode to follow space theme or OS dark mode",
+            old='  // user_color.\n',
+            new=_BROWSER_WIDGET_OTR_SENTINEL + '  // user_color.\n',
+            description="Maho: tag Incognito BrowserWidget color keys with the OTR sentinel",
             guard="key.app_controller = GetMahoOtrSentinel();",
         ),
     ],
@@ -3807,12 +3979,33 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }\n"
                 "  return false;\n"
                 "}\n"
+                "\n"
+                "// Maps only approved public Maho aliases to their existing Chrome WebUI\n"
+                "// origins. Returning false leaves malformed, unlisted, and direct legacy\n"
+                "// chrome://maho-* URLs untouched.\n"
+                "bool MahoHandleUrlAlias(GURL* url,\n"
+                "                        content::BrowserContext* /*context*/) {\n"
+                "  return maho::MapMahoUrlAliasToActualUrl(*url, url);\n"
+                "}\n"
+                "\n"
+                "// BrowserURLHandler calls this only after MahoHandleUrlAlias matched the\n"
+                "// original public alias. Always claim that reverse rewrite: an approved\n"
+                "// final WebUI destination becomes its alias, while any external or\n"
+                "// unlisted final URL is intentionally retained to clear a stale alias.\n"
+                "bool MahoHandleUrlAliasReverse(GURL* url,\n"
+                "                               content::BrowserContext* /*context*/) {\n"
+                "  GURL alias;\n"
+                "  if (maho::ResolveActualUrlToMahoAlias(*url, &alias)) {\n"
+                "    *url = alias;\n"
+                "  }\n"
+                "  return true;\n"
+                "}\n"
             ),
             description=(
-                "Insert MahoRewriteNewTabToBlank helper into the existing anonymous "
-                "namespace of chrome_content_browser_client.cc"
+                "Insert Maho new-tab and public URL alias helpers into the existing "
+                "anonymous namespace of chrome_content_browser_client.cc"
             ),
-            guard="bool MahoRewriteNewTabToBlank(",
+            guard="bool MahoHandleUrlAliasReverse(",
         ),
         Replacement(
             old=(
@@ -3824,14 +4017,31 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // upstream NTP rewriter runs, so Maho never commits a NTP WebUI frame.\n"
                 "  handler->AddHandlerPair(&MahoRewriteNewTabToBlank,\n"
                 "                          BrowserURLHandler::null_handler());\n"
+                "  // Preserve maho:// aliases as virtual URLs while committing only the\n"
+                "  // approved existing chrome://maho-* WebUI origins.\n"
+                "  handler->AddHandlerPair(&MahoHandleUrlAlias,\n"
+                "                          &MahoHandleUrlAliasReverse);\n"
                 "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
                 "                          BrowserURLHandler::null_handler());\n"
             ),
             description=(
-                "Register MahoRewriteNewTabToBlank handler before "
+                "Register Maho new-tab then alias handler pairs before "
                 "HandleChromeAboutAndChromeSyncRewrite in BrowserURLHandlerCreated()"
             ),
-            guard="&MahoRewriteNewTabToBlank,",
+            guard="&MahoHandleUrlAliasReverse);",
+        ),
+        Replacement(
+            old=(
+                '#include "content/public/browser/browser_url_handler.h"\n'
+            ),
+            new=(
+                '#include "content/public/browser/browser_url_handler.h"\n'
+                '#include "maho/browser/maho_url_scheme.h"\n'
+            ),
+            description=(
+                "Include Maho URL alias resolver in chrome_content_browser_client.cc"
+            ),
+            guard='#include "maho/browser/maho_url_scheme.h"',
         ),
         # ── Ad-block throttle includes ─────────────────────────────────────────
         Replacement(
@@ -4145,6 +4355,22 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="Maho: web page rendering follows Browser theme",
         ),
     ],
+    "chrome/browser/BUILD.gn": [
+        Replacement(
+            old='      "//maho/browser:maho_context_menus",\n',
+            new=(
+                '      "//maho/browser:maho_context_menus",\n'
+                '      "//maho/browser:maho_url_scheme",\n'
+            ),
+            description=(
+                "Add Maho URL alias resolver directly to chrome/browser:browser deps"
+            ),
+            guard=(
+                '      "//maho/browser:maho_password_provider",\n'
+                '       "//maho/browser:maho_url_scheme",\n'
+            ),
+        ),
+    ],
     "chrome/test/BUILD.gn": [
         Replacement(
             old=(
@@ -4180,6 +4406,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Include Maho Shield bubble interactive tests in Chromium interactive_ui_tests deps",
             guard='"//maho/browser/ui/views/shields:interactive_tests"',
+        ),
+        Replacement(
+            old='      "//maho/browser/ui/views/shields:interactive_tests",\n',
+            new=(
+                '      "//maho/browser/ui/views/shields:interactive_tests",\n'
+                '      "//maho/browser/ui/views/boost:interactive_tests",\n'
+            ),
+            description="Include Maho Boost interactive tests in Chromium interactive_ui_tests deps",
+            guard='"//maho/browser/ui/views/boost:interactive_tests"',
         ),
         Replacement(
             old='      "//maho/browser/ui/views/spaces_overlay:unit_tests",\n',
@@ -6241,7 +6476,125 @@ def normalize_browser_view_features(text: str) -> tuple[str, int]:
     return text, include_count + focus_count + toolbar_count
 
 
-def apply_replacements(target_file: Path, replacements: list[Replacement], dry_run: bool = False) -> tuple[bool, list[str]]:
+def normalize_browser_widget_theme_override(text: str) -> tuple[str, int]:
+    normalized_count = 0
+    if _BROWSER_WIDGET_LEGACY_INCLUDES in text:
+        text = text.replace(
+            _BROWSER_WIDGET_LEGACY_INCLUDES,
+            _BROWSER_WIDGET_INCLUDES,
+            1,
+        )
+        normalized_count += 1
+    if _BROWSER_WIDGET_LEGACY_THEME_OVERRIDE in text:
+        text = text.replace(
+            _BROWSER_WIDGET_LEGACY_THEME_OVERRIDE,
+            _BROWSER_WIDGET_OTR_SENTINEL,
+            1,
+        )
+        normalized_count += 1
+
+    stale_markers = (
+        '#include "maho/browser/ui/theme/maho_space_theme_state.h"',
+        '#include "ui/native_theme/native_theme.h"',
+        "MahoSpaceThemeState::ResolveSidebarDarkMode",
+        "the whole window (sidebar-dominated chrome) follows the active Space",
+    )
+    remaining_markers = [marker for marker in stale_markers if marker in text]
+    if remaining_markers:
+        raise RuntimeError(
+            "BrowserWidget Space-theme override drift: legacy markers remain after "
+            f"normalization: {', '.join(remaining_markers)}"
+        )
+
+    return text, normalized_count
+
+
+def normalize_gn_stale_deps(text: str, relative_path: str = "") -> tuple[str, int]:
+    normalized_path = relative_path.replace("\\", "/")
+    stale_deps: set[str] = set()
+
+    if normalized_path == "chrome/browser/ui/webui/BUILD.gn":
+        stale_deps.add('"//maho/build/config:maho_test_buildflags"')
+    elif normalized_path == "chrome/browser/ui/BUILD.gn":
+        stale_deps.add('"//maho/browser:maho_features"')
+
+    if not stale_deps:
+        return text, 0
+
+    kept_lines: list[str] = []
+    removed_count = 0
+
+    for line in text.splitlines(keepends=True):
+        if line.strip().removesuffix(",") in stale_deps:
+            removed_count += 1
+            continue
+        kept_lines.append(line)
+
+    return "".join(kept_lines), removed_count
+
+
+def normalize_maho_url_alias_handlers(text: str) -> tuple[str, int]:
+    normalized_count = 0
+    helper_marker = "bool MahoRewriteNewTabToBlank(GURL* url,"
+    helper_count = text.count(helper_marker)
+    if helper_count > 1:
+        if helper_count != 2:
+            raise RuntimeError(
+                "Unexpected Maho new-tab helper count while normalizing URL aliases"
+            )
+        duplicate_helper = re.compile(
+            r"// Rewrites stray chrome://newtab navigations \(those that reach\n"
+            r"// BrowserURLHandlerCreated after policy and extra_parts handlers have\n"
+            r"// already had a chance to intercept\) to about:blank so that Maho never\n"
+            r"// commits a chrome://newtab WebUI frame\.\n"
+            r"bool MahoRewriteNewTabToBlank\(GURL\* url,\n"
+            r"\s+content::BrowserContext\* /\*context\*/\) \{\n"
+            r"  if \(url->SchemeIs\(\"chrome\"\) && url->host\(\) == \"newtab\"\) \{\n"
+            r"    \*url = GURL\(\"about:blank\"\);\n"
+            r"    return true;\n"
+            r"  \}\n"
+            r"  return false;\n"
+            r"\}\n\n"
+        )
+        matches = list(duplicate_helper.finditer(text))
+        if len(matches) != 2:
+            raise RuntimeError(
+                "Unable to identify duplicate Maho new-tab helper for normalization"
+            )
+        text = text[: matches[1].start()] + text[matches[1].end() :]
+        normalized_count += 1
+
+    registration_marker = "handler->AddHandlerPair(&MahoRewriteNewTabToBlank,"
+    registration_count = text.count(registration_marker)
+    if registration_count > 1:
+        if registration_count != 2:
+            raise RuntimeError(
+                "Unexpected Maho new-tab handler registration count while normalizing URL aliases"
+            )
+        duplicate_registration = (
+            "  // Maho: rewrite stray chrome://newtab to about:blank before the\n"
+            "  // upstream NTP rewriter runs, so Maho never commits a NTP WebUI frame.\n"
+            "  handler->AddHandlerPair(&MahoRewriteNewTabToBlank,\n"
+            "                          BrowserURLHandler::null_handler());\n"
+        )
+        first = text.find(duplicate_registration)
+        second = text.find(duplicate_registration, first + 1)
+        if first == -1 or second == -1:
+            raise RuntimeError(
+                "Unable to identify duplicate Maho new-tab registration for normalization"
+            )
+        text = text[:second] + text[second + len(duplicate_registration) :]
+        normalized_count += 1
+
+    return text, normalized_count
+
+
+def apply_replacements(
+    target_file: Path,
+    replacements: list[Replacement],
+    dry_run: bool = False,
+    relative_path: str | None = None,
+) -> tuple[bool, list[str]]:
     text = target_file.read_text()
     changed = False
     applied: list[str] = []
@@ -6257,6 +6610,34 @@ def apply_replacements(target_file: Path, replacements: list[Replacement], dry_r
         if normalized_count:
             changed = True
             applied.append("patched: Make Maho browser-view paths unconditional")
+
+    if target_file.name == "browser_widget.cc":
+        text, normalized_count = normalize_browser_widget_theme_override(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Detach BrowserWidget color mode from global Space theme"
+            )
+
+    if target_file.name == "chrome_content_browser_client.cc":
+        text, normalized_count = normalize_maho_url_alias_handlers(text)
+        if normalized_count:
+            changed = True
+            applied.append("patched: Normalize duplicate Maho URL alias handlers")
+
+    if target_file.name == "BUILD.gn":
+        exact_rel = relative_path.replace("\\", "/") if relative_path is not None else ""
+        if not exact_rel:
+            try:
+                exact_rel = target_file.resolve().relative_to(default_chromium_src().resolve()).as_posix()
+            except ValueError:
+                exact_rel = ""
+
+        if exact_rel in ("chrome/browser/ui/webui/BUILD.gn", "chrome/browser/ui/BUILD.gn"):
+            text, normalized_count = normalize_gn_stale_deps(text, exact_rel)
+            if normalized_count:
+                changed = True
+                applied.append(f"patched: Remove stale dependencies from {exact_rel}")
 
     for replacement in replacements:
         if replacement.new and replacement.new in text and (
@@ -6356,7 +6737,7 @@ def main() -> int:
             print(f"target file not found: {target_file}", file=sys.stderr)
             return 1
 
-        changed, applied = apply_replacements(target_file, replacements, dry_run=args.dry_run)
+        changed, applied = apply_replacements(target_file, replacements, dry_run=args.dry_run, relative_path=relative_path)
         any_changed = any_changed or changed
         print(relative_path)
         for line in applied:

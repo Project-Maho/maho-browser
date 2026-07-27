@@ -625,6 +625,26 @@ TEST_F(MahoCommandModelTest, PrivateSearchUsesTemplateUrlServiceReadOnly) {
   EXPECT_NE(std::string::npos, suggestion.title.find("ExampleSearch"));
 }
 
+TEST_F(MahoCommandModelTest, BuildsNavigationSuggestionForWebAndMahoUrls) {
+  std::optional<CommandSuggestion> web =
+      MahoCommandModel::BuildNavigationSuggestionForQuery("example.com/path");
+  ASSERT_TRUE(web.has_value());
+  EXPECT_EQ(CommandSuggestionType::kNavigation, web->type);
+  EXPECT_EQ("https://example.com/path", web->execution_payload);
+
+  std::optional<CommandSuggestion> maho =
+      MahoCommandModel::BuildNavigationSuggestionForQuery("maho://settings/");
+  ASSERT_TRUE(maho.has_value());
+  EXPECT_EQ(CommandSuggestionType::kNavigation, maho->type);
+  EXPECT_EQ("maho://settings/", maho->execution_payload);
+}
+
+TEST_F(MahoCommandModelTest, RejectsUnlistedMahoNavigationSuggestion) {
+  EXPECT_FALSE(MahoCommandModel::BuildNavigationSuggestionForQuery(
+                   "maho://not-listed/")
+                   .has_value());
+}
+
 TEST_F(MahoCommandModelTest, MatchExactSiteSearchKeyword) {
   MahoCommandModel model(nullptr);
 
@@ -686,4 +706,3 @@ TEST_F(MahoCommandModelTest, ParseSearchResultsJsonFiltersAiAnswer) {
 
 }  // namespace
 }  // namespace maho
-

@@ -12,6 +12,8 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
@@ -33,11 +35,26 @@ std::string PaneQueryFromUrl(const GURL& url) {
 }
 
 GURL BuildSettingsUrl(const std::string& pane_key) {
-  GURL url(maho::kMahoSettingsURL);
+  GURL url(maho::kMahoSettingsPublicURL);
   if (pane_key.empty()) {
     return url;
   }
   return net::AppendQueryParameter(url, "pane", pane_key);
+}
+
+bool IsMahoSettingsUrl(const GURL& url) {
+  return (url.SchemeIs("chrome") && url.host() == maho::kMahoSettingsHost) ||
+         (url.SchemeIs("maho") &&
+          url.host() == GURL(maho::kMahoSettingsPublicURL).host());
+}
+
+GURL SettingsPaneUrl(content::WebContents* contents) {
+  if (!contents) {
+    return GURL();
+  }
+  content::NavigationEntry* entry =
+      contents->GetController().GetLastCommittedEntry();
+  return entry ? entry->GetVirtualURL() : GURL();
 }
 
 struct SettingsTabLocation {
@@ -61,9 +78,12 @@ SettingsTabLocation FindSettingsTabAcrossWindows(Profile* profile) {
           if (!contents) {
             continue;
           }
-          const GURL& visible = contents->GetVisibleURL();
-          if (visible.SchemeIs("chrome") &&
-              visible.host() == maho::kMahoSettingsHost) {
+          content::NavigationEntry* entry =
+              contents->GetController().GetLastCommittedEntry();
+          if (!entry) {
+            continue;
+          }
+          if (IsMahoSettingsUrl(entry->GetURL())) {
             result.browser_window = bwi;
             result.index = i;
             return false;
@@ -91,8 +111,7 @@ void OpenMahoSettingsPane(Browser* browser, const std::string& pane_key) {
     existing_tab_strip->ActivateTabAt(existing.index);
     if (pane_targeted) {
       auto* contents = existing_tab_strip->GetActiveWebContents();
-      if (contents &&
-          PaneQueryFromUrl(contents->GetVisibleURL()) != pane_key) {
+      if (contents && PaneQueryFromUrl(SettingsPaneUrl(contents)) != pane_key) {
         NavigateParams nav(existing.browser_window, target_url,
                            ui::PAGE_TRANSITION_GENERATED);
         nav.disposition = WindowOpenDisposition::CURRENT_TAB;

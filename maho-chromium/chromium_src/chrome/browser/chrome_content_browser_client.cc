@@ -65,12 +65,13 @@
 // GN dep added to chrome/browser/BUILD.gn:
 //   "//maho/browser/net"
 //
-// ── Patch 2: BrowserURLHandler NTP rewrite ───────────────────────────────────
+// ── Patch 2: BrowserURLHandler NTP and public alias rewrites ─────────────────
 //
-// Includes added (file-scope, after chrome/browser/search/search.h):
+// Includes added (file-scope, after maho/browser/ui/views/sidebar/maho_sidebar_prefs.h):
 //   #include "content/public/browser/browser_url_handler.h"
+//   #include "maho/browser/maho_url_scheme.h"
 //
-// A helper inserted into the file's existing anonymous namespace, after:
+// Helpers inserted into the file's existing anonymous namespace, after:
 //   bool g_disable_advanced_protection_caching_for_tests = false;
 //
 //   bool MahoRewriteNewTabToBlank(GURL* url,
@@ -82,13 +83,35 @@
 //     return false;
 //   }
 //
+//   bool MahoHandleUrlAlias(GURL* url,
+//                           content::BrowserContext* /*context*/) {
+//     return maho::MapMahoUrlAliasToActualUrl(*url, url);
+//   }
+//
+//   bool MahoHandleUrlAliasReverse(GURL* url,
+//                                  content::BrowserContext* /*context*/) {
+//     GURL alias;
+//     if (maho::ResolveActualUrlToMahoAlias(*url, &alias)) {
+//       *url = alias;
+//     }
+//     return true;
+//   }
+//
 // In ChromeContentBrowserClient::BrowserURLHandlerCreated(), immediately
 // before the existing HandleChromeAboutAndChromeSyncRewrite AddHandlerPair:
 //   handler->AddHandlerPair(&MahoRewriteNewTabToBlank,
 //                           BrowserURLHandler::null_handler());
+//   handler->AddHandlerPair(&MahoHandleUrlAlias,
+//                           &MahoHandleUrlAliasReverse);
 //
 // This rewrite fires after extra_parts_ BrowserURLHandlerCreated() calls and
 // before the upstream NTP/about-rewriter, so chrome://newtab navigations that
-// survive policy and extra_parts handling are redirected to about:blank.
-// The handler only inspects GURL* and BrowserContext*; it never touches UI.
-// The reverse handler is null_handler() (no reverse mapping needed).
+// survive policy and extra_parts handling are redirected to about:blank. The
+// public alias pair follows it and precedes both Chrome about/sync and WebUI
+// handlers. The forward callback returns true only for the strict allowlist of
+// valid maho:// aliases and maps them to their existing chrome://maho-* WebUI
+// origins. Direct legacy chrome://maho-* URLs do not match and remain visibly
+// legacy. BrowserURLHandler invokes the reverse callback only when the original
+// URL matched the forward callback; it always returns true. It maps an approved
+// final actual URL to its alias, but deliberately leaves external or unlisted
+// final URLs unchanged to clear a stale alias virtual URL.

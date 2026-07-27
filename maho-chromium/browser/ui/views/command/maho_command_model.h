@@ -185,6 +185,8 @@ class MahoCommandModel : public TabStripModelObserver,
       const std::string& query,
       const std::string& search_url,
       const std::string& engine_name);
+  static std::optional<CommandSuggestion> BuildNavigationSuggestionForQuery(
+      const std::string& query);
   static std::vector<CommandSuggestion> ParseSearchResultsJson(
       const std::string& json_str,
       const std::vector<CommandSuggestion>& chromium_bookmarks);

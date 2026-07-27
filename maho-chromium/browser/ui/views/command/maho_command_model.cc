@@ -25,6 +25,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "url/gurl.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
@@ -55,6 +56,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 
@@ -345,7 +347,7 @@ CommandSuggestion& CommandSuggestion::operator=(CommandSuggestion&&) = default;
 CommandSuggestion::~CommandSuggestion() = default;
 
 MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {
-  context_class_ = ClassifyProfileForTesting(
+  context_class_ = MahoClassifyProfile(
       browser_ ? browser_->profile() : nullptr);
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
@@ -561,6 +563,46 @@ bool IsUrlLikeQuery(const std::string& query) {
   return query.find('.') != std::string::npos;
 }
 
+// Mirrors IsSidebarEligibleUrl (maho_sidebar_tab_list_view.cc): the NTP,
+// downloads, history and about: pages are not user-facing "Switch to Tab"
+// targets, so they are excluded from the command palette to match the sidebar.
+bool IsCommandBarEligibleTabUrl(const GURL& url) {
+  if (!url.is_valid() || url.is_empty()) {
+    return false;
+  }
+  if (url.SchemeIs("about")) {
+    return false;
+  }
+  if (url.SchemeIs("chrome")) {
+    if (url.host() == "newtab" || url.host() == "downloads" ||
+        url.host() == "history") {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsApprovedMahoAliasUrl(const GURL& url) {
+  if (!url.is_valid() || !url.SchemeIs("maho") || url.has_username() ||
+      url.has_password() || url.has_port()) {
+    return false;
+  }
+  for (const auto& record : kMahoUrlAliases) {
+    if (url.host() == record.alias_host) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsNavigableCommandUrl(const GURL& url) {
+  if (!url.is_valid()) {
+    return false;
+  }
+  return url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("chrome") ||
+         IsApprovedMahoAliasUrl(url);
+}
+
 }  // namespace
 
 std::string MahoCommandModel::BuildTabsJson() {
@@ -589,6 +631,9 @@ std::string MahoCommandModel::BuildTabsJson() {
           auto* tab_helper = sessions::SessionTabHelper::FromWebContents(wc);
           auto* tab_ui_helper = tab ? TabUIHelper::From(tab) : nullptr;
           if (!wc || !tab_helper || !tab_ui_helper)
+            continue;
+
+          if (!IsCommandBarEligibleTabUrl(wc->GetVisibleURL()))
             continue;
 
           std::string stable_id = BuildStableTabId(candidate, wc);
@@ -646,6 +691,27 @@ CommandSuggestion MahoCommandModel::BuildDefaultProviderSearchSuggestion(
   return suggestion;
 }
 
+std::optional<CommandSuggestion> MahoCommandModel::BuildNavigationSuggestionForQuery(
+    const std::string& query) {
+  if (!IsUrlLikeQuery(query)) {
+    return std::nullopt;
+  }
+
+  const std::string url_spec = IsProtocolLike(query) ? query : "https://" + query;
+  GURL url(url_spec);
+  if (!IsNavigableCommandUrl(url)) {
+    return std::nullopt;
+  }
+
+  CommandSuggestion suggestion;
+  suggestion.type = CommandSuggestionType::kNavigation;
+  suggestion.key = "nav:" + url.spec();
+  suggestion.title = "Go to " + url.spec();
+  suggestion.subtitle = "Navigate";
+  suggestion.execution_payload = url.spec();
+  return suggestion;
+}
+
 std::optional<std::pair<std::string, std::string>>
 MahoCommandModel::ResolveDefaultProviderSearch(const std::string& query) const {
   if (!browser_ || !browser_->profile() || query.empty()) {
@@ -690,21 +756,9 @@ std::vector<CommandSuggestion> MahoCommandModel::BuildPrivateResults(
   }
 
   if (!query.empty()) {
-    if (IsUrlLikeQuery(query)) {
-      const std::string url =
-          (base::StartsWith(query, "http://",
-                            base::CompareCase::INSENSITIVE_ASCII) ||
-           base::StartsWith(query, "https://",
-                            base::CompareCase::INSENSITIVE_ASCII))
-              ? query
-              : "https://" + query;
-      CommandSuggestion nav;
-      nav.type = CommandSuggestionType::kNavigation;
-      nav.key = "nav:" + url;
-      nav.title = "Go to " + url;
-      nav.subtitle = "Navigate";
-      nav.execution_payload = url;
-      results.push_back(std::move(nav));
+    if (std::optional<CommandSuggestion> nav =
+            BuildNavigationSuggestionForQuery(query)) {
+      results.push_back(std::move(*nav));
     }
 
     if (std::optional<std::pair<std::string, std::string>> search =
@@ -720,6 +774,9 @@ std::vector<CommandSuggestion> MahoCommandModel::BuildPrivateResults(
       content::WebContents* wc = model->GetWebContentsAt(i);
       tabs::TabInterface* tab = model->GetTabAtIndex(i);
       if (!wc) {
+        continue;
+      }
+      if (!IsCommandBarEligibleTabUrl(wc->GetVisibleURL())) {
         continue;
       }
       const std::string title = base::UTF16ToUTF8(wc->GetTitle());
@@ -966,6 +1023,21 @@ void MahoCommandModel::OnResults(ResultsCallback callback,
     std::erase_if(results, [](const CommandSuggestion& s) {
       return s.type != CommandSuggestionType::kAction;
     });
+  }
+
+  if (!actions_only_) {
+    if (std::optional<CommandSuggestion> nav =
+            BuildNavigationSuggestionForQuery(query_)) {
+      const std::string payload = nav->execution_payload;
+      const bool already_present = std::ranges::any_of(
+          results, [&payload](const CommandSuggestion& result) {
+            return result.type == CommandSuggestionType::kNavigation &&
+                   result.execution_payload == payload;
+          });
+      if (!already_present) {
+        results.insert(results.begin(), std::move(*nav));
+      }
+    }
   }
 
   ApplyQuickActionGate(results, mode_, query_);

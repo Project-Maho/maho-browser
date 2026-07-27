@@ -4,60 +4,59 @@
 
 #include <string>
 
+#include "base/check.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/values.h"
 #include "base/logging.h"
-#include "base/uuid.h"
-#include "components/prefs/pref_service.h"
-#include "chrome/browser/profiles/profile.h"
-#include "maho/browser/ui/maho_ai_ingress_coordinator.h"
-#include "maho/browser/maho_ai_popup_lifetime_tracker.h"
-#include "maho/browser/ui/webui/maho_ai_prefs.h"
-#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/check.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/uuid.h"
+#include "base/values.h"
 #include "chrome/browser/devtools/devtools_window.h"
-#include "components/sessions/content/session_tab_helper.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
-#include "ui/views/view_utils.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "ui/views/view_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "components/prefs/pref_service.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
-#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"  // nogncheck
+#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"  // nogncheck
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
-#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
-#include "components/split_tabs/split_tab_id.h"
-#include "components/tabs/public/split_tab_data.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/views/view_utils.h"
 #include "url/gurl.h"
 
 namespace maho {
@@ -71,9 +70,24 @@ void CopyTextToClipboard(const std::string& text) {
   writer.WriteText(base::UTF8ToUTF16(text));
 }
 
+bool IsApprovedMahoAliasUrl(const GURL& url) {
+  if (!url.is_valid() || !url.SchemeIs("maho") || url.has_username() ||
+      url.has_password() || url.has_port()) {
+    return false;
+  }
+  const std::string lower_host = base::ToLowerASCII(url.host());
+  for (const auto& record : maho::kMahoUrlAliases) {
+    if (record.alias_host == lower_host) {
+      return true;
+    }
+  }
+  return false;
+}
+
 BrowserWindowInterface* FindBrowserForStableTab(
     const CommandSuggestion& suggestion) {
-  if (suggestion.browser_session_id.empty() || suggestion.tab_session_id.empty()) {
+  if (suggestion.browser_session_id.empty() ||
+      suggestion.tab_session_id.empty()) {
     return nullptr;
   }
 
@@ -82,8 +96,8 @@ BrowserWindowInterface* FindBrowserForStableTab(
     return nullptr;
   }
 
-  BrowserWindowInterface* browser =
-      BrowserWindowInterface::FromSessionID(SessionID::FromSerializedValue(browser_id));
+  BrowserWindowInterface* browser = BrowserWindowInterface::FromSessionID(
+      SessionID::FromSerializedValue(browser_id));
   if (!browser || !browser->GetWindow() || !browser->GetTabStripModel()) {
     return nullptr;
   }
@@ -105,11 +119,13 @@ int FindTabIndexForStableId(BrowserWindowInterface* browser,
   TabStripModel* tab_strip = browser->GetTabStripModel();
   for (int i = 0; i < tab_strip->count(); ++i) {
     auto* contents = tab_strip->GetWebContentsAt(i);
-    if (!contents)
+    if (!contents) {
       continue;
+    }
     auto* helper = sessions::SessionTabHelper::FromWebContents(contents);
-    if (helper && helper->session_id().id() == desired_tab_id)
+    if (helper && helper->session_id().id() == desired_tab_id) {
       return i;
+    }
   }
 
   return TabStripModel::kNoTab;
@@ -124,7 +140,8 @@ BrowserWindowInterface* FindBrowserForHelperStableId(
   if (stable_id.empty()) {
     return nullptr;
   }
-  Profile* origin_profile = origin_browser ? origin_browser->profile() : nullptr;
+  Profile* origin_profile =
+      origin_browser ? origin_browser->profile() : nullptr;
   BrowserWindowInterface* match = nullptr;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [&match, &stable_id, origin_profile](BrowserWindowInterface* candidate) {
@@ -137,7 +154,9 @@ BrowserWindowInterface* FindBrowserForHelperStableId(
         TabStripModel* model = candidate->GetTabStripModel();
         for (int i = 0; i < model->count(); ++i) {
           auto* contents = model->GetWebContentsAt(i);
-          if (!contents) continue;
+          if (!contents) {
+            continue;
+          }
           auto* helper = MahoTabIdHelper::FromWebContents(contents);
           if (helper && helper->stable_tab_id() == stable_id) {
             match = candidate;
@@ -150,14 +169,16 @@ BrowserWindowInterface* FindBrowserForHelperStableId(
 }
 
 int FindTabIndexForHelperStableId(BrowserWindowInterface* browser,
-                                   const std::string& stable_id) {
+                                  const std::string& stable_id) {
   if (!browser || stable_id.empty()) {
     return TabStripModel::kNoTab;
   }
   TabStripModel* model = browser->GetTabStripModel();
   for (int i = 0; i < model->count(); ++i) {
     auto* contents = model->GetWebContentsAt(i);
-    if (!contents) continue;
+    if (!contents) {
+      continue;
+    }
     auto* helper = MahoTabIdHelper::FromWebContents(contents);
     if (helper && helper->stable_tab_id() == stable_id) {
       return i;
@@ -231,9 +252,8 @@ void ActivatePartnerSplitPane(Browser* browser) {
     const int partner_index = model->GetIndexOfTab(member);
     if (partner_index != TabStripModel::kNoTab) {
       model->ActivateTabAt(
-          partner_index,
-          TabStripUserGestureDetails(
-              TabStripUserGestureDetails::GestureType::kOther));
+          partner_index, TabStripUserGestureDetails(
+                             TabStripUserGestureDetails::GestureType::kOther));
     }
     return;
   }
@@ -316,8 +336,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   DCHECK(browser);
   DCHECK(browser->tab_strip_model());
 
-  const MahoPrivateContextClass klass =
-      ClassifyProfileForTesting(browser->profile());
+  const MahoPrivateContextClass klass = MahoClassifyProfile(browser->profile());
   if (klass == MahoPrivateContextClass::kPrimaryIncognito) {
     ExecutePrivateCommandAction(browser, action_id);
     return;
@@ -338,7 +357,8 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       }
     }
   } else if (action_id == "archive_tab") {
-    if (auto* web_contents = browser->tab_strip_model()->GetActiveWebContents()) {
+    if (auto* web_contents =
+            browser->tab_strip_model()->GetActiveWebContents()) {
       if (auto* helper = MahoTabIdHelper::FromWebContents(web_contents);
           helper && !helper->stable_tab_id().empty()) {
         MahoTabRegistry::Get()->ArchiveTabsAndRemoveFromStrip(
@@ -420,10 +440,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     const bool forward = (action_id == "next_tab");
     bool handled = false;
     auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    auto* container = browser_view
-        ? static_cast<MahoSidebarContainerView*>(
-              browser_view->maho_sidebar_container())
-        : nullptr;
+    auto* container = browser_view ? static_cast<MahoSidebarContainerView*>(
+                                         browser_view->maho_sidebar_container())
+                                   : nullptr;
     if (container) {
       auto* sidebar =
           views::AsViewClass<maho::MahoSidebarView>(container->sidebar_view());
@@ -443,8 +462,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     auto* web_contents = browser->tab_strip_model()->GetActiveWebContents();
     if (web_contents) {
       DevToolsWindow::OpenDevToolsWindow(
-          web_contents,
-          DevToolsToggleAction::ShowConsolePanel(),
+          web_contents, DevToolsToggleAction::ShowConsolePanel(),
           DevToolsOpenedByAction::kUnknown);
     }
   } else if (action_id.starts_with("select_tab_")) {
@@ -457,9 +475,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       if (tab_num <= 8) {
         auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
         auto* container = browser_view
-            ? static_cast<MahoSidebarContainerView*>(
-                  browser_view->maho_sidebar_container())
-            : nullptr;
+                              ? static_cast<MahoSidebarContainerView*>(
+                                    browser_view->maho_sidebar_container())
+                              : nullptr;
         if (container) {
           activated = container->TryActivateFavoriteByIndex(
               static_cast<size_t>(tab_num - 1));
@@ -477,8 +495,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     if (auto* web_contents =
             browser->tab_strip_model()->GetActiveWebContents()) {
       ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-      writer.WriteText(
-          base::UTF8ToUTF16(web_contents->GetVisibleURL().spec()));
+      writer.WriteText(base::UTF8ToUTF16(web_contents->GetVisibleURL().spec()));
     }
   } else if (action_id == "copy_url_markdown") {
     if (auto* web_contents =
@@ -506,14 +523,17 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     if (!space_id.empty()) {
       MahoSidebarView::ActivateSpaceAndTab(browser, space_id);
     }
-  } else if (action_id == "little_arc") {
-    maho::LittleArcRequest request;
+  } else if (action_id == "maho_mini") {
+    maho::MahoMiniRequest request;
     GURL active_url;
-    if (browser && browser->tab_strip_model() && browser->tab_strip_model()->GetActiveWebContents()) {
-      active_url = browser->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL();
+    if (browser && browser->tab_strip_model() &&
+        browser->tab_strip_model()->GetActiveWebContents()) {
+      active_url = browser->tab_strip_model()
+                       ->GetActiveWebContents()
+                       ->GetLastCommittedURL();
     }
     request.url = active_url;
-    maho::LaunchLittleArc(browser ? browser->profile() : nullptr, request);
+    maho::LaunchMahoMini(browser ? browser->profile() : nullptr, request);
   } else if (action_id == "next_space" || action_id == "prev_space") {
     auto* core = maho::GetCore();
     auto* bridge = MahoSpaceProfileBridge::GetInstance();
@@ -528,8 +548,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
           const auto& list = spaces->GetList();
           for (size_t i = 0; i < list.size(); ++i) {
             const auto* dict = list[i].GetIfDict();
-            if (!dict)
+            if (!dict) {
               continue;
+            }
             const std::string* id = dict->FindString("id");
             if (id && *id == active_id) {
               size_t target;
@@ -541,7 +562,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
               const auto* target_dict = list[target].GetIfDict();
               if (target_dict) {
                 const std::string* target_id = target_dict->FindString("id");
-                  MahoSidebarView::ActivateSpaceAndTab(browser, *target_id);
+                MahoSidebarView::ActivateSpaceAndTab(browser, *target_id);
               }
               break;
             }
@@ -570,7 +591,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
               const auto* dict = list[idx].GetIfDict();
               if (dict) {
                 const std::string* id = dict->FindString("id");
-                  MahoSidebarView::ActivateSpaceAndTab(browser, *id);
+                MahoSidebarView::ActivateSpaceAndTab(browser, *id);
               }
             }
           }
@@ -615,8 +636,8 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
         }
       }
       for (int i : indices) {
-        model->CloseWebContentsAt(
-            i, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+        model->CloseWebContentsAt(i,
+                                  TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
       }
     }
   } else {
@@ -634,16 +655,19 @@ void OpenCommandSuggestion(Browser* browser,
   }
 
   if (suggestion.type == CommandSuggestionType::kRecentSearch) {
-    if (suggestion.title.empty())
+    if (suggestion.title.empty()) {
       return;
+    }
 
     auto* core = maho::GetCore();
-    if (!core)
+    if (!core) {
       return;
+    }
 
     char* search_url = maho_core_get_search_url(core, suggestion.title.c_str());
-    if (!search_url)
+    if (!search_url) {
       return;
+    }
 
     GURL gurl(search_url);
     maho_string_free(search_url);
@@ -655,11 +679,13 @@ void OpenCommandSuggestion(Browser* browser,
   }
 
   if (suggestion.type == CommandSuggestionType::kSearch) {
-    if (suggestion.execution_payload.empty())
+    if (suggestion.execution_payload.empty()) {
       return;
+    }
     GURL gurl(suggestion.execution_payload);
-    if (!gurl.SchemeIsHTTPOrHTTPS())
+    if (!gurl.SchemeIsHTTPOrHTTPS()) {
       return;
+    }
     NavigateParams params(browser, gurl, ui::PAGE_TRANSITION_GENERATED);
     params.disposition = disposition;
     Navigate(&params);
@@ -668,15 +694,17 @@ void OpenCommandSuggestion(Browser* browser,
 
   if (suggestion.type == CommandSuggestionType::kCalculator ||
       suggestion.type == CommandSuggestionType::kUnitConversion) {
-    if (suggestion.title.empty())
+    if (suggestion.title.empty()) {
       return;
+    }
 
     std::string text_to_copy = suggestion.title;
     if (suggestion.type == CommandSuggestionType::kCalculator) {
       constexpr char kCalculatorSeparator[] = " = ";
       const size_t separator = text_to_copy.rfind(kCalculatorSeparator);
       if (separator != std::string::npos) {
-        text_to_copy = text_to_copy.substr(separator + sizeof(kCalculatorSeparator) - 1);
+        text_to_copy =
+            text_to_copy.substr(separator + sizeof(kCalculatorSeparator) - 1);
       }
     }
 
@@ -686,7 +714,8 @@ void OpenCommandSuggestion(Browser* browser,
 
   if (!suggestion.browser_session_id.empty() &&
       !suggestion.tab_session_id.empty()) {
-    BrowserWindowInterface* target_browser = FindBrowserForStableTab(suggestion);
+    BrowserWindowInterface* target_browser =
+        FindBrowserForStableTab(suggestion);
     if (target_browser) {
       if (target_browser != browser) {
         target_browser->GetWindow()->Show();
@@ -712,8 +741,8 @@ void OpenCommandSuggestion(Browser* browser,
         target_browser->GetWindow()->Show();
         target_browser->GetWindow()->Activate();
       }
-      int tab_index = FindTabIndexForHelperStableId(
-          target_browser, suggestion.stable_tab_id);
+      int tab_index = FindTabIndexForHelperStableId(target_browser,
+                                                    suggestion.stable_tab_id);
       if (tab_index >= 0) {
         target_browser->GetTabStripModel()->ActivateTabAt(tab_index);
         return;
@@ -751,10 +780,9 @@ void OpenCommandSuggestion(Browser* browser,
     // reusing WakeSuspendedTab so scroll/pin state is restored and no duplicate
     // tab is created.
     BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    auto* container = browser_view
-        ? static_cast<MahoSidebarContainerView*>(
-              browser_view->maho_sidebar_container())
-        : nullptr;
+    auto* container = browser_view ? static_cast<MahoSidebarContainerView*>(
+                                         browser_view->maho_sidebar_container())
+                                   : nullptr;
     if (container) {
       auto* sidebar =
           views::AsViewClass<maho::MahoSidebarView>(container->sidebar_view());
@@ -766,16 +794,20 @@ void OpenCommandSuggestion(Browser* browser,
   }
 
   GURL gurl(suggestion.execution_payload);
-  if (!gurl.SchemeIsHTTPOrHTTPS() && !gurl.SchemeIs("chrome"))
+  if (!gurl.SchemeIsHTTPOrHTTPS() && !gurl.SchemeIs("chrome") &&
+      !IsApprovedMahoAliasUrl(gurl)) {
     return;
+  }
 
-  if (gurl.spec() == maho::kMahoAIURL) {
+  if (gurl.spec() == maho::kMahoAIURL ||
+      gurl.spec() == maho::kMahoAIPublicURL) {
     browser->GetFeatures().side_panel_ui()->Show(
         SidePanelEntryId::kMahoAiPanel);
     return;
   }
 
-  if (gurl.spec() == maho::kMahoSettingsURL) {
+  if (gurl.spec() == maho::kMahoSettingsURL ||
+      gurl.spec() == maho::kMahoSettingsPublicURL) {
     maho::OpenMahoSettingsPane(browser, "");
     return;
   }
@@ -785,17 +817,19 @@ void OpenCommandSuggestion(Browser* browser,
       return;
     }
     auto* bridge = MahoSpaceProfileBridge::GetInstance();
-    const std::string space_id = bridge ? bridge->GetActiveSpaceId() : std::string();
+    const std::string space_id =
+        bridge ? bridge->GetActiveSpaceId() : std::string();
     if (space_id.empty()) {
       return;
     }
-    if (browser->profile() &&
-        !maho::sidebar_prefs::IsSidebarPanelExpanded(browser->profile()->GetPrefs())) {
-      maho::sidebar_prefs::ToggleSidebarPanelExpanded(browser->profile()->GetPrefs());
+    if (browser->profile() && !maho::sidebar_prefs::IsSidebarPanelExpanded(
+                                  browser->profile()->GetPrefs())) {
+      maho::sidebar_prefs::ToggleSidebarPanelExpanded(
+          browser->profile()->GetPrefs());
     }
-    DispatchShellEvent("toggle_folder_expanded", {
-        {"space_id", space_id},
-        {"folder_id", suggestion.folder_id}});
+    DispatchShellEvent(
+        "toggle_folder_expanded",
+        {{"space_id", space_id}, {"folder_id", suggestion.folder_id}});
     return;
   }
 
@@ -837,13 +871,14 @@ bool MahoCommandActionHandler::OnQuerySubmitted(
   MahoAiIngressCoordinator::GetOrCreateForBrowser(browser)->Dispatch(
       std::move(dispatch));
 
-  bool has_popup = maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser) != nullptr;
+  bool has_popup = maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(
+                       browser) != nullptr;
   if (!has_popup) {
     auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
     const bool ai_panel_showing =
         side_panel_ui &&
         side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
-        SidePanelEntryId::kMahoAiPanel;
+            SidePanelEntryId::kMahoAiPanel;
     if (!ai_panel_showing && side_panel_ui) {
       side_panel_ui->Show(SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
                           SidePanelOpenTrigger::kToolbarButton);

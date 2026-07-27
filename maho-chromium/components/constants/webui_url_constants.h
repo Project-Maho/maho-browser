@@ -3,6 +3,8 @@
 #ifndef MAHO_CHROMIUM_COMPONENTS_CONSTANTS_WEBUI_URL_CONSTANTS_H_
 #define MAHO_CHROMIUM_COMPONENTS_CONSTANTS_WEBUI_URL_CONSTANTS_H_
 
+#include <array>
+
 namespace maho {
 
 inline constexpr char kMahoAIHost[] = "maho-ai";
@@ -48,6 +50,40 @@ inline constexpr char kMahoSpaceCreateURL[] = "chrome://maho-space-create/";
 
 inline constexpr char kMahoRoutinesHost[] = "maho-routines";
 inline constexpr char kMahoRoutinesURL[] = "chrome://maho-routines/";
+
+inline constexpr char kMahoMailHost[] = "maho-mail";
+inline constexpr char kMahoMailURL[] = "chrome://maho-mail/";
+
+// Public alias constants (maho:// scheme).
+inline constexpr char kMahoSettingsPublicURL[] = "maho://settings/";
+inline constexpr char kMahoAIPublicURL[] = "maho://ai/";
+inline constexpr char kMahoSpaceConfigPublicURL[] = "maho://space-config/";
+inline constexpr char kMahoSpaceCreatePublicURL[] = "maho://space-create/";
+inline constexpr char kMahoSyncPublicURL[] = "maho://sync/";
+inline constexpr char kMahoLiveFoldersPublicURL[] = "maho://live-folders/";
+inline constexpr char kMahoWelcomePublicURL[] = "maho://welcome/";
+inline constexpr char kMahoRoutinesPublicURL[] = "maho://routines/";
+inline constexpr char kMahoMailPublicURL[] = "maho://mail/";
+
+struct MahoUrlAliasRecord {
+  const char* alias_host;
+  const char* public_url;
+  const char* actual_host;
+  const char* actual_url;
+};
+
+// Exactly nine production alias records.
+inline constexpr std::array<MahoUrlAliasRecord, 9> kMahoUrlAliases = {{
+    { "settings", kMahoSettingsPublicURL, kMahoSettingsHost, kMahoSettingsURL },
+    { "ai", kMahoAIPublicURL, kMahoAIHost, kMahoAIURL },
+    { "space-config", kMahoSpaceConfigPublicURL, kMahoSpaceConfigHost, kMahoSpaceConfigURL },
+    { "space-create", kMahoSpaceCreatePublicURL, kMahoSpaceCreateHost, kMahoSpaceCreateURL },
+    { "sync", kMahoSyncPublicURL, kMahoSyncHost, kMahoSyncURL },
+    { "live-folders", kMahoLiveFoldersPublicURL, kMahoLiveFoldersHost, kMahoLiveFoldersURL },
+    { "welcome", kMahoWelcomePublicURL, kMahoWelcomeHost, kMahoWelcomeURL },
+    { "routines", kMahoRoutinesPublicURL, kMahoRoutinesHost, kMahoRoutinesURL },
+    { "mail", kMahoMailPublicURL, kMahoMailHost, kMahoMailURL },
+}};
 
 }  // namespace maho
 

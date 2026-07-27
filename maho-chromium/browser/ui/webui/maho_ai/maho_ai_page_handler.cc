@@ -50,6 +50,7 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_voice_session.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/base/net_errors.h"
@@ -1791,7 +1792,7 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
       popup_params.trusted_source = true;
       popup_params.omit_from_session_restore = true;
       Browser* popup = Browser::Create(popup_params);
-      chrome::AddTabAt(popup, GURL("chrome://maho-ai/"),
+      chrome::AddTabAt(popup, GURL(maho::kMahoAIPublicURL),
                        /*index=*/-1, /*foreground=*/true);
       maho::MahoAiPopupLifetimeTracker::Get()->TrackPopup(browser_, popup);
       popup->window()->Show();
