@@ -67,7 +67,13 @@ maho-workspace/
 - Chromium C++: explicit includes, `DCHECK_CALLED_ON_VALID_SEQUENCE`, namespace-local helpers
 - Mojo handlers are thin — delegate to helpers in `browser/ai/` or `browser/ui/`
 - WebUI pattern: each feature has `{feature}.mojom` + `_page_handler.cc/h` + `_ui.cc/h` + `resources/{feature}/app.ts`
+- `plan/` is local planning scratch, not canonical project documentation. Keep it gitignored; durable decisions and ship-state notes belong in AGENTS.md, ADRs, or committed docs.
 - Subtree AGENTS.md files take precedence over this root guide
+
+## CURRENT SHIP STATUS
+- **Maho Mail is deferred from the current ship.** Do not expose or reactivate Mail without explicit user approval and a completed security/integrity remediation pass.
+- Runtime defer gates are intentionally left in place while the bundle may still build: sidebar Mail entry hidden in `maho_sidebar_top_bar_view.cc`, `chrome://maho-mail` disabled via `MahoMailUIConfig::IsWebUIEnabled()`, helper launch blocked by `kMahoMailDeferred`, and Maho Mail settings panes hidden by `MAIL_DEFERRED`.
+- Keeping the WebUI/resources/helper targets in the bundle is acceptable for now; they are unreachable dead weight. Removing them from GN/build scripts is a separate cleanup requiring explicit approval because it touches shared build infrastructure.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - **No adding relay/ or mail/ crates to root workspace members** (libsqlite3-sys conflict)

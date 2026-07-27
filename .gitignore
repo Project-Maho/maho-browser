@@ -63,6 +63,7 @@ __pycache__/
 .serena/
 .sisyphus/
 .omo/
+/plan/
 
 # Tool runtime artifacts
 .agent-browser-profile/
