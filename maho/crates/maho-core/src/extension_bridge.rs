@@ -4,18 +4,21 @@ use serde::{Deserialize, Serialize};
 
 // === Extension Bridge ===
 
+pub const DEFAULT_PROFILE_KEY: &str = "default";
+
+type ExtensionSyncCallback = Box<dyn Fn(&str, bool, bool) + Send + Sync>;
+
 pub struct ExtensionBridge {
-    /// Installed extensions registry
-    pub extensions: HashMap<String, InstalledExtension>,
-    /// Extension sync callback
-    pub sync_callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
-    /// Registered side panels
-    pub side_panels: HashMap<String, SidePanelOptions>,
-    /// H6: false until the first installed-extensions snapshot has been absorbed.
-    /// The first snapshot is a startup baseline and must NOT be re-pushed to sync
-    /// (the in-memory mirror is empty at startup, so every entry would otherwise
-    /// look "changed" and re-upload on every restart).
-    pub baseline_synced: bool,
+    profiles: HashMap<String, ProfileExtensionState>,
+    primary_sync_profile: Option<String>,
+}
+
+#[derive(Default)]
+struct ProfileExtensionState {
+    extensions: HashMap<String, InstalledExtension>,
+    sync_callback: Option<ExtensionSyncCallback>,
+    side_panels: HashMap<String, SidePanelOptions>,
+    baseline_synced: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -64,24 +67,73 @@ impl Default for ExtensionBridge {
 impl ExtensionBridge {
     pub fn new() -> Self {
         Self {
-            extensions: HashMap::new(),
-            sync_callback: None,
-            side_panels: HashMap::new(),
-            baseline_synced: false,
+            profiles: HashMap::new(),
+            primary_sync_profile: None,
+        }
+    }
+
+    fn profile_mut(&mut self, profile_key: &str) -> &mut ProfileExtensionState {
+        self.profiles.entry(profile_key.to_string()).or_default()
+    }
+
+    fn profile(&self, profile_key: &str) -> Option<&ProfileExtensionState> {
+        self.profiles.get(profile_key)
+    }
+
+    pub fn is_baseline_synced_for_profile(&self, profile_key: &str) -> bool {
+        self.profile(profile_key)
+            .map(|profile| profile.baseline_synced)
+            .unwrap_or(false)
+    }
+
+    pub fn mark_baseline_synced_for_profile(&mut self, profile_key: &str) {
+        self.profile_mut(profile_key).baseline_synced = true;
+    }
+
+    pub fn is_primary_sync_profile(&mut self, profile_key: &str) -> bool {
+        match &self.primary_sync_profile {
+            Some(primary) => primary == profile_key,
+            None => {
+                self.primary_sync_profile = Some(profile_key.to_string());
+                true
+            }
         }
     }
 
     pub fn register_side_panel(&mut self, extension_id: &str, options: SidePanelOptions) {
-        self.side_panels.insert(extension_id.to_string(), options);
+        self.register_side_panel_for_profile(DEFAULT_PROFILE_KEY, extension_id, options);
+    }
+
+    pub fn register_side_panel_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+        options: SidePanelOptions,
+    ) {
+        self.profile_mut(profile_key)
+            .side_panels
+            .insert(extension_id.to_string(), options);
     }
 
     pub fn unregister_side_panel(&mut self, extension_id: &str) {
-        self.side_panels.remove(extension_id);
+        self.unregister_side_panel_for_profile(DEFAULT_PROFILE_KEY, extension_id);
+    }
+
+    pub fn unregister_side_panel_for_profile(&mut self, profile_key: &str, extension_id: &str) {
+        if let Some(profile) = self.profiles.get_mut(profile_key) {
+            profile.side_panels.remove(extension_id);
+        }
     }
 
     pub fn list_side_panels(&self) -> Vec<RegisteredSidePanel> {
-        self.side_panels
-            .iter()
+        self.list_side_panels_for_profile(DEFAULT_PROFILE_KEY)
+    }
+
+    pub fn list_side_panels_for_profile(&self, profile_key: &str) -> Vec<RegisteredSidePanel> {
+        self.profile(profile_key)
+            .map(|profile| &profile.side_panels)
+            .into_iter()
+            .flat_map(|side_panels| side_panels.iter())
             .map(|(ext_id, opt)| RegisteredSidePanel {
                 extension_id: ext_id.clone(),
                 path: opt.path.clone(),
@@ -91,47 +143,173 @@ impl ExtensionBridge {
             .collect()
     }
 
+    pub fn side_panel_options(&self, extension_id: &str) -> Option<SidePanelOptions> {
+        self.side_panel_options_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn side_panel_options_for_profile(
+        &self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<SidePanelOptions> {
+        self.profile(profile_key)
+            .and_then(|profile| profile.side_panels.get(extension_id).cloned())
+    }
+
     // === Extension management for settings ===
 
     pub fn register_extension(&mut self, ext: InstalledExtension) {
-        self.extensions.insert(ext.id.clone(), ext);
+        self.register_extension_for_profile(DEFAULT_PROFILE_KEY, ext);
+    }
+
+    pub fn register_extension_for_profile(
+        &mut self,
+        profile_key: &str,
+        ext: InstalledExtension,
+    ) {
+        self.profile_mut(profile_key)
+            .extensions
+            .insert(ext.id.clone(), ext);
     }
 
     pub fn set_installed_extensions(&mut self, exts: Vec<InstalledExtension>) {
-        self.extensions.clear();
+        self.set_installed_extensions_for_profile(DEFAULT_PROFILE_KEY, exts);
+    }
+
+    pub fn set_installed_extensions_for_profile(
+        &mut self,
+        profile_key: &str,
+        exts: Vec<InstalledExtension>,
+    ) {
+        let profile = self.profile_mut(profile_key);
+        profile.extensions.clear();
         for ext in exts {
-            self.extensions.insert(ext.id.clone(), ext);
+            profile.extensions.insert(ext.id.clone(), ext);
         }
     }
 
     pub fn clear_installed_extensions(&mut self) {
-        self.extensions.clear();
+        self.clear_installed_extensions_for_profile(DEFAULT_PROFILE_KEY);
     }
 
-    pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {
-        if let Some(ext) = self.extensions.get_mut(extension_id) {
-            ext.enabled = !ext.enabled;
-            Some(ext.enabled)
-        } else {
-            None
+    pub fn clear_installed_extensions_for_profile(&mut self, profile_key: &str) {
+        if let Some(profile) = self.profiles.get_mut(profile_key) {
+            profile.extensions.clear();
+            profile.baseline_synced = false;
         }
     }
 
+    pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {
+        self.toggle_extension_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn toggle_extension_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<bool> {
+        let ext = self.profile_mut(profile_key).extensions.get_mut(extension_id)?;
+        ext.enabled = !ext.enabled;
+        Some(ext.enabled)
+    }
+
     pub fn remove_extension(&mut self, extension_id: &str) -> Option<InstalledExtension> {
-        self.extensions.remove(extension_id)
+        self.remove_extension_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn remove_extension_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<InstalledExtension> {
+        self.profiles
+            .get_mut(profile_key)
+            .and_then(|profile| profile.extensions.remove(extension_id))
     }
 
     pub fn get_installed_extensions(&self) -> Vec<&InstalledExtension> {
-        self.extensions.values().collect()
+        self.get_installed_extensions_for_profile(DEFAULT_PROFILE_KEY)
+    }
+
+    pub fn get_installed_extensions_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Vec<&InstalledExtension> {
+        self.profile(profile_key)
+            .map(|profile| profile.extensions.values().collect())
+            .unwrap_or_default()
     }
 
     pub fn get_extension(&self, extension_id: &str) -> Option<&InstalledExtension> {
-        self.extensions.get(extension_id)
+        self.get_extension_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn get_extension_for_profile(
+        &self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<&InstalledExtension> {
+        self.profile(profile_key)
+            .and_then(|profile| profile.extensions.get(extension_id))
+    }
+
+    pub fn set_extension_enabled_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+        enabled: bool,
+    ) {
+        if let Some(ext) = self
+            .profiles
+            .get_mut(profile_key)
+            .and_then(|profile| profile.extensions.get_mut(extension_id))
+        {
+            ext.enabled = enabled;
+        }
+    }
+
+    pub fn extension_ids_for_profile(&self, profile_key: &str) -> Vec<String> {
+        self.profile(profile_key)
+            .map(|profile| profile.extensions.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn get_password_provider_extension_id(&self) -> Option<String> {
-        let exts: Vec<InstalledExtension> = self.extensions.values().cloned().collect();
+        self.get_password_provider_extension_id_for_profile(DEFAULT_PROFILE_KEY)
+    }
+
+    pub fn get_password_provider_extension_id_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Option<String> {
+        let exts: Vec<InstalledExtension> = self
+            .profile(profile_key)
+            .map(|profile| profile.extensions.values().cloned().collect())
+            .unwrap_or_default();
         find_password_provider(&exts)
+    }
+
+    pub fn register_extension_sync_callback(
+        &mut self,
+        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+    ) {
+        self.register_extension_sync_callback_for_profile(DEFAULT_PROFILE_KEY, callback);
+    }
+
+    pub fn register_extension_sync_callback_for_profile(
+        &mut self,
+        profile_key: &str,
+        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+    ) {
+        self.profile_mut(profile_key).sync_callback = callback;
+    }
+
+    pub fn sync_callback_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Option<&(dyn Fn(&str, bool, bool) + Send + Sync)> {
+        self.profile(profile_key)
+            .and_then(|profile| profile.sync_callback.as_deref())
     }
 }
 

@@ -897,6 +897,35 @@ pub unsafe extern "C" fn maho_core_get_installed_extensions(ptr: *mut MahoCore) 
 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key` must be a valid null-terminated UTF-8 string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_installed_extensions_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            to_json_cstring(&core.get_installed_extensions_for_profile(profile_key))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_clear_installed_extensions(ptr: *mut MahoCore) {
     ffi_safe!(
@@ -910,6 +939,34 @@ pub unsafe extern "C" fn maho_core_clear_installed_extensions(ptr: *mut MahoCore
             }
             let core = &mut *ptr;
             core.clear_installed_extensions();
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key` must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_clear_installed_extensions_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() {
+                return;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            core.clear_installed_extensions_for_profile(profile_key);
         },
         ()
     )
@@ -945,6 +1002,48 @@ pub unsafe extern "C" fn maho_core_set_installed_extensions(
                 }
             };
             core.set_installed_extensions(extensions);
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key` and `extensions_json` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_installed_extensions_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    extensions_json: *const c_char,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() || extensions_json.is_null() {
+                return;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            let json_str = match CStr::from_ptr(extensions_json).to_str() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            let extensions = match maho_core::extension_bridge::parse_extension_payload(json_str) {
+                Ok(exts) => exts,
+                Err(e) => {
+                    eprintln!(
+                        "[ffi] set_installed_extensions_for_profile: invalid extension payload: {e}"
+                    );
+                    return;
+                }
+            };
+            core.set_installed_extensions_for_profile(profile_key, extensions);
         },
         ()
     )
@@ -997,6 +1096,55 @@ pub unsafe extern "C" fn maho_core_register_extension_sync_callback(
     )
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key` must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_extension_sync_callback_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    callback: Option<extern "C" fn(*mut c_void, *const c_char, bool, bool)>,
+    user_data: *mut c_void,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() {
+                return;
+            }
+            // SAFETY(H8): gate on import to avoid a data race on MahoCore, matching
+            // the other &mut *ptr FFIs.
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            if let Some(cb) = callback {
+                let ud_raw = user_data as usize;
+                core.register_extension_sync_callback_for_profile(
+                    profile_key,
+                    Some(Box::new(move |id, enabled, deleted| {
+                        // SAFETY(H8): the sync callback is invoked on the UI/sync
+                        // sequence that owns `user_data`; it must not run after the
+                        // C++ owner is destroyed. Skip (never panic across FFI) if the
+                        // id contains an interior NUL.
+                        let Ok(id_c) = CString::new(id) else {
+                            return;
+                        };
+                        let ud = ud_raw as *mut c_void;
+                        cb(ud, id_c.as_ptr(), enabled, deleted);
+                    })),
+                );
+            } else {
+                core.register_extension_sync_callback_for_profile(profile_key, None);
+            }
+        },
+        ()
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_register_side_panel(
     ptr: *mut MahoCore,
@@ -1032,6 +1180,55 @@ pub unsafe extern "C" fn maho_core_register_side_panel(
     )
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key`, `extension_id`, `path`, and `layout` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_side_panel_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    extension_id: *const c_char,
+    path: *const c_char,
+    layout: *const c_char,
+    default_width: i32,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null()
+                || profile_key.is_null()
+                || extension_id.is_null()
+                || path.is_null()
+                || layout.is_null()
+            {
+                return;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
+            let p = CStr::from_ptr(path).to_string_lossy();
+            let lay_str = CStr::from_ptr(layout).to_string_lossy();
+            let layout_enum = if lay_str == "left" {
+                maho_core::extension_bridge::SidePanelLayout::Left
+            } else {
+                maho_core::extension_bridge::SidePanelLayout::Right
+            };
+            core.register_side_panel_for_profile(
+                profile_key,
+                &ext_id,
+                maho_core::extension_bridge::SidePanelOptions {
+                    path: p.to_string(),
+                    layout: layout_enum,
+                    default_width,
+                },
+            );
+        },
+        ()
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_unregister_side_panel(
     ptr: *mut MahoCore,
@@ -1045,6 +1242,32 @@ pub unsafe extern "C" fn maho_core_unregister_side_panel(
             let core = &mut *ptr;
             let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
             core.unregister_side_panel(&ext_id);
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key` and `extension_id` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_unregister_side_panel_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    extension_id: *const c_char,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() || extension_id.is_null() {
+                return;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
+            core.unregister_side_panel_for_profile(profile_key, &ext_id);
         },
         ()
     )
@@ -1066,6 +1289,56 @@ pub unsafe extern "C" fn maho_core_get_side_panel_options(
             let core = &*ptr;
             let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
             if let Some(opt) = core.get_side_panel_options(ext_id.as_ref()) {
+                if !out_path.is_null() {
+                    if let Ok(p_cstr) = CString::new(opt.path.clone()) {
+                        *out_path = p_cstr.into_raw();
+                    }
+                }
+                if !out_layout.is_null() {
+                    let lay_str = match opt.layout {
+                        maho_core::extension_bridge::SidePanelLayout::Left => "left",
+                        maho_core::extension_bridge::SidePanelLayout::Right => "right",
+                    };
+                    if let Ok(lay_cstr) = CString::new(lay_str) {
+                        *out_layout = lay_cstr.into_raw();
+                    }
+                }
+                if !out_default_width.is_null() {
+                    *out_default_width = opt.default_width;
+                }
+                true
+            } else {
+                false
+            }
+        },
+        false
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `profile_key` and `extension_id` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_side_panel_options_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    extension_id: *const c_char,
+    out_path: *mut *mut c_char,
+    out_layout: *mut *mut c_char,
+    out_default_width: *mut i32,
+) -> bool {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() || extension_id.is_null() {
+                return false;
+            }
+            let core = &*ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
+            if let Some(opt) = core.get_side_panel_options_for_profile(profile_key, ext_id.as_ref()) {
                 if !out_path.is_null() {
                     if let Ok(p_cstr) = CString::new(opt.path.clone()) {
                         *out_path = p_cstr.into_raw();
@@ -4541,6 +4814,40 @@ pub unsafe extern "C" fn maho_core_toggle_extension(
 }
 
 /// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`;
+/// `profile_key` and `extension_id` must be valid NUL-terminated UTF-8 strings.
+/// Returns `false` on null input or if import is active.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_toggle_extension_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    extension_id: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() || extension_id.is_null() {
+                return false;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return false;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let id_str = match CStr::from_ptr(extension_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            core.toggle_extension_for_profile(profile_key, id_str).is_some()
+        },
+        false
+    )
+}
+
+/// # Safety
 /// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `extension_id` must be a
 /// valid NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
@@ -4563,6 +4870,40 @@ pub unsafe extern "C" fn maho_core_remove_extension(
                 Err(_) => return false,
             };
             core.remove_extension(id_str).is_some()
+        },
+        false
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`;
+/// `profile_key` and `extension_id` must be valid NUL-terminated UTF-8 strings.
+/// Returns `false` on null input or if import is active.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_remove_extension_for_profile(
+    ptr: *mut MahoCore,
+    profile_key: *const c_char,
+    extension_id: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_key.is_null() || extension_id.is_null() {
+                return false;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return false;
+            }
+            let core = &mut *ptr;
+            let profile_key = match CStr::from_ptr(profile_key).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let id_str = match CStr::from_ptr(extension_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            core.remove_extension_for_profile(profile_key, id_str).is_some()
         },
         false
     )

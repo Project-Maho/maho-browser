@@ -71,7 +71,7 @@ use crate::easel_manager::EaselManager;
 use crate::event_dispatcher::{
     CommandBarInterface, EventDispatcher, SpaceManagerInterface, TabManagerInterface,
 };
-use crate::extension_bridge::ExtensionBridge;
+use crate::extension_bridge::{ExtensionBridge, DEFAULT_PROFILE_KEY};
 use crate::find_manager::FindManager;
 use crate::import_export_manager::ImportExportManager;
 use crate::llm_manager::LLMManager;
@@ -5209,7 +5209,7 @@ impl MahoCore {
             }
 
             ShellEvent::ToggleExtension { extension_id } => {
-                if let Some(enabled) = self.extension_bridge.toggle_extension(extension_id) {
+                if let Some(enabled) = self.toggle_extension(extension_id) {
                     return vec![CoreUpdate::ExtensionToggled {
                         extension_id: extension_id.clone(),
                         enabled,
@@ -5222,11 +5222,7 @@ impl MahoCore {
                 )];
             }
             ShellEvent::RemoveExtension { extension_id } => {
-                if self
-                    .extension_bridge
-                    .remove_extension(extension_id)
-                    .is_some()
-                {
+                if self.remove_extension(extension_id).is_some() {
                     return vec![CoreUpdate::ExtensionRemoved {
                         extension_id: extension_id.clone(),
                     }];
@@ -7230,8 +7226,15 @@ impl MahoCore {
     }
 
     pub fn get_installed_extensions(&self) -> Vec<crate::extension_bridge::InstalledExtension> {
+        self.get_installed_extensions_for_profile(DEFAULT_PROFILE_KEY)
+    }
+
+    pub fn get_installed_extensions_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Vec<crate::extension_bridge::InstalledExtension> {
         self.extension_bridge
-            .get_installed_extensions()
+            .get_installed_extensions_for_profile(profile_key)
             .into_iter()
             .cloned()
             .collect()
@@ -7270,9 +7273,22 @@ impl MahoCore {
     }
 
     pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {
-        let res = self.extension_bridge.toggle_extension(extension_id);
+        self.toggle_extension_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn toggle_extension_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<bool> {
+        let res = self
+            .extension_bridge
+            .toggle_extension_for_profile(profile_key, extension_id);
         if let Some(enabled) = res {
-            if let Some(ref cb) = self.extension_bridge.sync_callback {
+            if let Some(cb) = self
+                .extension_bridge
+                .sync_callback_for_profile(profile_key)
+            {
                 cb(extension_id, enabled, false);
             }
             let update = CoreUpdate::InstalledExtensionsUpdated;
@@ -7287,9 +7303,22 @@ impl MahoCore {
         &mut self,
         extension_id: &str,
     ) -> Option<crate::extension_bridge::InstalledExtension> {
-        let res = self.extension_bridge.remove_extension(extension_id);
+        self.remove_extension_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn remove_extension_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<crate::extension_bridge::InstalledExtension> {
+        let res = self
+            .extension_bridge
+            .remove_extension_for_profile(profile_key, extension_id);
         if res.is_some() {
-            if let Some(ref cb) = self.extension_bridge.sync_callback {
+            if let Some(cb) = self
+                .extension_bridge
+                .sync_callback_for_profile(profile_key)
+            {
                 cb(extension_id, false, true);
             }
             let update = CoreUpdate::InstalledExtensionsUpdated;
@@ -7301,7 +7330,16 @@ impl MahoCore {
     }
 
     pub fn register_extension(&mut self, ext: crate::extension_bridge::InstalledExtension) {
-        self.extension_bridge.register_extension(ext);
+        self.register_extension_for_profile(DEFAULT_PROFILE_KEY, ext);
+    }
+
+    pub fn register_extension_for_profile(
+        &mut self,
+        profile_key: &str,
+        ext: crate::extension_bridge::InstalledExtension,
+    ) {
+        self.extension_bridge
+            .register_extension_for_profile(profile_key, ext);
         let update = CoreUpdate::InstalledExtensionsUpdated;
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
@@ -7312,7 +7350,16 @@ impl MahoCore {
         &mut self,
         callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
     ) {
-        self.extension_bridge.sync_callback = callback;
+        self.register_extension_sync_callback_for_profile(DEFAULT_PROFILE_KEY, callback);
+    }
+
+    pub fn register_extension_sync_callback_for_profile(
+        &mut self,
+        profile_key: &str,
+        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+    ) {
+        self.extension_bridge
+            .register_extension_sync_callback_for_profile(profile_key, callback);
     }
 
     pub fn register_side_panel(
@@ -7320,34 +7367,71 @@ impl MahoCore {
         extension_id: &str,
         options: crate::extension_bridge::SidePanelOptions,
     ) {
+        self.register_side_panel_for_profile(DEFAULT_PROFILE_KEY, extension_id, options);
+    }
+
+    pub fn register_side_panel_for_profile(
+        &mut self,
+        profile_key: &str,
+        extension_id: &str,
+        options: crate::extension_bridge::SidePanelOptions,
+    ) {
         self.extension_bridge
-            .register_side_panel(extension_id, options);
+            .register_side_panel_for_profile(profile_key, extension_id, options);
     }
 
     pub fn unregister_side_panel(&mut self, extension_id: &str) {
-        self.extension_bridge.unregister_side_panel(extension_id);
+        self.unregister_side_panel_for_profile(DEFAULT_PROFILE_KEY, extension_id);
+    }
+
+    pub fn unregister_side_panel_for_profile(&mut self, profile_key: &str, extension_id: &str) {
+        self.extension_bridge
+            .unregister_side_panel_for_profile(profile_key, extension_id);
     }
 
     pub fn get_side_panel_options(
         &self,
         extension_id: &str,
     ) -> Option<crate::extension_bridge::SidePanelOptions> {
-        self.extension_bridge.side_panels.get(extension_id).cloned()
+        self.get_side_panel_options_for_profile(DEFAULT_PROFILE_KEY, extension_id)
+    }
+
+    pub fn get_side_panel_options_for_profile(
+        &self,
+        profile_key: &str,
+        extension_id: &str,
+    ) -> Option<crate::extension_bridge::SidePanelOptions> {
+        self.extension_bridge
+            .side_panel_options_for_profile(profile_key, extension_id)
     }
 
     pub fn set_installed_extensions(
         &mut self,
         exts: Vec<crate::extension_bridge::InstalledExtension>,
     ) {
-        let is_baseline = !self.extension_bridge.baseline_synced;
-        self.extension_bridge.baseline_synced = true;
+        self.set_installed_extensions_for_profile(DEFAULT_PROFILE_KEY, exts);
+    }
+
+    pub fn set_installed_extensions_for_profile(
+        &mut self,
+        profile_key: &str,
+        exts: Vec<crate::extension_bridge::InstalledExtension>,
+    ) {
+        let is_baseline = !self
+            .extension_bridge
+            .is_baseline_synced_for_profile(profile_key);
+        self.extension_bridge
+            .mark_baseline_synced_for_profile(profile_key);
+        let sync_profile = profile_key == DEFAULT_PROFILE_KEY;
         for ext in &exts {
-            let old_ext = self.extension_bridge.extensions.get(&ext.id);
+            let old_ext = self
+                .extension_bridge
+                .get_extension_for_profile(profile_key, &ext.id);
             let state_changed = match old_ext {
                 Some(old) => old.enabled != ext.enabled,
                 None => true,
             };
-            if state_changed && !is_baseline {
+            if sync_profile && state_changed && !is_baseline {
                 let cws_url = format!("https://chromewebstore.google.com/detail/{}", ext.id);
                 let payload = serde_json::json!({
                     "id": ext.id,
@@ -7391,41 +7475,43 @@ impl MahoCore {
             exts.iter().map(|e| e.id.as_str()).collect();
         let removed_ids: Vec<String> = self
             .extension_bridge
-            .extensions
-            .keys()
+            .extension_ids_for_profile(profile_key)
+            .into_iter()
             .filter(|id| !new_ids.contains(id.as_str()))
-            .cloned()
             .collect();
-        for removed_id in removed_ids {
-            match self.next_hlc_ts() {
-                Ok(version) => {
-                    let device_id = self.account_manager.device_id_hash();
-                    let payload_str = serde_json::json!({ "id": removed_id }).to_string();
-                    let fields_hlc_json =
-                        crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
-                    self.sync_push_entity_persisted(SyncEntity {
-                        entity_type: SyncEntityType::Extension,
-                        entity_id: removed_id.clone(),
-                        version,
-                        device_id,
-                        schema_version: 1,
-                        modified_at: chrono::Utc::now().timestamp(),
-                        payload_json: payload_str,
-                        deleted: true,
-                        queue_row_id: None,
-                        fields_hlc_json,
-                    });
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[sync] Skipping extension tombstone for '{}': HLC failure: {}",
-                        removed_id, e
-                    );
+        if sync_profile {
+            for removed_id in removed_ids {
+                match self.next_hlc_ts() {
+                    Ok(version) => {
+                        let device_id = self.account_manager.device_id_hash();
+                        let payload_str = serde_json::json!({ "id": removed_id }).to_string();
+                        let fields_hlc_json =
+                            crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
+                        self.sync_push_entity_persisted(SyncEntity {
+                            entity_type: SyncEntityType::Extension,
+                            entity_id: removed_id.clone(),
+                            version,
+                            device_id,
+                            schema_version: 1,
+                            modified_at: chrono::Utc::now().timestamp(),
+                            payload_json: payload_str,
+                            deleted: true,
+                            queue_row_id: None,
+                            fields_hlc_json,
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[sync] Skipping extension tombstone for '{}': HLC failure: {}",
+                            removed_id, e
+                        );
+                    }
                 }
             }
         }
 
-        self.extension_bridge.set_installed_extensions(exts);
+        self.extension_bridge
+            .set_installed_extensions_for_profile(profile_key, exts);
         let update = CoreUpdate::InstalledExtensionsUpdated;
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
@@ -7433,7 +7519,12 @@ impl MahoCore {
     }
 
     pub fn clear_installed_extensions(&mut self) {
-        self.extension_bridge.clear_installed_extensions();
+        self.clear_installed_extensions_for_profile(DEFAULT_PROFILE_KEY);
+    }
+
+    pub fn clear_installed_extensions_for_profile(&mut self, profile_key: &str) {
+        self.extension_bridge
+            .clear_installed_extensions_for_profile(profile_key);
         let update = CoreUpdate::InstalledExtensionsUpdated;
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
@@ -10861,13 +10952,16 @@ impl MahoCore {
                                 .unwrap_or(true);
                             let deleted = entity.deleted;
 
-                            if let Some(ext) = self.extension_bridge.extensions.get_mut(id) {
-                                if ext.enabled != enabled {
-                                    ext.enabled = enabled;
-                                }
-                            }
+                            self.extension_bridge.set_extension_enabled_for_profile(
+                                DEFAULT_PROFILE_KEY,
+                                id,
+                                enabled,
+                            );
 
-                            if let Some(ref cb) = self.extension_bridge.sync_callback {
+                            if let Some(cb) = self
+                                .extension_bridge
+                                .sync_callback_for_profile(DEFAULT_PROFILE_KEY)
+                            {
                                 cb(id, enabled, deleted);
                             }
                         }

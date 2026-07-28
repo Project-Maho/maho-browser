@@ -324,8 +324,24 @@ char *maho_core_get_installed_extensions(struct MahoCore *ptr);
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key` must be a valid null-terminated UTF-8 string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_installed_extensions_for_profile(struct MahoCore *ptr, const char *profile_key);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
  */
 void maho_core_clear_installed_extensions(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key` must be a valid null-terminated UTF-8 string.
+ */
+void maho_core_clear_installed_extensions_for_profile(struct MahoCore *ptr,
+                                                      const char *profile_key);
 
 /**
  * # Safety
@@ -334,9 +350,31 @@ void maho_core_clear_installed_extensions(struct MahoCore *ptr);
  */
 void maho_core_set_installed_extensions(struct MahoCore *ptr, const char *extensions_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key` and `extensions_json` must be valid null-terminated UTF-8 strings.
+ */
+void maho_core_set_installed_extensions_for_profile(struct MahoCore *ptr,
+                                                    const char *profile_key,
+                                                    const char *extensions_json);
+
 void maho_core_register_extension_sync_callback(struct MahoCore *ptr,
                                                 void (*callback)(void*, const char*, bool, bool),
                                                 void *user_data);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key` must be a valid null-terminated UTF-8 string.
+ */
+void maho_core_register_extension_sync_callback_for_profile(struct MahoCore *ptr,
+                                                            const char *profile_key,
+                                                            void (*callback)(void*,
+                                                                             const char*,
+                                                                             bool,
+                                                                             bool),
+                                                            void *user_data);
 
 void maho_core_register_side_panel(struct MahoCore *ptr,
                                    const char *extension_id,
@@ -344,13 +382,46 @@ void maho_core_register_side_panel(struct MahoCore *ptr,
                                    const char *layout,
                                    int32_t default_width);
 
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key`, `extension_id`, `path`, and `layout` must be valid null-terminated UTF-8 strings.
+ */
+void maho_core_register_side_panel_for_profile(struct MahoCore *ptr,
+                                               const char *profile_key,
+                                               const char *extension_id,
+                                               const char *path,
+                                               const char *layout,
+                                               int32_t default_width);
+
 void maho_core_unregister_side_panel(struct MahoCore *ptr, const char *extension_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key` and `extension_id` must be valid null-terminated UTF-8 strings.
+ */
+void maho_core_unregister_side_panel_for_profile(struct MahoCore *ptr,
+                                                 const char *profile_key,
+                                                 const char *extension_id);
 
 bool maho_core_get_side_panel_options(struct MahoCore *ptr,
                                       const char *extension_id,
                                       char **out_path,
                                       char **out_layout,
                                       int32_t *out_default_width);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `profile_key` and `extension_id` must be valid null-terminated UTF-8 strings.
+ */
+bool maho_core_get_side_panel_options_for_profile(struct MahoCore *ptr,
+                                                  const char *profile_key,
+                                                  const char *extension_id,
+                                                  char **out_path,
+                                                  char **out_layout,
+                                                  int32_t *out_default_width);
 
 /**
  * # Safety
@@ -1225,10 +1296,30 @@ bool maho_core_toggle_extension(struct MahoCore *ptr, const char *extension_id);
 
 /**
  * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`;
+ * `profile_key` and `extension_id` must be valid NUL-terminated UTF-8 strings.
+ * Returns `false` on null input or if import is active.
+ */
+bool maho_core_toggle_extension_for_profile(struct MahoCore *ptr,
+                                            const char *profile_key,
+                                            const char *extension_id);
+
+/**
+ * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `extension_id` must be a
  * valid NUL-terminated C string. Returns `false` on null input or if import is active.
  */
 bool maho_core_remove_extension(struct MahoCore *ptr, const char *extension_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`;
+ * `profile_key` and `extension_id` must be valid NUL-terminated UTF-8 strings.
+ * Returns `false` on null input or if import is active.
+ */
+bool maho_core_remove_extension_for_profile(struct MahoCore *ptr,
+                                            const char *profile_key,
+                                            const char *extension_id);
 
 /**
  * # Safety
