@@ -109,6 +109,11 @@ bool MahoPrivateContextToken::Revalidate(MahoPrivateCapability capability) {
   return IsCapabilityAllowed(context_class_, capability);
 }
 
-MahoPrivateContextClass ClassifyProfileForTesting(Profile* profile) {
+MahoPrivateContextClass MahoClassifyProfile(Profile* profile) {
   return ClassifyProfile(profile);
+}
+
+bool MahoIsCapabilityAllowed(Profile* profile,
+                             MahoPrivateCapability capability) {
+  return IsCapabilityAllowed(ClassifyProfile(profile), capability);
 }

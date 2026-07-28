@@ -21,6 +21,7 @@ class GlobalBrowserCollection;
 
 class Browser;
 class BrowserWindowInterface;
+class Profile;
 
 namespace maho {
 
@@ -70,6 +71,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   void ClearBrowserActiveSpace(Browser* browser);
 
   std::vector<std::string> GetSpaceIds() const;
+  std::string GetSpaceIdForProfile(Profile* profile) const;
   base::FilePath GetProfilePathForTesting(const std::string& space_id) const;
 
   static constexpr size_t kMahoProfileIdMaxLen = 64;

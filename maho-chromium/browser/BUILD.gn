@@ -646,11 +646,14 @@ source_set("maho_extension_state_bridge") {
   public_deps = [
     "//base",
     "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
     "//extensions/browser",
     "//extensions/common",
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    "//content/public/browser",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
   ]
@@ -680,6 +683,19 @@ source_set("maho_extension_state_bridge_unittests") {
     "//maho/browser/net",
     "//chrome/browser/ui",
     "//chrome/browser/ui/views/frame",
+  ]
+}
+
+test("maho_extension_state_bridge_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_extension_state_bridge_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
   ]
 }
 

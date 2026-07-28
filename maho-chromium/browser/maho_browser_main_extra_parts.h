@@ -9,7 +9,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "base/memory/raw_ptr_exclusion.h"
-#include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_routines_scheduler.h"
 
 class Profile;
@@ -21,7 +20,6 @@ class MahoMcpSocketServer;
 class MahoMcpPipeServer;
 class MahoMcpSessionToken;
 class MahoSyncRelayClient;
-class MahoExtensionSidePanelCoordinator;
 }  // namespace maho
 
 class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
@@ -57,9 +55,6 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     RAW_PTR_EXCLUSION Profile* regular_profile_ = nullptr;
     bool observing_power_suspend_ = false;
 
-   std::unique_ptr<maho::MahoExtensionStateBridge> extension_state_bridge_;
-   std::unique_ptr<maho::MahoExtensionSidePanelCoordinator>
-       extension_side_panel_coordinator_;
    std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
    std::unique_ptr<maho::MahoSyncRelayClient> sync_relay_client_;
 

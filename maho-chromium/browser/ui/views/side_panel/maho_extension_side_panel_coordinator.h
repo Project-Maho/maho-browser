@@ -4,8 +4,10 @@
 #define MAHO_BROWSER_UI_VIEWS_SIDE_PANEL_MAHO_EXTENSION_SIDE_PANEL_COORDINATOR_H_
 
 #include <string>
+
 #include "base/scoped_observation.h"
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
+#include "components/keyed_service/core/keyed_service.h"
 
 #include "extensions/browser/extension_registry_observer.h"
 
@@ -15,7 +17,8 @@ class Profile;
 
 namespace maho {
 
-class MahoExtensionSidePanelCoordinator : public extensions::SidePanelService::Observer,
+class MahoExtensionSidePanelCoordinator : public KeyedService,
+                                          public extensions::SidePanelService::Observer,
                                           public extensions::ExtensionRegistryObserver {
  public:
   static MahoExtensionSidePanelCoordinator* GetForProfile(Profile* profile);
@@ -48,6 +51,7 @@ class MahoExtensionSidePanelCoordinator : public extensions::SidePanelService::O
 
  private:
   const raw_ptr<Profile> profile_;
+  const std::string profile_key_;
   base::ScopedObservation<extensions::SidePanelService,
                           extensions::SidePanelService::Observer>
       service_observation_{this};

@@ -328,6 +328,21 @@ std::vector<std::string> MahoSpaceProfileBridge::GetSpaceIds() const {
   return ids;
 }
 
+std::string MahoSpaceProfileBridge::GetSpaceIdForProfile(
+    Profile* profile) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!profile) {
+    return "default";
+  }
+  const base::FilePath profile_basename = profile->GetPath().BaseName();
+  for (const auto& entry : space_to_profile_) {
+    if (entry.second == profile_basename) {
+      return entry.first;
+    }
+  }
+  return "default";
+}
+
 base::FilePath MahoSpaceProfileBridge::GetProfilePathForTesting(
     const std::string& space_id) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

@@ -21,13 +21,17 @@ namespace {
 
 class ScopedCoreOverride {
  public:
-  explicit ScopedCoreOverride(MahoCore* core) : saved_(GetCore()) {
+  explicit ScopedCoreOverride(MahoCore* core) : saved_(GetCore()), core_(core) {
     SetCore(core);
   }
-  ~ScopedCoreOverride() { SetCore(saved_); }
+  ~ScopedCoreOverride() {
+    SetCore(saved_);
+    maho_core_free(core_);
+  }
 
  private:
   raw_ptr<MahoCore> saved_;
+  raw_ptr<MahoCore> core_;
 };
 
 class MahoExtensionSidePanelCoordinatorTest : public testing::Test {
@@ -39,24 +43,27 @@ TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileNullForNullProfile) {
   EXPECT_EQ(MahoExtensionSidePanelCoordinator::GetForProfile(nullptr), nullptr);
 }
 
-TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileNullBeforeConstruction) {
+TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileCreatesServiceForRegularProfile) {
   TestingProfile profile;
-  EXPECT_EQ(MahoExtensionSidePanelCoordinator::GetForProfile(&profile), nullptr);
+  EXPECT_NE(MahoExtensionSidePanelCoordinator::GetForProfile(&profile), nullptr);
 }
 
-TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileReturnsInstanceAfterConstruction) {
+TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileReturnsSameServiceForProfile) {
   TestingProfile profile;
-  auto coordinator = std::make_unique<MahoExtensionSidePanelCoordinator>(&profile);
-  EXPECT_EQ(MahoExtensionSidePanelCoordinator::GetForProfile(&profile), coordinator.get());
+  auto* first = MahoExtensionSidePanelCoordinator::GetForProfile(&profile);
+  auto* second = MahoExtensionSidePanelCoordinator::GetForProfile(&profile);
+  EXPECT_NE(first, nullptr);
+  EXPECT_EQ(first, second);
 }
 
-TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileReturnsNullAfterDestruction) {
-  TestingProfile profile;
-  {
-    auto coordinator = std::make_unique<MahoExtensionSidePanelCoordinator>(&profile);
-    EXPECT_NE(MahoExtensionSidePanelCoordinator::GetForProfile(&profile), nullptr);
-  }
-  EXPECT_EQ(MahoExtensionSidePanelCoordinator::GetForProfile(&profile), nullptr);
+TEST_F(MahoExtensionSidePanelCoordinatorTest, GetForProfileCreatesDistinctServicesForProfiles) {
+  TestingProfile profile_a;
+  TestingProfile profile_b;
+  auto* first = MahoExtensionSidePanelCoordinator::GetForProfile(&profile_a);
+  auto* second = MahoExtensionSidePanelCoordinator::GetForProfile(&profile_b);
+  EXPECT_NE(first, nullptr);
+  EXPECT_NE(second, nullptr);
+  EXPECT_NE(first, second);
 }
 
 TEST_F(MahoExtensionSidePanelCoordinatorTest, OnPanelOptionsChangedRegistersSidePanel) {
@@ -93,7 +100,6 @@ TEST_F(MahoExtensionSidePanelCoordinatorTest, OnPanelOptionsChangedRegistersSide
   registered = maho_core_get_side_panel_options(core, "test_ext_id", nullptr, nullptr, nullptr);
   EXPECT_FALSE(registered);
 
-  maho_core_free(core);
 }
 
 }  // namespace

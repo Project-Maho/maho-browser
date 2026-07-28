@@ -2,6 +2,7 @@
 
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 
+#include <memory>
 #include <string>
 
 #include "base/containers/flat_map.h"
@@ -9,7 +10,10 @@
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/profiles/profile.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -20,53 +24,87 @@
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "components/keyed_service/core/keyed_service.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace maho {
 
 namespace {
 
-base::flat_map<Profile*, MahoExtensionStateBridge*>& GetInstanceMap() {
-  static base::NoDestructor<base::flat_map<Profile*, MahoExtensionStateBridge*>>
-      s_map;
-  return *s_map;
-}
+class MahoExtensionStateBridgeFactory : public ProfileKeyedServiceFactory {
+ public:
+  static MahoExtensionStateBridgeFactory* GetInstance() {
+    static base::NoDestructor<MahoExtensionStateBridgeFactory> instance;
+    return instance.get();
+  }
+
+  static MahoExtensionStateBridge* GetForProfile(Profile* profile) {
+    if (!profile) {
+      return nullptr;
+    }
+    return static_cast<MahoExtensionStateBridge*>(
+        GetInstance()->GetServiceForBrowserContext(profile, /*create=*/true));
+  }
+
+  MahoExtensionStateBridgeFactory(const MahoExtensionStateBridgeFactory&) = delete;
+  MahoExtensionStateBridgeFactory& operator=(const MahoExtensionStateBridgeFactory&) = delete;
+
+ private:
+  friend base::NoDestructor<MahoExtensionStateBridgeFactory>;
+
+  MahoExtensionStateBridgeFactory()
+      : ProfileKeyedServiceFactory(
+            "MahoExtensionStateBridge",
+            ProfileSelections::BuildForRegularProfile()) {}
+  ~MahoExtensionStateBridgeFactory() override = default;
+
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
+      content::BrowserContext* context) const override {
+    Profile* profile = Profile::FromBrowserContext(context);
+    if (!MahoIsCapabilityAllowed(profile,
+                                 MahoPrivateCapability::kExtensionSnapshot)) {
+      return nullptr;
+    }
+    return std::make_unique<MahoExtensionStateBridge>(profile);
+  }
+
+  bool ServiceIsCreatedWithBrowserContext() const override { return true; }
+};
 
 }  // namespace
 
 // static
 MahoExtensionStateBridge* MahoExtensionStateBridge::FromProfile(
     Profile* profile) {
-  if (!profile || profile->IsOffTheRecord()) {
+  if (!MahoIsCapabilityAllowed(profile,
+                               MahoPrivateCapability::kExtensionSnapshot)) {
     return nullptr;
   }
-  auto& map = GetInstanceMap();
-  auto it = map.find(profile);
-  if (it == map.end()) {
-    return nullptr;
-  }
-  return it->second;
+  return MahoExtensionStateBridgeFactory::GetForProfile(profile);
 }
 
 MahoExtensionStateBridge::MahoExtensionStateBridge(Profile* profile)
-    : profile_(profile) {
-  GetInstanceMap()[profile_] = this;
+    : profile_(profile),
+      profile_key_(MahoSpaceProfileBridge::GetInstance()->GetSpaceIdForProfile(profile)) {
   observation_.Observe(extensions::ExtensionRegistry::Get(profile_));
   PushFullSnapshot();
 
   MahoCore* core = maho::GetCore();
   if (core) {
-    maho_core_register_extension_sync_callback(core, OnSyncCallback, this);
+    maho_core_register_extension_sync_callback_for_profile(
+        core, profile_key_.c_str(), OnSyncCallback, this);
   }
 }
 
 MahoExtensionStateBridge::~MahoExtensionStateBridge() {
-  GetInstanceMap().erase(profile_);
   MahoCore* core = maho::GetCore();
   if (core) {
-    maho_core_clear_installed_extensions(core);
-    maho_core_register_extension_sync_callback(core, nullptr, nullptr);
+    maho_core_clear_installed_extensions_for_profile(core, profile_key_.c_str());
+    maho_core_register_extension_sync_callback_for_profile(
+        core, profile_key_.c_str(), nullptr, nullptr);
   }
 }
 
@@ -125,7 +163,7 @@ bool MahoExtensionStateBridge::RequestDisable(const std::string& extension_id) {
   return true;
 }
 
-bool MahoExtensionStateBridge::RequestUninstall(
+bool MahoExtensionStateBridge::CanUninstall(
     const std::string& extension_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto* registry = extensions::ExtensionRegistry::Get(profile_);
@@ -176,70 +214,49 @@ void MahoExtensionStateBridge::OnExtensionUninstalled(
 
 void MahoExtensionStateBridge::PushFullSnapshot() {
   MahoCore* core = maho::GetCore();
-  if (!core) {
-    return;
-  }
-
   auto* registry = extensions::ExtensionRegistry::Get(profile_);
-  if (!registry) {
-    return;
+  if (core && registry) {
+    base::ListValue list;
+    auto append_set = [&list](const auto& set, bool enabled) {
+      for (const auto& ext : set) {
+        if (!extensions::ui_util::ShouldDisplayInExtensionSettings(*ext)) {
+          continue;
+        }
+        base::DictValue dict;
+        dict.Set("id", ext->id());
+        dict.Set("name", ext->name());
+        dict.Set("version", ext->version().GetString());
+        dict.Set("description", ext->description());
+        dict.Set("enabled", enabled);
+        dict.Set("manifestVersion", ext->manifest_version());
+
+        base::ListValue permissions_list;
+        for (const extensions::APIPermission* permission :
+             ext->permissions_data()->active_permissions().apis()) {
+          permissions_list.Append(permission->name());
+        }
+        dict.Set("permissions", std::move(permissions_list));
+
+        list.Append(std::move(dict));
+      }
+    };
+    append_set(registry->enabled_extensions(), true);
+    append_set(registry->disabled_extensions(), false);
+
+    base::DictValue envelope;
+    envelope.Set("schema_version", 1);
+    envelope.Set("extensions", std::move(list));
+
+    std::string json;
+    if (base::JSONWriter::Write(envelope, &json)) {
+      maho_core_set_installed_extensions_for_profile(
+          core, profile_key_.c_str(), json.c_str());
+    }
   }
 
-  base::ListValue list;
-
-  // Process Enabled Extensions
-  for (const auto& ext : registry->enabled_extensions()) {
-    if (!extensions::ui_util::ShouldDisplayInExtensionSettings(*ext)) {
-      continue;
-    }
-    base::DictValue dict;
-    dict.Set("id", ext->id());
-    dict.Set("name", ext->name());
-    dict.Set("version", ext->version().GetString());
-    dict.Set("description", ext->description());
-    dict.Set("enabled", true);
-    dict.Set("manifestVersion", ext->manifest_version());
-
-    base::ListValue permissions_list;
-    for (const extensions::APIPermission* permission : ext->permissions_data()->active_permissions().apis()) {
-      permissions_list.Append(permission->name());
-    }
-    dict.Set("permissions", std::move(permissions_list));
-
-    list.Append(std::move(dict));
-  }
-
-  // Process Disabled Extensions
-  for (const auto& ext : registry->disabled_extensions()) {
-    if (!extensions::ui_util::ShouldDisplayInExtensionSettings(*ext)) {
-      continue;
-    }
-    base::DictValue dict;
-    dict.Set("id", ext->id());
-    dict.Set("name", ext->name());
-    dict.Set("version", ext->version().GetString());
-    dict.Set("description", ext->description());
-    dict.Set("enabled", false);
-    dict.Set("manifestVersion", ext->manifest_version());
-
-    base::ListValue permissions_list;
-    for (const extensions::APIPermission* permission : ext->permissions_data()->active_permissions().apis()) {
-      permissions_list.Append(permission->name());
-    }
-    dict.Set("permissions", std::move(permissions_list));
-
-    list.Append(std::move(dict));
-  }
-
-  base::DictValue envelope;
-  envelope.Set("schema_version", 1);
-  envelope.Set("extensions", std::move(list));
-
-  std::string json;
-  if (base::JSONWriter::Write(envelope, &json)) {
-    maho_core_set_installed_extensions(core, json.c_str());
-  }
-
+  // H5: observer notification must fire regardless of core/registry
+  // availability, otherwise the location-bar extension grid goes stale whenever
+  // core is not yet initialized.
   ScheduleObserverNotify();
 }
 
@@ -273,9 +290,9 @@ void MahoExtensionStateBridge::HandleIncomingSync(const std::string& extension_i
   }
 
   if (deleted) {
-    // Policy gate: RequestUninstall only checks policy (does not uninstall);
+    // Policy gate: CanUninstall only checks policy (does not uninstall);
     // skipping it here would let sync delete a force-installed extension.
-    if (!RequestUninstall(extension_id)) {
+    if (!CanUninstall(extension_id)) {
       return;
     }
     auto* registrar = extensions::ExtensionRegistrar::Get(profile_);

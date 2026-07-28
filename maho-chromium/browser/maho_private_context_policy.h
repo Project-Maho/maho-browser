@@ -57,6 +57,14 @@ class MahoPrivateContextToken {
   SEQUENCE_CHECKER(sequence_checker_);
 };
 
-MahoPrivateContextClass ClassifyProfileForTesting(Profile* profile);
+MahoPrivateContextClass MahoClassifyProfile(Profile* profile);
+
+// Profile-layer capability check. Applies the SAME policy as
+// MahoPrivateContextToken::Revalidate() (via MahoClassifyProfile +
+// IsCapabilityAllowed) but without the window/WebContents liveness
+// re-validation, for boundaries that operate at the Profile layer (services,
+// bridges, extension/split APIs) where no live browser window exists. WebUI
+// handlers that DO hold a window/WebContents should keep using the token.
+bool MahoIsCapabilityAllowed(Profile* profile, MahoPrivateCapability capability);
 
 #endif  // MAHO_BROWSER_MAHO_PRIVATE_CONTEXT_POLICY_H_

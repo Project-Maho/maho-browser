@@ -72,7 +72,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/ai/maho_ai_settings_migration.h"
-#include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -97,7 +96,6 @@
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
@@ -2984,12 +2982,6 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   // Register MCP browser delegate
   static base::NoDestructor<MahoMcpBrowserDelegateImpl> mcp_delegate;
   maho::MahoMcpSession::SetBrowserDelegate(mcp_delegate.get());
-
-  extension_state_bridge_ =
-      std::make_unique<maho::MahoExtensionStateBridge>(profile);
-
-  extension_side_panel_coordinator_ =
-      std::make_unique<maho::MahoExtensionSidePanelCoordinator>(profile);
 
   sync_relay_client_ = std::make_unique<maho::MahoSyncRelayClient>(profile);
   sync_relay_client_->StartPolling();

@@ -69,13 +69,17 @@ class TestManagementPolicyProvider : public extensions::ManagementPolicy::Provid
 
 class ScopedCoreOverride {
  public:
-  explicit ScopedCoreOverride(MahoCore* core) : saved_(GetCore()) {
+  explicit ScopedCoreOverride(MahoCore* core) : saved_(GetCore()), core_(core) {
     SetCore(core);
   }
-  ~ScopedCoreOverride() { SetCore(saved_); }
+  ~ScopedCoreOverride() {
+    SetCore(saved_);
+    maho_core_free(core_);
+  }
 
  private:
   raw_ptr<MahoCore> saved_;
+  raw_ptr<MahoCore> core_;
 };
 
 class MahoExtensionStateBridgeTest : public testing::Test {
@@ -87,24 +91,27 @@ TEST_F(MahoExtensionStateBridgeTest, FromProfileNullForNullProfile) {
   EXPECT_EQ(MahoExtensionStateBridge::FromProfile(nullptr), nullptr);
 }
 
-TEST_F(MahoExtensionStateBridgeTest, FromProfileNullBeforeConstruction) {
+TEST_F(MahoExtensionStateBridgeTest, FromProfileCreatesServiceForRegularProfile) {
   TestingProfile profile;
-  EXPECT_EQ(MahoExtensionStateBridge::FromProfile(&profile), nullptr);
+  EXPECT_NE(MahoExtensionStateBridge::FromProfile(&profile), nullptr);
 }
 
-TEST_F(MahoExtensionStateBridgeTest, FromProfileReturnsInstanceAfterConstruction) {
+TEST_F(MahoExtensionStateBridgeTest, FromProfileReturnsSameServiceForProfile) {
   TestingProfile profile;
-  auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
-  EXPECT_EQ(MahoExtensionStateBridge::FromProfile(&profile), bridge.get());
+  auto* first = MahoExtensionStateBridge::FromProfile(&profile);
+  auto* second = MahoExtensionStateBridge::FromProfile(&profile);
+  EXPECT_NE(first, nullptr);
+  EXPECT_EQ(first, second);
 }
 
-TEST_F(MahoExtensionStateBridgeTest, FromProfileReturnsNullAfterDestruction) {
-  TestingProfile profile;
-  {
-    auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
-    EXPECT_NE(MahoExtensionStateBridge::FromProfile(&profile), nullptr);
-  }
-  EXPECT_EQ(MahoExtensionStateBridge::FromProfile(&profile), nullptr);
+TEST_F(MahoExtensionStateBridgeTest, FromProfileCreatesDistinctServicesForProfiles) {
+  TestingProfile profile_a;
+  TestingProfile profile_b;
+  auto* first = MahoExtensionStateBridge::FromProfile(&profile_a);
+  auto* second = MahoExtensionStateBridge::FromProfile(&profile_b);
+  EXPECT_NE(first, nullptr);
+  EXPECT_NE(second, nullptr);
+  EXPECT_NE(first, second);
 }
 
 TEST_F(MahoExtensionStateBridgeTest, FromProfileNullForIncognito) {
@@ -155,7 +162,6 @@ TEST_F(MahoExtensionStateBridgeTest,
     EXPECT_TRUE(found) << "Extension 'test_ext_id' not found in core snapshot";
   }
 
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -187,7 +193,6 @@ TEST_F(MahoExtensionStateBridgeTest,
 
   bridge->RemoveObserver(&observer);
   bridge.reset();
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -244,7 +249,6 @@ TEST_F(MahoExtensionStateBridgeTest,
       << "Component extension 'component_ext_id' must be excluded from snapshot";
 
   bridge.reset();
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -262,14 +266,14 @@ TEST_F(MahoExtensionStateBridgeTest,
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
-       RequestUninstallReturnsFalseForUnknownExtension) {
+       CanUninstallReturnsFalseForUnknownExtension) {
   TestingProfile profile;
   auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
-  EXPECT_FALSE(bridge->RequestUninstall("does_not_exist"));
+  EXPECT_FALSE(bridge->CanUninstall("does_not_exist"));
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
-       RequestUninstallReturnsTrueForKnownUnpoliciedExtension) {
+       CanUninstallReturnsTrueForKnownUnpoliciedExtension) {
   MahoCore* core = maho_core_new();
   ASSERT_NE(core, nullptr);
   ScopedCoreOverride scoped_core(core);
@@ -284,10 +288,9 @@ TEST_F(MahoExtensionStateBridgeTest,
   registry->AddEnabled(ext);
   registry->TriggerOnLoaded(ext.get());
 
-  EXPECT_TRUE(bridge->RequestUninstall("uninstall_ext_id"));
+  EXPECT_TRUE(bridge->CanUninstall("uninstall_ext_id"));
 
   bridge.reset();
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -322,7 +325,6 @@ TEST_F(MahoExtensionStateBridgeTest,
 
   extension_system->management_policy()->UnregisterProvider(&policy_provider);
   bridge.reset();
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -352,7 +354,6 @@ TEST_F(MahoExtensionStateBridgeTest,
   EXPECT_FALSE(registry->GetExtensionById("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", extensions::ExtensionRegistry::EVERYTHING));
 
   bridge.reset();
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -386,7 +387,6 @@ TEST_F(MahoExtensionStateBridgeTest,
 
   extension_system->management_policy()->UnregisterProvider(&policy_provider);
   bridge.reset();
-  maho_core_free(core);
 }
 
 TEST_F(MahoExtensionStateBridgeTest,
@@ -418,7 +418,6 @@ TEST_F(MahoExtensionStateBridgeTest,
 
   extension_system->management_policy()->UnregisterProvider(&policy_provider);
   bridge.reset();
-  maho_core_free(core);
 }
 
 }  // namespace

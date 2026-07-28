@@ -5,6 +5,7 @@
 
 #include <string>
 
+#include "components/keyed_service/core/keyed_service.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -17,7 +18,8 @@ class Profile;
 
 namespace maho {
 
-class MahoExtensionStateBridge : public extensions::ExtensionRegistryObserver {
+class MahoExtensionStateBridge : public KeyedService,
+                                 public extensions::ExtensionRegistryObserver {
  public:
   class Observer : public base::CheckedObserver {
    public:
@@ -42,9 +44,9 @@ class MahoExtensionStateBridge : public extensions::ExtensionRegistryObserver {
   // extension is not registered.
   bool RequestEnable(const std::string& extension_id);
   bool RequestDisable(const std::string& extension_id);
-  // RequestUninstall performs the policy check only; the actual uninstall is
-  // invoked by the settings page handler after the user confirms the dialog.
-  bool RequestUninstall(const std::string& extension_id);
+  // Returns whether policy permits uninstalling the extension. Pure policy
+  // check; performs no uninstall itself.
+  bool CanUninstall(const std::string& extension_id);
 
   void HandleIncomingSyncForTesting(const std::string& extension_id,
                                     bool enabled,
@@ -86,6 +88,7 @@ class MahoExtensionStateBridge : public extensions::ExtensionRegistryObserver {
 
   SEQUENCE_CHECKER(sequence_checker_);
   const raw_ptr<Profile> profile_;
+  const std::string profile_key_;
   base::ScopedObservation<extensions::ExtensionRegistry,
                           extensions::ExtensionRegistryObserver>
       observation_{this};

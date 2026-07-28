@@ -84,6 +84,30 @@ class MahoPrivateContextPolicyTest : public ChromeRenderViewHostTestHarness {
       EXPECT_EQ(token.Revalidate(cap), expected);
     }
   }
+
+  void ExpectAccessorCapabilities(
+      Profile* profile,
+      const std::vector<MahoPrivateCapability>& allowed) {
+    std::vector<MahoPrivateCapability> all_caps = {
+        MahoPrivateCapability::kWindowLocalTabs,
+        MahoPrivateCapability::kPrivateVisuals,
+        MahoPrivateCapability::kProcessGlobalWebUI,
+        MahoPrivateCapability::kSavedReadMutate,
+        MahoPrivateCapability::kPersistentSplit,
+        MahoPrivateCapability::kMahoSearchReadMutate,
+        MahoPrivateCapability::kPreview,
+        MahoPrivateCapability::kAI,
+        MahoPrivateCapability::kMCP,
+        MahoPrivateCapability::kExtensionSnapshot,
+        MahoPrivateCapability::kMahoDownloadMetadata,
+    };
+
+    for (auto cap : all_caps) {
+      bool expected =
+          std::find(allowed.begin(), allowed.end(), cap) != allowed.end();
+      EXPECT_EQ(MahoIsCapabilityAllowed(profile, cap), expected);
+    }
+  }
 };
 
 TEST_F(MahoPrivateContextPolicyTest, NullFailsClosed) {
@@ -126,7 +150,7 @@ TEST_F(MahoPrivateContextPolicyTest, PrimaryIncognitoCapabilities) {
 TEST_F(MahoPrivateContextPolicyTest, GuestRegularFailsClosed) {
   std::unique_ptr<TestingProfile> guest_profile =
       TestingProfile::Builder().SetGuestSession().Build();
-  EXPECT_EQ(ClassifyProfileForTesting(guest_profile.get()),
+  EXPECT_EQ(MahoClassifyProfile(guest_profile.get()),
             MahoPrivateContextClass::kGuest);
   std::unique_ptr<content::WebContents> guest_contents =
       content::WebContentsTester::CreateTestWebContents(guest_profile.get(),
@@ -140,7 +164,7 @@ TEST_F(MahoPrivateContextPolicyTest, GuestPrimaryOtrFailsClosed) {
   std::unique_ptr<TestingProfile> guest_profile =
       TestingProfile::Builder().SetGuestSession().Build();
   Profile* guest_otr = guest_profile->GetPrimaryOTRProfile(true);
-  EXPECT_EQ(ClassifyProfileForTesting(guest_otr),
+  EXPECT_EQ(MahoClassifyProfile(guest_otr),
             MahoPrivateContextClass::kGuest);
   std::unique_ptr<content::WebContents> guest_otr_contents =
       content::WebContentsTester::CreateTestWebContents(guest_otr, nullptr);
@@ -154,7 +178,7 @@ TEST_F(MahoPrivateContextPolicyTest, SystemRegularAndOtrFailClosed) {
       TestingProfile::Builder().Build();
   profile_metrics::SetBrowserProfileType(
       system_profile.get(), profile_metrics::BrowserProfileType::kSystem);
-  EXPECT_EQ(ClassifyProfileForTesting(system_profile.get()),
+  EXPECT_EQ(MahoClassifyProfile(system_profile.get()),
             MahoPrivateContextClass::kSystem);
 
   std::unique_ptr<content::WebContents> system_contents =
@@ -183,7 +207,7 @@ TEST_F(MahoPrivateContextPolicyTest, DevToolsOtrFailsClosed) {
       Profile::OTRProfileID::CreateUniqueForDevTools();
   TestingProfile* devtools_otr_profile =
       TestingProfile::Builder().BuildOffTheRecord(profile(), devtools_otr_id);
-  EXPECT_EQ(ClassifyProfileForTesting(devtools_otr_profile),
+  EXPECT_EQ(MahoClassifyProfile(devtools_otr_profile),
             MahoPrivateContextClass::kDevToolsOtr);
 
   std::unique_ptr<content::WebContents> devtools_contents =
@@ -199,7 +223,7 @@ TEST_F(MahoPrivateContextPolicyTest, NonPrimaryOtrFailsClosed) {
       Profile::OTRProfileID::CreateUniqueForTesting();
   TestingProfile* other_otr_profile =
       TestingProfile::Builder().BuildOffTheRecord(profile(), other_otr_id);
-  EXPECT_EQ(ClassifyProfileForTesting(other_otr_profile),
+  EXPECT_EQ(MahoClassifyProfile(other_otr_profile),
             MahoPrivateContextClass::kOtherOtr);
 
   std::unique_ptr<content::WebContents> other_contents =
@@ -244,6 +268,59 @@ TEST_F(MahoPrivateContextPolicyTest, BrowserWebContentsAndTokenAgree) {
 
   browser_window.reset();
   EXPECT_FALSE(token.Revalidate(MahoPrivateCapability::kWindowLocalTabs));
+}
+
+TEST_F(MahoPrivateContextPolicyTest, AccessorNullFailsClosed) {
+  ExpectAccessorCapabilities(nullptr, {});
+}
+
+TEST_F(MahoPrivateContextPolicyTest, AccessorRegularCapabilities) {
+  ExpectAccessorCapabilities(profile(), {
+                                            MahoPrivateCapability::kWindowLocalTabs,
+                                            MahoPrivateCapability::kProcessGlobalWebUI,
+                                            MahoPrivateCapability::kSavedReadMutate,
+                                            MahoPrivateCapability::kPersistentSplit,
+                                            MahoPrivateCapability::kMahoSearchReadMutate,
+                                            MahoPrivateCapability::kPreview,
+                                            MahoPrivateCapability::kAI,
+                                            MahoPrivateCapability::kMCP,
+                                            MahoPrivateCapability::kExtensionSnapshot,
+                                            MahoPrivateCapability::kMahoDownloadMetadata,
+                                        });
+}
+
+TEST_F(MahoPrivateContextPolicyTest, AccessorPrimaryIncognitoCapabilities) {
+  TestingProfile* incognito_profile =
+      TestingProfile::Builder().BuildIncognito(profile());
+  EXPECT_EQ(MahoClassifyProfile(incognito_profile),
+            MahoPrivateContextClass::kPrimaryIncognito);
+  ExpectAccessorCapabilities(incognito_profile, {
+                                                    MahoPrivateCapability::kWindowLocalTabs,
+                                                    MahoPrivateCapability::kPrivateVisuals,
+                                                });
+}
+
+TEST_F(MahoPrivateContextPolicyTest, AccessorGuestFailsClosed) {
+  std::unique_ptr<TestingProfile> guest_profile =
+      TestingProfile::Builder().SetGuestSession().Build();
+  ExpectAccessorCapabilities(guest_profile.get(), {});
+  ExpectAccessorCapabilities(guest_profile->GetPrimaryOTRProfile(true), {});
+}
+
+TEST_F(MahoPrivateContextPolicyTest, AccessorDevToolsOtrFailsClosed) {
+  Profile::OTRProfileID devtools_otr_id =
+      Profile::OTRProfileID::CreateUniqueForDevTools();
+  TestingProfile* devtools_otr_profile =
+      TestingProfile::Builder().BuildOffTheRecord(profile(), devtools_otr_id);
+  ExpectAccessorCapabilities(devtools_otr_profile, {});
+}
+
+TEST_F(MahoPrivateContextPolicyTest, AccessorNonPrimaryOtrFailsClosed) {
+  Profile::OTRProfileID other_otr_id =
+      Profile::OTRProfileID::CreateUniqueForTesting();
+  TestingProfile* other_otr_profile =
+      TestingProfile::Builder().BuildOffTheRecord(profile(), other_otr_id);
+  ExpectAccessorCapabilities(other_otr_profile, {});
 }
 
 }  // namespace
