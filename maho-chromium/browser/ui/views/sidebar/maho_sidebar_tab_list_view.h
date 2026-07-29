@@ -19,6 +19,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/tabs/public/tab_interface.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/views/view_tracker.h"
@@ -73,6 +74,7 @@ class SidebarVisibilityManager;
 class MahoTabPreviewController;
 class MahoSidebarFolderHoverController;
 class MahoSidebarView;
+class MahoSidebarTabListView;
 struct SidebarDropPlan;
 
 const ui::ClipboardFormatType& GetMahoDragFormatType();
@@ -86,15 +88,20 @@ bool ReadMahoDragData(const ui::OSExchangeData& data,
                       SidebarDragPayload& out);
 
 std::unique_ptr<views::View> CreateSidebarSpaceHeaderRow();
+void SetSidebarSpaceHeaderRowTabListView(
+    views::View* row,
+    base::WeakPtr<MahoSidebarTabListView> tab_list_view);
 void UpdateSidebarSpaceHeaderRow(views::View* row,
                                  const std::string& icon,
                                  const std::u16string& name);
 void ConfigureSidebarSpaceHeaderRowPrivate(views::View* row,
-                                           const ui::ImageModel& icon,
-                                           const std::u16string& name,
-                                           ui::ColorId text_color);
-
-class MahoSidebarTabListView;
+                                            const ui::ImageModel& icon,
+                                            const std::u16string& name,
+                                            ui::ColorId text_color);
+void SetSidebarSpaceHeaderRowPalette(views::View* row,
+                                      const MahoSidebarPalette& palette);
+MahoSidebarPalette GetSidebarSpaceHeaderRowPaletteForTesting(
+    views::View* row);
 
 class RebuildRowsBatchScoper {
  public:
@@ -173,7 +180,15 @@ class MahoSidebarTabListView : public views::View,
   MahoSidebarTabListView& operator=(const MahoSidebarTabListView&) = delete;
   ~MahoSidebarTabListView() override;
 
+  base::WeakPtr<MahoSidebarTabListView> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
+
   void Update(MahoSidebarTabListModel model, Browser* browser);
+  void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
+  }
   void SetPrivateMode(bool private_mode);
   void SetLastFavoritesModel(const MahoSidebarFavoritesModel& model);
 
@@ -522,6 +537,7 @@ class MahoSidebarTabListView : public views::View,
   void OnTidyPressed(const ui::Event& event);
   void OnTidyFinished(int folder_count, const std::string& error_message);
   void OnClearPressed(const ui::Event& event);
+  void ApplyActionRowPalette();
 
   // ui::SimpleMenuModel::Delegate (Clear menu only).
   void ExecuteCommand(int command_id, int event_flags) override;
@@ -559,6 +575,7 @@ class MahoSidebarTabListView : public views::View,
   raw_ptr<views::LabelButton> new_tab_button_ = nullptr;
   raw_ptr<views::View> tidy_button_ = nullptr;
   raw_ptr<views::View> clear_button_ = nullptr;
+  std::vector<raw_ptr<views::View>> action_dividers_;
   std::unique_ptr<ui::SimpleMenuModel> clear_menu_model_;
   std::unique_ptr<views::MenuRunner> clear_menu_runner_;
   raw_ptr<views::View> tab_rows_ = nullptr;
@@ -636,6 +653,7 @@ class MahoSidebarTabListView : public views::View,
       nullptr;
   views::ViewTracker focus_tracker_;
   raw_ptr<views::View> trigger_button_ = nullptr;
+  MahoSidebarPalette palette_;
 
   int rebuild_rows_count_for_testing_ = 0;
   int accessibility_rebuild_count_for_testing_ = 0;
@@ -810,6 +828,11 @@ class SidebarTabRowView : public views::View,
     reveal_empty_pinned_drop_lane_callback_ = std::move(callback);
   }
 
+  void SetOwningTabListView(
+      base::WeakPtr<MahoSidebarTabListView> tab_list_view) {
+    owning_tab_list_view_ = std::move(tab_list_view);
+  }
+
   views::View::DropCallback GetDropCallbackForTesting(
       const ui::DropTargetEvent& event) {
     return GetDropCallback(event);
@@ -840,6 +863,7 @@ class SidebarTabRowView : public views::View,
   views::LabelButton* title_button_for_testing() { return title_button_; }
 
   void SetSuspended(bool suspended);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
   bool is_suspended() const { return is_suspended_; }
 
   // Toggles active-highlight without rebuilding. Enables the fast path in
@@ -910,6 +934,7 @@ class SidebarTabRowView : public views::View,
   base::RepeatingCallback<void(const std::string&)>
       favorites_drop_accepted_callback_;
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
+  base::WeakPtr<MahoSidebarTabListView> owning_tab_list_view_;
   bool drag_over_drop_target_ = false;
   SidebarTabDropZone active_drop_zone_ = SidebarTabDropZone::kNone;
   gfx::SlideAnimation split_preview_animation_{this};
@@ -932,8 +957,9 @@ class SidebarTabRowView : public views::View,
   // P3: Skip redundant close-button icon swap (VectorIcon re-render) when the
   // minus/X state hasn't toggled. Called ~870×/hover cycle.
   bool last_close_button_show_minus_ = false;
-  ui::ColorId last_title_color_id_ = ui::ColorId{};
+  SkColor last_title_color_ = SK_ColorTRANSPARENT;
   bool split_compact_ = false;
+  MahoSidebarPalette palette_;
 };
 
 class SidebarFolderRowView : public views::View,
@@ -1034,6 +1060,7 @@ class SidebarFolderRowView : public views::View,
   const std::string& parent_folder_id() const { return parent_folder_id_; }
   MahoSidebarTabSection section() const { return section_; }
   void SetExpanded(bool expanded);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
  private:
   SidebarFolderDropZone ResolveDropZone(const ui::DropTargetEvent& event,
@@ -1080,8 +1107,9 @@ class SidebarFolderRowView : public views::View,
   std::unique_ptr<views::MenuRunner> active_folder_menu_runner_;
 
   mutable bool cached_icon_expanded_ = false;
-  mutable ui::ColorId cached_icon_color_id_ = 0;
+  mutable SkColor cached_icon_color_ = SK_ColorTRANSPARENT;
   mutable bool icon_cache_valid_ = false;
+  MahoSidebarPalette palette_;
 
   base::WeakPtrFactory<SidebarFolderRowView> weak_factory_{this};
 };
@@ -1093,12 +1121,10 @@ struct SidebarSectionDropIndicatorStateForTesting {
 
 views::View::DropCallback GetSectionDropCallbackForTesting(
     MahoSidebarTabSection section,
-    const ui::DropTargetEvent& event,
-    bool populated = false);
+    const ui::DropTargetEvent& event);
 SidebarSectionDropIndicatorStateForTesting
 GetSectionDropIndicatorStateForTesting(MahoSidebarTabSection section,
-                                       const ui::DropTargetEvent& event,
-                                       bool populated = false);
+                                        const ui::DropTargetEvent& event);
 
 }  // namespace maho
 

@@ -48,6 +48,9 @@ class RecordingShellEventObserver : public ShellEventObserver {
  public:
   void OnShellEventDispatched(const std::string& kind,
                               const std::string& event_json) override {
+    if (on_event) {
+      on_event.Run(kind);
+    }
     events.push_back({kind, event_json});
   }
 
@@ -57,6 +60,7 @@ class RecordingShellEventObserver : public ShellEventObserver {
   };
 
   std::vector<EventRecord> events;
+  base::RepeatingCallback<void(const std::string&)> on_event;
   void Clear() { events.clear(); }
 };
 
@@ -392,10 +396,72 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabToPinnedSection) {
   observer_.Clear();
   auto payload = MakeTabPayload(source_tab_id,
                                 SidebarDragOrigin::kNormalSection);
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  const int source_index = ResolveIndexForStableId(model, source_tab_id);
+  ASSERT_GE(source_index, 0);
+  payload.tab_strip_index = source_index;
+  bool native_pin_preceded_core_event = false;
+  observer_.on_event = base::BindLambdaForTesting(
+      [&](const std::string& kind) {
+        if (kind != "pin_tab") {
+          return;
+        }
+        const int live_index = ResolveIndexForStableId(model, source_tab_id);
+        native_pin_preceded_core_event =
+            live_index >= 0 && model->IsTabPinned(live_index);
+      });
   PerformSyntheticDrop(pinned_section, payload);
+  observer_.on_event.Reset();
 
-  ASSERT_FALSE(observer_.events.empty());
-  EXPECT_EQ(observer_.events.back().kind, "pin_tab");
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "pin_tab");
+  EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
+  EXPECT_TRUE(native_pin_preceded_core_event)
+      << "Native TabStripModel pinning must finish before the core event can "
+         "synchronously refresh and invalidate the drag target/index";
+  const int source_index_after = ResolveIndexForStableId(model, source_tab_id);
+  ASSERT_GE(source_index_after, 0);
+  EXPECT_TRUE(model->IsTabPinned(source_index_after));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                       LiveTabDropOnSpaceHeaderPinsNativeTab) {
+  auto state = GetState();
+  std::string source_tab_id;
+  int source_index = -1;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index >= 0) {
+      source_tab_id = node.tab_id;
+      source_index = node.tab_strip_index;
+      break;
+    }
+  }
+  if (source_tab_id.empty()) {
+    GTEST_SKIP() << "Need at least one live normal tab";
+  }
+
+  views::View* header = sidebar_->space_header_view_for_testing();
+  ASSERT_TRUE(header);
+  ASSERT_TRUE(header->GetVisible());
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_TRUE(model->ContainsIndex(source_index));
+  ASSERT_FALSE(model->IsTabPinned(source_index));
+
+  observer_.Clear();
+  auto payload = MakeTabPayload(source_tab_id,
+                                SidebarDragOrigin::kNormalSection);
+  payload.tab_strip_index = source_index;
+  PerformSyntheticDrop(header, payload);
+
+  const int source_index_after = ResolveIndexForStableId(model, source_tab_id);
+  ASSERT_GE(source_index_after, 0);
+  EXPECT_EQ(last_drop_result_, ui::mojom::DragOperation::kMove);
+  EXPECT_TRUE(model->IsTabPinned(source_index_after))
+      << "The visible Space header advertises a pinned-section drop and must "
+         "complete the same native pin transition as that section";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveFavoriteReorder) {
@@ -580,6 +646,71 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabBodySplitCreatesSplit) 
       << "Tab-on-tab body drops should create a split";
   EXPECT_TRUE(observer_.events.empty())
       << "Tab-on-tab body split should not dispatch a shell move event";
+}
+
+IN_PROC_BROWSER_TEST_F(
+    MahoSidebarDnDBrowserTest,
+    LiveNormalTabDropOnPopulatedPinnedRowBodyPinsWithoutSplit) {
+  auto state = GetState();
+  std::string source_id;
+  std::string target_id;
+  int source_index = -1;
+  int target_index = -1;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      source_id = node.tab_id;
+      source_index = node.tab_strip_index;
+      break;
+    }
+  }
+  for (const auto& node : state.tab_list.pinned_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      target_id = node.tab_id;
+      target_index = node.tab_strip_index;
+      break;
+    }
+  }
+  if (source_id.empty() || target_id.empty()) {
+    GTEST_SKIP() << "Need live root tabs in both normal and pinned sections";
+  }
+
+  SidebarTabRowView* target_row = FindLiveTabRow(target_id);
+  ASSERT_TRUE(target_row);
+  ASSERT_EQ(target_row->section_for_testing(),
+            MahoSidebarTabSection::kPinned);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  ASSERT_TRUE(model->ContainsIndex(source_index));
+  ASSERT_TRUE(model->ContainsIndex(target_index));
+  content::WebContents* source_contents =
+      model->GetWebContentsAt(source_index);
+  content::WebContents* target_contents =
+      model->GetWebContentsAt(target_index);
+  ASSERT_TRUE(source_contents);
+  ASSERT_TRUE(target_contents);
+  ASSERT_FALSE(model->GetSplitForTab(source_index).has_value());
+  ASSERT_FALSE(model->GetSplitForTab(target_index).has_value());
+
+  observer_.Clear();
+  auto payload = MakeTabPayload(source_id, SidebarDragOrigin::kNormalSection);
+  payload.tab_strip_index = source_index;
+  PerformSyntheticDrop(target_row, payload, gfx::Point(5, 20));
+
+  const int source_index_after = model->GetIndexOfWebContents(source_contents);
+  const int target_index_after = model->GetIndexOfWebContents(target_contents);
+  ASSERT_GE(source_index_after, 0);
+  ASSERT_GE(target_index_after, 0);
+  EXPECT_FALSE(model->GetSplitForTab(source_index_after).has_value());
+  EXPECT_FALSE(model->GetSplitForTab(target_index_after).has_value());
+
+  ASSERT_EQ(last_drop_result_, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "pin_tab");
+  EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveFolderBodyDropRejected) {

@@ -185,20 +185,33 @@ const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kSectionInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kSectionSeparatorInsets = gfx::Insets::TLBR(2, 8, 2, 8);
 
+SkColor ResolveSidebarPaletteColor(const MahoSidebarPalette& palette,
+                                   const views::View* view,
+                                   SkColor palette_color,
+                                   ui::ColorId fallback_color_id) {
+  if (palette.primary_text != SK_ColorTRANSPARENT) {
+    return palette_color;
+  }
+  const ui::ColorProvider* color_provider = view->GetColorProvider();
+  return color_provider ? color_provider->GetColor(fallback_color_id)
+                        : SK_ColorTRANSPARENT;
+}
+
 class SidebarSplitDropTargetBackground : public views::Background {
  public:
   explicit SidebarSplitDropTargetBackground(
       base::RepeatingCallback<double()> progress_callback,
-      base::RepeatingCallback<bool()> preview_left_callback)
+      base::RepeatingCallback<bool()> preview_left_callback,
+      SkColor active_color,
+      SkColor divider_color,
+      SkColor focus_color)
       : progress_callback_(std::move(progress_callback)),
-        preview_left_callback_(std::move(preview_left_callback)) {}
+        preview_left_callback_(std::move(preview_left_callback)),
+        active_color_(active_color),
+        divider_color_(divider_color),
+        focus_color_(focus_color) {}
 
   void Paint(gfx::Canvas* canvas, views::View* view) const override {
-    const ui::ColorProvider* color_provider = view->GetColorProvider();
-    if (!color_provider) {
-      return;
-    }
-
     const gfx::Rect bounds = view->GetLocalBounds();
     if (bounds.IsEmpty()) {
       return;
@@ -228,15 +241,13 @@ class SidebarSplitDropTargetBackground : public views::Background {
     cc::PaintFlags target_flags;
     target_flags.setAntiAlias(true);
     target_flags.setStyle(cc::PaintFlags::kFill_Style);
-    target_flags.setColor(ApplyOpacity(
-        color_provider->GetColor(kMahoColorTabRowActiveBackground), progress));
+    target_flags.setColor(ApplyOpacity(active_color_, progress));
     canvas->DrawRoundRect(target_bounds, kRowCornerRadiusDp, target_flags);
 
     cc::PaintFlags incoming_flags;
     incoming_flags.setAntiAlias(true);
     incoming_flags.setStyle(cc::PaintFlags::kFill_Style);
-    incoming_flags.setColor(ApplyOpacity(
-        color_provider->GetColor(kMahoColorTabRowActiveBackground), progress));
+    incoming_flags.setColor(ApplyOpacity(active_color_, progress));
     canvas->DrawRoundRect(incoming_bounds, kRowCornerRadiusDp, incoming_flags);
 
     const float full_divider_height =
@@ -247,8 +258,7 @@ class SidebarSplitDropTargetBackground : public views::Background {
       cc::PaintFlags divider_flags;
       divider_flags.setAntiAlias(true);
       divider_flags.setStyle(cc::PaintFlags::kFill_Style);
-      divider_flags.setColor(ApplyOpacity(
-          color_provider->GetColor(ui::kColorSysDivider), progress));
+      divider_flags.setColor(ApplyOpacity(divider_color_, progress));
       const float divider_x =
           bounds.x() + ((bounds.width() - kSplitPreviewDividerWidthDp) / 2.0f);
       const float divider_y =
@@ -263,8 +273,7 @@ class SidebarSplitDropTargetBackground : public views::Background {
     border_flags.setAntiAlias(true);
     border_flags.setStyle(cc::PaintFlags::kStroke_Style);
     border_flags.setStrokeWidth(kDropIndicatorOutlineThicknessDp);
-    border_flags.setColor(ApplyOpacity(
-        color_provider->GetColor(ui::kColorSysPrimary), progress));
+    border_flags.setColor(ApplyOpacity(focus_color_, progress));
     gfx::RectF border_bounds(bounds);
     border_bounds.Inset(kDropIndicatorOutlineThicknessDp / 2.0f);
     canvas->DrawRoundRect(border_bounds, kRowCornerRadiusDp, border_flags);
@@ -281,6 +290,9 @@ class SidebarSplitDropTargetBackground : public views::Background {
 
   base::RepeatingCallback<double()> progress_callback_;
   base::RepeatingCallback<bool()> preview_left_callback_;
+  SkColor active_color_;
+  SkColor divider_color_;
+  SkColor focus_color_;
 };
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
@@ -340,6 +352,13 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
     return views::LayoutManagerBase::OnViewRemoved(host, view);
   }
 
+  bool OnViewVisibilitySet(views::View* host,
+                           views::View* view,
+                           bool visible) override {
+    cache_valid_ = false;
+    return views::LayoutManagerBase::OnViewVisibilitySet(host, view, visible);
+  }
+
   views::ProposedLayout CalculateProposedLayout(
       const views::SizeBounds& size_bounds) const override {
     views::ProposedLayout layout;
@@ -364,8 +383,16 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
       cached_heights_.reserve(total);
       total_height_ = 0;
       for (int i = 0; i < total; ++i) {
-        const int h = children[i]->GetPreferredSize(
-            views::SizeBounds(width, views::SizeBound())).height();
+        // CanBeVisible() tracks visibility requested by product code, unlike
+        // GetVisible(), which is also false when this layout virtualizes an
+        // offscreen row. Externally hidden lanes must occupy 0dp, while
+        // virtualized rows must retain their geometry and scroll extent.
+        const int h = CanBeVisible(children[i])
+                          ? children[i]
+                                ->GetPreferredSize(views::SizeBounds(
+                                    width, views::SizeBound()))
+                                .height()
+                          : 0;
         cached_heights_.push_back(h);
         total_height_ += h;
       }
@@ -447,15 +474,24 @@ class MahoInlineActionButton : public views::LabelButton {
     UpdateHoverBackground();
   }
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    UpdateHoverBackground();
+  }
+
  private:
   void UpdateHoverBackground() {
     const ButtonState state = GetState();
     if (engaged_ || state == STATE_PRESSED) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorTabRowActiveBackground, corner_radius_));
+          ResolveSidebarPaletteColor(palette_, this, palette_.row_active,
+                                     kMahoColorTabRowActiveBackground),
+          corner_radius_));
     } else if (state == STATE_HOVERED) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorTabRowHoverBackground, corner_radius_));
+          ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
+                                     kMahoColorTabRowHoverBackground),
+          corner_radius_));
     } else {
       SetBackground(nullptr);
     }
@@ -463,6 +499,7 @@ class MahoInlineActionButton : public views::LabelButton {
 
   int corner_radius_;
   bool engaged_ = false;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(MahoInlineActionButton)
@@ -678,6 +715,15 @@ END_METADATA
 
 namespace maho {
 
+base::DictValue MakeRootItem(SidebarNodeKind kind, const std::string& id);
+base::DictValue MakeInsertionPointBefore(SidebarNodeKind target_kind,
+                                         const std::string& target_id);
+base::DictValue MakeInsertionPointAppend();
+void DispatchReorderRootItem(const std::string& space_id,
+                             SidebarNodeKind item_kind,
+                             const std::string& item_id,
+                             base::DictValue insertion_point);
+
 // Defined in namespace maho (not the anonymous namespace) so it is the same
 // type as the `friend class SidebarSectionDropTarget;` declaration in
 // MahoSidebarTabListView. Under clang-cl's MSVC compatibility mode that friend
@@ -688,8 +734,11 @@ class SidebarSectionDropTarget : public views::View {
  public:
   explicit SidebarSectionDropTarget(
       MahoSidebarTabSection section,
+      std::string active_space_id,
       base::WeakPtr<MahoSidebarTabListView> tab_list_view)
-      : section_(section), tab_list_view_(tab_list_view) {
+      : section_(section),
+        active_space_id_(std::move(active_space_id)),
+        tab_list_view_(tab_list_view) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, kSectionInsets,
         kRowSpacingDp));
@@ -704,20 +753,12 @@ class SidebarSectionDropTarget : public views::View {
     on_favorites_drop_accepted_ = std::move(cb);
   }
 
-  void SetPopulated(bool populated) {
-    populated_ = populated;
-  }
-
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override {
     format_types->insert(GetMahoDragFormatType());
     return true;
   }
 
-  // CanDrop() stays permissive even when the section is populated so that drag
-  // events keep propagating through SidebarDropForwardingView to row and
-  // insertion-lane descendants. The populated-section rejection is applied
-  // later in OnDragUpdated() / GetDropCallback() once the final target is known.
   bool CanDrop(const ui::OSExchangeData& data) override {
     SidebarDragPayload payload;
     return ReadMahoDragData(data, payload);
@@ -725,9 +766,6 @@ class SidebarSectionDropTarget : public views::View {
 
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
     ForwardDragToAutoScroller(this, event);
-    if (populated_) {
-      return static_cast<int>(ui::mojom::DragOperation::kNone);
-    }
     drag_over_drop_target_ = true;
     UpdateAppearance();
     return static_cast<int>(ui::mojom::DragOperation::kMove);
@@ -735,17 +773,10 @@ class SidebarSectionDropTarget : public views::View {
 
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
     ForwardDragEnded(this);
-    if (populated_) {
-      return base::BindOnce(
-          [](const ui::DropTargetEvent&,
-             ui::mojom::DragOperation& output_drag_op,
-             std::unique_ptr<ui::LayerTreeOwner>) {
-            output_drag_op = ui::mojom::DragOperation::kNone;
-          });
-    }
     return base::BindOnce(
         [](base::WeakPtr<MahoSidebarTabListView> tab_list_view,
            MahoSidebarTabSection section,
+           std::string active_space_id,
            base::RepeatingCallback<void(const std::string&)>
                on_favorites_drop_accepted,
            const ui::DropTargetEvent& event,
@@ -759,19 +790,56 @@ class SidebarSectionDropTarget : public views::View {
           output_drag_op = ui::mojom::DragOperation::kMove;
 
           const SidebarDropPlan plan = PlanSectionDrop(section, payload);
-          ExecuteDropPlan(plan);
+          if (!plan.is_valid) {
+            output_drag_op = ui::mojom::DragOperation::kNone;
+            return;
+          }
 
+          // This view is only a section's background fallback; child rows and
+          // their 2dp lanes own precise hit targets. Folder-child tab/folder
+          // escapes already append via move_*_to_root, so suppress this generic
+          // append to avoid duplicate root_order and stale parent/root entries.
+          const bool tab_escaped_to_root =
+              payload.node_kind == SidebarNodeKind::kTab &&
+              !payload.source_parent_folder_id.empty();
+          const bool folder_escaped_to_root =
+              payload.node_kind == SidebarNodeKind::kFolder &&
+              !payload.source_parent_folder_id.empty();
+          if (folder_escaped_to_root) {
+            DispatchShellEvent(maho::sidebar::kMoveFolderToRoot,
+                               {{"space_id", active_space_id},
+                                {"folder_id", payload.node_id}});
+          }
+
+          // Apply the native TabStripModel role before dispatching the core
+          // event. DispatchShellEvent is synchronous and may rebuild the
+          // sidebar, invalidating the source row/index while this drop callback
+          // is still running. Hover feedback alone is not drop completion.
           if (tab_list_view) {
             tab_list_view->HandlePostDropTransition(payload, plan);
           }
+          ExecuteDropPlan(plan);
 
           if (plan.favorite_transition.kind ==
                   SidebarDropPlan::FavoriteTransition::Kind::kUnfavorite &&
               on_favorites_drop_accepted) {
             on_favorites_drop_accepted.Run(payload.node_id);
           }
+
+          if (payload.node_kind == SidebarNodeKind::kTab &&
+              !payload.node_id.empty() && !tab_escaped_to_root) {
+            DispatchReorderRootItem(active_space_id, SidebarNodeKind::kTab,
+                                    payload.node_id,
+                                    MakeInsertionPointAppend());
+          } else if (payload.node_kind == SidebarNodeKind::kFolder &&
+                     !payload.node_id.empty() && !folder_escaped_to_root) {
+            DispatchReorderRootItem(active_space_id, SidebarNodeKind::kFolder,
+                                    payload.node_id,
+                                    MakeInsertionPointAppend());
+          }
         },
-        tab_list_view_, section_, on_favorites_drop_accepted_);
+        tab_list_view_, section_, active_space_id_,
+        on_favorites_drop_accepted_);
   }
 
   void OnDragExited() override {
@@ -804,9 +872,9 @@ class SidebarSectionDropTarget : public views::View {
   }
 
   const MahoSidebarTabSection section_;
+  const std::string active_space_id_;
   base::WeakPtr<MahoSidebarTabListView> tab_list_view_;
   bool drag_over_drop_target_ = false;
-  bool populated_ = false;
   base::RepeatingCallback<void(const std::string&)> on_favorites_drop_accepted_;
 };
 
@@ -908,9 +976,10 @@ MahoSidebarTabListModel BuildLiveStripFallbackTabListModel(
 views::View* AddSectionContainer(
     views::View* parent,
     MahoSidebarTabSection section,
+    const std::string& active_space_id,
     base::WeakPtr<MahoSidebarTabListView> tab_list_view) {
-  auto container =
-      std::make_unique<SidebarSectionDropTarget>(section, tab_list_view);
+  auto container = std::make_unique<SidebarSectionDropTarget>(
+      section, active_space_id, tab_list_view);
   auto* raw = container.get();
   parent->AddChildView(std::unique_ptr<views::View>(container.release()));
   return raw;
@@ -929,15 +998,6 @@ END_METADATA
 }  // namespace
 
 namespace maho {
-
-base::DictValue MakeRootItem(SidebarNodeKind kind, const std::string& id);
-base::DictValue MakeInsertionPointBefore(SidebarNodeKind target_kind,
-                                         const std::string& target_id);
-base::DictValue MakeInsertionPointAppend();
-void DispatchReorderRootItem(const std::string& space_id,
-                             SidebarNodeKind item_kind,
-                             const std::string& item_id,
-                             base::DictValue insertion_point);
 
 class SplitGroupContainerView : public views::BoxLayoutView {
   METADATA_HEADER(SplitGroupContainerView, views::BoxLayoutView)
@@ -1106,10 +1166,10 @@ class SidebarInsertionLaneView : public views::View {
                   on_favorites_drop_accepted.Run(payload.node_id);
                 }
               }
-              ExecuteDropPlan(plan);
               if (tab_list_view) {
                 tab_list_view->HandlePostDropTransition(payload, plan);
               }
+              ExecuteDropPlan(plan);
               output_drag_op = ui::mojom::DragOperation::kMove;
               DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
                                      payload.node_id,
@@ -1132,10 +1192,10 @@ class SidebarInsertionLaneView : public views::View {
                   on_favorites_drop_accepted.Run(payload.node_id);
                 }
               }
-              ExecuteDropPlan(plan);
               if (tab_list_view) {
                 tab_list_view->HandlePostDropTransition(payload, plan);
               }
+              ExecuteDropPlan(plan);
               output_drag_op = ui::mojom::DragOperation::kMove;
               DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
                                      payload.node_id,
@@ -1152,10 +1212,10 @@ class SidebarInsertionLaneView : public views::View {
               output_drag_op = ui::mojom::DragOperation::kNone;
               return;
             }
-            ExecuteDropPlan(plan);
             if (tab_list_view) {
               tab_list_view->HandlePostDropTransition(payload, plan);
             }
+            ExecuteDropPlan(plan);
             output_drag_op = ui::mojom::DragOperation::kMove;
             if (target_kind == SidebarNodeKind::kTab) {
               DispatchReorderRootItem(space_id, SidebarNodeKind::kFolder,
@@ -1347,19 +1407,17 @@ END_METADATA
 
 views::View::DropCallback GetSectionDropCallbackForTesting(
     MahoSidebarTabSection section,
-    const ui::DropTargetEvent& event,
-    bool populated) {
-  SidebarSectionDropTarget target(section, base::WeakPtr<MahoSidebarTabListView>());
-  target.SetPopulated(populated);
+    const ui::DropTargetEvent& event) {
+  SidebarSectionDropTarget target(
+      section, "space-1", base::WeakPtr<MahoSidebarTabListView>());
   return target.GetDropCallback(event);
 }
 
 SidebarSectionDropIndicatorStateForTesting
 GetSectionDropIndicatorStateForTesting(MahoSidebarTabSection section,
-                                             const ui::DropTargetEvent& event,
-                                             bool populated) {
-  SidebarSectionDropTarget target(section, base::WeakPtr<MahoSidebarTabListView>());
-  target.SetPopulated(populated);
+                                       const ui::DropTargetEvent& event) {
+  SidebarSectionDropTarget target(
+      section, "space-1", base::WeakPtr<MahoSidebarTabListView>());
   SidebarSectionDropIndicatorStateForTesting state;
   target.OnDragUpdated(event);
   state.visible_after_update = target.is_drop_indicator_visible_for_testing();
@@ -1857,18 +1915,29 @@ void SidebarTabRowView::UpdateAudioState(bool audible, bool muted) {
     return;
   }
 
+  const SkColor neutral_glyph = ResolveSidebarPaletteColor(
+      palette_, this, palette_.neutral_glyph, ui::kColorSysOnSurfaceSubtle);
+  const SkColor primary_text = ResolveSidebarPaletteColor(
+      palette_, this, palette_.primary_text, ui::kColorSysOnSurface);
+  const auto set_audio_image = [this, neutral_glyph, primary_text](
+                                   const gfx::VectorIcon& icon) {
+    audio_button_->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(icon, neutral_glyph, 14));
+    audio_button_->SetImageModel(
+        views::Button::STATE_HOVERED,
+        ui::ImageModel::FromVectorIcon(icon, primary_text, 14));
+    audio_button_->SetImageModel(
+        views::Button::STATE_PRESSED,
+        ui::ImageModel::FromVectorIcon(icon, primary_text, 14));
+  };
+
   if (muted_) {
-    views::SetImageFromVectorIconWithColor(
-        audio_button_, maho_lucide_icons::kVolumeXIcon, 14,
-        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
-                          ui::kColorSysOnSurface));
+    set_audio_image(maho_lucide_icons::kVolumeXIcon);
     audio_button_->SetTooltipText(u"Tab muted");
     audio_button_->SetVisible(true);
   } else if (audible_) {
-    views::SetImageFromVectorIconWithColor(
-        audio_button_, maho_lucide_icons::kVolume2Icon, 14,
-        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
-                          ui::kColorSysOnSurface));
+    set_audio_image(maho_lucide_icons::kVolume2Icon);
     audio_button_->SetTooltipText(u"Tab playing audio");
     audio_button_->SetVisible(true);
   } else {
@@ -2016,10 +2085,23 @@ void SidebarTabRowView::RenameTab(int /*tab_index*/) {
 
 void SidebarTabRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  if (title_field_ && GetColorProvider()) {
-    title_field_->SetTextColor(
-        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+  if (title_field_) {
+    title_field_->SetTextColor(ResolveSidebarPaletteColor(
+        palette_, this, palette_.primary_text, ui::kColorSysOnSurface));
   }
+  UpdateAppearance();
+}
+
+void SidebarTabRowView::SetSidebarPalette(const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  last_visual_state_ = AppearanceVisualState::kUninitialized;
+  last_title_color_ = SK_ColorTRANSPARENT;
+  last_close_button_show_minus_ = !last_close_button_show_minus_;
+  if (title_field_) {
+    title_field_->SetTextColor(ResolveSidebarPaletteColor(
+        palette_, this, palette_.primary_text, ui::kColorSysOnSurface));
+  }
+  UpdateAudioState(audible_, muted_);
   UpdateAppearance();
 }
 
@@ -2295,10 +2377,10 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
               // The source tab may live inside a folder; run the drop plan
               // first so it exits the folder to root, then create the split.
               if (!plan.steps.empty()) {
-                ExecuteDropPlan(plan);
                 if (list_view) {
                   list_view->HandlePostDropTransition(single_payload, plan);
                 }
+                ExecuteDropPlan(plan);
               }
               TabStripModel* model =
                   browser ? browser->tab_strip_model() : nullptr;
@@ -2453,28 +2535,29 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                 favorites_drop_accepted.Run(single_payload.node_id);
               }
             }
+            // For a folder child, escape to root first, apply pin/unpin or
+            // favorite transitions second, then reorder before the target.
+            // Pinning moves root tabs to the end of pinned, overwriting any
+            // before-target reorder performed earlier.
             if (drop_zone == SidebarTabDropZone::kBefore &&
                 !single_payload.source_parent_folder_id.empty()) {
               DispatchShellEvent("move_tab_to_root", {
                   {"space_id", space_id},
                   {"folder_id", single_payload.source_parent_folder_id},
-                  {"tab_id", single_payload.node_id},
-                  {"before_tab_id", tab_id}});
+                  {"tab_id", single_payload.node_id}});
             }
 
-            ExecuteDropPlanTransitionsOnly(plan);
             if (list_view) {
               list_view->HandlePostDropTransition(single_payload, plan);
             }
+            ExecuteDropPlanTransitionsOnly(plan);
             output_drag_op = ui::mojom::DragOperation::kMove;
 
             if (drop_zone == SidebarTabDropZone::kBefore) {
-              if (single_payload.source_parent_folder_id.empty()) {
-                DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
-                                        single_payload.node_id,
-                                        MakeInsertionPointBefore(
-                                            SidebarNodeKind::kTab, tab_id));
-              }
+              DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                      single_payload.node_id,
+                                      MakeInsertionPointBefore(
+                                          SidebarNodeKind::kTab, tab_id));
             }
           }
           return;
@@ -2487,10 +2570,10 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
             output_drag_op = ui::mojom::DragOperation::kNone;
             return;
           }
-          ExecuteDropPlanTransitionsOnly(plan);
           if (list_view) {
             list_view->HandlePostDropTransition(payload, plan);
           }
+          ExecuteDropPlanTransitionsOnly(plan);
           if (drop_zone == SidebarTabDropZone::kBefore) {
             output_drag_op = ui::mojom::DragOperation::kMove;
             if (!payload.source_parent_folder_id.empty()) {
@@ -2530,8 +2613,8 @@ void SidebarTabRowView::OnDragDone() {
   split_preview_left_ = false;
   UpdateAppearance();
   NotifySidebarDragEnded(this);
-  if (MahoSidebarTabListView* list_view = GetTabListView()) {
-    list_view->OnDragSourceFinished();
+  if (owning_tab_list_view_) {
+    owning_tab_list_view_->OnDragSourceFinished();
   }
 }
 
@@ -2820,7 +2903,13 @@ void SidebarTabRowView::UpdateAppearance() {
           base::BindRepeating(&SidebarTabRowView::GetSplitPreviewProgress,
                               base::Unretained(this)),
           base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
-                              base::Unretained(this))));
+                              base::Unretained(this)),
+          ResolveSidebarPaletteColor(palette_, this, palette_.row_active,
+                                     kMahoColorTabRowActiveBackground),
+          ResolveSidebarPaletteColor(palette_, this, palette_.outline,
+                                     ui::kColorSysDivider),
+          ResolveSidebarPaletteColor(palette_, this, palette_.focus_ring,
+                                     ui::kColorSysPrimary)));
       SetBorder(views::CreateEmptyBorder(
           gfx::Insets(kDropIndicatorOutlineThicknessDp)));
     } else {
@@ -2832,34 +2921,54 @@ void SidebarTabRowView::UpdateAppearance() {
                     &SidebarTabRowView::GetSplitPreviewProgress,
                     base::Unretained(this)),
                 base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
-                                    base::Unretained(this))));
+                                     base::Unretained(this)),
+                ResolveSidebarPaletteColor(
+                    palette_, this, palette_.row_active,
+                    kMahoColorTabRowActiveBackground),
+                ResolveSidebarPaletteColor(palette_, this, palette_.outline,
+                                           ui::kColorSysDivider),
+                ResolveSidebarPaletteColor(palette_, this, palette_.focus_ring,
+                                           ui::kColorSysPrimary)));
             SetBorder(views::CreateEmptyBorder(
                 gfx::Insets(kDropIndicatorOutlineThicknessDp)));
           } else {
             SetBackground(views::CreateRoundedRectBackground(
-                ui::kColorSysSurface4, kRowCornerRadiusDp));
+                ResolveSidebarPaletteColor(palette_, this, palette_.row_active,
+                                           ui::kColorSysSurface4),
+                kRowCornerRadiusDp));
             SetBorder(views::CreateRoundedRectBorder(
                 kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
-                ui::kColorSysPrimary));
+                ResolveSidebarPaletteColor(palette_, this, palette_.focus_ring,
+                                           ui::kColorSysPrimary)));
           }
           break;
         case AppearanceVisualState::kActive:
           SetBackground(views::CreateRoundedRectBackground(
-              hovered ? kMahoColorTabRowActiveHoveredBackground
-                      : kMahoColorTabRowActiveBackground,
+              hovered ? ResolveSidebarPaletteColor(
+                            palette_, this, palette_.row_active,
+                            kMahoColorTabRowActiveHoveredBackground)
+                      : ResolveSidebarPaletteColor(
+                            palette_, this, palette_.row_active,
+                            kMahoColorTabRowActiveBackground),
               kRowCornerRadiusDp));
           SetBorder(nullptr);
           break;
         case AppearanceVisualState::kSelected:
           SetBackground(views::CreateRoundedRectBackground(
-              hovered ? kMahoColorTabRowSelectedHoveredBackground
-                      : kMahoColorTabRowSelectedBackground,
+              hovered ? ResolveSidebarPaletteColor(
+                            palette_, this, palette_.row_selected,
+                            kMahoColorTabRowSelectedHoveredBackground)
+                      : ResolveSidebarPaletteColor(
+                            palette_, this, palette_.row_selected,
+                            kMahoColorTabRowSelectedBackground),
               kRowCornerRadiusDp));
           SetBorder(nullptr);
           break;
         case AppearanceVisualState::kHovered:
           SetBackground(views::CreateRoundedRectBackground(
-              kMahoColorTabRowHoverBackground, kRowCornerRadiusDp));
+              ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
+                                         kMahoColorTabRowHoverBackground),
+              kRowCornerRadiusDp));
           SetBorder(nullptr);
           break;
         case AppearanceVisualState::kIdle:
@@ -2871,9 +2980,10 @@ void SidebarTabRowView::UpdateAppearance() {
     }
   }
 
-  const ui::ColorId desired_title_color = ui::kColorSysOnSurface;
-  if (desired_title_color != last_title_color_id_) {
-    last_title_color_id_ = desired_title_color;
+  const SkColor desired_title_color = ResolveSidebarPaletteColor(
+      palette_, this, palette_.primary_text, ui::kColorSysOnSurface);
+  if (desired_title_color != last_title_color_) {
+    last_title_color_ = desired_title_color;
     title_button_->SetTextColor(views::Button::STATE_NORMAL, desired_title_color);
     title_button_->SetTextColor(views::Button::STATE_HOVERED, desired_title_color);
     title_button_->SetTextColor(views::Button::STATE_PRESSED, desired_title_color);
@@ -2889,10 +2999,20 @@ void SidebarTabRowView::UpdateAppearance() {
     const gfx::VectorIcon& close_icon =
         show_minus ? maho_lucide_icons::kMinusIcon
                    : maho_lucide_icons::kXIcon;
-    views::SetImageFromVectorIconWithColor(
-        close_button_, close_icon, kCloseIconSizeDp,
-        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
-                          ui::kColorSysOnSurface));
+    const SkColor neutral_glyph = ResolveSidebarPaletteColor(
+        palette_, this, palette_.neutral_glyph, ui::kColorSysOnSurfaceSubtle);
+    close_button_->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(close_icon, neutral_glyph,
+                                       kCloseIconSizeDp));
+    close_button_->SetImageModel(
+        views::Button::STATE_HOVERED,
+        ui::ImageModel::FromVectorIcon(close_icon, desired_title_color,
+                                       kCloseIconSizeDp));
+    close_button_->SetImageModel(
+        views::Button::STATE_PRESSED,
+        ui::ImageModel::FromVectorIcon(close_icon, desired_title_color,
+                                       kCloseIconSizeDp));
     const std::u16string close_tooltip =
         show_minus ? u"Unload tab" : u"Close tab";
     close_button_->SetTooltipText(close_tooltip);
@@ -2938,10 +3058,19 @@ SidebarTabRowView::SidebarTabDropZone SidebarTabRowView::ResolveDropZone(
     }
   }
 
-  // Dropping a tab onto another tab always creates a split view — that is the
-  // whole point of a tab-on-tab drop. Reordering to a specific position is done
-  // by dropping on the thin insertion lanes between rows, not on a row body.
+  // Cross-section tab bodies are role transitions, never split previews.
+  // Only same-section tab bodies split; insertion lanes remain the precise
+  // reorder surface.
   if (payload.node_kind == SidebarNodeKind::kTab) {
+    const bool is_cross_section_drop =
+        payload.origin == SidebarDragOrigin::kFavorites ||
+        (section_ == MahoSidebarTabSection::kPinned &&
+         payload.origin == SidebarDragOrigin::kNormalSection) ||
+        (section_ == MahoSidebarTabSection::kNormal &&
+         payload.origin == SidebarDragOrigin::kPinnedSection);
+    if (is_cross_section_drop) {
+      return SidebarTabDropZone::kBefore;
+    }
     if (browser_) {
       return SidebarTabDropZone::kSplit;
     }
@@ -3139,9 +3268,21 @@ void SidebarFolderRowView::EndFolderEditing(bool commit) {
 
 void SidebarFolderRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  if (name_field_ && GetColorProvider()) {
-    name_field_->SetTextColor(
-        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+  if (name_field_) {
+    name_field_->SetTextColor(ResolveSidebarPaletteColor(
+        palette_, this, palette_.primary_text, ui::kColorSysOnSurface));
+  }
+  UpdateAppearance();
+}
+
+void SidebarFolderRowView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  icon_cache_valid_ = false;
+  last_folder_visual_state_ = FolderVisualState::kIdle;
+  if (name_field_) {
+    name_field_->SetTextColor(ResolveSidebarPaletteColor(
+        palette_, this, palette_.primary_text, ui::kColorSysOnSurface));
   }
   UpdateAppearance();
 }
@@ -3323,14 +3464,14 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
             favorites_drop_accepted.Run(payload.node_id);
           }
         }
+        if (list_view) {
+          list_view->HandlePostDropTransition(payload, plan);
+        }
         if (payload.node_kind == SidebarNodeKind::kTab &&
             drop_zone == SidebarFolderDropZone::kInto) {
           ExecuteDropPlanTransitionsOnly(plan);
         } else {
           ExecuteDropPlan(plan);
-        }
-        if (list_view) {
-          list_view->HandlePostDropTransition(payload, plan);
         }
         output_drag_op = ui::mojom::DragOperation::kMove;
         if (payload.node_kind == SidebarNodeKind::kTab) {
@@ -3472,30 +3613,52 @@ void SidebarFolderRowView::UpdateAppearance() {
     folder_glyph_container_->SetBackground(nullptr);
     folder_glyph_container_->SetBorder(nullptr);
   }
-  const ui::ColorId icon_color_id = show_drop_target ? ui::kColorSysPrimary : ui::kColorSysOnSurface;
-  if (!icon_cache_valid_ || cached_icon_expanded_ != expanded || cached_icon_color_id_ != icon_color_id) {
+  const SkColor icon_color = show_drop_target
+                                 ? ResolveSidebarPaletteColor(
+                                       palette_, this, palette_.focus_ring,
+                                       ui::kColorSysPrimary)
+                                 : ResolveSidebarPaletteColor(
+                                       palette_, this, palette_.neutral_glyph,
+                                       ui::kColorSysOnSurface);
+  if (!icon_cache_valid_ || cached_icon_expanded_ != expanded ||
+      cached_icon_color_ != icon_color) {
     cached_icon_expanded_ = expanded;
-    cached_icon_color_id_ = icon_color_id;
+    cached_icon_color_ = icon_color;
     icon_cache_valid_ = true;
     if (folder_icon_) {
       folder_icon_->SetImage(ui::ImageModel::FromVectorIcon(
           expanded ? maho_lucide_icons::kFolderOpenIcon
                    : maho_lucide_icons::kFolderIcon,
-          icon_color_id,
+           icon_color,
           kFolderGlyphSizeDp));
     }
   }
   if (label_button_) {
     label_button_->SetVisible(!is_editing_name_);
     label_button_->SetTextColor(views::Button::STATE_NORMAL,
-                                show_drop_target ? ui::kColorSysPrimary
-                                                 : ui::kColorSysOnSurface);
+                                show_drop_target
+                                    ? ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.focus_ring,
+                                          ui::kColorSysPrimary)
+                                    : ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.primary_text,
+                                          ui::kColorSysOnSurface));
     label_button_->SetTextColor(views::Button::STATE_HOVERED,
-                                show_drop_target ? ui::kColorSysPrimary
-                                                 : ui::kColorSysOnSurface);
+                                show_drop_target
+                                    ? ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.focus_ring,
+                                          ui::kColorSysPrimary)
+                                    : ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.primary_text,
+                                          ui::kColorSysOnSurface));
     label_button_->SetTextColor(views::Button::STATE_PRESSED,
-                                show_drop_target ? ui::kColorSysPrimary
-                                                 : ui::kColorSysOnSurface);
+                                show_drop_target
+                                    ? ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.focus_ring,
+                                          ui::kColorSysPrimary)
+                                    : ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.primary_text,
+                                          ui::kColorSysOnSurface));
   }
   if (name_field_) {
     name_field_->SetVisible(is_editing_name_);
@@ -3511,16 +3674,21 @@ void SidebarFolderRowView::UpdateAppearance() {
   if (current_state != last_folder_visual_state_) {
     last_folder_visual_state_ = current_state;
     switch (current_state) {
-      case FolderVisualState::kDropTarget:
-        SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
-                                                         kRowCornerRadiusDp));
+        case FolderVisualState::kDropTarget:
+        SetBackground(views::CreateRoundedRectBackground(
+            ResolveSidebarPaletteColor(palette_, this, palette_.row_active,
+                                       ui::kColorSysSurface4),
+            kRowCornerRadiusDp));
         SetBorder(views::CreateRoundedRectBorder(
             kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
-            ui::kColorSysPrimary));
+            ResolveSidebarPaletteColor(palette_, this, palette_.focus_ring,
+                                       ui::kColorSysPrimary)));
         break;
       case FolderVisualState::kHovered:
         SetBackground(views::CreateRoundedRectBackground(
-            kMahoColorTabRowHoverBackground, kRowCornerRadiusDp));
+            ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
+                                       kMahoColorTabRowHoverBackground),
+            kRowCornerRadiusDp));
         SetBorder(nullptr);
         break;
       case FolderVisualState::kIdle:
@@ -3607,6 +3775,8 @@ class SidebarSpaceHeaderRow : public views::View {
     icon_label_->SetText(base::UTF8ToUTF16(icon));
     icon_label_->SetVisible(!icon.empty());
     name_label_->SetText(name);
+    private_text_color_.reset();
+    ApplyPalette();
     // Invariant: name is non-empty when an active space exists.
     // Empty name == no active space (transitional/zero-context) → hide row.
     SetVisible(!name.empty());
@@ -3621,8 +3791,21 @@ class SidebarSpaceHeaderRow : public views::View {
     icon_image_->SetVisible(!icon.IsEmpty());
     name_label_->SetText(name);
     name_label_->SetEnabledColor(text_color);
+    private_text_color_ = text_color;
     SetVisible(true);
     InvalidateLayout();
+  }
+
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    ApplyPalette();
+  }
+
+  MahoSidebarPalette palette_for_testing() const { return palette_; }
+
+  void SetTabListView(
+      base::WeakPtr<MahoSidebarTabListView> tab_list_view) {
+    tab_list_view_ = std::move(tab_list_view);
   }
 
   // --- Drop target overrides ---
@@ -3647,8 +3830,10 @@ class SidebarSpaceHeaderRow : public views::View {
     if (!drag_hover_active_) {
       drag_hover_active_ = true;
       SetBackground(
-          views::CreateRoundedRectBackground(ui::kColorSysSurface4,
-                                             kRowCornerRadiusDp));
+          views::CreateRoundedRectBackground(
+              ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
+                                         ui::kColorSysSurface4),
+              kRowCornerRadiusDp));
     }
     return static_cast<int>(ui::mojom::DragOperation::kMove);
   }
@@ -3662,7 +3847,8 @@ class SidebarSpaceHeaderRow : public views::View {
     drag_hover_active_ = false;
     SetBackground(nullptr);
     return base::BindOnce(
-        [](const ui::DropTargetEvent& event,
+        [](base::WeakPtr<MahoSidebarTabListView> tab_list_view,
+           const ui::DropTargetEvent& event,
            ui::mojom::DragOperation& output_drag_op,
            std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
           SidebarDragPayload payload;
@@ -3673,15 +3859,40 @@ class SidebarSpaceHeaderRow : public views::View {
           output_drag_op = ui::mojom::DragOperation::kMove;
           const SidebarDropPlan plan =
               PlanSectionDrop(MahoSidebarTabSection::kPinned, payload);
+          if (!plan.is_valid) {
+            output_drag_op = ui::mojom::DragOperation::kNone;
+            return;
+          }
+          // This row paints the active Space name, but its accepted drop means
+          // "move into Pinned". It must complete the same native transition as
+          // SidebarSectionDropTarget before the synchronous core event can
+          // refresh the hierarchy. A hover highlight is never proof of a
+          // successful mutation.
+          if (tab_list_view) {
+            tab_list_view->HandlePostDropTransition(payload, plan);
+          }
           ExecuteDropPlan(plan);
-        });
+        },
+        tab_list_view_);
   }
 
  private:
+  void ApplyPalette() {
+    if (private_text_color_) {
+      name_label_->SetEnabledColor(*private_text_color_);
+      return;
+    }
+    name_label_->SetEnabledColor(ResolveSidebarPaletteColor(
+        palette_, this, palette_.secondary_text, ui::kColorSysOnSurfaceSubtle));
+  }
+
   raw_ptr<views::ImageView> icon_image_ = nullptr;
   raw_ptr<views::Label> icon_label_ = nullptr;
   raw_ptr<views::Label> name_label_ = nullptr;
   bool drag_hover_active_ = false;
+  base::WeakPtr<MahoSidebarTabListView> tab_list_view_;
+  std::optional<ui::ColorId> private_text_color_;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(SidebarSpaceHeaderRow)
@@ -3712,6 +3923,18 @@ std::unique_ptr<views::View> CreateSidebarSpaceHeaderRow() {
   return std::make_unique<SidebarSpaceHeaderRow>();
 }
 
+void SetSidebarSpaceHeaderRowTabListView(
+    views::View* row,
+    base::WeakPtr<MahoSidebarTabListView> tab_list_view) {
+  if (!row) {
+    return;
+  }
+  auto* header = views::AsViewClass<SidebarSpaceHeaderRow>(row);
+  CHECK(header)
+      << "SetSidebarSpaceHeaderRowTabListView received non-header row";
+  header->SetTabListView(std::move(tab_list_view));
+}
+
 void UpdateSidebarSpaceHeaderRow(views::View* row,
                                  const std::string& icon,
                                  const std::u16string& name) {
@@ -3733,6 +3956,25 @@ void ConfigureSidebarSpaceHeaderRowPrivate(views::View* row,
   auto* header = views::AsViewClass<SidebarSpaceHeaderRow>(row);
   CHECK(header) << "ConfigureSidebarSpaceHeaderRowPrivate received non-SidebarSpaceHeaderRow";
   header->ConfigurePrivate(icon, name, text_color);
+}
+
+void SetSidebarSpaceHeaderRowPalette(views::View* row,
+                                      const MahoSidebarPalette& palette) {
+  if (!row) {
+    return;
+  }
+  auto* header = views::AsViewClass<SidebarSpaceHeaderRow>(row);
+  CHECK(header) << "SetSidebarSpaceHeaderRowPalette received non-SidebarSpaceHeaderRow";
+  header->SetSidebarPalette(palette);
+}
+
+MahoSidebarPalette GetSidebarSpaceHeaderRowPaletteForTesting(
+    views::View* row) {
+  CHECK(row);
+  auto* header = views::AsViewClass<SidebarSpaceHeaderRow>(row);
+  CHECK(header)
+      << "GetSidebarSpaceHeaderRowPaletteForTesting received non-header row";
+  return header->palette_for_testing();
 }
 
 // --- MahoSidebarTabListView::SidebarAutoScroller implementation ---
@@ -3981,6 +4223,25 @@ MahoSidebarTabListView::~MahoSidebarTabListView() {
   GetViewAccessibility().RemoveAllVirtualChildViews();
 }
 
+void MahoSidebarTabListView::OnSidebarPaletteChanged(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (action_processing_view_) {
+    action_processing_view_->SetSidebarPalette(palette_);
+  }
+  for (const auto& entry : tab_id_to_row_view_) {
+    if (entry.second) {
+      entry.second->SetSidebarPalette(palette_);
+    }
+  }
+  for (const auto& entry : folder_rows_by_id_) {
+    if (entry.second) {
+      entry.second->SetSidebarPalette(palette_);
+    }
+  }
+  ApplyActionRowPalette();
+}
+
 void MahoSidebarTabListView::SetFavoritesDropAcceptedCallback(
     base::RepeatingCallback<void(const std::string&)> callback) {
   favorites_drop_accepted_callback_ = callback;
@@ -4084,10 +4345,16 @@ void MahoSidebarTabListView::Update(MahoSidebarTabListModel model,
   }
 
   if (GetWidget() && GetWidget()->HasCapture()) {
-    rebuild_deferred_ = true;
-    deferred_model_ = model;
-    deferred_browser_ = browser;
     if (adopt) {
+      // The same adoption guard used by the immediate and batch paths must
+      // protect the deferred slot too. A transient empty core push can arrive
+      // while a drag owns capture; queueing it would clear every rendered row
+      // on release, move the drop target under the cursor, and restart the
+      // enter/exit cycle that users observe as pinned-area flipping. Do not
+      // clear an already queued valid model when rejecting that transient push.
+      rebuild_deferred_ = true;
+      deferred_model_ = model;
+      deferred_browser_ = browser;
       last_model_ = std::move(model);
       has_last_model_ = true;
       RefreshRowFaviconRequestsFromModel(last_model_);
@@ -4647,21 +4914,20 @@ void MahoSidebarTabListView::SetPrivateMode(bool private_mode) {
     return;
   }
   DCHECK(!action_placeholder_active_);
-  if (action_row_) {
-    std::optional<size_t> index = tab_rows_->GetIndexOf(action_row_);
-    if (!index.has_value()) {
-      return;
+  private_mode_ = private_mode;
+
+  // Force a full rebuild (not a SetVisible toggle): RebuildRows reuses the
+  // existing action row, so drop it first to get a private-aware one and let
+  // the pinned separator / empty pinned drop-target gating re-apply.
+  if (has_last_model_ && browser_) {
+    if (action_row_ && action_row_->parent() == tab_rows_) {
+      tab_rows_->RemoveChildViewT(action_row_.get());
     }
-    private_mode_ = private_mode;
-    tab_rows_->RemoveChildViewT(action_row_);
     action_row_ = nullptr;
     action_buttons_ = nullptr;
     action_processing_view_ = nullptr;
-    auto new_row = CreateActionRow();
-    tab_rows_->AddChildViewAt(std::move(new_row), index.value());
-    return;
+    RebuildRows(last_model_, browser_);
   }
-  private_mode_ = private_mode;
 }
 
 void MahoSidebarTabListView::StartActionProcessing(
@@ -4737,8 +5003,13 @@ int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
         payload.origin == SidebarDragOrigin::kFavorites) {
       RevealEmptyPinnedDropLane();
     }
+    return static_cast<int>(ui::mojom::DragOperation::kMove);
   }
-  return static_cast<int>(ui::mojom::DragOperation::kCopy);
+  const auto urls =
+      event.data().GetURLs(ui::FilenameToURLPolicy::CONVERT_FILENAMES);
+  return !urls.empty() && urls.front().url.is_valid()
+             ? static_cast<int>(ui::mojom::DragOperation::kCopy)
+             : static_cast<int>(ui::mojom::DragOperation::kNone);
 }
 
 views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
@@ -4766,10 +5037,10 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
               favorites_drop_accepted.Run(payload.node_id);
             }
           }
-          ExecuteDropPlan(plan);
           if (tab_list_view) {
             tab_list_view->HandlePostDropTransition(payload, plan);
           }
+          ExecuteDropPlan(plan);
           output_drag_op = ui::mojom::DragOperation::kMove;
           if (payload.node_kind == SidebarNodeKind::kTab &&
               !payload.node_id.empty()) {
@@ -4809,14 +5080,21 @@ void MahoSidebarTabListView::OnDragExited() {
     }
   }
   ForwardDragEnded(this);
-  HideEmptyPinnedDropLane();
+  // A parent receives OnDragExited when DropHelper hands the drag to the
+  // newly revealed pinned child. Hiding that child here makes the next hit
+  // test fall back to the parent, producing an enter/exit visibility loop.
+  // External drags have no retained source; internal drags keep the lane until
+  // the source's authoritative OnDragDone -> OnDragSourceFinished callback.
+  if (drag_source_tab_id_.empty()) {
+    HideEmptyPinnedDropLane();
+  }
 }
 
 void MahoSidebarTabListView::RevealEmptyPinnedDropLane() {
   if (pinned_drop_lane_revealed_) {
     return;
   }
-  if (!has_last_model_) {
+  if (private_mode_ || !has_last_model_) {
     return;
   }
   const bool pinned_already_has_content =
@@ -4837,14 +5115,25 @@ void MahoSidebarTabListView::HideEmptyPinnedDropLane() {
 }
 
 void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
+  const bool pinned_has_content =
+      has_last_model_ && !last_model_.pinned_tree.empty();
+  const bool pinned_target_visible =
+      !private_mode_ && (visible || pinned_has_content);
   if (pinned_section_target_) {
-    auto* drop_target = static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
-    drop_target->SetMinDropTargetHeight(visible ? kRowHeightDp : 0);
-    pinned_section_target_->SetVisible(visible);
+    auto* drop_target =
+        static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
+    if (!pinned_has_content) {
+      // Keep the empty lane intrinsically tab-height so revealing it produces
+      // a stable target. SidebarVirtualLayoutDelegate removes that height only
+      // while product code externally hides the lane.
+      drop_target->SetMinDropTargetHeight(private_mode_ ? 0 : kRowHeightDp);
+    }
+    pinned_section_target_->SetVisible(pinned_target_visible);
   }
   if (pinned_separator_) {
-    // Separator stays visible regardless of pinned-section drop-lane state.
-    pinned_separator_->SetVisible(true);
+    // The divider separates pinned from normal semantics in normal mode; it
+    // is not part of the transient empty-lane hit target and must not flicker.
+    pinned_separator_->SetVisible(!private_mode_);
   }
 }
 
@@ -5197,14 +5486,14 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   auto separator = std::make_unique<SidebarSeparatorRow>();
   pinned_separator_ = tab_rows_->AddChildView(std::move(separator));
-  const bool pinned_visible = !effective_model->pinned_tree.empty() ||
-                              pinned_drop_lane_revealed_;
+  const bool pinned_has_content = !effective_model->pinned_tree.empty();
+  const bool pinned_visible = pinned_has_content || pinned_drop_lane_revealed_;
   auto* pinned_drop_target =
       static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
-  if (effective_model->pinned_tree.empty()) {
-    pinned_drop_target->SetMinDropTargetHeight(kRowHeightDp);
+  if (!pinned_has_content) {
+    pinned_drop_target->SetMinDropTargetHeight(private_mode_ ? 0 : kRowHeightDp);
   }
-  pinned_section_target_->SetVisible(pinned_visible);
+  pinned_section_target_->SetVisible(!private_mode_ && pinned_visible);
   pinned_separator_->SetVisible(!private_mode_);
   if (action_row_holder) {
     tab_rows_->AddChildView(std::move(action_row_holder));
@@ -5379,7 +5668,8 @@ void MahoSidebarTabListView::RebuildTreeSection(
     MahoSidebarTabSection section,
     Browser* browser) {
   auto* section_container =
-      AddSectionContainer(parent, section, weak_factory_.GetWeakPtr());
+      AddSectionContainer(parent, section, active_space_id_,
+                          weak_factory_.GetWeakPtr());
 
   if (section == MahoSidebarTabSection::kPinned) {
     pinned_section_target_ = section_container;
@@ -5387,11 +5677,9 @@ void MahoSidebarTabListView::RebuildTreeSection(
     normal_section_target_ = section_container;
   }
 
-  auto* section_drop_target =
-      static_cast<SidebarSectionDropTarget*>(section_container);
-  section_drop_target->SetPopulated(!nodes.empty());
-
   if (favorites_drop_accepted_callback_) {
+    auto* section_drop_target =
+        static_cast<SidebarSectionDropTarget*>(section_container);
     section_drop_target->SetFavoritesDropAcceptedCallback(
         favorites_drop_accepted_callback_);
   }
@@ -5428,7 +5716,10 @@ void MahoSidebarTabListView::RebuildTreeSection(
   if (nodes.empty()) {
     auto* drop_target =
         static_cast<SidebarSectionDropTarget*>(section_container);
-    drop_target->SetMinDropTargetHeight(kRowHeightDp);
+    drop_target->SetMinDropTargetHeight(
+        (private_mode_ && section == MahoSidebarTabSection::kPinned)
+            ? 0
+            : kRowHeightDp);
   }
 }
 
@@ -5476,10 +5767,11 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           node, section, active_space_id_, browser,
           base::BindRepeating(&MahoSidebarTabListView::ToggleFolderExpanded,
                               weak_factory_.GetWeakPtr(), node.folder_id),
-          base::BindRepeating(&MahoSidebarTabListView::CommitFolderNameChange,
-                              weak_factory_.GetWeakPtr()),
-          next_sibling_folder_id, sibling_parent_folder_id,
-          !node.children.empty()));
+           base::BindRepeating(&MahoSidebarTabListView::CommitFolderNameChange,
+                               weak_factory_.GetWeakPtr()),
+           next_sibling_folder_id, sibling_parent_folder_id,
+           !node.children.empty()));
+      folder_row->SetSidebarPalette(palette_);
       if (favorites_drop_accepted_callback_) {
         folder_row->SetFavoritesDropAcceptedCallback(
             favorites_drop_accepted_callback_);
@@ -5638,6 +5930,7 @@ std::unique_ptr<SidebarTabRowView> MahoSidebarTabListView::CreateTabRowView(
       base::BindRepeating(&MahoSidebarTabListView::HandleTabRowHoverEnd,
                           base::Unretained(this)));
   row_view->SetSuspended(is_suspended);
+  row_view->SetSidebarPalette(palette_);
   if (favorites_drop_accepted_callback_) {
     row_view->SetFavoritesDropAcceptedCallback(
         favorites_drop_accepted_callback_);
@@ -5645,6 +5938,7 @@ std::unique_ptr<SidebarTabRowView> MahoSidebarTabListView::CreateTabRowView(
   row_view->SetRevealEmptyPinnedDropLaneCallback(
       base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
                           base::Unretained(this)));
+  row_view->SetOwningTabListView(weak_factory_.GetWeakPtr());
   row_view->SetTooltipText(GetNodeTooltipText(node));
   return row_view;
 }
@@ -5889,10 +6183,11 @@ std::unique_ptr<views::View> MahoSidebarTabListView::RealizeProjectionRow(
           row.node, row.section, active_space_id_, browser,
           base::BindRepeating(&MahoSidebarTabListView::ToggleFolderExpanded,
                               weak_factory_.GetWeakPtr(), row.node.folder_id),
-          base::BindRepeating(&MahoSidebarTabListView::CommitFolderNameChange,
-                              weak_factory_.GetWeakPtr()),
-          row.folder_next_sibling_id, row.node.parent_of_folder_id,
-          row.folder_has_children);
+           base::BindRepeating(&MahoSidebarTabListView::CommitFolderNameChange,
+                               weak_factory_.GetWeakPtr()),
+           row.folder_next_sibling_id, row.node.parent_of_folder_id,
+           row.folder_has_children);
+      folder_row->SetSidebarPalette(palette_);
       if (favorites_drop_accepted_callback_) {
         folder_row->SetFavoritesDropAcceptedCallback(
             favorites_drop_accepted_callback_);
@@ -6453,6 +6748,9 @@ void MahoSidebarTabListView::SetDragSourceTabId(const std::string& tab_id) {
 
 void MahoSidebarTabListView::OnDragSourceFinished() {
   drag_source_tab_id_.clear();
+  // Drag completion, not target handoff, owns transient-lane teardown. This
+  // keeps hit-test geometry stable for the entire native drag session.
+  HideEmptyPinnedDropLane();
   if (!drag_preserve_holder_ || drag_preserve_holder_->children().empty()) {
     return;
   }
@@ -6826,6 +7124,7 @@ std::unique_ptr<views::View> MahoSidebarTabListView::CreateActionRow() {
   button_surface->layer()->SetFillsBoundsOpaquely(false);
 
   action_buttons_ = button_surface.get();
+  action_dividers_.clear();
 
   auto new_tab = std::make_unique<MahoInlineActionButton>(
       base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
@@ -6844,9 +7143,10 @@ std::unique_ptr<views::View> MahoSidebarTabListView::CreateActionRow() {
   if (!private_mode_) {
     auto divider1 = std::make_unique<views::View>();
     divider1->SetPreferredSize(gfx::Size(1, 20));
-    divider1->SetBackground(
-        views::CreateSolidBackground(ui::kColorSysNeutralOutline));
-    button_surface->AddChildView(std::move(divider1));
+    divider1->SetBackground(views::CreateSolidBackground(
+        ResolveSidebarPaletteColor(palette_, this, palette_.outline,
+                                   ui::kColorSysNeutralOutline)));
+    action_dividers_.push_back(button_surface->AddChildView(std::move(divider1)));
 
     auto tidy = std::make_unique<MahoInlineActionButton>(
         base::BindRepeating(&MahoSidebarTabListView::OnTidyPressed,
@@ -6871,9 +7171,10 @@ std::unique_ptr<views::View> MahoSidebarTabListView::CreateActionRow() {
 
     auto divider2 = std::make_unique<views::View>();
     divider2->SetPreferredSize(gfx::Size(1, 20));
-    divider2->SetBackground(
-        views::CreateSolidBackground(ui::kColorSysNeutralOutline));
-    button_surface->AddChildView(std::move(divider2));
+    divider2->SetBackground(views::CreateSolidBackground(
+        ResolveSidebarPaletteColor(palette_, this, palette_.outline,
+                                   ui::kColorSysNeutralOutline)));
+    action_dividers_.push_back(button_surface->AddChildView(std::move(divider2)));
 
     auto clear = std::make_unique<MahoInlineActionButton>(
         base::BindRepeating(&MahoSidebarTabListView::OnClearPressed,
@@ -6908,6 +7209,7 @@ std::unique_ptr<views::View> MahoSidebarTabListView::CreateActionRow() {
         std::make_unique<MahoSidebarProcessingPlaceholderView>();
     processing_view->SetVisible(false);
     processing_view->SetButtonSurface(button_surface_ptr);
+    processing_view->SetSidebarPalette(palette_);
     action_processing_view_ = processing_view.get();
     action_row->AddChildView(std::move(processing_view));
   } else {
@@ -6918,7 +7220,46 @@ std::unique_ptr<views::View> MahoSidebarTabListView::CreateActionRow() {
     ApplyActionPlaceholderButtonState();
   }
 
+  ApplyActionRowPalette();
+
   return action_row;
+}
+
+void MahoSidebarTabListView::ApplyActionRowPalette() {
+  const SkColor secondary_text = ResolveSidebarPaletteColor(
+      palette_, this, palette_.secondary_text, ui::kColorSysOnSurfaceSubtle);
+  const SkColor neutral_glyph = ResolveSidebarPaletteColor(
+      palette_, this, palette_.neutral_glyph, ui::kColorSysOnSurfaceSubtle);
+  const auto apply_button = [secondary_text, this](views::View* button) {
+    if (auto* action_button =
+            views::AsViewClass<MahoInlineActionButton>(button)) {
+      action_button->SetSidebarPalette(palette_);
+      action_button->SetEnabledTextColors(secondary_text);
+    }
+  };
+  apply_button(new_tab_button_);
+  apply_button(tidy_button_);
+  apply_button(clear_button_);
+  if (auto* tidy = views::AsViewClass<MahoInlineActionButton>(tidy_button_)) {
+    tidy->SetImageModel(views::Button::STATE_NORMAL,
+                        ui::ImageModel::FromVectorIcon(
+                            maho_lucide_icons::kWandSparklesIcon,
+                            neutral_glyph, kInlineActionIconSizeDp));
+  }
+  if (auto* clear =
+          views::AsViewClass<MahoInlineActionButton>(clear_button_)) {
+    clear->SetImageModel(views::Button::STATE_NORMAL,
+                         ui::ImageModel::FromVectorIcon(
+                             maho_lucide_icons::kArrowDownToLineIcon,
+                             neutral_glyph, kInlineActionIconSizeDp));
+  }
+  for (views::View* divider : action_dividers_) {
+    if (divider) {
+      divider->SetBackground(views::CreateSolidBackground(
+          ResolveSidebarPaletteColor(palette_, this, palette_.outline,
+                                     ui::kColorSysNeutralOutline)));
+    }
+  }
 }
 
 void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {

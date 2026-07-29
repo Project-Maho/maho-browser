@@ -54,6 +54,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/background.h"
@@ -177,9 +178,14 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   // instead of the general branch (SetPrivateAppearance() otherwise arrives a
   // frame later). Presentation-only; the OTR data gate is is_otr_ below.
   is_private_ = browser_ && browser_->profile() &&
-                browser_->profile()->IsIncognitoProfile() &&
-                browser_->profile()->IsPrimaryOTRProfile();
+                 browser_->profile()->IsIncognitoProfile() &&
+                 browser_->profile()->IsPrimaryOTRProfile();
   BuildUi();
+  palette_host_.SetApplyCallback(base::BindRepeating(
+      &MahoSidebarView::ApplyPaletteSnapshot, base::Unretained(this)));
+  if (!is_private_) {
+    UpdateSidebarPalette(MahoSidebarPaletteUpdateReason::kConstruction);
+  }
 
   if (!browser_) {
     return;
@@ -244,6 +250,10 @@ MahoSidebarNowPlayingView* MahoSidebarView::AddNowPlayingView(std::unique_ptr<Ma
   }
   size_t footer_index = body_host_->GetIndexOf(footer_view_).value_or(0);
   now_playing_view_ = body_host_->AddChildViewAt(std::move(view), footer_index);
+  now_playing_view_->SetSidebarPalette(sidebar_palette());
+  now_playing_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarNowPlayingView::SetSidebarPalette,
+                          base::Unretained(now_playing_view_)));
   return now_playing_view_;
 }
 
@@ -265,13 +275,12 @@ void MahoSidebarView::ApplySidebarBackground() {
     // leave it untouched.
     return;
   }
-  // Normal windows paint their themed background in OnPaintBackground() — an
-  // opaque themed gradient while a library overlay is active, otherwise the
-  // translucent glass-frame gradient. Clear any Background so it does not paint
-  // beneath, and repaint so the opaque/translucent choice refreshes on
-  // body-mode / category changes.
   SetBackground(nullptr);
-  SchedulePaint();
+  const bool opaque = ShouldUseOpaqueSidebarBackground();
+  if (palette_host_.has_palette() && palette_host_.opaque() == opaque) {
+    return;
+  }
+  UpdateSidebarPalette(MahoSidebarPaletteUpdateReason::kOpaqueMode);
 }
 
 bool MahoSidebarView::ShouldUseOpaqueSidebarBackground() const {
@@ -295,20 +304,15 @@ bool MahoSidebarView::ShouldUseOpaqueSidebarBackground() const {
 
 void MahoSidebarView::OnThemeChanged() {
   views::View::OnThemeChanged();
-
-  std::optional<MahoSpaceThemeState::ThemeData> theme_data =
-      MahoSpaceThemeState::GetThemeData();
-  const float texture = theme_data ? theme_data->texture : 0.0f;
-
-  ApplySidebarBackground();
+  if (!is_private_) {
+    UpdateSidebarPalette(MahoSpaceThemeState::HasPreviewOverride(browser_)
+                             ? MahoSidebarPaletteUpdateReason::kPreview
+                             : MahoSidebarPaletteUpdateReason::kNativeTheme);
+  }
   UpdateSidebarBorderForOverlay();
   if (library_divider_) {
     library_divider_->SetBackground(
         views::CreateSolidBackground(ui::kColorSeparator));
-  }
-
-  if (grain_overlay_) {
-    grain_overlay_->SetTexture(texture);
   }
 
   auto model = state_adapter_.BuildViewStateModel(browser_);
@@ -327,9 +331,8 @@ void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
     return;
   }
 
-  const ui::ColorProvider* provider = GetColorProvider();
   const gfx::Rect bounds = GetLocalBounds();
-  if (!provider || bounds.IsEmpty()) {
+  if (bounds.IsEmpty()) {
     return;
   }
 
@@ -348,8 +351,45 @@ void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
   // Archive library, or the Spaces full-viewport overlay) is active so the
   // docked rail matches the opaque overlay content; otherwise keep the native
   // (translucent) alpha for the glass-frame vibrancy look.
-  const bool opaque = ShouldUseOpaqueSidebarBackground();
-  PaintMahoSidebarThemedBackground(canvas, bounds, provider, opaque, radii);
+  PaintMahoSidebarThemedBackground(canvas, palette_host_.palette(), bounds,
+                                   palette_host_.opaque(), radii);
+}
+
+base::CallbackListSubscription
+MahoSidebarView::AddSidebarPaletteChangedCallback(
+    SidebarPaletteChangedCallback callback) {
+  return palette_changed_callbacks_.Add(std::move(callback));
+}
+
+float MahoSidebarView::grain_texture_for_testing() const {
+  return grain_overlay_ ? grain_overlay_->texture_for_testing() : 0.0f;
+}
+
+void MahoSidebarView::UpdateSidebarPalette(
+    MahoSidebarPaletteUpdateReason reason) {
+  const ui::NativeTheme* native_theme =
+      ui::NativeTheme::GetInstanceForNativeUi();
+  MahoSidebarThemeEnvironment environment =
+      BuildMahoSidebarThemeEnvironmentForBrowser(
+          browser_, GetColorProvider(), native_theme);
+  if (!palette_host_.Update(reason, environment,
+                            ShouldUseOpaqueSidebarBackground())) {
+    return;
+  }
+  ++palette_repaint_count_for_testing_;
+  SchedulePaint();
+}
+
+void MahoSidebarView::ApplyPaletteSnapshot(
+    const MahoSidebarPalette& palette) {
+  if (grain_overlay_) {
+    grain_overlay_->SetTextureWithoutRepaint(palette.grain);
+  }
+  if (tab_list_view_) {
+    tab_list_view_->OnSidebarPaletteChanged(palette);
+  }
+  SetSidebarSpaceHeaderRowPalette(space_header_view_, palette);
+  palette_changed_callbacks_.Notify(palette);
 }
 
 void MahoSidebarView::ViewHierarchyChanged(
@@ -508,6 +548,8 @@ void MahoSidebarView::BuildUi() {
 
   auto tab_list = std::make_unique<MahoSidebarTabListView>(browser_);
   tab_list_view_ = scroll->SetContents(std::move(tab_list));
+  SetSidebarSpaceHeaderRowTabListView(space_header_view_,
+                                     tab_list_view_->GetWeakPtr());
   tab_scroll_view_ = tabs_surface_->AddChildView(std::move(scroll));
 
   tab_list_view_->SetAutoScrollScrollView(tab_scroll_view_);
@@ -570,11 +612,28 @@ void MahoSidebarView::BuildUi() {
                               base::Unretained(this)));
   update_notification_view_ = AddChildView(
       std::make_unique<MahoSidebarUpdateNotificationView>());
+  update_notification_view_->SetSidebarPalette(sidebar_palette());
+  update_notification_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarUpdateNotificationView::SetSidebarPalette,
+                          base::Unretained(update_notification_view_)));
   update_notification_view_->SetProperty(views::kViewIgnoredByLayoutKey, true);
   update_notification_view_->AddObserver(this);
 
   footer_view_ = body_host_->AddChildView(
       std::make_unique<MahoSidebarFooterView>(browser_));
+
+  top_bar_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarTopBarView::OnSidebarPaletteChanged,
+                          base::Unretained(top_bar_view_)));
+  search_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarSearchView::OnSidebarPaletteChanged,
+                          base::Unretained(search_view_)));
+  favorites_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarFavoritesGridView::OnSidebarPaletteChanged,
+                          base::Unretained(favorites_view_)));
+  footer_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarFooterView::OnSidebarPaletteChanged,
+                          base::Unretained(footer_view_)));
 
   normal_body_layout->SetFlexForView(tab_scroll_view_, 1, true);
   body_layout->SetFlexForView(content_host_, 1, false);
@@ -585,6 +644,10 @@ void MahoSidebarView::BuildUi() {
   create_space_view_->SetVisible(false);
   create_space_view_->SetCloseCallback(base::BindRepeating(
       &MahoSidebarView::HideCreateSpace, weak_factory_.GetWeakPtr()));
+  create_space_view_->SetSidebarPalette(sidebar_palette());
+  create_space_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarCreateSpaceView::SetSidebarPalette,
+                          base::Unretained(create_space_view_)));
   root_layout->SetFlexForView(create_space_view_, 1, true);
 
 
@@ -859,7 +922,11 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
                 sidebar_view->archive_view_->ReloadArchivedTabs();
               }
             },
-            weak_factory_.GetWeakPtr()));
+             weak_factory_.GetWeakPtr()));
+        archive_view_->SetSidebarPalette(sidebar_palette());
+        archive_palette_subscription_ = AddSidebarPaletteChangedCallback(
+            base::BindRepeating(&MahoSidebarArchiveView::SetSidebarPalette,
+                                base::Unretained(archive_view_)));
       }
       pane = archive_view_;
       break;
@@ -868,6 +935,10 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
       if (!downloads_view_) {
         downloads_view_ = library_content_host_->AddChildView(
             std::make_unique<MahoSidebarDownloadsView>(browser_));
+        downloads_view_->SetSidebarPalette(sidebar_palette());
+        downloads_palette_subscription_ = AddSidebarPaletteChangedCallback(
+            base::BindRepeating(&MahoSidebarDownloadsView::SetSidebarPalette,
+                                base::Unretained(downloads_view_)));
         downloads_view_->SetVisible(false);
       }
       pane = downloads_view_;
@@ -877,6 +948,10 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
       if (!media_view_) {
         media_view_ = library_content_host_->AddChildView(
             std::make_unique<MahoSidebarMediaView>());
+        media_view_->SetSidebarPalette(sidebar_palette());
+        media_palette_subscription_ = AddSidebarPaletteChangedCallback(
+            base::BindRepeating(&MahoSidebarMediaView::SetSidebarPalette,
+                                base::Unretained(media_view_)));
         media_view_->SetVisible(false);
       }
       pane = media_view_;
@@ -1151,6 +1226,34 @@ void MahoSidebarView::ScheduleRefreshAll() {
   refresh_state_ = RefreshState::kInFlight;
   refresh_dirty_ = false;
   RefreshAll();
+}
+
+void MahoSidebarView::RefreshSpaceThemeForBrowser(Browser* browser) {
+  if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+    return;
+  }
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+  if (!browser_view) {
+    return;
+  }
+  auto* container = views::AsViewClass<MahoSidebarContainerView>(
+      browser_view->maho_sidebar_container());
+  if (!container) {
+    return;
+  }
+  auto* sidebar =
+      views::AsViewClass<MahoSidebarView>(container->sidebar_view());
+  if (sidebar) {
+    sidebar->RefreshSpaceTheme();
+  }
+}
+
+void MahoSidebarView::RefreshSpaceTheme() {
+  if (is_private_ || is_otr_) {
+    return;
+  }
+  UpdateSidebarPalette(MahoSidebarPaletteUpdateReason::kStructuralBridge);
+  ScheduleRefreshAll();
 }
 
 void MahoSidebarView::RefreshAll() {
@@ -1840,6 +1943,9 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged(bool is_structural) {
     OnSpaceProfileBridgeChanged();
   } else {
     DVLOG(1) << "[MAHO_PERF] NotifyChanged cosmetic_skipped_rebuild=true";
+    palette_host_.Update(MahoSidebarPaletteUpdateReason::kCosmetic,
+                         MahoSidebarThemeEnvironment(),
+                         palette_host_.opaque());
     ScheduleCosmeticRefresh();
   }
 }
@@ -1851,14 +1957,7 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged() {
   cosmetic_refresh_timer_.Stop();
   cosmetic_refresh_pending_ = false;
   UpdateSpacesPaneActions();
-  // Grain is a cached overlay value (not a live ColorProvider token like the
-  // sidebar color/opacity), so it must be refreshed per-space here; otherwise
-  // it stays at the previously active space's noise level.
-  if (grain_overlay_) {
-    std::optional<MahoSpaceThemeState::ThemeData> theme_data =
-        MahoSpaceThemeState::GetThemeData();
-    grain_overlay_->SetTexture(theme_data ? theme_data->texture : 0.0f);
-  }
+  UpdateSidebarPalette(MahoSidebarPaletteUpdateReason::kStructuralBridge);
   ScheduleRefreshAll();
 }
 
@@ -1923,10 +2022,15 @@ bool MahoSidebarView::GetDropFormats(
 }
 
 bool MahoSidebarView::CanDrop(const ui::OSExchangeData& data) {
-  if (favorites_view_) {
-    return favorites_view_->CanDrop(data);
+  if (!favorites_view_ || favorites_view_->GetVisible() || is_private_ ||
+      is_otr_) {
+    return false;
   }
-  return false;
+  // DropHelper walks from the deepest child toward this root. Once Favorites
+  // is visible, its own view must be the only accepting target; otherwise the
+  // root can claim dead space and return kNone outside the grid. The root is
+  // needed only for the first update that reveals a hidden Favorites target.
+  return favorites_view_->CanDrop(data);
 }
 
 int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
@@ -2021,6 +2125,7 @@ void MahoSidebarView::OnDragEnded() {
     favorites_view_->OnDragEnded();
   }
   if (tab_list_view_) {
+    tab_list_view_->OnDragExited();
     tab_list_view_->FlushDeferredRebuild();
   }
 }
