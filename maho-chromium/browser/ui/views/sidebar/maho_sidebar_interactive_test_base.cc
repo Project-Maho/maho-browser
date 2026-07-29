@@ -44,8 +44,6 @@ namespace maho {
 
 namespace {
 
-#include <unistd.h>
-
 views::View* FindViewAtScreenPoint(views::View* root, const gfx::Point& screen_point) {
   if (!root || !root->GetVisible()) {
     return nullptr;
