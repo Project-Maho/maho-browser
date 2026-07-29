@@ -13,6 +13,12 @@
 #include <utility>
 #include <vector>
 
+#include "build/build_config.h"
+
+#if !BUILDFLAG(IS_WIN)
+#include <unistd.h>
+#endif
+
 #include "base/json/json_reader.h"
 #include "base/json/string_escape.h"
 #include "base/values.h"
@@ -24,6 +30,20 @@
 
 namespace maho {
 namespace {
+
+// Constructs a session the way a same-user client connection would appear on
+// each platform: POSIX authenticates by peer UID, Windows by an auth token
+// presented during the initialize handshake. A null token skips token
+// validation, which is the Windows analogue of the matching-UID case.
+std::unique_ptr<MahoMcpSession> MakeTestSession(
+    MahoMcpLeaseRegistry* lease_registry = nullptr) {
+#if BUILDFLAG(IS_WIN)
+  return std::make_unique<MahoMcpSession>(
+      static_cast<MahoMcpSessionToken*>(nullptr), lease_registry);
+#else
+  return std::make_unique<MahoMcpSession>(getuid(), lease_registry);
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // R-8: non-revealing, generation-bound target resolution (task-8-mcp-session).
@@ -230,8 +250,8 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
 class MahoMcpSessionTest : public testing::Test {
  protected:
   void SetUp() override {
-    // Create session with matching UID (simulates same-user connection).
-    session_ = std::make_unique<MahoMcpSession>(getuid());
+    // Create session as a same-user connection (see MakeTestSession).
+    session_ = MakeTestSession();
   }
 
   void TearDown() override {
@@ -253,8 +273,7 @@ class MahoMcpSessionTest : public testing::Test {
     delegate_ = std::make_unique<ResolvingFakeDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
     lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
-    session_ =
-        std::make_unique<MahoMcpSession>(getuid(), lease_registry_.get());
+    session_ = MakeTestSession(lease_registry_.get());
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionTest::CaptureDeferred, base::Unretained(this)));
     auto responses = session_->ProcessData(
@@ -397,6 +416,10 @@ TEST_F(MahoMcpSessionTest, ToolsListAfterInitialize) {
   EXPECT_TRUE(result->FindList("tools"));
 }
 
+#if !BUILDFLAG(IS_WIN)
+// Peer-UID authentication is POSIX-only; Windows rejects mismatched clients
+// through MahoMcpSessionToken instead (see
+// maho_mcp_session_token_win_unittest.cc).
 TEST_F(MahoMcpSessionTest, RejectsPeerUidMismatch) {
   auto foreign_session = std::make_unique<MahoMcpSession>(getuid() + 1);
 
@@ -409,6 +432,7 @@ TEST_F(MahoMcpSessionTest, RejectsPeerUidMismatch) {
   auto responses = foreign_session->ProcessData(input);
   EXPECT_EQ(foreign_session->state(), MahoMcpSession::State::kClosed);
 }
+#endif  // !BUILDFLAG(IS_WIN)
 
 // D1 allowed_domains: helper to drive a session through initialize
 // followed by an arbitrary payload, returning the LAST response parsed.
@@ -950,7 +974,7 @@ class MahoMcpSessionMailReadTest : public testing::Test {
   void SetUp() override {
     delegate_ = std::make_unique<FakeMailReadDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
-    session_ = std::make_unique<MahoMcpSession>(getuid());
+    session_ = MakeTestSession();
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionMailReadTest::CaptureDeferred,
         base::Unretained(this)));
@@ -1194,7 +1218,7 @@ class MahoMcpSessionNetworkCaptureTest : public testing::Test {
   void SetUp() override {
     delegate_ = std::make_unique<FakeAsyncNetworkDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
-    session_ = std::make_unique<MahoMcpSession>(getuid());
+    session_ = MakeTestSession();
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionNetworkCaptureTest::CaptureDeferred,
         base::Unretained(this)));
@@ -2309,7 +2333,7 @@ class MahoMcpSessionTypeGuardTest : public testing::Test {
     delegate_ = std::make_unique<TypeGuardFakeDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
     lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
-    session_ = std::make_unique<MahoMcpSession>(getuid(), lease_registry_.get());
+    session_ = MakeTestSession(lease_registry_.get());
     auto responses = session_->ProcessData(
         R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
         R"("params":{"protocolVersion":"2025-03-26",)"
