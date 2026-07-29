@@ -28,7 +28,7 @@
 | 4 | Import from Zen, workspaces appear as space dots | ✅ | E2E (2026-06-24): 3 workspaces (Space/Rust/das) imported after `containerTabId` schema fix |
 | 5 | Zen 5-level folder nesting preserved | ✅ | `parsers::zen::workspaces::preserves_up_to_5_level_folder_nesting_and_rejects_deeper` — verifies depth-cap behavior: 5 levels accepted, 6th rejected |
 | 6 | 12 essential sites in favorites grid | ✅ | Welcome flow `FavoriteEssentialSites` separate path, unchanged |
-| 7 | Import from Arc, spaces + sidebar items mapped correctly | ✅ | E2E verified: 8 spaces (Personal + 7 Arc), 24 folders, 23 with nested tabs, 10 nested folders (parent_id chain), 237 history |
+| 7 | Import from Arc, spaces + sidebar items mapped correctly | ⚠️ | Deterministic tests cover Arc and Zen workspace extraction; exact pinned, favorite, regular, and foldered titles; empty-title fallback; persistence across core reopen; hydration parsing, profile filtering, non-destructive merge, and idempotency; and success, cancellation, and error completion ordering. Native space switching remains covered by the existing sidebar interactive suite. |
 | 8 | Safari import with FDA granted, bookmarks imported | ✅ | `crates/maho-import/tests/safari_fda_paths.rs::safari_with_fda_via_accessible_copy` — copies real plist to accessible temp dir (proxy for FDA-granted read), parser succeeds |
 | 9 | Safari without FDA, EPERM + retry button works | ✅ | `crates/maho-import/tests/safari_fda_paths.rs::safari_without_fda_returns_permission_denied` — verified `ImportError::PermissionDenied(/Users/indo/Library/Safari/Bookmarks.plist)` returned on unauthorized read |
 | 10 | FinishOnboarding closes welcome, opens browser | ✅ | Unchanged from prior work |
@@ -83,7 +83,7 @@ Visual criteria 17–28 unchanged by migration; status from prior work preserved
 
 | # | Criterion | Status | Notes |
 |---|-----------|--------|-------|
-| 32 | Unit tests pass | ✅ | `cargo test -p maho-import --lib` → 135/135 pass in <0.1s (replaces C++ unit_tests target — those .cc files deleted) |
+| 32 | Rust unit and destination-contract tests pass | ✅ | `maho-import` library tests, the Arc/Zen workspace integration tests, and `maho-ffi` destination-contract tests cover title propagation, fallback, folders, and persisted reopen behavior. |
 | 33 | Golden-hash gate passes (`verify_golden.py`) | ✅ | 7 synthetic fixtures verified: nss_3des_cbc, nss_aes256_cbc_sha256/sha384, nss_aes256_gcm, oscrypt_v10, cookie_v10/v20_prefix |
 
 ---
@@ -101,49 +101,55 @@ Visual criteria 17–28 unchanged by migration; status from prior work preserved
 
 | Status | Count |
 |--------|-------|
-| ✅ Verified | 35 |
-| ⚠️ Partial | 0 |
+| ✅ Verified | 34 |
+| ⚠️ Partial | 1 |
 | ☐ Pending manual QA | 0 |
 | ❌ Known broken | 0 |
 
-**Acceptance gate**: 35/35 ✅ (100%) post-migration. **Tier-A complete.**
+**Acceptance gate**: 34/35 verified. Criterion 7 is covered at the parser, destination, persistence, hydration-state, completion-ordering, and native interactive-test layers.
 
 ### What's NOT in This Status Tally
 
 - v20 cookies (Chrome 117+ App-Bound Encryption) — parser detects + skips. Out of scope: requires Chrome's per-app entitlement.
+- No AX- or coordinate-driven local QA attempt is represented as an automated E2E test.
 
 ---
 
-## Final Gate Commands
+## Final Verification Ledger, 2026-07-29
+
+The commands below record the checks that were run for the Arc import workspace-fidelity work. Results marked NOT RUN / DEFERRED are not passes.
 
 ```bash
-cd /Users/indo/code/project/maho-workspace
+cd /path/to/maho-workspace
 
-# 1. Build Chromium
-python3 maho-chromium/build/scripts/build_maho.py
-# Expect: exit 0; libchrome_dll.dylib produced
+# 1. Rebuild the maho-core prebuilt before Chromium compilation
+python3 maho-chromium/build/scripts/build_maho_core.py
+# Result: exit 0; fresh arm64 libmaho_ffi.a copied to the Chromium prebuilt location
 
-# 2. Rust unit tests
-cd maho && cargo test -p maho-import --lib
-# Expect: 142/142 pass
+# 2. Rust gates
+cd maho
+cargo test -p maho-import --lib
+# Result: 206/206
+cargo test -p maho-ffi --test destination_callbacks -- --nocapture
+# Result: 6/6, including non-empty title persistence after core free, reopen, and load
+cargo check -p maho-import --all-targets
+# Result: exit 0
+cargo check -p maho-ffi --all-targets
+# Result: exit 0
 
-# 3. Golden hash gate
-python3 maho-chromium/browser/importer/test_data/verify_golden.py \
-  --synthetic-dir maho-chromium/browser/importer/test_data/synthetic \
-  --hashes-file maho-chromium/browser/importer/test_data/golden_hashes.json
-# Expect: "All synthetic fixtures verified successfully"
+# 3. Chromium source-set and application builds, through the canonical lock-backed wrapper
+cd ..
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target maho/browser/importer:unit_tests
+# Result: exit 0
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target maho/browser/ui/views/sidebar:interactive_tests
+# Result: exit 0
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch --ninja-target chrome
+# Result: exit 0; Maho.app linked, bundled, and signed
 
-# 4. FFI surface check (target: 5 symbols, 4 functional + 1 utility)
-nm -gU maho-chromium/third_party/maho/prebuilt/arm64/libmaho_ffi.a | grep -E '_maho_import_' | sort -u
-# Expect: detect_browsers, orchestrator_start, orchestrator_cancel, orchestrator_free, string_free
-
-# 5. C++ source file count in importer/ (target: 6 files)
-ls maho-chromium/browser/importer/*.{cc,h} | wc -l
-# Expect: 6
-
-# 6. Manual E2E walkthrough on fresh user-data-dir
-"chromium/src/out/Default/Maho.app/Contents/MacOS/Maho" --user-data-dir=/tmp/maho-qa
-# Click through welcome → import → verify spaces/tabs/folders in sidebar
+# 4. Focused deterministic C++ tests
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-check --no-launch \
+  --ninja-target maho/browser:maho_space_profile_hydration_test \
+  --ninja-target maho/browser/importer:maho_import_session_bridge_test
+chromium/src/out/Default/maho_space_profile_hydration_test
+chromium/src/out/Default/maho_import_session_bridge_test
 ```
-
-ALL must pass before Tier A is declared done.

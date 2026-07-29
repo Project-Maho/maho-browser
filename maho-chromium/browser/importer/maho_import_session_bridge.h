@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
+#include "maho/browser/importer/maho_import_session_completion.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 class Profile;
@@ -65,7 +66,17 @@ class MahoImportSessionBridge {
   void Cancel();
 
   // Returns true if the session has been started and has not yet terminated.
-  bool is_active() const { return session_ != nullptr && !terminated_; }
+  bool is_active() const {
+    return session_ != nullptr &&
+           terminal_state_ == ImportTerminalState::kRunning;
+  }
+
+  void SetHydrationCallbackForTesting(base::RepeatingClosure callback);
+  void SimulateProgressForTesting(uint32_t kind,
+                                  uint32_t import_type,
+                                  int32_t count,
+                                  std::string message);
+  void SimulateCancelledForTesting();
 
  private:
   // Static C-linkage callback passed to Rust.  |user_data| is |this|.
@@ -102,6 +113,12 @@ class MahoImportSessionBridge {
                           uint32_t import_type,
                           int32_t count,
                           std::string message);
+  void ForwardProgress(uint32_t kind,
+                       uint32_t import_type,
+                       int32_t count,
+                       const std::string& message);
+  void ReleaseSession();
+  void HydrateAfterSuccessfulImport();
 
   void HandleCookie(std::string host,
                     std::string name,
@@ -128,7 +145,8 @@ class MahoImportSessionBridge {
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
   raw_ptr<Profile> profile_ = nullptr;
   RAW_PTR_EXCLUSION MahoImportSession* session_ = nullptr;
-  bool terminated_ = false;
+  ImportTerminalState terminal_state_ = ImportTerminalState::kRunning;
+  base::RepeatingClosure hydration_callback_for_testing_;
   base::WeakPtrFactory<MahoImportSessionBridge> weak_factory_{this};
 };
 

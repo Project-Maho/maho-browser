@@ -217,3 +217,116 @@ fn destination_handles_null_bytes_in_strings_gracefully() {
         let _ = Arc::from_raw(counters_ptr as *const CallbackCounters);
     }
 }
+
+#[test]
+fn destination_persists_nonempty_tab_title_after_reopen() {
+    let storage = tempfile::tempdir().unwrap();
+    let path = CString::new(storage.path().to_string_lossy().as_bytes()).unwrap();
+    let core = unsafe { maho_ffi::maho_core_new_with_storage(path.as_ptr()) };
+    assert!(!core.is_null());
+
+    let imported_title = "Fictional Observatory Notes";
+    let tab_id = {
+        let destination = unsafe { MahoCoreDestination::new(core) };
+        let space_id = destination.get_active_space_id().unwrap();
+        destination
+            .create_tab(
+                &space_id,
+                "https://observatory.invalid/notes",
+                imported_title,
+            )
+            .unwrap()
+    };
+
+    let created_title = unsafe {
+        (&*core)
+            .get_tab_view_models()
+            .into_iter()
+            .find(|tab| tab.id.0 == tab_id)
+            .unwrap()
+            .title
+    };
+    assert_eq!(created_title, imported_title);
+    unsafe { maho_ffi::maho_core_free(core) };
+
+    let reopened = unsafe { maho_ffi::maho_core_new_with_storage(path.as_ptr()) };
+    assert!(!reopened.is_null());
+    unsafe { (&mut *reopened).load_state().unwrap() };
+    let loaded_title = unsafe {
+        (&*reopened)
+            .get_tab_view_models()
+            .into_iter()
+            .find(|tab| tab.id.0 == tab_id)
+            .unwrap()
+            .title
+    };
+    assert_eq!(loaded_title, imported_title);
+    unsafe { maho_ffi::maho_core_free(reopened) };
+}
+
+#[test]
+fn destination_preserves_default_title_for_empty_imported_title() {
+    let storage = tempfile::tempdir().unwrap();
+    let path = CString::new(storage.path().to_string_lossy().as_bytes()).unwrap();
+    let core = unsafe { maho_ffi::maho_core_new_with_storage(path.as_ptr()) };
+    assert!(!core.is_null());
+
+    let tab_id = {
+        let destination = unsafe { MahoCoreDestination::new(core) };
+        let space_id = destination.get_active_space_id().unwrap();
+        destination
+            .create_tab(&space_id, "https://fallback.invalid/untitled", "")
+            .unwrap()
+    };
+
+    let created_title = unsafe {
+        (&*core)
+            .get_tab_view_models()
+            .into_iter()
+            .find(|tab| tab.id.0 == tab_id)
+            .unwrap()
+            .title
+    };
+    assert_eq!(created_title, "New Tab");
+    unsafe { maho_ffi::maho_core_free(core) };
+}
+
+#[test]
+fn destination_persists_foldered_tab_title_after_reopen() {
+    let storage = tempfile::tempdir().unwrap();
+    let path = CString::new(storage.path().to_string_lossy().as_bytes()).unwrap();
+    let core = unsafe { maho_ffi::maho_core_new_with_storage(path.as_ptr()) };
+    assert!(!core.is_null());
+
+    let imported_title = "Fictional Foldered Notes";
+    let tab_id = {
+        let destination = unsafe { MahoCoreDestination::new(core) };
+        let space_id = destination.get_active_space_id().unwrap();
+        let folder_id = destination
+            .create_folder(&space_id, "Fictional Folder", "")
+            .unwrap();
+        destination
+            .create_tab_in_folder(
+                &space_id,
+                "https://foldered.invalid/notes",
+                imported_title,
+                &folder_id,
+            )
+            .unwrap()
+    };
+
+    unsafe { maho_ffi::maho_core_free(core) };
+    let reopened = unsafe { maho_ffi::maho_core_new_with_storage(path.as_ptr()) };
+    assert!(!reopened.is_null());
+    unsafe { (&mut *reopened).load_state().unwrap() };
+    let loaded_title = unsafe {
+        (&*reopened)
+            .get_tab_view_models()
+            .into_iter()
+            .find(|tab| tab.id.0 == tab_id)
+            .unwrap()
+            .title
+    };
+    assert_eq!(loaded_title, imported_title);
+    unsafe { maho_ffi::maho_core_free(reopened) };
+}

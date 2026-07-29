@@ -9,6 +9,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "maho/browser/importer/maho_browser_detector.h"
 #include "maho/components/maho_importer/maho_importer_constants.mojom.h"

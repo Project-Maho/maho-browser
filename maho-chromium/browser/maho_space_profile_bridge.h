@@ -48,20 +48,25 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   bool SwitchToSpace(const std::string& space_id);
   bool SwitchToSpace(Browser* browser, const std::string& space_id);
 
+  bool HydrateFromCore();
+  bool HydrateFromSerializedStateForTesting(
+      std::string_view spaces_json,
+      std::string_view active_space_id_json);
+
   void SetActiveSpaceId(const std::string& space_id);
   void SetActiveSpaceId(Browser* browser, const std::string& space_id);
   void NotifyChanged(bool is_structural = true);
 
-  void SetLastActiveTab(const std::string& space_id,
-                       const std::string& tab_id);
+  void SetLastActiveTab(const std::string& space_id, const std::string& tab_id);
   std::string GetLastActiveTab(const std::string& space_id) const;
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
   const std::string& GetActiveSpaceId() const;
-  // The per-browser map is the canonical UI active-space state; the global
-  // active_space_id_ value exists only as a seed and as a no-browser-context fallback.
+  // The per-browser map is the canonical UI active-space state. The global
+  // active_space_id_ value is only a creation seed and no-browser fallback;
+  // mapped lookup fails closed when a Browser has no explicit entry.
   const std::string& GetActiveSpaceId(Browser* browser) const;
   const std::string& GetActiveSpaceId(BrowserWindowInterface* browser) const;
   size_t GetRegisteredSpaceCount() const;
@@ -69,10 +74,15 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   int GetActiveSpaceIndex(Browser* browser) const;
 
   void ClearBrowserActiveSpace(Browser* browser);
+  std::vector<Browser*> GetBrowsersForSpaces(
+      const std::vector<std::string>& space_ids) const;
+  void ClearBrowserActiveSpacesForTesting();
+  void EnsureBrowserCollectionObservationForTesting();
+  void ResetBrowserCollectionObservationForTesting();
 
   std::vector<std::string> GetSpaceIds() const;
   std::string GetSpaceIdForProfile(Profile* profile) const;
-  base::FilePath GetProfilePathForTesting(const std::string& space_id) const;
+  base::FilePath GetProfilePathForSpace(const std::string& space_id) const;
 
   static constexpr size_t kMahoProfileIdMaxLen = 64;
   static std::optional<base::FilePath> ProfileBasenameForId(

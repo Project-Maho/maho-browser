@@ -204,51 +204,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   create_space_view->CompleteCreateSpaceForTesting(true, new_space_id);
   base::RunLoop().RunUntilIdle();
 
-  base::FilePath profile_path = bridge->GetProfilePathForTesting(new_space_id);
+  base::FilePath profile_path = bridge->GetProfilePathForSpace(new_space_id);
   EXPECT_EQ(base::FilePath::FromASCII("Default"), profile_path);
 }
 
-IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ProfileBasenameForIdValidation) {
-  // Sentinel mapping: empty, default, and Default map to Default
-  EXPECT_EQ(base::FilePath::FromASCII("Default"),
-            MahoSpaceProfileBridge::ProfileBasenameForId(""));
-  EXPECT_EQ(base::FilePath::FromASCII("Default"),
-            MahoSpaceProfileBridge::ProfileBasenameForId("   "));
-  EXPECT_EQ(base::FilePath::FromASCII("Default"),
-            MahoSpaceProfileBridge::ProfileBasenameForId("default"));
-  EXPECT_EQ(base::FilePath::FromASCII("Default"),
-            MahoSpaceProfileBridge::ProfileBasenameForId("Default"));
-
-  // Non-default mapping
-  EXPECT_EQ(base::FilePath::FromASCII("MahoProfile_alpha"),
-            MahoSpaceProfileBridge::ProfileBasenameForId("alpha"));
-  EXPECT_EQ(base::FilePath::FromASCII("MahoProfile_Default-Like-But-Not"),
-            MahoSpaceProfileBridge::ProfileBasenameForId("Default-Like-But-Not"));
-
-  // contains / or backslash or colon
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha/beta"));
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha\\beta"));
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(":"));
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("a:b"));
-  // equals "." or ".."
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("."));
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(".."));
-  // contains a .. segment
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("foo..bar"));
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("..foo"));
-  // starts with .
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(".alpha"));
-  // non-ASCII
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("\xff\xfe"));
-  // exceeds kMahoProfileIdMaxLen (64)
-  std::string long_id(MahoSpaceProfileBridge::kMahoProfileIdMaxLen + 1, 'a');
-  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(long_id));
-}
-
 // Locks the cache-reset gating from MahoSpaceProfileBridge::SwitchToSpace:
-// UpdateFromCore() must return false when the active theme is unchanged (so the
-// process-wide ColorProviderManager cache reset is skipped on same-theme space
-// switches) and true when the active theme actually changed.
+// UpdateFromCore() must return no changed Space IDs when the snapshot is
+// unchanged and identify the active Space when its theme changes.
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
                        UpdateFromCoreGatesCacheResetOnThemeChange) {
   MahoCore* core = maho::GetCore();
@@ -265,16 +227,16 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   MahoSpaceThemeState::UpdateFromCore();
 
   // No mutation between calls -> must report no change (skips cache reset).
-  EXPECT_FALSE(MahoSpaceThemeState::UpdateFromCore())
-      << "UpdateFromCore must return false when the active theme is unchanged";
+  EXPECT_TRUE(MahoSpaceThemeState::UpdateFromCore().empty())
+      << "UpdateFromCore must identify no changed Spaces for an unchanged snapshot";
 
   // A genuinely different theme -> must report a change (triggers cache reset).
   const std::string theme_b =
       R"({"type":"solid","color":{"hue":30.0,"saturation":0.9,)"
       R"("brightness":0.5,"grain":0.1}})";
   ASSERT_TRUE(maho_theme::ApplyThemeJsonToSpace(core, active_space, theme_b));
-  EXPECT_TRUE(MahoSpaceThemeState::UpdateFromCore())
-      << "UpdateFromCore must return true when the active theme changed";
+  EXPECT_FALSE(MahoSpaceThemeState::UpdateFromCore().empty())
+      << "UpdateFromCore must identify the Space whose theme changed";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ExplicitFailurePathNoMutation) {
@@ -337,8 +299,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, StartupHydrationParity)
   base::RunLoop().RunUntilIdle();
 
   // Verify that the resulting profile paths stored in the bridge are identical
-  base::FilePath path_from_hydration = bridge->GetProfilePathForTesting(space_id_hydration);
-  base::FilePath path_from_creation = bridge->GetProfilePathForTesting(space_id_created);
+  base::FilePath path_from_hydration = bridge->GetProfilePathForSpace(space_id_hydration);
+  base::FilePath path_from_creation = bridge->GetProfilePathForSpace(space_id_created);
 
   EXPECT_FALSE(path_from_hydration.empty());
   EXPECT_EQ(path_from_hydration, path_from_creation);

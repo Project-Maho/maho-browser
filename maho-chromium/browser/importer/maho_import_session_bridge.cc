@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/check.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -21,6 +22,7 @@
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/favicon/core/favicon_service.h"
 #include "content/public/browser/storage_partition.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_page_handler.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_options.h"
@@ -51,8 +53,7 @@ MahoImportSessionBridge::MahoImportSessionBridge(
 MahoImportSessionBridge::~MahoImportSessionBridge() {
   if (session_) {
     maho_import_orchestrator_cancel(session_);
-    maho_import_orchestrator_free(session_);
-    session_ = nullptr;
+    ReleaseSession();
   }
 }
 
@@ -81,9 +82,64 @@ bool MahoImportSessionBridge::Start(MahoCore* core,
 }
 
 void MahoImportSessionBridge::Cancel() {
-  if (session_) {
+  if (session_ && terminal_state_ == ImportTerminalState::kRunning) {
+    terminal_state_ = ImportTerminalState::kCancelled;
     maho_import_orchestrator_cancel(session_);
   }
+}
+
+void MahoImportSessionBridge::SetHydrationCallbackForTesting(
+    base::RepeatingClosure callback) {
+  hydration_callback_for_testing_ = std::move(callback);
+}
+
+void MahoImportSessionBridge::SimulateProgressForTesting(
+    uint32_t kind,
+    uint32_t import_type,
+    int32_t count,
+    std::string message) {
+  HandleProgressOnUI(kind, import_type, count, std::move(message));
+}
+
+void MahoImportSessionBridge::SimulateCancelledForTesting() {
+  terminal_state_ = ImportTerminalState::kCancelled;
+}
+
+void MahoImportSessionBridge::HandleProgressOnUI(uint32_t kind,
+                                                 uint32_t import_type,
+                                                 int32_t count,
+                                                 std::string message) {
+  for (ImportProgressAction action :
+       AdvanceImportProgress(kind, &terminal_state_)) {
+    switch (action) {
+      case ImportProgressAction::kReleaseSession:
+        ReleaseSession();
+        break;
+      case ImportProgressAction::kHydrateSpaces:
+        HydrateAfterSuccessfulImport();
+        break;
+      case ImportProgressAction::kForwardProgress:
+        ForwardProgress(kind, import_type, count, message);
+        break;
+    }
+  }
+}
+
+void MahoImportSessionBridge::ReleaseSession() {
+  if (!session_) {
+    return;
+  }
+  maho_import_orchestrator_free(session_);
+  session_ = nullptr;
+}
+
+void MahoImportSessionBridge::HydrateAfterSuccessfulImport() {
+  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  if (hydration_callback_for_testing_) {
+    hydration_callback_for_testing_.Run();
+    return;
+  }
+  MahoSpaceProfileBridge::GetInstance()->HydrateFromCore();
 }
 
 // static — called from Rust background thread.
@@ -154,22 +210,10 @@ void MahoImportSessionBridge::OnFaviconFromRust(
                      std::move(png_copy)));
 }
 
-void MahoImportSessionBridge::HandleProgressOnUI(uint32_t kind,
-                                                 uint32_t import_type,
-                                                 int32_t count,
-                                                 std::string message) {
-  if (terminated_) return;
-
-  const bool is_terminal = (kind == 3 || kind == 4);
-
-  if (is_terminal) {
-    terminated_ = true;
-    if (session_) {
-      maho_import_orchestrator_free(session_);
-      session_ = nullptr;
-    }
-  }
-
+void MahoImportSessionBridge::ForwardProgress(uint32_t kind,
+                                              uint32_t import_type,
+                                              int32_t count,
+                                              const std::string& message) {
   if (progress_callback_) {
     // Generic callback mode.
     switch (kind) {

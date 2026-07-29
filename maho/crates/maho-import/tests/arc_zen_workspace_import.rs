@@ -1,17 +1,3 @@
-//! End-to-end import test for Arc and Zen workspace data.
-//!
-//! Drives the real import pipeline — `Orchestrator` → `WorkspaceWorker` →
-//! `parse_arc_sidebar` / `parse_zen_workspaces` — against realistic on-disk
-//! browser data (Arc `StorableSidebar.json`, Zen mozLz4 `zen-sessions.jsonlz4`)
-//! and asserts that spaces, tabs, folders, pinned/favorite tabs, and the active
-//! space are actually materialized into an `ImportDestination`.
-//!
-//! `profile_path` mirrors what `maho_browser_detector.cc` produces: the C++
-//! detector appends a data filename to the Rust-detected profile directory, and
-//! the workspace worker recovers the directory via `profile_path.parent()`.
-//! Detection naming (Arc collapsing to a single "Arc" entry) is covered by the
-//! unit tests in `src/detect.rs`; this test covers extraction + import.
-
 use std::sync::mpsc;
 use std::sync::Mutex;
 
@@ -22,6 +8,7 @@ use maho_import::{BrowserType, DetectedBrowser, ImportServices};
 struct RecTab {
     space_id: String,
     url: String,
+    title: String,
     folder_id: Option<String>,
 }
 
@@ -72,21 +59,29 @@ impl ImportDestination for Recorder {
         Some(id)
     }
 
-    fn create_tab(&self, space_id: &str, url: &str) -> Option<String> {
+    fn create_tab(&self, space_id: &str, url: &str, title: &str) -> Option<String> {
         let id = self.next("tab");
         self.tabs.lock().unwrap().push(RecTab {
             space_id: space_id.to_string(),
             url: url.to_string(),
+            title: title.to_string(),
             folder_id: None,
         });
         Some(id)
     }
 
-    fn create_tab_in_folder(&self, space_id: &str, url: &str, folder_id: &str) -> Option<String> {
+    fn create_tab_in_folder(
+        &self,
+        space_id: &str,
+        url: &str,
+        title: &str,
+        folder_id: &str,
+    ) -> Option<String> {
         let id = self.next("tab");
         self.tabs.lock().unwrap().push(RecTab {
             space_id: space_id.to_string(),
             url: url.to_string(),
+            title: title.to_string(),
             folder_id: Some(folder_id.to_string()),
         });
         Some(id)
@@ -232,28 +227,65 @@ fn arc_real_sidebar_extracts_and_imports_spaces() {
     assert!(names.contains(&"Work"));
     assert!(names.contains(&"Personal"));
 
-    let work_id = spaces.iter().find(|(_, n, ..)| n == "Work").map(|(id, ..)| id.clone()).unwrap();
-    let personal_id = spaces.iter().find(|(_, n, ..)| n == "Personal").map(|(id, ..)| id.clone()).unwrap();
-    let work_icon = spaces.iter().find(|(_, n, ..)| n == "Work").map(|(.., i)| i.clone());
+    let work_id = spaces
+        .iter()
+        .find(|(_, n, ..)| n == "Work")
+        .map(|(id, ..)| id.clone())
+        .unwrap();
+    let personal_id = spaces
+        .iter()
+        .find(|(_, n, ..)| n == "Personal")
+        .map(|(id, ..)| id.clone())
+        .unwrap();
+    let work_icon = spaces
+        .iter()
+        .find(|(_, n, ..)| n == "Work")
+        .map(|(.., i)| i.clone());
     assert_eq!(work_icon.as_deref(), Some("💼"));
-    let home_icon = spaces.iter().find(|(_, n, ..)| n == "Personal").map(|(.., i)| i.clone());
+    let home_icon = spaces
+        .iter()
+        .find(|(_, n, ..)| n == "Personal")
+        .map(|(.., i)| i.clone());
     assert_eq!(home_icon.as_deref(), Some("house"));
     drop(spaces);
 
     let tabs = dest.tabs.lock().unwrap();
-    let find = |url: &str| tabs.iter().find(|t| t.url == url).unwrap_or_else(|| panic!("missing tab {url}"));
+    let find = |url: &str| {
+        tabs.iter()
+            .find(|t| t.url == url)
+            .unwrap_or_else(|| panic!("missing tab {url}"))
+    };
 
-    assert_eq!(find("https://github.com").space_id, work_id, "github in Work");
+    assert_eq!(
+        find("https://github.com").space_id,
+        work_id,
+        "github in Work"
+    );
+    assert_eq!(find("https://github.com").title, "GitHub", "github title");
     assert_eq!(find("https://docs.rs").space_id, work_id, "docs.rs in Work");
-    assert_eq!(find("https://news.ycombinator.com").space_id, work_id, "HN in Work");
-    assert_eq!(find("https://mail.example.com").space_id, personal_id, "mail in Personal");
+    assert_eq!(find("https://docs.rs").title, "Docs.rs", "docs.rs title");
+    assert_eq!(
+        find("https://news.ycombinator.com").space_id,
+        work_id,
+        "HN in Work"
+    );
+    assert_eq!(find("https://news.ycombinator.com").title, "HN", "HN title");
+    assert_eq!(
+        find("https://mail.example.com").space_id,
+        personal_id,
+        "mail in Personal"
+    );
+    assert_eq!(find("https://mail.example.com").title, "Mail", "mail title");
 
     // Pinned tabs (github + mail) are pinned in the destination.
     assert_eq!(dest.pinned.lock().unwrap().len(), 2, "two pinned tabs");
 
     // The Docs folder exists and docs.rs is nested inside it (not flat).
     let folders = dest.folders.lock().unwrap();
-    let docs = folders.iter().find(|f| f.name == "Docs").expect("Docs folder created");
+    let docs = folders
+        .iter()
+        .find(|f| f.name == "Docs")
+        .expect("Docs folder created");
     assert_eq!(
         find("https://docs.rs").folder_id.as_deref(),
         Some(docs.id.as_str()),
@@ -261,7 +293,10 @@ fn arc_real_sidebar_extracts_and_imports_spaces() {
     );
 
     // The HN regular tab is NOT in a folder.
-    assert!(find("https://news.ycombinator.com").folder_id.is_none(), "regular tab is not foldered");
+    assert!(
+        find("https://news.ycombinator.com").folder_id.is_none(),
+        "regular tab is not foldered"
+    );
 
     // Arc has no active-workspace pref → first space (Work) becomes active.
     let active = dest.active_space.lock().unwrap().clone().unwrap();
@@ -304,7 +339,7 @@ fn zen_real_session_extracts_and_imports_spaces() {
               "entries": [{ "url": "https://crates.io", "title": "crates.io" }],
               "folderId": "zf-crates", "pinned": false, "zenEssential": false },
             { "zenWorkspace": "zws-dev",
-              "entries": [{ "url": "https://lib.rs", "title": "lib.rs" }],
+              "entries": [{ "url": "https://lib.rs", "title": "" }],
               "pinned": false, "zenEssential": true },
             { "zenWorkspace": "zws-media",
               "entries": [{ "url": "https://youtube.com", "title": "YouTube" }],
@@ -337,25 +372,63 @@ fn zen_real_session_extracts_and_imports_spaces() {
 
     let spaces = dest.spaces.lock().unwrap();
     assert_eq!(spaces.len(), 2, "both Zen workspaces imported");
-    let dev = spaces.iter().find(|(_, n, ..)| n == "Dev").expect("Dev space");
+    let dev = spaces
+        .iter()
+        .find(|(_, n, ..)| n == "Dev")
+        .expect("Dev space");
     let dev_id = dev.0.clone();
     assert_eq!(dev.2, "#aa00ff", "Dev theme color imported");
     assert_eq!(dev.3, "🦊", "Dev icon imported");
-    let media_id = spaces.iter().find(|(_, n, ..)| n == "Media").map(|(id, ..)| id.clone()).expect("Media space");
+    let media_id = spaces
+        .iter()
+        .find(|(_, n, ..)| n == "Media")
+        .map(|(id, ..)| id.clone())
+        .expect("Media space");
     drop(spaces);
 
     let tabs = dest.tabs.lock().unwrap();
-    let find = |url: &str| tabs.iter().find(|t| t.url == url).unwrap_or_else(|| panic!("missing tab {url}"));
-    assert_eq!(find("https://rust-lang.org").space_id, dev_id, "rust in Dev");
+    let find = |url: &str| {
+        tabs.iter()
+            .find(|t| t.url == url)
+            .unwrap_or_else(|| panic!("missing tab {url}"))
+    };
+    assert_eq!(
+        find("https://rust-lang.org").space_id,
+        dev_id,
+        "rust in Dev"
+    );
+    assert_eq!(find("https://rust-lang.org").title, "Rust", "pinned title");
     assert_eq!(find("https://crates.io").space_id, dev_id, "crates in Dev");
+    assert_eq!(
+        find("https://crates.io").title,
+        "crates.io",
+        "foldered title"
+    );
     assert_eq!(find("https://lib.rs").space_id, dev_id, "lib.rs in Dev");
-    assert_eq!(find("https://youtube.com").space_id, media_id, "youtube in Media");
+    assert_eq!(find("https://lib.rs").title, "", "empty favorite title");
+    assert_eq!(
+        find("https://youtube.com").space_id,
+        media_id,
+        "youtube in Media"
+    );
+    assert_eq!(
+        find("https://youtube.com").title,
+        "YouTube",
+        "regular title"
+    );
 
     assert_eq!(dest.pinned.lock().unwrap().len(), 1, "rust-lang is pinned");
-    assert_eq!(dest.favorited.lock().unwrap().len(), 1, "lib.rs is favorited (essential)");
+    assert_eq!(
+        dest.favorited.lock().unwrap().len(),
+        1,
+        "lib.rs is favorited (essential)"
+    );
 
     let folders = dest.folders.lock().unwrap();
-    let crates = folders.iter().find(|f| f.name == "Crates").expect("Crates folder");
+    let crates = folders
+        .iter()
+        .find(|f| f.name == "Crates")
+        .expect("Crates folder");
     assert_eq!(
         find("https://crates.io").folder_id.as_deref(),
         Some(crates.id.as_str()),

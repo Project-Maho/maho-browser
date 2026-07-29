@@ -1,5 +1,7 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
+import("//testing/test.gni")
+
 source_set("importer") {
   sources = [
     "importers/essential_importer.cc",
@@ -21,6 +23,7 @@ source_set("importer") {
   ]
 
   deps = [
+    ":maho_import_session_completion",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/favicon",
     "//chrome/browser/webdata_services",
@@ -40,6 +43,13 @@ source_set("importer") {
   ]
 }
 
+source_set("maho_import_session_completion") {
+  sources = [
+    "maho_import_session_completion.cc",
+    "maho_import_session_completion.h",
+  ]
+}
+
 source_set("unit_tests") {
   testonly = true
   sources = [
@@ -52,6 +62,25 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//testing/gtest",
     "//ui/views:test_support",
+  ]
+}
+
+source_set("maho_import_session_completion_unittests") {
+  testonly = true
+  sources = [ "maho_import_session_completion_unittest.cc" ]
+  deps = [
+    ":maho_import_session_completion",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_import_session_bridge_test") {
+  sources = [ "../ai/maho_browser_tool_test_main.cc" ]
+  deps = [
+    ":maho_import_session_completion_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }
 
