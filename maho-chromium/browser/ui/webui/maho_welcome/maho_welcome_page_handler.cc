@@ -9,15 +9,17 @@
 #include <utility>
 #include <vector>
 
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/path_service.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"  // nogncheck
@@ -33,27 +35,34 @@
 #include "chrome/browser/ui/startup/startup_tab.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
 #include "chrome/browser/ui/views/frame/browser_view.h"  // nogncheck
+#include "chrome/common/chrome_paths.h"  // nogncheck
 #include "chrome/grit/generated_resources.h"  // nogncheck
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/storage_partition.h"
 #include "maho/browser/importer/maho_browser_detector.h"
 #include "maho/browser/importer/maho_import_session_bridge.h"
 #include "maho/browser/importer/importers/essential_importer.h"
 #include "maho/browser/importer/maho_space_ffi_client.h"
+#include "maho/browser/mail_helper/maho_mail_helper_version.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/webui/maho_mail/maho_mail_oauth_session.h"
 #include "maho/browser/ui/views/importer/maho_migration_dialog_view.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
@@ -65,6 +74,7 @@
 
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/platform_util.h"  // nogncheck
+#include "chrome/browser/app_controller_mac.h"  // nogncheck
 #endif
 
 MahoWelcomePageHandler::MahoWelcomePageHandler(
@@ -90,13 +100,17 @@ MahoWelcomePageHandler::MahoWelcomePageHandler(
                        weak_factory_.GetWeakPtr()),
         os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
   }
+  maho::MahoMailService* service = maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (service) {
+    mail_service_observation_.Observe(service);
+  }
 }
 
 MahoWelcomePageHandler::~MahoWelcomePageHandler() {
-  if (MahoSpaceThemeState::HasPreviewOverride()) {
-    MahoSpaceThemeState::ClearPreviewOverride();
+  if (MahoSpaceThemeState::HasPreviewOverride(browser_)) {
+    MahoSpaceThemeState::ClearPreviewOverride(browser_);
     MahoSpaceThemeState::UpdateFromCore();
-    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+    MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
 }
 
@@ -245,6 +259,7 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
 
   add("IDS_MAHO_WELCOME_SPLASH_TITLE1", "Built for people who");
   add("IDS_MAHO_WELCOME_SPLASH_TITLE2", "took browsers seriously.");
+  add("IDS_MAHO_WELCOME_SPLASH_START", "Get started");
   add("IDS_MAHO_WELCOME_APPEARANCE_TITLE", "Choose your appearance");
   add("IDS_MAHO_WELCOME_APPEARANCE_BODY",
       "Pick a look for Maho. You can change it anytime in Settings.");
@@ -258,16 +273,32 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
   add("IDS_MAHO_WELCOME_IMPORT_TITLE", "A Fresh Start, Same Bookmarks");
   add("IDS_MAHO_WELCOME_IMPORT_BODY1", "Your bookmarks, history, and passwords are like a trail of breadcrumbs through the internet—don't leave them behind!");
   add("IDS_MAHO_WELCOME_IMPORT_BODY2", "Easily bring them over from another browser and pick up right where you left off.");
+  add("IDS_MAHO_WELCOME_IMPORT_PROGRESS_TITLE", "Importing your data...");
+  add("IDS_MAHO_WELCOME_IMPORT_PROGRESS_BODY",
+      "Please wait while we bring over your bookmarks, history, and other data.");
+  add("IDS_MAHO_WELCOME_IMPORT_PROGRESS_STATUS", "Importing in progress...");
+  add("IDS_MAHO_WELCOME_IMPORT_ERROR_TITLE", "Import couldn't be completed");
+  add("IDS_MAHO_WELCOME_IMPORT_ERROR_BODY",
+      "Your data was not changed. Go back and try the import again.");
+  add("IDS_MAHO_WELCOME_IMPORT_STARTING_STATUS", "Starting import…");
+  add("IDS_MAHO_WELCOME_IMPORT_BROWSER_PLACEHOLDER", "Browser");
+  add("IDS_MAHO_WELCOME_IMPORT_PROFILE_PLACEHOLDER", "Profile");
   add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_TITLE", "Set as default browser");
   add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_BODY",
       "Make Maho your go-to browser so every link opens right where you want it.");
   add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_YES", "Set as default");
   add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_NO", "Maybe later");
+  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_NOTE",
+      "You can change this later in browser settings.");
   add("IDS_MAHO_WELCOME_SEARCH_TITLE", "Your Default Search Engine");
   add("IDS_MAHO_WELCOME_SEARCH_BODY", "Choose your default search engine. You can always change it later!");
-  add("IDS_MAHO_WELCOME_ESSENTIALS_TITLE", "Your Key Tabs, Always Within Reach");
-  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY1", "Keep your most important tabs easily accessible and always at hand, no matter how many you open.");
-  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY2", "Essential tabs are always visible, no matter what workspace you are in.");
+  add("IDS_MAHO_WELCOME_SEARCH_LOADING", "Loading search engines…");
+  add("IDS_MAHO_WELCOME_SEARCH_EMPTY", "No search engines available.");
+  add("IDS_MAHO_WELCOME_ESSENTIALS_TITLE", "Pin Your Essential Apps");
+  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY1",
+      "Choose the apps you use every day. They'll be pinned to your sidebar — always one click away.");
+  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY2",
+      "Pinned apps stay visible across every workspace.");
   add("IDS_MAHO_WELCOME_THEME_TITLE", "Choose your theme");
   add("IDS_MAHO_WELCOME_THEME_BODY",
       "Personalize your browser by giving each workspace its own unique color identity.");
@@ -282,11 +313,49 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
   add("IDS_MAHO_WELCOME_CTA_DONE", "Dive in!");
   add("IDS_MAHO_WELCOME_CTA_SIGN_IN", "Sign in");
   add("IDS_MAHO_WELCOME_CTA_SIGN_UP", "Sign up");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNIN_TAB", "Sign in");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNUP_TAB", "Create account");
+  add("IDS_MAHO_WELCOME_AUTH_EMAIL_LABEL", "Email");
+  add("IDS_MAHO_WELCOME_AUTH_EMAIL_PLACEHOLDER", "Email");
+  add("IDS_MAHO_WELCOME_AUTH_PASSWORD_LABEL", "Password");
+  add("IDS_MAHO_WELCOME_AUTH_PASSWORD_PLACEHOLDER", "Password");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNIN_CTA", "Sign in");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNUP_CTA", "Create account");
+  add("IDS_MAHO_WELCOME_AUTH_REAUTH_TITLE", "Session expired");
+  add("IDS_MAHO_WELCOME_AUTH_REAUTH_BODY",
+      "Sign in again to restore your Maho session.");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNUP_TITLE", "Create your account");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNUP_BODY",
+      "Set up a Maho account to continue.");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNIN_TITLE", "Sign in to Maho");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNIN_BODY",
+      "Sign in to continue setting up Maho.");
+  add("IDS_MAHO_WELCOME_AUTH_REQUIRED_ERROR",
+      "Email and password are required.");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNIN_ERROR", "Sign in failed.");
+  add("IDS_MAHO_WELCOME_AUTH_SIGNUP_ERROR", "Sign up failed.");
   add("IDS_MAHO_WELCOME_PASSWORD_SETUP_TITLE",
       "Choose your password provider");
   add("IDS_MAHO_WELCOME_PASSWORD_SETUP_BODY",
-      "Select where Maho should manage passwords. Your local Vault must be "
-      "unlocked whichever provider you choose.");
+      "Select where Maho should manage passwords. Your local Vault must be unlocked whichever provider you choose.");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_REQUIRED_INITIALIZE",
+      "Master passphrase and recovery secret are required.");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_REQUIRED_UNLOCK",
+      "Master passphrase is required.");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_LOADING",
+      "Loading password setup…");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_FAILED", "Password setup failed");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_RETRY", "Retry");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_WORKING", "Working…");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_INITIALIZE",
+      "Initialize Vault and continue");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_UNLOCK",
+      "Unlock Vault and continue");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_CONTINUE", "Continue");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_LOAD_VAULT_ERROR",
+      "Failed to load the local Vault status.");
+  add("IDS_MAHO_WELCOME_PASSWORD_SETUP_LOAD_ERROR",
+      "Failed to load password setup.");
   add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_TITLE", "Password provider");
   add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_BODY",
       "External providers require their enabled browser extension.");
@@ -294,19 +363,138 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
   add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_ARIA", "Password provider");
   add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_PLACEHOLDER",
       "Choose a provider");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_UNAVAILABLE",
+      "Extension not installed or disabled.");
   add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_UNAVAILABLE_HELPER",
-      "The extension is not installed or is disabled. This selection remains "
-      "saved, and Maho Native will be used until the extension is enabled.");
+      "The extension is not installed or is disabled. This selection remains saved, and Maho Native will be used until the extension is enabled.");
+  add("IDS_MAHO_WELCOME_PASSWORD_PROVIDER_SAVE_ERROR",
+      "Failed to save the password provider.");
   add("IDS_MAHO_WELCOME_VAULT_CARD_TITLE", "Local Vault");
   add("IDS_MAHO_WELCOME_VAULT_INITIALIZE_BODY",
-      "Create the local Vault used to protect password metadata and provider "
-      "access.");
+      "Create the local Vault used to protect password metadata and provider access.");
   add("IDS_MAHO_WELCOME_VAULT_UNLOCK_BODY",
       "Unlock the local Vault before continuing.");
   add("IDS_MAHO_WELCOME_VAULT_READY_BODY",
       "Your local Vault is unlocked and ready.");
   add("IDS_MAHO_WELCOME_VAULT_MASTER_LABEL", "Master passphrase");
   add("IDS_MAHO_WELCOME_VAULT_RECOVERY_LABEL", "Recovery secret");
+  add("IDS_MAHO_WELCOME_VAULT_INITIALIZE_ERROR",
+      "Vault initialization failed.");
+  add("IDS_MAHO_WELCOME_VAULT_UNLOCK_ERROR", "Vault unlock failed.");
+  add("IDS_MAHO_WELCOME_VAULT_REQUIRED_ERROR",
+      "Unlock your local Vault to continue.");
+  add("IDS_MAHO_WELCOME_COMPLETION_SIDEBAR_TITLE1", "All set?");
+  add("IDS_MAHO_WELCOME_COMPLETION_SIDEBAR_TITLE2", "Let's get rolling!");
+  add("IDS_MAHO_WELCOME_COMPLETION_SIDEBAR_BODY",
+      "You're all set up and ready to go. Click the button below to start browsing with Maho.");
+  add("IDS_MAHO_WELCOME_COMPLETION_MAIL_SKIPPED_BODY",
+      "You can connect your email accounts anytime in settings.");
+  add("IDS_MAHO_WELCOME_DEV_SKIP_TITLE",
+      "Local dev only — skip onboarding and open the browser");
+  add("IDS_MAHO_WELCOME_DEV_SKIP", "Dev: Skip onboarding");
+  add("IDS_MAHO_WELCOME_PROGRESS_ARIA",
+      "Setup progress: step {{current}} of {{total}}");
+  add("IDS_MAHO_WELCOME_PROGRESS_CURRENT", "Current step");
+  add("IDS_MAHO_WELCOME_MAIL_COMMON_CANCEL", "Cancel");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_EMAILADDRESS", "Email address");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_DISPLAYNAME", "Display name");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_PASSWORD", "Password");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_PORTRANGE", "Port numbers must be between 1 and 65535.");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_REQUIREDFIELDS", "Please fill in all required fields.");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_CONNECTIONSUCCESS", "Connection successful!");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_TESTCONNECTION", "Test Connection");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_ADDACCOUNT", "Add Account");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_IMAPINCOMING", "IMAP (Incoming)");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_HOST", "Host");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_PORT", "Port");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_ENCRYPTION", "Encryption");
+  add("IDS_MAHO_WELCOME_MAIL_ACCOUNT_SMTPOUTGOING", "SMTP (Outgoing)");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_STEPPROVIDER", "Provider");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_STEPCONNECT", "Connect");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_STEPTRANSLATION", "Translation");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_STEPDONE", "Done");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_DELETECONFIRM", "Delete {{email}} from Maho Mail?");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_DELETEFAILED",
+      "Could not delete this mail account.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_CHOOSEPROVIDER", "Choose your email provider");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_MAILPREPARING", "Mail is still getting ready. We will retry automatically.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_MOREPROVIDERS", "More providers");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_SHOWFEWER", "Show fewer");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_OAUTHUNAVAILABLE", "OAuth is unavailable. Try IMAP instead.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TESTREQUIREDFIELDS", "Email, password, and IMAP host are required.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TESTFAILED", "Could not connect to the IMAP server.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_INVALIDEMAIL", "Please enter a valid email address.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ADDFAILED", "Could not add this mail account.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONUNAVAILABLE", "Translation setup is unavailable right now.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONCONFIGFAILED", "Failed to configure translation setting.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_SIDEBARTITLE", "Bring your inbox to Maho");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_SIDEBARBODY", "Connect an account now so Mail is ready when you finish setup.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_SIDEBARCONNECTEDCOUNT", "{{count}} account{{plural}} connected.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_SIDEBARSKIPBODY", "You can skip this step and add accounts later.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATURESMARTINBOX", "Smart Inbox");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATURESMARTINBOXDESC", "AI categorizes your emails automatically");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATUREAIASSISTANT", "AI Assistant");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATUREAIASSISTANTDESC", "Summarize, reply, and translate with AI");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATUREQUICKSEARCH", "Quick Search");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATUREQUICKSEARCHDESC", "Find emails with keyword or AI search");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATUREPRIVACY", "Privacy First");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_FEATUREPRIVACYDESC", "Your data stays on your device");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ACCOUNTADDED", "Account added!");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ACCOUNTADDEDDESCRIPTION", "Your email account has been set up successfully.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_GETSTARTED", "Get Started");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_OAUTHWAITINGTITLE", "Waiting for authorization…");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_OAUTHWAITINGBODY", "Complete sign-in to {{provider}} in the new tab.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_REMOVEACCOUNTLABEL", "Remove {{email}}");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONSTEPTITLE", "Translation Setup");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONSTEPSUBTITLE", "Choose how you'd like to translate emails in other languages.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONBYOKTITLE", "Cloud AI (Your API Key)");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONBYOKRECOMMENDED", "Recommended");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONBYOKSUBTITLE", "Use your existing OpenAI, Anthropic, or Ollama key for fast, high-quality translation.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONCHECKINGCONFIG", "Checking configuration...");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONBYOKNEEDSCONFIG", "You'll need to add an API key in Settings → AI after setup.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONSKIPTITLE", "Skip for now");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TRANSLATIONSKIPSUBTITLE", "You can enable translation later in Settings.");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_BACK", "Back");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_CREDENTIALSTITLE", "Enter your credentials");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_EMAILPLACEHOLDER", "you@example.com");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_DISPLAYNAMEPLACEHOLDER", "Your Name");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PASSWORDPLACEHOLDER", "App password or account password");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ADVANCEDSETTINGS", "Advanced server settings");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_TESTINGCONNECTION", "Testing...");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ADDINGACCOUNT", "Adding...");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_IMAPHOSTPLACEHOLDER", "imap.example.com");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_SMTPHOSTPLACEHOLDER", "smtp.example.com");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERGMAIL", "Gmail");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERGMAILDESC", "Sign in with Google");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDEROUTLOOK", "Outlook");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDEROUTLOOKDESC", "Sign in with Microsoft");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERYAHOO", "Yahoo Mail");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERAPPPASSWORDDESC", "App password required");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERICLOUD", "iCloud Mail");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERFASTMAIL", "Fastmail");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERZOHO", "Zoho Mail");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERAOL", "AOL");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERGMX", "GMX");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERGMXDESC", "Free email service");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERYANDEX", "Yandex");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERNAVER", "Naver");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDERNAVERDESC", "Enable IMAP and use an app password");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDEROTHER", "Other");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_PROVIDEROTHERDESC", "IMAP/SMTP manual setup");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_NAVERGUIDETITLE", "Naver Mail Setup");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_NAVERGUIDESTEP1", "Log in to Naver Mail (mail.naver.com)");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_NAVERGUIDESTEP2", "Go to Settings → POP3/IMAP");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_NAVERGUIDESTEP3", "Enable IMAP/SMTP access");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_NAVERGUIDESTEP4", "Set up 2-step verification in Naver account settings");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_NAVERGUIDESTEP5", "Generate an app password and use it below");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_YAHOOGUIDETITLE", "Yahoo Mail Setup");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_YAHOOGUIDESTEP1", "Enable 2-step verification in Yahoo account security");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_YAHOOGUIDESTEP2", "Generate an app password (Account Info → Security → App passwords)");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_YAHOOGUIDESTEP3", "Use the app password below instead of your regular password");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ICLOUDGUIDETITLE", "iCloud Mail Setup");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ICLOUDGUIDESTEP1", "Enable 2-factor authentication for your Apple ID");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ICLOUDGUIDESTEP2", "Go to appleid.apple.com → Sign-In and Security → App-Specific Passwords");
+  add("IDS_MAHO_WELCOME_MAIL_ONBOARDING_ICLOUDGUIDESTEP3", "Generate an app password and use it below");
 
   std::move(callback).Run(std::move(strings));
 }
@@ -338,6 +526,7 @@ void MahoWelcomePageHandler::GetSearchEngines(
       default_engine ? base::UTF16ToUTF8(default_engine->keyword())
                      : std::string();
 
+  bool has_ddg = false;
   for (const TemplateURL* turl : service->GetTemplateURLs()) {
     if (!turl->prepopulate_id()) continue;
     std::string name_utf8 = base::UTF16ToUTF8(turl->short_name());
@@ -345,6 +534,10 @@ void MahoWelcomePageHandler::GetSearchEngines(
     if (name_lower.find("wikipedia") != std::string::npos ||
         name_lower.find("ebay") != std::string::npos) {
       continue;
+    }
+    if (name_lower.find("duckduckgo") != std::string::npos ||
+        turl->prepopulate_id() == 92) {
+      has_ddg = true;
     }
     auto info = maho_welcome::mojom::SearchEngineInfo::New();
     info->keyword = base::UTF16ToUTF8(turl->keyword());
@@ -361,6 +554,7 @@ void MahoWelcomePageHandler::GetSearchEngines(
         {67, "chrome://maho-welcome/icons/search-engines/naver.svg"},
         {68, "chrome://maho-welcome/icons/search-engines/daum.svg"},
         {91, "chrome://maho-welcome/icons/search-engines/coccoc.svg"},
+        {92, "chrome://maho-welcome/icons/search-engines/duckduckgo.png"},
     };
     bool found = false;
     for (const auto& entry : kBundledSearchEngineFavicons) {
@@ -369,6 +563,10 @@ void MahoWelcomePageHandler::GetSearchEngines(
         found = true;
         break;
       }
+    }
+    if (!found && name_lower.find("duckduckgo") != std::string::npos) {
+      info->icon_url = "chrome://maho-welcome/icons/search-engines/duckduckgo.png";
+      found = true;
     }
     if (!found) {
       // Other prepopulated engines: try favicon2 (cache-only fallback)
@@ -381,6 +579,30 @@ void MahoWelcomePageHandler::GetSearchEngines(
     }
     info->is_default = (info->keyword == default_keyword);
     engines.push_back(std::move(info));
+  }
+
+  if (!has_ddg) {
+    const TemplateURL* ddg_turl =
+        service->GetTemplateURLForKeyword(u"duckduckgo.com");
+    if (!ddg_turl) {
+      ddg_turl = service->GetTemplateURLForKeyword(u"duckduckgo");
+    }
+    if (!ddg_turl) {
+      TemplateURLData data;
+      data.SetShortName(u"DuckDuckGo");
+      data.SetKeyword(u"duckduckgo.com");
+      data.SetURL("https://duckduckgo.com/?q={searchTerms}");
+      data.favicon_url = GURL("https://duckduckgo.com/favicon.ico");
+      ddg_turl = service->Add(std::make_unique<TemplateURL>(data));
+    }
+    if (ddg_turl) {
+      auto info = maho_welcome::mojom::SearchEngineInfo::New();
+      info->keyword = base::UTF16ToUTF8(ddg_turl->keyword());
+      info->name = base::UTF16ToUTF8(ddg_turl->short_name());
+      info->icon_url = "chrome://maho-welcome/icons/search-engines/duckduckgo.png";
+      info->is_default = (info->keyword == default_keyword);
+      engines.push_back(std::move(info));
+    }
   }
 
   std::move(callback).Run(std::move(engines));
@@ -435,8 +657,8 @@ void MahoWelcomePageHandler::FavoriteEssentialSites(
 }
 
 void MahoWelcomePageHandler::PreviewTheme(const std::string& theme_json) {
-  if (MahoSpaceThemeState::SetPreviewOverride(theme_json)) {
-    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+  if (MahoSpaceThemeState::SetPreviewOverride(browser_, theme_json)) {
+    MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
 }
 
@@ -451,16 +673,16 @@ void MahoWelcomePageHandler::ApplyTheme(const std::string& theme_json) {
       }
     }
   }
-  MahoSpaceThemeState::ClearPreviewOverride();
+  MahoSpaceThemeState::ClearPreviewOverride(browser_);
   MahoSpaceThemeState::UpdateFromCore();
-  MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+  MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
 }
 
 void MahoWelcomePageHandler::ClearThemePreview() {
-  if (MahoSpaceThemeState::HasPreviewOverride()) {
-    MahoSpaceThemeState::ClearPreviewOverride();
+  if (MahoSpaceThemeState::HasPreviewOverride(browser_)) {
+    MahoSpaceThemeState::ClearPreviewOverride(browser_);
     MahoSpaceThemeState::UpdateFromCore();
-    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+    MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
 }
 
@@ -505,19 +727,54 @@ void MahoWelcomePageHandler::SignupFromWelcome(
       profile_->GetPrefs(), url_loader_factory, *encryptor_, email, password,
       display_name,
       base::BindOnce(
-          [](SignupFromWelcomeCallback cb, PrefService* prefs, bool ok,
-             const std::string& error_message) {
+          [](SignupFromWelcomeCallback cb,
+             base::WeakPtr<MahoWelcomePageHandler> handler, PrefService* prefs,
+             bool ok, const std::string& error_message) {
             if (ok) {
               prefs->SetString(maho::ai_prefs::kProvider, "maho-managed");
+              if (handler) {
+                handler->LaunchMailHelperIfReady();
+              }
             }
             std::move(cb).Run(ok, error_message);
           },
-          std::move(callback), profile_->GetPrefs()));
+          std::move(callback), weak_factory_.GetWeakPtr(),
+          profile_->GetPrefs()));
 }
 
 void MahoWelcomePageHandler::OnOsCryptReady(
     os_crypt_async::Encryptor encryptor) {
   encryptor_ = std::move(encryptor);
+}
+
+void MahoWelcomePageHandler::LaunchMailHelperIfReady() {
+  base::FilePath user_data_dir;
+  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
+    OnMailHelperCrashpadReady(base::FilePath());
+    return;
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce([](base::FilePath user_data_dir) -> base::FilePath {
+        base::FilePath crashpad = user_data_dir.AppendASCII("Crashpad");
+        base::CreateDirectory(crashpad);
+        return crashpad;
+      }, user_data_dir),
+      base::BindOnce(&MahoWelcomePageHandler::OnMailHelperCrashpadReady,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoWelcomePageHandler::OnMailHelperCrashpadReady(
+    const base::FilePath& crashpad_database) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    return;
+  }
+  service->EnsureHelperLaunched(maho::mail_helper::kMahoMailHelperVersion,
+                                profile_->GetPath().AsUTF8Unsafe(),
+                                crashpad_database);
 }
 
 void MahoWelcomePageHandler::FinishOnboarding() {
@@ -528,14 +785,6 @@ void MahoWelcomePageHandler::FinishOnboarding() {
 
   if (!maho::auth::HasValidRelaySession(profile_->GetPrefs())) {
     LOG(ERROR) << "FinishOnboarding: Refusing to finish onboarding without valid relay session.";
-    return;
-  }
-
-  if (maho::welcome::RequiresPasswordSetup(
-          profile_->GetPrefs()->GetBoolean(maho::welcome::kWelcomeCompleted)) &&
-      !maho_settings_password_helpers::IsPasswordSetupComplete()) {
-    LOG(ERROR) << "FinishOnboarding: Refusing to finish onboarding before "
-                  "password setup completes.";
     return;
   }
 
@@ -563,11 +812,12 @@ void MahoWelcomePageHandler::DoFinishOnboarding() {
   prefs->SetBoolean(maho::welcome::kWelcomeCompleted, true);
   prefs->SetBoolean(maho::welcome::kLoginGateActive, false);
 
-  DVLOG(1) << "[MahoFinish] step2 theme cleanup; HasPreview=" << MahoSpaceThemeState::HasPreviewOverride();
-  if (MahoSpaceThemeState::HasPreviewOverride()) {
-    MahoSpaceThemeState::ClearPreviewOverride();
+  DVLOG(1) << "[MahoFinish] step2 theme cleanup; HasPreview="
+           << MahoSpaceThemeState::HasPreviewOverride(browser_);
+  if (MahoSpaceThemeState::HasPreviewOverride(browser_)) {
+    MahoSpaceThemeState::ClearPreviewOverride(browser_);
     MahoSpaceThemeState::UpdateFromCore();
-    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+    MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
 
   DVLOG(1) << "[MahoFinish] step3 defer reveal; profile_=" << profile_;
@@ -607,6 +857,10 @@ void MahoWelcomePageHandler::RevealBrowserAndCloseWelcome() {
   main_browser->window()->Show();
   main_browser->window()->Activate();
 
+#if BUILDFLAG(IS_MAC)
+  app_controller_mac::DrainQueuedNativeUrlsAfterMahoWelcome(profile_);
+#endif
+
   auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(main_browser);
   overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
 
@@ -618,6 +872,8 @@ void MahoWelcomePageHandler::OpenFDASettings() {
 #if BUILDFLAG(IS_MAC)
   platform_util::OpenExternal(
       GURL("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"));
+#else
+  // No-op on non-macOS platforms. Full Disk Access is a macOS concept.
 #endif
 }
 
@@ -661,14 +917,21 @@ void MahoWelcomePageHandler::LoginFromWelcome(
   maho::auth::MahoRelayLogin(
       profile_->GetPrefs(), url_loader_factory, *encryptor_, email, password,
       base::BindOnce(
-          [](LoginFromWelcomeCallback cb, PrefService* prefs, bool ok,
-             const std::string& error_message) {
-            if (ok && prefs->GetString(maho::ai_prefs::kProvider).empty()) {
-              prefs->SetString(maho::ai_prefs::kProvider, "maho-managed");
+          [](LoginFromWelcomeCallback cb,
+             base::WeakPtr<MahoWelcomePageHandler> handler, PrefService* prefs,
+             bool ok, const std::string& error_message) {
+            if (ok) {
+              if (prefs->GetString(maho::ai_prefs::kProvider).empty()) {
+                prefs->SetString(maho::ai_prefs::kProvider, "maho-managed");
+              }
+              if (handler) {
+                handler->LaunchMailHelperIfReady();
+              }
             }
             std::move(cb).Run(ok, error_message);
           },
-          std::move(callback), profile_->GetPrefs()));
+          std::move(callback), weak_factory_.GetWeakPtr(),
+          profile_->GetPrefs()));
 }
 
 void MahoWelcomePageHandler::GetRelayAccountStatusFromWelcome(
@@ -725,4 +988,272 @@ void MahoWelcomePageHandler::UnlockVault(
     UnlockVaultCallback callback) {
   std::move(callback).Run(
       maho_settings_password_helpers::UnlockVaultInCore(master_passphrase));
+}
+
+void MahoWelcomePageHandler::GenerateSyncKey(
+    GenerateSyncKeyCallback callback) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run("", "", "");
+    return;
+  }
+  char* json_str = maho_core_generate_sync_key(core);
+  if (!json_str) {
+    std::move(callback).Run("", "", "");
+    return;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  maho::welcome::GeneratedSyncKeyResult parsed =
+      maho::welcome::ParseGenerateSyncKeyJsonForTesting(json);
+  std::move(callback).Run(parsed.sync_key, parsed.room_id,
+                           parsed.recovery_phrase);
+}
+
+void MahoWelcomePageHandler::StartSync(
+    const std::string& room_id,
+    const std::string& recovery_phrase,
+    StartSyncCallback callback) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false, "Core not available");
+    return;
+  }
+  char* result = maho_core_join_sync(
+      core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
+  if (!result) {
+    std::move(callback).Run(true, "");
+    return;
+  }
+  std::string json(result);
+  maho_string_free(result);
+
+  maho::welcome::StartSyncResult parsed =
+      maho::welcome::ParseStartSyncJsonForTesting(json);
+  std::move(callback).Run(parsed.ok, parsed.error_message);
+}
+
+void MahoWelcomePageHandler::MailAddAccount(const std::string& request_json,
+                                            MailAddAccountCallback callback) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->AddAccount(request_json, base::BindOnce(
+      [](MailAddAccountCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoWelcomePageHandler::MailTestConnection(
+    const std::string& params_json,
+    MailTestConnectionCallback callback) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->TestConnection(params_json, base::BindOnce(
+      [](MailTestConnectionCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoWelcomePageHandler::MailBeginOAuth(const std::string& provider,
+                                            MailBeginOAuthCallback callback) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable", std::string());
+    return;
+  }
+  service->OAuthLoopbackSignIn(
+      provider,
+      base::BindOnce(
+          [](base::WeakPtr<MahoWelcomePageHandler> self,
+             MailBeginOAuthCallback cb, bool ok, std::string result) {
+            if (!ok) {
+              std::move(cb).Run(false, std::move(result), std::string());
+              return;
+            }
+            maho::MahoMailOAuthSession::StartResult start =
+                maho::MahoMailOAuthSession::ParseStartResult(result);
+            if (!start.ok) {
+              std::move(cb).Run(false, std::move(start.error_json),
+                                std::string());
+              return;
+            }
+            if (!self) {
+              std::move(cb).Run(false, "Welcome handler unavailable",
+                                std::string());
+              return;
+            }
+            auto cancel_closure = base::BindOnce(
+                [](Profile* profile, std::string state) {
+                  maho::MahoMailService* service =
+                      maho::MahoMailServiceFactory::GetForProfileIfExists(
+                          profile);
+                  if (service) {
+                    service->OAuthCancel(state, base::DoNothing());
+                  }
+                },
+                self->profile_, start.state);
+            NavigateParams params(self->profile_, start.auth_url,
+                                  ui::PAGE_TRANSITION_LINK);
+            params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+            Navigate(&params);
+            content::WebContents* oauth_contents =
+                params.navigated_or_inserted_contents;
+            if (!oauth_contents) {
+              std::move(cancel_closure).Run();
+              std::move(cb).Run(false, "Failed to open authorization tab",
+                                std::string());
+              return;
+            }
+            maho::MahoMailOAuthSession::CreateForWebContents(
+                oauth_contents, start.state, std::move(cancel_closure));
+            self->pending_mail_oauth_web_contents_ =
+                oauth_contents->GetWeakPtr();
+            std::move(cb).Run(true, std::string(), std::move(start.state));
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoWelcomePageHandler::MailListAccounts(
+    MailListAccountsCallback callback) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->ListAccounts(base::BindOnce(
+      [](MailListAccountsCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoWelcomePageHandler::MailDeleteAccount(
+    const std::string& account_id,
+    MailDeleteAccountCallback callback) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->DeleteAccount(account_id, base::BindOnce(
+      [](MailDeleteAccountCallback cb, bool ok, std::string result) {
+        std::move(cb).Run(ok, std::move(result));
+      },
+      std::move(callback)));
+}
+
+void MahoWelcomePageHandler::GetAiProviderConfigured(
+    GetAiProviderConfiguredCallback callback) {
+  PrefService* prefs = profile_->GetPrefs();
+  bool configured =
+      !prefs->GetString(maho::ai_prefs::kProvider).empty() ||
+      !prefs->GetString(maho::ai_prefs::kApiKey).empty() ||
+      !prefs->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty() ||
+      !prefs->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64).empty();
+  std::move(callback).Run(configured);
+}
+
+void MahoWelcomePageHandler::SetTranslationProvider(
+    const std::string& provider, SetTranslationProviderCallback callback) {
+  if (provider != "byok" && provider != "skip") {
+    std::move(callback).Run(false);
+    return;
+  }
+  profile_->GetPrefs()->SetString(maho::ai_prefs::kTranslationProvider, provider);
+  std::move(callback).Run(true);
+}
+
+void MahoWelcomePageHandler::MailOAuthCancel(
+    const std::string& state,
+    MailOAuthCancelCallback callback) {
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false);
+    return;
+  }
+  service->OAuthCancel(state, std::move(callback));
+}
+
+void MahoWelcomePageHandler::CompletePendingMailOAuth() {
+  content::WebContents* oauth_contents = pending_mail_oauth_web_contents_.get();
+  pending_mail_oauth_web_contents_.reset();
+  if (oauth_contents) {
+    if (maho::MahoMailOAuthSession* session =
+            maho::MahoMailOAuthSession::FromWebContents(oauth_contents)) {
+      session->MarkComplete();
+    }
+    CloseMailOAuthTab(oauth_contents);
+  }
+  ReactivateWelcomeTab();
+}
+
+void MahoWelcomePageHandler::CloseMailOAuthTab(
+    content::WebContents* oauth_contents) {
+  if (!oauth_contents) {
+    return;
+  }
+  Browser* oauth_browser = chrome::FindBrowserWithTab(oauth_contents);
+  if (oauth_browser) {
+    TabStripModel* model = oauth_browser->tab_strip_model();
+    int index = model->GetIndexOfWebContents(oauth_contents);
+    if (index != TabStripModel::kNoTab) {
+      model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
+      return;
+    }
+  }
+  if (content::WebContentsDelegate* delegate = oauth_contents->GetDelegate()) {
+    delegate->CloseContents(oauth_contents);
+  }
+}
+
+void MahoWelcomePageHandler::ReactivateWelcomeTab() {
+  if (!web_contents_) {
+    return;
+  }
+  if (maho::MahoWelcomeWindow* window =
+          maho::MahoWelcomeWindow::FromWebContents(web_contents_)) {
+    if (views::Widget* widget = window->GetWidget()) {
+      widget->Show();
+      widget->Activate();
+    }
+    web_contents_->Focus();
+    return;
+  }
+  Browser* welcome_browser = chrome::FindBrowserWithTab(web_contents_);
+  if (!welcome_browser) {
+    return;
+  }
+  TabStripModel* model = welcome_browser->tab_strip_model();
+  int index = model->GetIndexOfWebContents(web_contents_);
+  if (index != TabStripModel::kNoTab) {
+    model->ActivateTabAt(index);
+  }
+  if (welcome_browser->window()) {
+    welcome_browser->window()->Activate();
+  }
+  web_contents_->Focus();
+}
+
+void MahoWelcomePageHandler::OnAccountsChanged() {
+  if (pending_mail_oauth_web_contents_) {
+    CompletePendingMailOAuth();
+  }
+  if (page_) {
+    page_->OnMailAccountsChanged();
+  }
 }
