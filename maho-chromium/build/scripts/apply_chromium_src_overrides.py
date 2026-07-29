@@ -49,6 +49,7 @@ class Replacement:
 # absent from this map is treated as enabled on all platforms.
 FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/app/app-Info.plist": frozenset({"mac"}),
+    "chrome/browser/app_controller_mac.h": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
@@ -580,6 +581,49 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="key.app_controller = GetMahoOtrSentinel();",
         ),
     ],
+    "chrome/browser/ui/views/frame/contents_web_view.h": [
+        Replacement(
+            old="#include <memory>\n",
+            new=(
+                "#include <memory>\n"
+                "#include <optional>\n"
+            ),
+            description="Maho: include <optional> for the per-instance content background override",
+            guard="#include <optional>\n",
+        ),
+        Replacement(
+            old='#include "ui/gfx/geometry/rounded_corners_f.h"\n',
+            new=(
+                '#include "ui/gfx/geometry/rounded_corners_f.h"\n'
+                '#include "third_party/skia/include/core/SkColor.h"\n'
+            ),
+            description="Maho: include SkColor for the per-instance content background override",
+            guard='#include "third_party/skia/include/core/SkColor.h"',
+        ),
+        Replacement(
+            old="  void SetBackgroundVisible(bool background_visible);\n",
+            new=(
+                "  void SetBackgroundVisible(bool background_visible);\n"
+                "\n"
+                "  // Maho: opaque content background sourced from the active Space's\n"
+                "  // sidebar palette. std::nullopt clears it (falls back to the\n"
+                "  // ColorProvider). Never applied to Incognito windows.\n"
+                "  void SetMahoBackgroundOverride(std::optional<SkColor> color);\n"
+            ),
+            description="Maho: declare ContentsWebView::SetMahoBackgroundOverride",
+            guard="void SetMahoBackgroundOverride(",
+        ),
+        Replacement(
+            old="  bool background_visible_ = true;\n",
+            new=(
+                "  bool background_visible_ = true;\n"
+                "\n"
+                "  std::optional<SkColor> maho_background_override_;\n"
+            ),
+            description="Maho: add ContentsWebView::maho_background_override_ member",
+            guard="maho_background_override_;",
+        ),
+    ],
     "chrome/browser/ui/views/frame/contents_web_view.cc": [
         Replacement(
             old='#include "chrome/browser/ui/color/chrome_color_id.h"\n',
@@ -621,6 +665,61 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "there is no regular-color flash; regular/Guest unchanged"
             ),
             guard="maho_content_bg",
+        ),
+        Replacement(
+            old=(
+                "  if (web_contents()) {\n"
+                "    Profile* maho_profile =\n"
+                "        Profile::FromBrowserContext(web_contents()->GetBrowserContext());\n"
+                "    if (maho_profile && maho_profile->IsIncognitoProfile() &&\n"
+                "        maho_profile->IsPrimaryOTRProfile()) {\n"
+                "      maho_content_bg = kMahoColorPrivateSidebarBackground;\n"
+                "    }\n"
+                "  }\n"
+                "  const SkColor color = GetColorProvider()->GetColor(maho_content_bg);\n"
+            ),
+            new=(
+                "  bool maho_is_private = false;\n"
+                "  if (web_contents()) {\n"
+                "    Profile* maho_profile =\n"
+                "        Profile::FromBrowserContext(web_contents()->GetBrowserContext());\n"
+                "    if (maho_profile && maho_profile->IsIncognitoProfile() &&\n"
+                "        maho_profile->IsPrimaryOTRProfile()) {\n"
+                "      maho_content_bg = kMahoColorPrivateSidebarBackground;\n"
+                "      maho_is_private = true;\n"
+                "    }\n"
+                "  }\n"
+                "  SkColor color = GetColorProvider()->GetColor(maho_content_bg);\n"
+                "  if (!maho_is_private && maho_background_override_.has_value()) {\n"
+                "    color = SkColorSetA(maho_background_override_.value(), SK_AlphaOPAQUE);\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: apply the per-instance Space content background override "
+                "(opaque) in UpdateBackgroundColor for regular windows; Incognito "
+                "keeps the fixed private surface"
+            ),
+            guard="maho_background_override_.has_value()",
+        ),
+        Replacement(
+            old="void ContentsWebView::UpdateBackgroundColor() {\n",
+            new=(
+                "void ContentsWebView::SetMahoBackgroundOverride(\n"
+                "    std::optional<SkColor> color) {\n"
+                "  if (color.has_value()) {\n"
+                "    color = SkColorSetA(color.value(), SK_AlphaOPAQUE);\n"
+                "  }\n"
+                "  if (maho_background_override_ == color) {\n"
+                "    return;\n"
+                "  }\n"
+                "  maho_background_override_ = color;\n"
+                "  UpdateBackgroundColor();\n"
+                "}\n"
+                "\n"
+                "void ContentsWebView::UpdateBackgroundColor() {\n"
+            ),
+            description="Maho: define ContentsWebView::SetMahoBackgroundOverride",
+            guard="void ContentsWebView::SetMahoBackgroundOverride(",
         ),
     ],
     "chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc": [],
@@ -1356,7 +1455,90 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="ShouldDeferStartupCommandUntilTabSelected(id)",
         ),
     ],
+    "chrome/browser/app_controller_mac.h": [
+        Replacement(
+            old=(
+                '#include "components/sessions/core/tab_restore_service_observer.h"\n'
+                '\n'
+                '#if defined(__OBJC__)\n'
+            ),
+            new=(
+                '#include "components/sessions/core/tab_restore_service_observer.h"\n'
+                '\n'
+                '#include <vector>\n'
+                '\n'
+                'class GURL;\n'
+                '\n'
+                '#if defined(__OBJC__)\n'
+            ),
+            description=(
+                "Expose vector and GURL declarations for the macOS native URL "
+                "queue API"
+            ),
+            guard="QueueNativeUrlsWhileMahoLoginGated",
+        ),
+        Replacement(
+            old=(
+                "void AllowApplicationToTerminate();\n"
+            ),
+            new=(
+                "void AllowApplicationToTerminate();\n"
+                "\n"
+                "// Retains validated native URLs for the original regular profile while\n"
+                "// Maho's login gate is active. The queue is process-local.\n"
+                "void QueueNativeUrlsWhileMahoLoginGated(Profile* profile,\n"
+                "                                           std::vector<GURL> urls);\n"
+                "void DrainQueuedNativeUrlsAfterMahoWelcome(Profile* profile);\n"
+                "\n"
+                "// Test-only queue observation.\n"
+                "size_t GetQueuedNativeUrlCountForTesting(Profile* profile);\n"
+            ),
+            description=(
+                "Expose the macOS deferred native URL queue API and test accessor"
+            ),
+            guard="GetQueuedNativeUrlCountForTesting",
+        ),
+        Replacement(
+            old="size_t GetQueuedNativeUrlCountForTesting(Profile* profile);\n",
+            new=(
+                "size_t GetQueuedNativeUrlCountForTesting(Profile* profile);\n"
+                "std::vector<GURL> GetQueuedNativeUrlsForTesting(Profile* profile);\n"
+            ),
+            description="Expose ordered test-only native URL queue observation",
+            guard="GetQueuedNativeUrlsForTesting",
+        ),
+    ],
     "chrome/browser/app_controller_mac.mm": [
+        Replacement(
+            old=(
+                "#include <memory>\n"
+                "#include <vector>\n"
+            ),
+            new=(
+                "#include <map>\n"
+                "#include <memory>\n"
+                "#include <vector>\n"
+            ),
+            description="Include map for AppController's deferred native URL queues",
+            guard="#include <map>\n",
+        ),
+        Replacement(
+            old=(
+                "  std::vector<GURL> _startupUrls;\n"
+                "  BOOL _startupComplete;\n"
+            ),
+            new=(
+                "  std::vector<GURL> _startupUrls;\n"
+                "  std::map<base::FilePath, std::vector<GURL>>\n"
+                "      _mahoNativeUrlsQueuedWhileLoginGated;\n"
+                "  BOOL _startupComplete;\n"
+            ),
+            description=(
+                "Store deferred native URLs on AppController by original regular "
+                "profile path"
+            ),
+            guard="_mahoNativeUrlsQueuedWhileLoginGated",
+        ),
         Replacement(
             old=(
                 "  BrowserWindowInterface* browser =\n"
@@ -1415,6 +1597,28 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Include Maho Mini and Space headers in app_controller_mac.mm",
             guard='#include "maho/browser/maho_space_profile_bridge.h"',
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/maho_space_profile_bridge.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/maho_space_profile_bridge.h"\n'
+                '#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"\n'
+            ),
+            description="Include the Maho welcome login-gate pref declaration",
+            guard='#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"',
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"\n'
+                '#include "maho/browser/ui/views/welcome/maho_welcome_window.h"\n'
+            ),
+            description="Include the Maho welcome window for native URL login-gate presentation",
+            guard='#include "maho/browser/ui/views/welcome/maho_welcome_window.h"',
         ),
         Replacement(
             old=(
@@ -1478,6 +1682,237 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Route external single URL links to ATC Space or Maho Mini if configured, with global linkage",
             guard="DecideLinkDestination(\n        url, /*is_external=*/true",
+        ),
+        Replacement(
+            old=(
+                "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
+                "                                  Profile* profile) {\n"
+                "  if (!profile)\n"
+                "    return;  // No suitable profile to open the URLs, do nothing.\n"
+                "\n"
+                "  if (urls.size() == 1) {\n"
+            ),
+            new=(
+                "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
+                "                                  Profile* profile) {\n"
+                "  if (!profile)\n"
+                "    return;  // No suitable profile to open the URLs, do nothing.\n"
+                "\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  if (regular_profile->GetPrefs()->GetBoolean(\n"
+                "          maho::welcome::kLoginGateActive)) {\n"
+                "    app_controller_mac::QueueNativeUrlsWhileMahoLoginGated(profile, urls);\n"
+                "    maho::MahoWelcomeWindow::Show(profile);\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (urls.size() == 1) {\n"
+            ),
+            description="Gate native URL dispatch while Maho login gate is active",
+            guard="MahoWelcomeWindow::Show(profile)",
+        ),
+        Replacement(
+            old=(
+                "- (void)setLastProfileForTesting:(Profile*)profile {\n"
+                "  _lastProfile = profile;\n"
+                "  BrowserWindowInterface* current_browser =\n"
+                "      chrome::FindLastActiveWithProfile(profile);\n"
+                "  Browser* browser =\n"
+                "      current_browser ? current_browser->GetBrowserForMigrationOnly() : nullptr;\n"
+                "  _lastActiveBrowser = browser->GetWeakPtr();\n"
+                "}\n"
+            ),
+            new=(
+                "- (void)setLastProfileForTesting:(Profile*)profile {\n"
+                "  _lastProfile = profile;\n"
+                "  BrowserWindowInterface* current_browser =\n"
+                "      chrome::FindLastActiveWithProfile(profile);\n"
+                "  Browser* browser =\n"
+                "      current_browser ? current_browser->GetBrowserForMigrationOnly() : nullptr;\n"
+                "  _lastActiveBrowser = browser->GetWeakPtr();\n"
+                "}\n"
+                "\n"
+                "- (void)queueNativeUrlsWhileMahoLoginGatedForProfile:(Profile*)profile\n"
+                "                                                urls:(std::vector<GURL>)urls {\n"
+                "  if (!profile || urls.empty()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  std::vector<GURL>& queued_urls =\n"
+                "      _mahoNativeUrlsQueuedWhileLoginGated[regular_profile->GetPath()];\n"
+                "  queued_urls.insert(queued_urls.end(), urls.begin(), urls.end());\n"
+                "}\n"
+                "\n"
+                "- (void)drainQueuedNativeUrlsAfterMahoWelcomeForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  if (regular_profile->GetPrefs()->GetBoolean(\n"
+                "          maho::welcome::kLoginGateActive)) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Todo 3 takes this profile's FIFO batch and dispatches it through the\n"
+                "  // existing native URL path after successful completion.\n"
+                "}\n"
+                "\n"
+                "- (size_t)queuedNativeUrlCountForTestingForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return 0;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(\n"
+                "      regular_profile->GetPath());\n"
+                "  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()\n"
+                "             ? 0\n"
+                "             : it->second.size();\n"
+                "}\n"
+            ),
+            description=(
+                "Add AppController-owned deferred native URL queue operations"
+            ),
+            guard="queueNativeUrlsWhileMahoLoginGatedForProfile",
+        ),
+        Replacement(
+            old=(
+                "- (void)drainQueuedNativeUrlsAfterMahoWelcomeForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  if (regular_profile->GetPrefs()->GetBoolean(\n"
+                "          maho::welcome::kLoginGateActive)) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Todo 3 takes this profile's FIFO batch and dispatches it through the\n"
+                "  // existing native URL path after successful completion.\n"
+                "}\n"
+            ),
+            new=(
+                "- (void)drainQueuedNativeUrlsAfterMahoWelcomeForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  if (regular_profile->GetPrefs()->GetBoolean(\n"
+                "          maho::welcome::kLoginGateActive)) {\n"
+                "    return;\n"
+                "  }\n"
+                "  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(\n"
+                "      regular_profile->GetPath());\n"
+                "  if (it == _mahoNativeUrlsQueuedWhileLoginGated.end()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  std::vector<GURL> urls = std::move(it->second);\n"
+                "  _mahoNativeUrlsQueuedWhileLoginGated.erase(it);\n"
+                "  OpenUrlsInBrowserWithProfile(urls, profile);\n"
+                "}\n"
+            ),
+            description=(
+                "Drain deferred native URLs through the existing dispatcher after the "
+                "login gate releases"
+            ),
+            guard="_mahoNativeUrlsQueuedWhileLoginGated.erase(it)",
+        ),
+        Replacement(
+            old=(
+                "- (size_t)queuedNativeUrlCountForTestingForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return 0;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(\n"
+                "      regular_profile->GetPath());\n"
+                "  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()\n"
+                "             ? 0\n"
+                "             : it->second.size();\n"
+                "}\n"
+            ),
+            new=(
+                "- (size_t)queuedNativeUrlCountForTestingForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return 0;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(\n"
+                "      regular_profile->GetPath());\n"
+                "  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()\n"
+                "             ? 0\n"
+                "             : it->second.size();\n"
+                "}\n"
+                "\n"
+                "- (std::vector<GURL>)queuedNativeUrlsForTestingForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return {};\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(\n"
+                "      regular_profile->GetPath());\n"
+                "  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()\n"
+                "             ? std::vector<GURL>()\n"
+                "             : it->second;\n"
+                "}\n"
+            ),
+            description="Expose ordered AppController native URL queue entries for tests",
+            guard="queuedNativeUrlsForTestingForProfile",
+        ),
+        Replacement(
+            old=(
+                "@end  // @implementation AppController\n"
+                "\n"
+                "//---------------------------------------------------------------------------\n"
+            ),
+            new=(
+                "@end  // @implementation AppController\n"
+                "\n"
+                "namespace app_controller_mac {\n"
+                "\n"
+                "void QueueNativeUrlsWhileMahoLoginGated(Profile* profile,\n"
+                "                                           std::vector<GURL> urls) {\n"
+                "  [AppController.sharedController\n"
+                "      queueNativeUrlsWhileMahoLoginGatedForProfile:profile\n"
+                "                                                urls:std::move(urls)];\n"
+                "}\n"
+                "\n"
+                "void DrainQueuedNativeUrlsAfterMahoWelcome(Profile* profile) {\n"
+                "  [AppController.sharedController\n"
+                "      drainQueuedNativeUrlsAfterMahoWelcomeForProfile:profile];\n"
+                "}\n"
+                "\n"
+                "size_t GetQueuedNativeUrlCountForTesting(Profile* profile) {\n"
+                "  return [AppController.sharedController\n"
+                "      queuedNativeUrlCountForTestingForProfile:profile];\n"
+                "}\n"
+                "\n"
+                "}  // namespace app_controller_mac\n"
+                "\n"
+                "//---------------------------------------------------------------------------\n"
+            ),
+            description=(
+                "Bridge deferred native URL queue operations through AppController"
+            ),
+            guard="QueueNativeUrlsWhileMahoLoginGated(Profile* profile",
+        ),
+        Replacement(
+            old=(
+                "size_t GetQueuedNativeUrlCountForTesting(Profile* profile) {\n"
+                "  return [AppController.sharedController\n"
+                "      queuedNativeUrlCountForTestingForProfile:profile];\n"
+                "}\n"
+            ),
+            new=(
+                "size_t GetQueuedNativeUrlCountForTesting(Profile* profile) {\n"
+                "  return [AppController.sharedController\n"
+                "      queuedNativeUrlCountForTestingForProfile:profile];\n"
+                "}\n"
+                "\n"
+                "std::vector<GURL> GetQueuedNativeUrlsForTesting(Profile* profile) {\n"
+                "  return [AppController.sharedController\n"
+                "      queuedNativeUrlsForTestingForProfile:profile];\n"
+                "}\n"
+            ),
+            description="Bridge ordered native URL queue entries through AppController for tests",
+            guard="GetQueuedNativeUrlsForTesting(Profile* profile)",
         ),
         Replacement(
             old=(
@@ -5865,6 +6300,44 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="maho_content_gradient_view_ = nullptr;",
         ),
+        Replacement(
+            old="namespace maho {\nclass MahoCommandOverlayController;\n",
+            new=(
+                "struct MahoSidebarPalette;\n"
+                "\n"
+                "namespace maho {\nclass MahoCommandOverlayController;\n"
+            ),
+            description=(
+                "Forward-declare (global-scope) MahoSidebarPalette for "
+                "BrowserView's content surface palette projection"
+            ),
+            guard="struct MahoSidebarPalette;",
+        ),
+        Replacement(
+            old=(
+                "  raw_ptr<maho::MahoContentGradientView>\n"
+                "      maho_content_gradient_view_ = nullptr;\n"
+            ),
+            new=(
+                "  raw_ptr<maho::MahoContentGradientView>\n"
+                "      maho_content_gradient_view_ = nullptr;\n"
+                "\n"
+                "  // Maho: mirror the active Space's sidebar palette onto the content\n"
+                "  // gradient + WebContents background so both panes read as one\n"
+                "  // themed surface (light/dark, opacity and stops all follow the\n"
+                "  // sidebar's browser-local resolution).\n"
+                "  void ApplyMahoSidebarPaletteToContentSurfaces(\n"
+                "      const MahoSidebarPalette& palette);\n"
+                "  void MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+                "  bool maho_sidebar_palette_subscribed_ = false;\n"
+                "  base::CallbackListSubscription maho_sidebar_palette_subscription_;\n"
+            ),
+            description=(
+                "Maho: declare BrowserView content-surface palette projection "
+                "(method + subscription) alongside the gradient view pointer"
+            ),
+            guard="maho_sidebar_palette_subscription_;",
+        ),
     ],
     "chrome/browser/ui/views/frame/browser_view.cc": [
         Replacement(
@@ -6074,6 +6547,149 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "gradient instead of Chromium's gray empty-web-contents background"
             ),
             guard="Maho: raise the zero-tab content gradient above the opaque",
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/maho_content_gradient_view.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"\n'
+                '#include "maho/browser/ui/theme/maho_theme_helper.h"\n'
+            ),
+            description=(
+                "Maho: include sidebar container/view + theme helper in "
+                "browser_view.cc for content-surface palette projection"
+            ),
+            guard='#include "maho/browser/ui/theme/maho_theme_helper.h"',
+        ),
+        Replacement(
+            old=(
+                "std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {\n"
+            ),
+            new=(
+                "void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(\n"
+                "    const MahoSidebarPalette& palette) {\n"
+                "  // Regular windows only; Incognito keeps its fixed private surface.\n"
+                "  if (browser_->profile()->IsOffTheRecord()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Empty (zero-tab) content shows the translucent themed gradient; the\n"
+                "  // content web layer is made transparent so the window glass (desktop\n"
+                "  // blur) shows through, matching the sidebar. Loaded tabs use an opaque\n"
+                "  // themed base (web content must be opaque).\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetGradientStops(palette.surface_stops);\n"
+                "    maho_content_gradient_view_->SetGrain(palette.grain);\n"
+                "  }\n"
+                "  if (browser_->tab_strip_model()->count() == 0) {\n"
+                "    if (ContentsWebView* view = contents_web_view()) {\n"
+                "      view->SetBackgroundVisible(false);\n"
+                "    }\n"
+                "    return;\n"
+                "  }\n"
+                "  const bool maho_has_stops = !palette.content_surface_stops.empty();\n"
+                "  const SkColor solid = maho_has_stops\n"
+                "                            ? palette.content_surface_stops.front()\n"
+                "                            : SK_ColorTRANSPARENT;\n"
+                "  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
+                "    if (!view) {\n"
+                "      continue;\n"
+                "    }\n"
+                "    view->SetBackgroundVisible(true);\n"
+                "    if (maho_has_stops) {\n"
+                "      view->SetMahoBackgroundOverride(solid);\n"
+                "    }\n"
+                "  }\n"
+                "  if (!maho_has_stops) {\n"
+                "    return;\n"
+                "  }\n"
+                "  TabStripModel* maho_tsm = browser_->tab_strip_model();\n"
+                "  for (int i = 0; i < maho_tsm->count(); ++i) {\n"
+                "    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {\n"
+                "      wc->SetPageBaseBackgroundColor(solid);\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+                "\n"
+                "void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar() {\n"
+                "  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "      maho_sidebar_container_);\n"
+                "  if (!container) {\n"
+                "    return;\n"
+                "  }\n"
+                "  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(\n"
+                "      container->sidebar_view());\n"
+                "  if (!sidebar) {\n"
+                "    return;\n"
+                "  }\n"
+                "  if (!maho_sidebar_palette_subscribed_) {\n"
+                "    maho_sidebar_palette_subscription_ =\n"
+                "        sidebar->AddSidebarPaletteChangedCallback(base::BindRepeating(\n"
+                "            &BrowserView::ApplyMahoSidebarPaletteToContentSurfaces,\n"
+                "            base::Unretained(this)));\n"
+                "    maho_sidebar_palette_subscribed_ = true;\n"
+                "  }\n"
+                "  ApplyMahoSidebarPaletteToContentSurfaces(sidebar->sidebar_palette());\n"
+                "}\n"
+                "\n"
+                "std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {\n"
+            ),
+            description=(
+                "Maho: define BrowserView content-surface palette projection "
+                "(gradient stops + per-instance WebContents background) from the "
+                "sidebar's browser-local palette"
+            ),
+            guard="void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar()",
+        ),
+        Replacement(
+            old=(
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(\n"
+                "        tab_strip_model->count() == 0);\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(\n"
+                "        tab_strip_model->count() == 0);\n"
+                "  }\n"
+                "  // Maho: mirror the active Space palette onto content when live tabs change.\n"
+                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+            ),
+            description=(
+                "Maho: re-project the Space palette onto content surfaces whenever "
+                "BrowserView observes a live-tab count change"
+            ),
+            guard="mirror the active Space palette onto content when live tabs change",
+        ),
+        Replacement(
+            old='  TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");\n',
+            new=(
+                '  TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");\n'
+                "  // Maho: refresh content surfaces for the newly active tab/split.\n"
+                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+            ),
+            description=(
+                "Maho: re-project the Space palette onto content surfaces when the "
+                "active tab (or split pane) changes"
+            ),
+            guard="refresh content surfaces for the newly active tab/split",
+        ),
+        Replacement(
+            old=(
+                "BrowserView::~BrowserView() {\n"
+                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
+            ),
+            new=(
+                "BrowserView::~BrowserView() {\n"
+                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
+                "  maho_sidebar_palette_subscription_ = {};\n"
+            ),
+            description=(
+                "Maho: drop the sidebar palette subscription before child views "
+                "(gradient/content) are torn down"
+            ),
+            guard="maho_sidebar_palette_subscription_ = {};",
         ),
     ],
     "chrome/browser/ui/views/frame/layout/browser_view_layout.h": [

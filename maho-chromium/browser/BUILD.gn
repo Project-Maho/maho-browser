@@ -164,6 +164,19 @@ source_set("maho_ffi_callback_handle_unittests") {
   ]
 }
 
+test("maho_agent_abi_integration_test") {
+  testonly = true
+  sources = [ "ai/maho_agent_abi_integration_test.cc" ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//net:test_support",
+    "//testing/gtest",
+  ]
+}
+
 # Interface-only target: just the abstract adapter header. Concrete adapter
 # implementors (HTTP, ACP) depend on this rather than the full router target,
 # which avoids a dependency cycle.
@@ -630,11 +643,40 @@ source_set("maho_space_profile_bridge") {
   sources = [
     "maho_space_profile_bridge.cc",
     "maho_space_profile_bridge.h",
+    "maho_space_profile_hydration.cc",
   ]
   deps = [
+    ":maho_space_profile_hydration_state",
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
+  ]
+}
+
+source_set("maho_space_profile_hydration_state") {
+  sources = [
+    "maho_space_profile_hydration.h",
+    "maho_space_profile_hydration_state.cc",
+  ]
+  public_deps = [ "//base" ]
+}
+
+source_set("maho_space_profile_hydration_unittests") {
+  testonly = true
+  sources = [ "maho_space_profile_hydration_unittest.cc" ]
+  deps = [
+    ":maho_space_profile_hydration_state",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_space_profile_hydration_test") {
+  sources = [ "ai/maho_browser_tool_test_main.cc" ]
+  deps = [
+    ":maho_space_profile_hydration_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }
 
@@ -1232,6 +1274,29 @@ test("maho_url_scheme_test") {
 }
 
 if (!is_android) {
+  if (is_mac) {
+    test("maho_login_gate_native_url_browsertest") {
+      defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+      sources = [ "maho_login_gate_native_url_browsertest.mm" ]
+      deps = [
+        "//base",
+        "//base/test:test_support",
+        "//chrome:packed_resources",
+        "//chrome/browser:browser",
+        "//chrome/browser/profiles:profile",
+        "//chrome/browser/ui",
+        "//chrome/test:browser_tests_runner",
+        "//chrome/test:test_support",
+        "//chrome/test:test_support_ui",
+        "//content/test:test_support",
+        "//maho/browser/ui/webui/maho_welcome:maho_welcome",
+        "//net",
+        "//testing/gtest",
+        "//url",
+      ]
+    }
+  }
+
   test("maho_url_scheme_browsertest") {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
     sources = [
