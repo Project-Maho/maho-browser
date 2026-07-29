@@ -36,6 +36,7 @@ import {ArrowLeft, ArrowUpRight} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
 import {DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
+import {DiscordCommunitySettingsSection} from './discord_community_settings_section.js';
 import {MahoSettingsStore} from './store.js';
 
 function cloneSetting(setting: SettingValue): SettingValue {
@@ -373,6 +374,7 @@ function LivePaneSection(
       {!bootstrapError && lastActionError ? (
         <p className="mb-4 text-sm leading-6 text-muted-foreground">{lastActionError}</p>
       ) : null}
+      {pane.key === 'general' ? <DiscordCommunitySettingsSection /> : null}
       {pane.key === 'general' ? <BrowserVersionCard store={store} /> : null}
       {cards.map((card, cardIndex) => (
         <div key={`${pane.key}-${card.title}`} className={cardIndex < cards.length - 1 ? 'mb-6' : undefined}>
