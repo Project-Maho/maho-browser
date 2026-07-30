@@ -85,6 +85,17 @@ where
     })
 }
 
+fn is_auth_error(err: &MailFfiError) -> bool {
+    match err {
+        MailFfiError::MissingCredentials(_) | MailFfiError::OAuth2Refresh(_) => true,
+        MailFfiError::Core(ref app_err) => {
+            let msg = app_err.to_string().to_uppercase();
+            msg.contains("AUTHENTICATIONFAILED") || msg.contains("UNAUTHORIZED")
+        }
+        _ => false,
+    }
+}
+
 async fn sync_loop(
     ctx: Arc<AppCtx>,
     account_id: String,
@@ -101,6 +112,9 @@ async fn sync_loop(
             }
             Err(err) => {
                 log::warn!("[mail-ffi] sync failed for {account_id}: {err}");
+                if is_auth_error(&err) {
+                    crate::ffi::emit_reauth_event(&account_id, "unknown", &err.to_string());
+                }
             }
         }
         tokio::select! {
@@ -126,7 +140,12 @@ async fn idle_loop(
                 let _ = sync_account_once(Arc::clone(&ctx), &account_id).await;
             }
             Ok(false) => {}
-            Err(err) => log::warn!("[mail-ffi] idle failed for {account_id}: {err}"),
+            Err(err) => {
+                log::warn!("[mail-ffi] idle failed for {account_id}: {err}");
+                if is_auth_error(&err) {
+                    crate::ffi::emit_reauth_event(&account_id, "unknown", &err.to_string());
+                }
+            }
         }
         tokio::select! {
             _ = token.cancelled() => return,

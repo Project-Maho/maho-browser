@@ -8,7 +8,7 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
     {kind: 'live-card', card: {
       title: 'Daily browsing defaults',
       description: '',
-      settingKeys: ['general.homepage', 'general.restore_on_startup', 'general.prompt_for_download', 'search.suggestions'],
+      settingKeys: ['general.prompt_for_download', 'search.suggestions'],
       wide: true,
     }},
   ],
@@ -19,16 +19,7 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
       settingKeys: [
         'appearance.theme',
         'appearance.sidebar_width',
-        'appearance.density',
       ],
-      wide: true,
-    }},
-  ],
-  privacy: [
-    {kind: 'live-card', card: {
-      title: 'Safety & tracking',
-      description: '',
-      settingKeys: ['privacy.do_not_track', 'privacy.safe_browsing', 'privacy.block_third_party_cookies'],
       wide: true,
     }},
   ],
@@ -58,6 +49,13 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
   ],
 };
 
+// Merged into the Content blocker pane; rendered there as toggles.
+export const PRIVACY_SETTING_KEYS = [
+  'privacy.do_not_track',
+  'privacy.safe_browsing',
+  'privacy.block_third_party_cookies',
+] as const;
+
 const BROWSING_PANES: PaneDefinition[] = [
   {
     key: 'general',
@@ -76,15 +74,6 @@ const BROWSING_PANES: PaneDefinition[] = [
     kind: 'live',
     domain: 'browsing',
     groupKeys: ['tabs'],
-  },
-  {
-    key: 'privacy',
-    symbol: 'P',
-    navTitle: 'Privacy',
-    title: 'Privacy',
-    kind: 'live',
-    domain: 'browsing',
-    groupKeys: ['privacy'],
   },
   {
     key: 'notifications',
@@ -136,15 +125,6 @@ const IDENTITY_PANES: PaneDefinition[] = [
     kind: 'live',
     domain: 'identity',
     contentKind: 'profiles',
-  },
-  {
-    key: 'account-sync',
-    symbol: 'AS',
-    navTitle: 'Account & sync',
-    title: 'Account & sync',
-    kind: 'live',
-    domain: 'identity',
-    contentKind: 'sync',
   },
   {
     key: 'passwords',
@@ -237,8 +217,8 @@ const PROTECTION_PANES: PaneDefinition[] = [
   {
     key: 'content-blocker',
     symbol: 'C',
-    navTitle: 'Content blocker',
-    title: 'Content blocker',
+    navTitle: 'Privacy & content blocker',
+    title: 'Privacy & content blocker',
     kind: 'live',
     domain: 'protection',
     contentKind: 'content-blocker',
@@ -320,22 +300,33 @@ const MAIL_PANES: PaneDefinition[] = [
   },
 ];
 
-// Mail deferred from this ship: omit the mail settings panes from the nav so
-// the whole "Maho Mail" section disappears (app.tsx skips empty domains). The
-// MAIL_PANES definitions are kept for a one-line revert. Flip to false to
-// restore mail settings.
-const MAIL_DEFERRED = true;
-
-export const ALL_PANE_DEFINITIONS: PaneDefinition[] = [
+const CORE_PANE_DEFINITIONS: PaneDefinition[] = [
   ...BROWSING_PANES,
   ...LOOK_AND_FEEL_PANES,
   ...IDENTITY_PANES,
   ...PRODUCTIVITY_PANES,
   ...PROTECTION_PANES,
-  ...(MAIL_DEFERRED ? [] : MAIL_PANES),
 ];
 
-export const PANE_DEFINITIONS = ALL_PANE_DEFINITIONS;
+// The "Maho Mail" section only exists when the maho.mail.enabled pref is on -
+// the same gate the sidebar button, chrome://maho-mail, and the helper
+// subprocess read. The C++ handler surfaces that pref as the `mail.enabled`
+// setting, so the nav is computed from live settings rather than a build-time
+// constant. app.tsx skips domains that end up with no panes.
+export function panesForSettings(mailEnabled: boolean): PaneDefinition[] {
+  return mailEnabled ? [...CORE_PANE_DEFINITIONS, ...MAIL_PANES] :
+                       CORE_PANE_DEFINITIONS;
+}
+
+// Every pane that can ever exist, used for key lookup and deep links. Callers
+// that render navigation must use panesForSettings() so a deferred Mail does
+// not appear.
+export const ALL_PANE_DEFINITIONS: PaneDefinition[] = [
+  ...CORE_PANE_DEFINITIONS,
+  ...MAIL_PANES,
+];
+
+export const PANE_DEFINITIONS = CORE_PANE_DEFINITIONS;
 
 export const PANE_DEFINITION_MAP: Record<string, PaneDefinition> =
     Object.fromEntries(ALL_PANE_DEFINITIONS.map(d => [d.key, d])) as

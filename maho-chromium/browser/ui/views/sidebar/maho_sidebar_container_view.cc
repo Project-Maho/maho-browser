@@ -2,10 +2,11 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 
+#include <algorithm>
+
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "base/logging.h"
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/prefs/pref_service.h"
@@ -16,14 +17,23 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_controller.h"
+#include "maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
 #include "maho_sidebar_now_playing_view.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/display/screen.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/events/event.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/resize_area.h"
+#include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
@@ -92,9 +102,34 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
   reveal_animation_.SetTweenType(gfx::Tween::EASE_OUT);
 
   sidebar_view_ = AddChildView(std::make_unique<MahoSidebarView>(browser));
-  auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
-  now_playing_view_ = sidebar->AddNowPlayingView(
-      std::make_unique<MahoSidebarNowPlayingView>(browser));
+  const MahoSidebarPalette& palette =
+      static_cast<MahoSidebarView*>(sidebar_view_)->sidebar_palette();
+  auto expand_button = views::CreateVectorImageButtonWithNativeTheme(
+      base::BindRepeating(
+          [](base::WeakPtr<MahoSidebarContainerView> container,
+             const ui::Event&) {
+            if (container) {
+              container->TogglePanelExpanded();
+            }
+      },
+      weak_factory_.GetWeakPtr()),
+      maho_lucide_icons::kPanelLeftIcon,
+      sidebar_layout::kTopBarIconSizeDp, palette.neutral_glyph,
+      palette.primary_text, palette.primary_text);
+  expand_button->SetTooltipText(u"Expand Sidebar");
+  expand_button->SetAccessibleName(u"Expand Sidebar");
+  expand_button->GetViewAccessibility().AddAction(
+      ax::mojom::Action::kDoDefault);
+  expand_button->GetViewAccessibility().SetDefaultActionVerb(
+      ax::mojom::DefaultActionVerb::kClick);
+  expand_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+  expand_button->SetRequestFocusOnPress(false);
+  expand_button->SetPreferredSize(
+      gfx::Size(sidebar_layout::kTopBarButtonSizeDp,
+                sidebar_layout::kTopBarButtonSizeDp));
+  expand_button->SetProperty(views::kViewIgnoredByLayoutKey, true);
+  views::InstallCircleHighlightPathGenerator(expand_button.get());
+  collapsed_expand_button_ = AddChildView(std::move(expand_button));
   resize_handle_view_ = AddChildView(std::make_unique<views::ResizeArea>(this));
 
   is_private_ = browser->profile()->IsIncognitoProfile() &&
@@ -155,7 +190,7 @@ void MahoSidebarContainerView::ShowCommandOverlayForSearch(
 }
 
 bool MahoSidebarContainerView::ShowAppMenu() {
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
   if (!sidebar || !sidebar->top_bar_view()) {
     return false;
@@ -173,7 +208,20 @@ void MahoSidebarContainerView::OnThemeChanged() {
 
 void MahoSidebarContainerView::Layout(PassKey) {
   LayoutSuperclass<views::View>(this);
+  UpdateCollapsedExpandButtonBounds();
   UpdateResizeHandleBounds();
+}
+
+void MahoSidebarContainerView::UpdateCollapsedExpandButtonBounds() {
+  if (!collapsed_expand_button_) {
+    return;
+  }
+  const int button_size = sidebar_layout::kTopBarButtonSizeDp;
+  const int x = std::max(0, (width() - button_size) / 2);
+  const int y = sidebar_layout::kRailInsetTopDp +
+                sidebar_layout::kTopBarTrafficLightAlignmentHeightDp +
+                sidebar_layout::kSectionSpacingDp;
+  collapsed_expand_button_->SetBounds(x, y, button_size, button_size);
 }
 
 void MahoSidebarContainerView::UpdateResizeHandleBounds() {
@@ -244,6 +292,9 @@ void MahoSidebarContainerView::OnSidebarWidthChanged() {
         parent()->InvalidateLayout();
       }
     }
+    if (overlay_host_) {
+      overlay_host_->UpdateLibraryOverlayBounds();
+    }
     return;
   }
 
@@ -251,11 +302,16 @@ void MahoSidebarContainerView::OnSidebarWidthChanged() {
   if (parent()) {
     parent()->InvalidateLayout();
   }
+  if (overlay_host_) {
+    overlay_host_->UpdateLibraryOverlayBounds();
+  }
 }
 
 void MahoSidebarContainerView::ApplyPanelState() {
   const bool pinned = ReadPanelExpanded();
   const bool was_pinned = was_panel_expanded_;
+
+  collapsed_expand_button_->SetVisible(!pinned);
 
   if (pinned) {
     reveal_animation_.Reset(1.0);
@@ -280,7 +336,7 @@ void MahoSidebarContainerView::ApplyPanelState() {
       reveal_animation_.Reset(0.0);
       sidebar_view_->SetVisible(false);
       SetPreferredSize(
-          gfx::Size(sidebar_layout::kHoverTriggerWidthDp, 0));
+          gfx::Size(sidebar_layout::kCollapsedRailWidthDp, 0));
       PreferredSizeChanged();
     }
   }
@@ -309,6 +365,14 @@ void MahoSidebarContainerView::ApplyPreferredWidthFromPrefs() {
         }
       } else if (active == MahoSidebarLibraryRailView::Category::kSpaces) {
         width = std::max(width, 1400);
+      } else if (active ==
+                     MahoSidebarLibraryRailView::Category::kDownloads ||
+                 active ==
+                     MahoSidebarLibraryRailView::Category::kArchivedTabs) {
+        const int rail_width = GetLibraryRailWidth();
+        if (rail_width > 0) {
+          width = rail_width;
+        }
       }
     }
   }
@@ -317,7 +381,7 @@ void MahoSidebarContainerView::ApplyPreferredWidthFromPrefs() {
 }
 
 void MahoSidebarContainerView::MaybePersistSidebarWidth(int width) {
-  if (width <= sidebar_layout::kHoverTriggerWidthDp) {
+  if (width <= sidebar_layout::kCollapsedRailWidthDp) {
     return;
   }
   if (reveal_animation_.is_animating()) {
@@ -476,7 +540,7 @@ void MahoSidebarContainerView::AnimationProgressed(
   const int full_width =
       sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
   const double fraction = reveal_animation_.GetCurrentValue();
-  const int trigger_width = sidebar_layout::kHoverTriggerWidthDp;
+  const int trigger_width = sidebar_layout::kCollapsedRailWidthDp;
   const int animated_width = trigger_width +
       static_cast<int>((full_width - trigger_width) * fraction);
 
@@ -490,7 +554,7 @@ void MahoSidebarContainerView::AnimationEnded(
     is_hover_revealed_ = false;
     sidebar_view_->SetVisible(false);
     SetPreferredSize(
-        gfx::Size(sidebar_layout::kHoverTriggerWidthDp, 0));
+        gfx::Size(sidebar_layout::kCollapsedRailWidthDp, 0));
     PreferredSizeChanged();
     RelayoutParent(this);
     CheckAndNotifyAutoHide();
@@ -519,6 +583,49 @@ void MahoSidebarContainerView::AddedToWidget() {
       FROM_HERE,
       base::BindOnce(&MahoSidebarContainerView::AttachOverlayHost,
                      weak_factory_.GetWeakPtr()));
+  if (GetWidget()) {
+    if (GetWidget()->IsVisible()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&MahoSidebarContainerView::CreateNowPlayingHostIfNeeded,
+                         weak_factory_.GetWeakPtr()));
+    } else {
+      GetWidget()->AddObserver(this);
+    }
+  }
+}
+
+void MahoSidebarContainerView::RemovedFromWidget() {
+  if (GetWidget()) {
+    GetWidget()->RemoveObserver(this);
+  }
+}
+
+void MahoSidebarContainerView::OnWidgetVisibilityChanged(views::Widget* widget, bool visible) {
+  if (visible) {
+    if (widget) {
+      widget->RemoveObserver(this);
+    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&MahoSidebarContainerView::CreateNowPlayingHostIfNeeded,
+                       weak_factory_.GetWeakPtr()));
+  }
+}
+
+void MahoSidebarContainerView::CreateNowPlayingHostIfNeeded() {
+  if (now_playing_view_) {
+    return;
+  }
+  auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+  if (!sidebar) return;
+  auto host = std::make_unique<MahoSidebarNowPlayingView>(browser_);
+  auto* host_ptr = host.get();
+  now_playing_view_ = sidebar->AddNowPlayingView(std::move(host));
+  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(browser_->profile());
+  if (coordinator) {
+    coordinator->RegisterHost(host_ptr);
+  }
 }
 
 void MahoSidebarContainerView::AttachOverlayHost() {
@@ -545,6 +652,24 @@ void MahoSidebarContainerView::DismissSpacesOverlay() {
 
 bool MahoSidebarContainerView::IsSpacesOverlayVisible() const {
   return overlay_host_ && overlay_host_->IsSpacesOverlayVisible();
+}
+
+void MahoSidebarContainerView::ToggleLibraryOverlay(
+    MahoSidebarLibraryRailView::Category category) {
+  AttachOverlayHost();
+  if (overlay_host_) {
+    overlay_host_->ToggleLibraryOverlay(category);
+  }
+}
+
+void MahoSidebarContainerView::DismissLibraryOverlay() {
+  if (overlay_host_) {
+    overlay_host_->DismissLibraryOverlay();
+  }
+}
+
+bool MahoSidebarContainerView::IsLibraryOverlayVisible() const {
+  return overlay_host_ && overlay_host_->IsLibraryOverlayVisible();
 }
 
 int MahoSidebarContainerView::GetLibraryRailWidth() const {
@@ -575,6 +700,14 @@ gfx::Insets MahoSidebarContainerView::GetSidebarSlotInsets() const {
         }
       } else if (active == MahoSidebarLibraryRailView::Category::kSpaces) {
         width = std::max(width, 1400);
+      } else if (active ==
+                     MahoSidebarLibraryRailView::Category::kDownloads ||
+                 active ==
+                     MahoSidebarLibraryRailView::Category::kArchivedTabs) {
+        const int rail_width = GetLibraryRailWidth();
+        if (rail_width > 0) {
+          width = rail_width;
+        }
       }
     }
   }
@@ -589,6 +722,7 @@ void MahoSidebarContainerView::CheckAndNotifyAutoHide() {
   if (IsFullyAutoHidden()) {
     if (overlay_host_) {
       overlay_host_->DismissSpacesOverlay();
+      overlay_host_->DismissLibraryOverlay();
     }
   }
 }

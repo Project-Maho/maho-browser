@@ -106,6 +106,7 @@ fn malformed_search_json_is_rejected_without_invocation() {
 // installs a global ctx, so this observes the uninitialized state reliably.
 #[test]
 fn uninitialized_state_is_rejected_without_invocation() {
+    crate::state::clear_ctx_for_test();
     let capture = Capture::new();
     assert!(!MahoMailListAccounts(Some(capture_cb), capture.as_user_data()));
     assert!(capture.peek().is_none());

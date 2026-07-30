@@ -10,15 +10,19 @@
 //! DEFERRED (not ported in this task): SMTP send/compose, calendar, PGP, S/MIME,
 //! rules, templates, signatures, translation. See `lib.rs` for the full list.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use maho_core::imap_client::ImapClient;
-use maho_core::models::account::Account;
+use maho_core::models::account::{Account, AccountResponse, CreateAccountRequest, Encryption};
 use rusqlite::Connection;
+use serde::Deserialize;
+use uuid::Uuid;
 
-use crate::credentials::get_encrypted_credential;
+use crate::credentials::{get_encrypted_credential, store_encrypted_credential};
 use crate::error::{MailFfiError, Result};
+use crate::state::AppCtx;
 
 /// Resolved IMAP authentication material for an account.
 #[derive(Clone)]
@@ -145,17 +149,23 @@ fn resolve_oauth2_access_token(
     }
 
     match refresh_oauth2_token(conn, credential_key, account) {
-        Ok(new_token) => Ok(new_token),
-        Err(refresh_err) => match current {
-            Some(token) => {
-                log::warn!(
-                    "[mail-ffi] oauth2 refresh failed for {}, using existing token: {refresh_err}",
-                    account.id
-                );
-                Ok(token)
+        Ok(new_token) => {
+            crate::ffi::emit_refresh_succeeded_event(&account.id);
+            Ok(new_token)
+        }
+        Err(refresh_err) => {
+            crate::ffi::emit_reauth_event(&account.id, &account.auth_type, &refresh_err.to_string());
+            match current {
+                Some(token) => {
+                    log::warn!(
+                        "[mail-ffi] oauth2 refresh failed for {}, using existing token: {refresh_err}",
+                        account.id
+                    );
+                    Ok(token)
+                }
+                None => Err(refresh_err),
             }
-            None => Err(refresh_err),
-        },
+        }
     }
 }
 
@@ -174,6 +184,27 @@ struct TokenResponse {
     access_token: String,
     expires_in: Option<i64>,
     refresh_token: Option<String>,
+}
+
+/// Build `refresh_token` grant params, including `client_secret` ONLY when
+/// non-empty. Public/desktop PKCE clients have no secret; sending an empty
+/// `client_secret=` makes Google reject the refresh with `invalid_request`
+/// ("client_secret is missing."). Confidential clients that supply one still
+/// forward it.
+fn build_refresh_params<'a>(
+    client_id: &'a str,
+    client_secret: &'a str,
+    refresh_token: &'a str,
+) -> Vec<(&'static str, &'a str)> {
+    let mut params: Vec<(&'static str, &'a str)> = vec![
+        ("grant_type", "refresh_token"),
+        ("client_id", client_id),
+        ("refresh_token", refresh_token),
+    ];
+    if !client_secret.is_empty() {
+        params.push(("client_secret", client_secret));
+    }
+    params
 }
 
 /// Refresh an OAuth2 access token via the provider token endpoint and persist
@@ -211,12 +242,7 @@ fn refresh_oauth2_token(
     )?
     .ok_or_else(|| MailFfiError::OAuth2Refresh("missing refresh_token".into()))?;
 
-    let params = [
-        ("grant_type", "refresh_token"),
-        ("client_id", client_id.as_str()),
-        ("client_secret", client_secret.as_str()),
-        ("refresh_token", refresh_token.as_str()),
-    ];
+    let params = build_refresh_params(&client_id, &client_secret, &refresh_token);
 
     let http = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -265,7 +291,7 @@ fn refresh_oauth2_token(
     Ok(token.access_token)
 }
 
-fn token_endpoint(auth_type: &str) -> Option<&'static str> {
+pub(crate) fn token_endpoint(auth_type: &str) -> Option<&'static str> {
     let lower = auth_type.to_ascii_lowercase();
     if lower.contains("google") || lower.contains("gmail") {
         Some("https://oauth2.googleapis.com/token")
@@ -279,6 +305,208 @@ fn token_endpoint(auth_type: &str) -> Option<&'static str> {
 /// Best-effort logout that never surfaces an error (used on teardown paths).
 pub fn safe_logout(mut client: ImapClient) {
     let _ = client.logout();
+}
+
+/// Create an account row from `request`, persist its secrets encrypted in
+/// `encrypted_credentials` (keyed by the injected `credential_key`), and null
+/// the plaintext secret columns on the row so secrets live only in the
+/// encrypted table. Returns a secret-free [`AccountResponse`].
+pub fn create_account(
+    conn: &mut Connection,
+    credential_key: &[u8; 32],
+    request: CreateAccountRequest,
+) -> Result<AccountResponse> {
+    if request.email.trim().is_empty() {
+        return Err(MailFfiError::InvalidRequest("email is required".into()));
+    }
+    if request.imap_host.trim().is_empty() {
+        return Err(MailFfiError::InvalidRequest("imap_host is required".into()));
+    }
+    if request.smtp_host.trim().is_empty() {
+        return Err(MailFfiError::InvalidRequest("smtp_host is required".into()));
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let auth_type = request
+        .auth_type
+        .clone()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "password".to_string());
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let tx = conn.transaction()?;
+
+    tx.execute(
+        "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, imap_port,
+             imap_encryption, smtp_host, smtp_port, smtp_encryption, username, password,
+             oauth2_client_id, oauth2_client_secret, oauth2_refresh_token, oauth2_access_token,
+             created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, NULL, NULL, ?13, ?14)",
+        rusqlite::params![
+            id,
+            request.email,
+            request.display_name,
+            auth_type,
+            request.imap_host,
+            request.imap_port,
+            request.imap_encryption.as_str(),
+            request.smtp_host,
+            request.smtp_port,
+            request.smtp_encryption.as_str(),
+            request.username,
+            request.oauth2_client_id,
+            now,
+            now,
+        ],
+    )?;
+
+    for (credential_type, value) in [
+        ("password", request.password.as_deref()),
+        ("oauth2_access_token", request.oauth2_access_token.as_deref()),
+        ("oauth2_refresh_token", request.oauth2_refresh_token.as_deref()),
+        ("oauth2_client_secret", request.oauth2_client_secret.as_deref()),
+    ] {
+        if let Some(secret) = value.filter(|value| !value.is_empty()) {
+            store_encrypted_credential(&tx, credential_key, &id, credential_type, secret)?;
+        }
+    }
+
+    tx.commit()?;
+
+    let account = load_account(conn, &id)?;
+    crate::state::spawn_account_workers_if_ready(&id);
+    crate::ffi::emit_accounts_changed_event(&id);
+    Ok(AccountResponse::from_account(&account))
+}
+
+/// Stop any running sync/backfill workers for `account_id`, then cascade-delete
+/// its attachments, emails, folders, encrypted credentials, and the account row
+/// itself in a single transaction.
+pub fn delete_account(ctx: &AppCtx, account_id: &str) -> Result<()> {
+    crate::state::registry().stop_account(account_id);
+
+    let mut conn = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id = ?1)",
+        [account_id],
+    )?;
+    tx.execute("DELETE FROM emails WHERE account_id = ?1", [account_id])?;
+    tx.execute("DELETE FROM folders WHERE account_id = ?1", [account_id])?;
+    tx.execute(
+        "DELETE FROM encrypted_credentials WHERE account_id = ?1",
+        [account_id],
+    )?;
+    tx.execute("DELETE FROM accounts WHERE id = ?1", [account_id])?;
+    tx.commit()?;
+    crate::ffi::emit_accounts_changed_event(account_id);
+    Ok(())
+}
+
+pub fn reconnect_account_with_runtime(
+    ctx: &Arc<AppCtx>,
+    account_id: &str,
+    rt: Option<&tokio::runtime::Runtime>,
+) -> Result<()> {
+    crate::state::registry().stop_account(account_id);
+    let conn = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    resolve_account_auth(&conn, &ctx.credential_key, account_id)?;
+    let rt = rt.ok_or(MailFfiError::NotInitialized)?;
+    crate::state::start_account_workers(rt, ctx, account_id);
+    crate::ffi::emit_accounts_changed_event(account_id);
+    Ok(())
+}
+
+/// Stop any running sync/backfill workers for `account_id`, then re-resolve the
+/// account's IMAP auth (refreshing OAuth2 tokens if expired) so the next sync
+/// starts from a healthy session. Recovers a stale account without deleting
+/// local data.
+pub fn reconnect_account(ctx: &Arc<AppCtx>, account_id: &str) -> Result<()> {
+    reconnect_account_with_runtime(ctx, account_id, crate::runtime::runtime())
+}
+
+/// Transient IMAP probe parameters (no persisted account row). Parsed at the
+/// FFI boundary from JSON.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProbeParams {
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub imap_encryption: Encryption,
+    pub username: String,
+    #[serde(default)]
+    pub auth_type: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub oauth2_access_token: Option<String>,
+}
+
+/// Test an IMAP connection for onboarding using transient credentials, without
+/// touching the database. Malformed parameters are rejected before any network
+/// call (the unit-testable seam); a real connect failure is surfaced as a typed
+/// error rather than a panic. Blocking — call from a blocking context.
+pub fn probe_imap_connection(params: &ProbeParams) -> Result<()> {
+    let auth = resolve_probe_auth(params)?;
+    let client = connect_probe(params, &auth)?;
+    safe_logout(client);
+    Ok(())
+}
+
+fn resolve_probe_auth(params: &ProbeParams) -> Result<ImapAuth> {
+    if params.imap_host.trim().is_empty() {
+        return Err(MailFfiError::InvalidRequest("imap_host is required".into()));
+    }
+    if params.username.trim().is_empty() {
+        return Err(MailFfiError::InvalidRequest("username is required".into()));
+    }
+
+    let is_oauth = params
+        .auth_type
+        .as_deref()
+        .is_some_and(|auth_type| auth_type.starts_with("oauth2"));
+    if is_oauth {
+        let token = params.oauth2_access_token.as_deref().unwrap_or_default();
+        if token.is_empty() {
+            return Err(MailFfiError::InvalidRequest(
+                "oauth2_access_token is required".into(),
+            ));
+        }
+        Ok(ImapAuth::OAuth2 {
+            access_token: token.to_string(),
+        })
+    } else {
+        let password = params.password.as_deref().unwrap_or_default();
+        if password.is_empty() {
+            return Err(MailFfiError::InvalidRequest("password is required".into()));
+        }
+        Ok(ImapAuth::Password(password.to_string()))
+    }
+}
+
+fn connect_probe(params: &ProbeParams, auth: &ImapAuth) -> Result<ImapClient> {
+    let client = match auth {
+        ImapAuth::Password(password) => ImapClient::connect(
+            &params.imap_host,
+            params.imap_port,
+            &params.imap_encryption,
+            &params.username,
+            password,
+        )?,
+        ImapAuth::OAuth2 { access_token } => ImapClient::connect_oauth2(
+            &params.imap_host,
+            params.imap_port,
+            &params.imap_encryption,
+            &params.username,
+            access_token,
+        )?,
+    };
+    Ok(client)
 }
 
 #[cfg(test)]
@@ -310,5 +538,261 @@ mod tests {
         assert!(is_expired(&past));
         assert!(!is_expired(&future));
         assert!(!is_expired("not-a-date"));
+    }
+
+    #[test]
+    fn refresh_params_omit_empty_client_secret() {
+        let params = build_refresh_params("client-id", "", "refresh-tok");
+        assert!(
+            !params.iter().any(|(k, _)| *k == "client_secret"),
+            "empty client_secret must be omitted for public/desktop PKCE clients"
+        );
+        assert!(params.contains(&("grant_type", "refresh_token")));
+        assert!(params.contains(&("client_id", "client-id")));
+        assert!(params.contains(&("refresh_token", "refresh-tok")));
+    }
+
+    #[test]
+    fn refresh_params_include_present_client_secret() {
+        let params = build_refresh_params("client-id", "shhh", "refresh-tok");
+        assert!(
+            params.contains(&("client_secret", "shhh")),
+            "non-empty client_secret must be forwarded for confidential clients"
+        );
+    }
+
+    fn migrated_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn
+    }
+
+    fn password_request(email: &str) -> CreateAccountRequest {
+        CreateAccountRequest {
+            email: email.to_string(),
+            display_name: "New User".to_string(),
+            auth_type: Some("password".to_string()),
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            imap_encryption: Encryption::Tls,
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: 587,
+            smtp_encryption: Encryption::StartTls,
+            username: email.to_string(),
+            password: Some("hunter2".to_string()),
+            oauth2_client_id: None,
+            oauth2_client_secret: None,
+            oauth2_access_token: None,
+            oauth2_refresh_token: None,
+        }
+    }
+
+    #[test]
+    fn create_account_persists_row_and_encrypts_password() {
+        let mut conn = migrated_conn();
+        let key = [21u8; 32];
+
+        let response = create_account(&mut conn, &key, password_request("new@example.com")).unwrap();
+
+        let loaded = load_account(&conn, &response.id).unwrap();
+        assert_eq!(loaded.email, "new@example.com");
+        assert_eq!(loaded.auth_type, "password");
+        assert!(
+            loaded.password.is_none(),
+            "plaintext password column must be nulled"
+        );
+
+        let recovered = get_encrypted_credential(&conn, &key, &response.id, "password").unwrap();
+        assert_eq!(recovered.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn create_account_rejects_empty_email() {
+        let mut conn = migrated_conn();
+        let mut request = password_request("new@example.com");
+        request.email = String::new();
+        assert!(matches!(
+            create_account(&mut conn, &[0u8; 32], request),
+            Err(MailFfiError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn create_account_rollback_on_failure() {
+        let mut conn = migrated_conn();
+        let key = [21u8; 32];
+        
+        let count_accounts = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap()
+        };
+        let count_creds = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM encrypted_credentials", [], |r| r.get(0)).unwrap()
+        };
+        
+        let initial_accounts = count_accounts(&conn);
+        let initial_creds = count_creds(&conn);
+        
+        // Install trigger that fails insertion on encrypted_credentials
+        conn.execute(
+            "CREATE TRIGGER fail_cred BEFORE INSERT ON encrypted_credentials
+             BEGIN
+                 SELECT RAISE(ABORT, 'forced credential failure');
+             END;",
+            [],
+        ).unwrap();
+        
+        let result = create_account(&mut conn, &key, password_request("fail@example.com"));
+        assert!(result.is_err());
+        
+        assert_eq!(count_accounts(&conn), initial_accounts, "accounts table must be rolled back");
+        assert_eq!(count_creds(&conn), initial_creds, "creds table must be rolled back");
+    }
+
+    #[test]
+    fn create_account_secrets_are_null_from_start() {
+        let mut conn = migrated_conn();
+        let key = [21u8; 32];
+        let response = create_account(&mut conn, &key, password_request("null_from_start@example.com")).unwrap();
+        
+        // Directly query DB to make sure secrets are NULL
+        let (pw, client_sec, ref_tok, acc_tok): (Option<String>, Option<String>, Option<String>, Option<String>) = conn.query_row(
+            "SELECT password, oauth2_client_secret, oauth2_refresh_token, oauth2_access_token FROM accounts WHERE id = ?1",
+            [&response.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        ).unwrap();
+        
+        assert!(pw.is_none());
+        assert!(client_sec.is_none());
+        assert!(ref_tok.is_none());
+        assert!(acc_tok.is_none());
+    }
+
+    #[test]
+    fn delete_account_removes_row_and_all_children() {
+        let pool = crate::test_support::pool_with_seeded_data();
+        let ctx = crate::test_support::ctx(pool);
+        {
+            let conn = ctx.pool.get().unwrap();
+            store_encrypted_credential(&conn, &ctx.credential_key, "acc1", "password", "pw")
+                .unwrap();
+        }
+
+        delete_account(&ctx, "acc1").unwrap();
+
+        let conn = ctx.pool.get().unwrap();
+        assert!(matches!(
+            load_account(&conn, "acc1"),
+            Err(MailFfiError::AccountNotFound(_))
+        ));
+        let counts = |table: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE account_id = 'acc1'"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(counts("encrypted_credentials"), 0);
+        assert_eq!(counts("emails"), 0);
+        assert_eq!(counts("folders"), 0);
+    }
+
+    fn probe_params(
+        encryption: Encryption,
+        host: &str,
+        password: Option<&str>,
+    ) -> ProbeParams {
+        ProbeParams {
+            imap_host: host.to_string(),
+            imap_port: 993,
+            imap_encryption: encryption,
+            username: "u@example.com".to_string(),
+            auth_type: None,
+            password: password.map(str::to_string),
+            oauth2_access_token: None,
+        }
+    }
+
+    #[test]
+    fn probe_rejects_empty_host_before_connect() {
+        let params = probe_params(Encryption::Tls, "", Some("pw"));
+        assert!(matches!(
+            probe_imap_connection(&params),
+            Err(MailFfiError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn probe_rejects_missing_password() {
+        let params = probe_params(Encryption::Tls, "imap.example.com", None);
+        assert!(matches!(
+            probe_imap_connection(&params),
+            Err(MailFfiError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn probe_rejects_missing_oauth_token() {
+        let mut params = probe_params(Encryption::Tls, "imap.example.com", None);
+        params.auth_type = Some("oauth2_gmail".to_string());
+        assert!(matches!(
+            probe_imap_connection(&params),
+            Err(MailFfiError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn probe_plaintext_encryption_is_rejected_deterministically() {
+        let params = probe_params(Encryption::None, "imap.example.com", Some("pw"));
+        assert!(probe_imap_connection(&params).is_err());
+    }
+
+    #[test]
+    fn reconnect_resolves_existing_password_account() {
+        let pool = crate::test_support::pool_with_seeded_data();
+        let ctx = crate::test_support::ctx_arc(pool);
+        assert!(reconnect_account(&ctx, "acc1").is_ok());
+    }
+
+    #[test]
+    fn reconnect_unknown_account_errors() {
+        let pool = crate::test_support::pool_with_seeded_data();
+        let ctx = crate::test_support::ctx_arc(pool);
+        assert!(matches!(
+            reconnect_account(&ctx, "ghost"),
+            Err(MailFfiError::AccountNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn reconnect_with_no_runtime_returns_not_initialized() {
+        let pool = crate::test_support::pool_with_seeded_data();
+        let ctx = crate::test_support::ctx_arc(pool);
+        assert!(matches!(
+            reconnect_account_with_runtime(&ctx, "acc1", None),
+            Err(MailFfiError::NotInitialized)
+        ));
+    }
+
+    #[test]
+    fn create_account_auto_start_seam_registers_workers_once() {
+        let rt = crate::runtime::runtime().expect("runtime");
+        let pool = crate::test_support::pool_with_seeded_data();
+        let ctx = crate::test_support::ctx_arc(pool);
+
+        let mut conn = ctx.pool.get().unwrap();
+        let response =
+            create_account(&mut conn, &ctx.credential_key, password_request("auto@example.com"))
+                .unwrap();
+        drop(conn);
+
+        let (sync, backfill) = crate::state::start_account_workers(rt, &ctx, &response.id);
+        assert!(sync && backfill, "first auto-start spawns both workers");
+        assert!(crate::state::registry().is_sync_running(&response.id));
+
+        let (sync_again, _) = crate::state::start_account_workers(rt, &ctx, &response.id);
+        assert!(!sync_again, "second auto-start does not respawn the live sync worker");
+
+        crate::state::registry().stop_account(&response.id);
     }
 }

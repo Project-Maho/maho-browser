@@ -14,7 +14,7 @@ namespace maho::mail_helper {
 //
 // Bump this whenever the helper Mojo contract or handshake changes in a way
 // that makes an older helper binary incompatible with a newer browser.
-inline constexpr char kMahoMailHelperVersion[] = "2";
+inline constexpr char kMahoMailHelperVersion[] = "3";
 
 }  // namespace maho::mail_helper
 

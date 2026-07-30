@@ -34,7 +34,7 @@ pub type MahoMailReadCallback =
     Option<unsafe extern "C" fn(ok: bool, json: *const c_char, user_data: *mut c_void)>;
 
 type ReadCallback = unsafe extern "C" fn(bool, *const c_char, *mut c_void);
-type ReadFuture = Pin<Box<dyn Future<Output = Result<String>> + Send + 'static>>;
+pub(crate) type ReadFuture = Pin<Box<dyn Future<Output = Result<String>> + Send + 'static>>;
 
 #[no_mangle]
 pub extern "C" fn MahoMailListAccounts(
@@ -153,7 +153,7 @@ pub extern "C" fn MahoMailListThread(
 /// a read entrypoint (arg validation, `make_future`, allocation, `rt.spawn`)
 /// under `catch_unwind`, so a panic BEFORE the worker begins returns false and
 /// invokes no callback. [Category 14 — unwinding]
-fn accept_read_call(body: impl FnOnce() -> bool) -> bool {
+pub(crate) fn accept_read_call(body: impl FnOnce() -> bool) -> bool {
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(accepted) => accepted,
         Err(_) => {
@@ -166,7 +166,11 @@ fn accept_read_call(body: impl FnOnce() -> bool) -> bool {
 /// Acceptance tail: requires a live callback, initialized ctx, and a runtime,
 /// then schedules `make_future(ctx)` and returns true. A failed precondition
 /// returns false without a callback.
-fn accept_read<F>(callback: MahoMailReadCallback, user_data: *mut c_void, make_future: F) -> bool
+pub(crate) fn accept_read<F>(
+    callback: MahoMailReadCallback,
+    user_data: *mut c_void,
+    make_future: F,
+) -> bool
 where
     F: FnOnce(Arc<AppCtx>) -> ReadFuture,
 {
@@ -188,7 +192,7 @@ where
     true
 }
 
-fn blocking_json<T, F>(run: F) -> ReadFuture
+pub(crate) fn blocking_json<T, F>(run: F) -> ReadFuture
 where
     T: serde::Serialize + Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
@@ -203,7 +207,7 @@ where
     })
 }
 
-fn spawn_read_task(
+pub(crate) fn spawn_read_task(
     rt: &'static Runtime,
     callback: ReadCallback,
     user_data: AtomicPtr<c_void>,

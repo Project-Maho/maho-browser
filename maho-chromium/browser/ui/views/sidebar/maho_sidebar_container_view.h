@@ -11,14 +11,20 @@
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/resize_area_delegate.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/widget/widget_observer.h"
 
 class Browser;
+
+namespace views {
+class ImageButton;
+}
 
 namespace maho {
 
@@ -28,7 +34,8 @@ class MahoBrowserFrameOverlayHost;
 
 class MahoSidebarContainerView : public views::View,
                                   public views::ResizeAreaDelegate,
-                                  public gfx::AnimationDelegate {
+                                  public gfx::AnimationDelegate,
+                                  public views::WidgetObserver {
   METADATA_HEADER(MahoSidebarContainerView, views::View)
 
  public:
@@ -56,6 +63,9 @@ class MahoSidebarContainerView : public views::View,
   void ToggleSpacesOverlay();
   void DismissSpacesOverlay();
   bool IsSpacesOverlayVisible() const;
+  void ToggleLibraryOverlay(MahoSidebarLibraryRailView::Category category);
+  void DismissLibraryOverlay();
+  bool IsLibraryOverlayVisible() const;
   int GetLibraryRailWidth() const;
   MahoBrowserFrameOverlayHost* overlay_host() { return overlay_host_; }
 
@@ -72,6 +82,7 @@ class MahoSidebarContainerView : public views::View,
   void OnMouseExited(const ui::MouseEvent& event) override;
   void OnThemeChanged() override;
   void AddedToWidget() override;
+  void RemovedFromWidget() override;
 
   // views::ResizeAreaDelegate:
   void OnResize(int resize_amount, bool done_resizing) override;
@@ -79,6 +90,9 @@ class MahoSidebarContainerView : public views::View,
   // gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
   void AnimationEnded(const gfx::Animation* animation) override;
+
+  // views::WidgetObserver:
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
 
   gfx::Insets GetSidebarSlotInsets() const;
   bool IsFullyAutoHidden() const;
@@ -90,6 +104,7 @@ class MahoSidebarContainerView : public views::View,
                             ui::ColorId surface_color_id,
                             ui::ColorId text_color_id);
   bool IsPrivateMode() const { return is_private_; }
+  bool IsPanelExpanded() const { return ReadPanelExpanded(); }
 
   // Toggles expanded/collapsed. Private/OTR flips in-memory state only, never
   // sidebar prefs; R-10 `toggle_sidebar` routes here.
@@ -99,6 +114,7 @@ class MahoSidebarContainerView : public views::View,
   void OnPanelExpandedChanged();
   void OnSidebarWidthChanged();
   void ApplyPanelState();
+  void UpdateCollapsedExpandButtonBounds();
   // Private/OTR: read/write in-memory state, never sidebar prefs. Regular:
   // delegate to PrefService (byte-identical to prior behavior).
   bool ReadPanelExpanded() const;
@@ -110,6 +126,7 @@ class MahoSidebarContainerView : public views::View,
   // from AddedToWidget() to avoid mutating the parent's child list while
   // the view tree is still iterating our attachment.
   void AttachOverlayHost();
+  void CreateNowPlayingHostIfNeeded();
 
  public:
   void ApplyPreferredWidthFromPrefs();
@@ -126,6 +143,7 @@ class MahoSidebarContainerView : public views::View,
 
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> sidebar_view_ = nullptr;
+  raw_ptr<views::ImageButton> collapsed_expand_button_ = nullptr;
   raw_ptr<views::View> resize_handle_view_ = nullptr;
   raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
   PrefChangeRegistrar pref_registrar_;

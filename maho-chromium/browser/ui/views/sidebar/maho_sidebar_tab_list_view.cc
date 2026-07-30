@@ -135,6 +135,7 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
+#include "maho/components/constants/webui_url_constants.h"
 
 namespace maho {
 void ForwardDragToAutoScroller(views::View* child,
@@ -890,8 +891,10 @@ bool IsSidebarEligibleUrl(const GURL& url) {
     return false;
   }
   if (url.SchemeIs("chrome")) {
+    // Maho Mail is reached through the dedicated sidebar control button, so its
+    // tab is kept out of the list for the same reason as downloads/history.
     if (url.host() == "newtab" || url.host() == "downloads" ||
-        url.host() == "history") {
+        url.host() == "history" || url.host() == maho::kMahoMailHost) {
       return false;
     }
   }

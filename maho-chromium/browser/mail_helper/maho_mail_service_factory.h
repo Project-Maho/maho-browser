@@ -39,6 +39,8 @@ class MahoMailServiceFactory : public ProfileKeyedServiceFactory {
   // nullptr for off-the-record / unsupported profiles.
   static MahoMailService* GetForProfile(Profile* profile);
 
+  static MahoMailService* GetForProfileIfExists(Profile* profile);
+
  private:
   friend base::NoDestructor<MahoMailServiceFactory>;
 

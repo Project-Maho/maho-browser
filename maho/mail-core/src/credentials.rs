@@ -19,21 +19,19 @@ use crate::error::{MailFfiError, Result};
 
 /// Decode the injected credential key string into a 32-byte AES key.
 ///
-/// Accepts, in priority order:
-///   1. standard base64 that decodes to exactly 32 bytes (maho-core format),
-///   2. a 64-char hex string,
-///   3. otherwise a deterministic fold of the raw UTF-8 bytes into 32 bytes.
-///
-/// The fold (3) is a last-resort so a mis-formatted key never panics across the
-/// FFI boundary; well-behaved callers always hit (1).
-pub fn decode_credential_key(raw: &str) -> [u8; 32] {
+/// Accepts standard base64 that decodes to exactly 32 bytes (maho-core format),
+/// or a 64-char hex string. Any other input is rejected with an error: silently
+/// downgrading to a low-entropy key (e.g. an all-zero key for empty input) would
+/// encrypt every account credential under an attacker-guessable key, which is
+/// strictly worse than failing closed and disabling mail.
+pub fn decode_credential_key(raw: &str) -> Result<[u8; 32]> {
     let trimmed = raw.trim();
 
     if let Ok(bytes) = base64::prelude::BASE64_STANDARD.decode(trimmed) {
         if bytes.len() == 32 {
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
-            return key;
+            return Ok(key);
         }
     }
 
@@ -42,17 +40,16 @@ pub fn decode_credential_key(raw: &str) -> [u8; 32] {
             if bytes.len() == 32 {
                 let mut key = [0u8; 32];
                 key.copy_from_slice(&bytes);
-                return key;
+                return Ok(key);
             }
         }
     }
 
-    // Deterministic fold fallback.
-    let mut key = [0u8; 32];
-    for (i, b) in trimmed.as_bytes().iter().enumerate() {
-        key[i % 32] ^= *b;
-    }
-    key
+    // Fail closed: an unrecognized key must never be silently folded into a
+    // low-entropy AES key.
+    Err(MailFfiError::InvalidKey(
+        "credential_key must be base64 or hex encoding exactly 32 bytes",
+    ))
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -84,6 +81,56 @@ fn decrypt(key: &[u8; 32], ciphertext: &[u8], nonce_bytes: &[u8]) -> Result<Stri
         .decrypt(nonce, ciphertext)
         .map_err(|e| MailFfiError::CredentialDecrypt(format!("decrypt: {e}")))?;
     String::from_utf8(plaintext).map_err(|e| MailFfiError::CredentialDecrypt(format!("utf8: {e}")))
+}
+
+/// Encrypt `plaintext` under `key` with AES-256-GCM, mirroring the layout read
+/// by [`get_encrypted_credential`]: a fresh 12-byte nonce plus the AEAD
+/// ciphertext (with the appended GCM tag). Returns `(ciphertext, nonce)`.
+fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    // aead's `getrandom` feature is not enabled for this crate (no
+    // `aes_gcm::aead::OsRng`), so source 12 random nonce bytes from a UUIDv4,
+    // which `uuid` already provides as a dependency. GCM requires the nonce to
+    // be unique per key; per-account credential writes are rare, so 96-bit
+    // random uniqueness is more than sufficient.
+    let uuid_bytes = uuid::Uuid::new_v4().into_bytes();
+    let mut nonce_bytes = [0u8; 12];
+    nonce_bytes.copy_from_slice(&uuid_bytes[..12]);
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| MailFfiError::CredentialEncrypt(format!("cipher init: {e}")))?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| MailFfiError::CredentialEncrypt(format!("encrypt: {e}")))?;
+    Ok((ciphertext, nonce_bytes.to_vec()))
+}
+
+/// Encrypt and persist a per-account credential into `encrypted_credentials`,
+/// matching the AES-256-GCM nonce/ciphertext layout consumed by
+/// [`get_encrypted_credential`]. Re-storing the same
+/// `(account_id, credential_type)` overwrites the prior value with a fresh
+/// nonce.
+///
+/// `credential_type` is one of `"password"`, `"oauth2_access_token"`,
+/// `"oauth2_refresh_token"`, `"oauth2_client_secret"`.
+pub fn store_encrypted_credential(
+    conn: &Connection,
+    credential_key: &[u8; 32],
+    account_id: &str,
+    credential_type: &str,
+    plaintext: &str,
+) -> Result<()> {
+    let (ciphertext, nonce) = encrypt(credential_key, plaintext)?;
+    conn.execute(
+        "INSERT INTO encrypted_credentials
+             (account_id, credential_type, encrypted_value, nonce, updated_at)
+         VALUES (?1, ?2, ?3, ?4, datetime('now'))
+         ON CONFLICT(account_id, credential_type) DO UPDATE SET
+             encrypted_value = excluded.encrypted_value,
+             nonce = excluded.nonce,
+             updated_at = excluded.updated_at",
+        rusqlite::params![account_id, credential_type, ciphertext, nonce],
+    )?;
+    Ok(())
 }
 
 /// Look up and decrypt a stored credential for an account, if present in the
@@ -129,21 +176,23 @@ mod tests {
     fn base64_key_roundtrips() {
         let raw_bytes = [7u8; 32];
         let b64 = base64::prelude::BASE64_STANDARD.encode(raw_bytes);
-        assert_eq!(decode_credential_key(&b64), raw_bytes);
+        assert_eq!(decode_credential_key(&b64).unwrap(), raw_bytes);
     }
 
     #[test]
     fn hex_key_roundtrips() {
         let raw_bytes = [0xABu8; 32];
         let hex: String = raw_bytes.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(decode_credential_key(&hex), raw_bytes);
+        assert_eq!(decode_credential_key(&hex).unwrap(), raw_bytes);
     }
 
     #[test]
-    fn fallback_fold_is_deterministic() {
-        let a = decode_credential_key("not-a-valid-key");
-        let b = decode_credential_key("not-a-valid-key");
-        assert_eq!(a, b);
+    fn rejects_invalid_key_instead_of_downgrading() {
+        // Empty / short / non-encoded keys MUST be rejected, never silently
+        // folded into a low-entropy AES key (crypto-downgrade).
+        assert!(decode_credential_key("").is_err());
+        assert!(decode_credential_key("short").is_err());
+        assert!(decode_credential_key("not-a-valid-key").is_err());
     }
 
     #[test]
@@ -199,6 +248,68 @@ mod tests {
         .unwrap();
 
         let wrong = [2u8; 32];
+        assert!(get_encrypted_credential(&conn, &wrong, "acc1", "password").is_err());
+    }
+
+    fn creds_table(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE encrypted_credentials (
+                account_id TEXT NOT NULL,
+                credential_type TEXT NOT NULL,
+                encrypted_value BLOB NOT NULL,
+                nonce BLOB NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (account_id, credential_type)
+            );",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn store_encrypted_credential_roundtrips_through_get() {
+        let conn = Connection::open_in_memory().unwrap();
+        creds_table(&conn);
+        let key = [55u8; 32];
+
+        store_encrypted_credential(&conn, &key, "acc1", "password", "hunter2").unwrap();
+
+        let got = get_encrypted_credential(&conn, &key, "acc1", "password").unwrap();
+        assert_eq!(got.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn store_encrypted_credential_reencrypts_on_overwrite() {
+        let conn = Connection::open_in_memory().unwrap();
+        creds_table(&conn);
+        let key = [77u8; 32];
+
+        store_encrypted_credential(&conn, &key, "acc1", "password", "old").unwrap();
+        store_encrypted_credential(&conn, &key, "acc1", "password", "new").unwrap();
+
+        let got = get_encrypted_credential(&conn, &key, "acc1", "password").unwrap();
+        assert_eq!(got.as_deref(), Some("new"));
+
+        // Exactly one row survives the overwrite (upsert, not duplicate insert).
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM encrypted_credentials WHERE account_id = 'acc1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn store_encrypted_credential_wrong_key_fails_decrypt() {
+        let conn = Connection::open_in_memory().unwrap();
+        creds_table(&conn);
+        let key = [3u8; 32];
+
+        store_encrypted_credential(&conn, &key, "acc1", "password", "secret").unwrap();
+
+        let wrong = [4u8; 32];
         assert!(get_encrypted_credential(&conn, &wrong, "acc1", "password").is_err());
     }
 }

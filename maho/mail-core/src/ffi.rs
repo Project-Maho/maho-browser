@@ -12,6 +12,38 @@ use crate::state::{self, AppCtx, InitInfo};
 use crate::sync::start_sync_worker;
 
 pub mod read_api;
+pub mod onboarding_api;
+pub mod write_api;
+pub mod compose_api;
+pub mod otp_api;
+pub mod organize_api;
+pub mod data_api;
+pub mod ai_api;
+pub mod crypto_api;
+pub mod calendar_api;
+pub mod io_api;
+
+struct StderrLogger;
+impl log::Log for StderrLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        eprintln!("[mail-core:{}] {}", record.level(), record.args());
+    }
+    fn flush(&self) {}
+}
+
+static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+static STDERR_LOGGER: StderrLogger = StderrLogger;
+
+fn init_logging() {
+    LOGGER_INIT.call_once(|| {
+        if log::set_logger(&STDERR_LOGGER).is_ok() {
+            log::set_max_level(log::LevelFilter::Debug);
+        }
+    });
+}
 
 #[no_mangle]
 pub extern "C" fn MahoMailInitialize(
@@ -48,6 +80,35 @@ pub extern "C" fn MahoMailStartBackfill(account_id: *const c_char) -> bool {
     ffi_bool(|| start_backfill(account_id))
 }
 
+#[no_mangle]
+pub extern "C" fn MahoMailStartAllAccountSync() -> bool {
+    ffi_bool(|| {
+        let ctx = state::ctx()?;
+        let rt = crate::runtime::runtime()
+            .ok_or_else(|| MailFfiError::Internal("tokio runtime unavailable".to_string()))?;
+        start_all_account_sync(&ctx, rt).map(|_| ())
+    })
+}
+
+/// Guarded auto-start of sync + backfill for every known account. Per-account
+/// work goes through the idempotent [`state::start_account_workers`] guard so a
+/// second call never double-spawns. Enumeration is the only fallible step;
+/// individual accounts cannot abort the loop (HC5). Returns the number of
+/// accounts for which a new sync worker was spawned.
+fn start_all_account_sync(ctx: &Arc<AppCtx>, rt: &tokio::runtime::Runtime) -> Result<usize> {
+    let accounts = crate::read::list_accounts(ctx)?;
+    log::info!("[mail-ffi] start_all_account_sync: {} account(s)", accounts.len());
+    let mut spawned = 0usize;
+    for account in accounts {
+        let (sync, _backfill) = state::start_account_workers(rt, ctx, &account.id);
+        log::info!("[mail-ffi] worker start account={} sync={}", account.id, sync);
+        if sync {
+            spawned += 1;
+        }
+    }
+    Ok(spawned)
+}
+
 fn ffi_bool(action: impl FnOnce() -> Result<()> + std::panic::UnwindSafe) -> bool {
     match std::panic::catch_unwind(action) {
         Ok(Ok(())) => true,
@@ -63,6 +124,8 @@ fn ffi_bool(action: impl FnOnce() -> Result<()> + std::panic::UnwindSafe) -> boo
 }
 
 fn initialize(version_token: *const c_char, profile_path: *const c_char) -> Result<()> {
+    init_logging();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let version_token = c_string(version_token, "version_token")?;
     let profile_path = PathBuf::from(c_string(profile_path, "profile_path")?);
     let app_data_dir = profile_path.join("MahoMail");
@@ -80,7 +143,7 @@ fn initialize(version_token: *const c_char, profile_path: *const c_char) -> Resu
 
 fn inject_keys(sqlcipher_key: *const c_char, credential_key: *const c_char) -> Result<()> {
     let sqlcipher_key = c_string(sqlcipher_key, "sqlcipher_key")?;
-    let credential_key = decode_credential_key(&c_string(credential_key, "credential_key")?);
+    let credential_key = decode_credential_key(&c_string(credential_key, "credential_key")?)?;
     let init = state::init_info().ok_or(MailFfiError::NotInitialized)?;
     let pool = maho_core::db::init_database_pool(&init.db_path, &sqlcipher_key)?;
     state::set_ctx(Arc::new(AppCtx {
@@ -141,6 +204,61 @@ fn c_string(ptr: *const c_char, name: &'static str) -> Result<String> {
         .to_str()
         .map(str::to_owned)
         .map_err(|_| MailFfiError::InvalidArg(name))
+}
+pub type MahoMailEventCallback = unsafe extern "C" fn(
+    event_type: *const c_char,
+    account_id: *const c_char,
+    provider: *const c_char,
+    reason: *const c_char,
+);
+
+static EVENT_CALLBACK: std::sync::OnceLock<MahoMailEventCallback> = std::sync::OnceLock::new();
+
+#[no_mangle]
+pub extern "C" fn MahoMailRegisterEventCallback(
+    callback: MahoMailEventCallback,
+) -> bool {
+    EVENT_CALLBACK.set(callback).is_ok()
+}
+
+fn safe_c_string(s: &str) -> std::ffi::CString {
+    let mut bytes = Vec::new();
+    for &b in s.as_bytes() {
+        if b != 0 {
+            bytes.push(b);
+        }
+    }
+    // SAFETY: bytes has no NUL (0) bytes, making unchecked construction safe.
+    unsafe { std::ffi::CString::from_vec_unchecked(bytes) }
+}
+
+pub fn emit_event(event_type: &str, account_id: &str, provider: &str, reason: &str) {
+    if let Some(callback) = EVENT_CALLBACK.get() {
+        let event_type_c = safe_c_string(event_type);
+        let account_id_c = safe_c_string(account_id);
+        let provider_c = safe_c_string(provider);
+        let reason_c = safe_c_string(reason);
+        unsafe {
+            callback(
+                event_type_c.as_ptr(),
+                account_id_c.as_ptr(),
+                provider_c.as_ptr(),
+                reason_c.as_ptr(),
+            );
+        }
+    }
+}
+
+pub fn emit_reauth_event(account_id: &str, provider: &str, reason: &str) {
+    emit_event("auth-reauth-required", account_id, provider, reason);
+}
+
+pub fn emit_refresh_succeeded_event(account_id: &str) {
+    emit_event("auth-refresh-succeeded", account_id, "", "");
+}
+
+pub fn emit_accounts_changed_event(account_id: &str) {
+    emit_event("accounts-changed", account_id, "", "");
 }
 
 #[cfg(test)]

@@ -26,6 +26,7 @@ const char kOpenExternalLinksInMahoMini[] =
     "maho.maho_mini.open_external_links_in_maho_mini";
 const char kMahoMiniWindowWidth[] = "maho.maho_mini.window_width";
 const char kMahoMiniWindowHeight[] = "maho.maho_mini.window_height";
+const char kMahoMailEnabled[] = "maho.mail.enabled";
 
 int ClampSidebarWidthForLayout(int width) {
   if (width <= sidebar_layout::kLegacyRailWidthResetThresholdDp) {
@@ -41,6 +42,10 @@ int GetSidebarWidthForLayout(int pref_width) {
 
 bool IsSidebarLayoutEnabled(const PrefService* prefs) {
   return prefs && prefs->GetBoolean(kSidebarLayoutEnabled);
+}
+
+bool IsMahoMailEnabled(const PrefService* prefs) {
+  return prefs && prefs->GetBoolean(kMahoMailEnabled);
 }
 
 bool IsSidebarPanelExpanded(const PrefService* prefs) {
@@ -72,6 +77,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kOpenExternalLinksInMahoMini, false);
   registry->RegisterIntegerPref(kMahoMiniWindowWidth, 0);
   registry->RegisterIntegerPref(kMahoMiniWindowHeight, 0);
+  // Mail stays off until its security/integrity remediation pass completes.
+  registry->RegisterBooleanPref(kMahoMailEnabled, false);
 }
 
 void MigrateFromLegacyVisiblePref(PrefService* prefs) {

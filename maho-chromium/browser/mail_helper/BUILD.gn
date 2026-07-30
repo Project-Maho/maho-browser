@@ -29,9 +29,7 @@ source_set("maho_mail_launcher") {
 }
 
 # Profile-keyed broker (browser side). Owns the launcher and proxies the
-# helper's asynchronous JSON read methods for one regular profile. Split from
-# the factory so unit tests can link the broker without the heavy
-# //chrome/browser/profiles dependency the factory pulls in.
+# helper's asynchronous JSON read methods for one regular profile.
 source_set("maho_mail_service") {
   sources = [
     "maho_mail_service.cc",
@@ -41,8 +39,16 @@ source_set("maho_mail_service") {
     ":mojo_bindings",
     "//base",
     "//components/keyed_service/core",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
+    "//crypto",
   ]
-  deps = [ ":maho_mail_launcher" ]
+  deps = [
+    ":maho_mail_launcher",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+  ]
 }
 
 # Profile-keyed factory: creates one MahoMailService per regular profile and
@@ -140,4 +146,10 @@ executable("maho_mail_helper") {
     "//maho/third_party/maho:maho_mail_ffi",
     "//third_party/crashpad/crashpad/client",
   ]
+
+  if (is_mac) {
+    # Seatbelt: the helper sandboxes itself in Initialize() before opening the
+    # mail DB or touching the network.
+    deps += [ "//sandbox/mac:seatbelt" ]
+  }
 }

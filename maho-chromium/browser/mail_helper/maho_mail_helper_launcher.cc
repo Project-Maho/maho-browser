@@ -11,12 +11,18 @@
 #include "base/path_service.h"
 #include "base/process/launch.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/foundation_util.h"
+#endif
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
 
 namespace maho {
 
 namespace {
+#if BUILDFLAG(IS_MAC)
+constexpr char kBaseBundleIdSwitch[] = "maho-mail-base-bundle-id";
+#endif
 constexpr char kCrashpadDatabaseSwitch[] = "maho-mail-crashpad-database";
 
 #if BUILDFLAG(IS_WIN)
@@ -65,6 +71,10 @@ void MahoMailHelperLauncher::LaunchInternal() {
   if (!crashpad_database_.empty()) {
     cmd_line.AppendSwitchPath(kCrashpadDatabaseSwitch, crashpad_database_);
   }
+#if BUILDFLAG(IS_MAC)
+  cmd_line.AppendSwitchASCII(kBaseBundleIdSwitch,
+                             std::string(base::apple::BaseBundleID()));
+#endif
 
   mojo::PlatformChannel channel;
   mojo::OutgoingInvitation invitation;
@@ -132,21 +142,129 @@ void MahoMailHelperLauncher::OnInitialized(bool success) {
     return;
   }
 
-  ready_ = true;
   LOG(INFO) << "[MahoMailHelperLauncher] Helper initialized successfully.";
+
+  mojo::PendingRemote<mojom::MahoMailHelperClient> client_remote;
+  client_receiver_.reset();
+  client_receiver_.Bind(client_remote.InitWithNewPipeAndPassReceiver());
+  helper_->BindClient(std::move(client_remote));
 
   ReinjectKeysIfPresent();
 }
 
+void MahoMailHelperLauncher::OnSyncEvent(const std::string& event_type, const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnSyncEvent: " << event_type;
+  if (observer_) {
+    observer_->OnSyncEvent(event_type, payload);
+  }
+}
+
+void MahoMailHelperLauncher::OnBackfillEvent(const std::string& event_type, const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnBackfillEvent: " << event_type;
+  if (observer_) {
+    observer_->OnBackfillEvent(event_type, payload);
+  }
+}
+
+void MahoMailHelperLauncher::OnStatusChanged(const std::string& account_id, bool connected) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnStatusChanged for " << account_id << ": " << connected;
+  if (observer_) {
+    observer_->OnStatusChanged(account_id, connected);
+  }
+}
+
+void MahoMailHelperLauncher::OnAuthRequired(const std::string& account_id,
+                                            const std::string& provider,
+                                            const std::string& reason) {
+  LOG(WARNING) << "[MahoMailHelperLauncher] OnAuthRequired for " << account_id << " (provider: " << provider << "): " << reason;
+  if (observer_) {
+    observer_->OnAuthRequired(account_id, provider, reason);
+  }
+}
+
+void MahoMailHelperLauncher::OnAuthRefreshSucceeded(const std::string& account_id) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnAuthRefreshSucceeded for " << account_id;
+  if (observer_) {
+    observer_->OnAuthRefreshSucceeded(account_id);
+  }
+}
+
+void MahoMailHelperLauncher::OnAccountsChanged() {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnAccountsChanged";
+  if (observer_) {
+    observer_->OnAccountsChanged();
+  }
+}
+
+void MahoMailHelperLauncher::OnNewMail(const std::string& account_id) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnNewMail for " << account_id;
+  if (observer_) {
+    observer_->OnNewMail(account_id);
+  }
+}
+
+void MahoMailHelperLauncher::OnMutation(const std::string& account_id, const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnMutation for " << account_id;
+  if (observer_) {
+    observer_->OnMutation(account_id, payload);
+  }
+}
+
+void MahoMailHelperLauncher::OnOutbox(const std::string& account_id, const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnOutbox for " << account_id;
+  if (observer_) {
+    observer_->OnOutbox(account_id, payload);
+  }
+}
+
+void MahoMailHelperLauncher::OnScheduler(const std::string& account_id, const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnScheduler for " << account_id;
+  if (observer_) {
+    observer_->OnScheduler(account_id, payload);
+  }
+}
+
+void MahoMailHelperLauncher::OnAgentStream(const std::string& session_id, const std::string& chunk) {
+  if (observer_) {
+    observer_->OnAgentStream(session_id, chunk);
+  }
+}
+
+void MahoMailHelperLauncher::OnCalendar(const std::string& account_id, const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnCalendar for " << account_id;
+  if (observer_) {
+    observer_->OnCalendar(account_id, payload);
+  }
+}
+
+void MahoMailHelperLauncher::OnImport(const std::string& payload) {
+  LOG(INFO) << "[MahoMailHelperLauncher] OnImport";
+  if (observer_) {
+    observer_->OnImport(payload);
+  }
+}
+
 void MahoMailHelperLauncher::ReinjectKeysIfPresent() {
-  if (!has_keys_ || !helper_.is_bound() || !ready_) {
+  if (!has_keys_ || !helper_.is_bound()) {
     return;
   }
   helper_->InjectKeys(
-      sqlcipher_key_, credential_key_, base::BindOnce([](bool success) {
-        LOG(INFO) << "[MahoMailHelperLauncher] Key re-injection result: "
-                  << (success ? "SUCCESS" : "FAILURE");
-      }));
+      sqlcipher_key_, credential_key_,
+      base::BindOnce(&MahoMailHelperLauncher::OnKeysInjected,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void MahoMailHelperLauncher::OnKeysInjected(bool success) {
+  if (shutting_down_) {
+    return;
+  }
+  if (success) {
+    ready_ = true;
+    LOG(INFO) << "[MahoMailHelperLauncher] Key injection/re-injection result: SUCCESS. Launcher is now ready.";
+  } else {
+    LOG(ERROR) << "[MahoMailHelperLauncher] Key injection/re-injection failed; relaunching helper.";
+    HandleFailureAndMaybeRelaunch();
+  }
 }
 
 void MahoMailHelperLauncher::InjectDatabaseKeys(
@@ -158,16 +276,15 @@ void MahoMailHelperLauncher::InjectDatabaseKeys(
   sqlcipher_key_ = sqlcipher_key;
   credential_key_ = credential_key;
 
-  if (!helper_.is_bound() || !ready_) {
-    LOG(WARNING) << "[MahoMailHelperLauncher] Helper not ready; keys cached "
+  if (!helper_.is_bound()) {
+    LOG(WARNING) << "[MahoMailHelperLauncher] Helper not bound; keys cached "
                     "for initialization or respawn.";
     return;
   }
   helper_->InjectKeys(
-      sqlcipher_key, credential_key, base::BindOnce([](bool success) {
-        LOG(INFO) << "[MahoMailHelperLauncher] Key injection result: "
-                  << (success ? "SUCCESS" : "FAILURE");
-      }));
+      sqlcipher_key, credential_key,
+      base::BindOnce(&MahoMailHelperLauncher::OnKeysInjected,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void MahoMailHelperLauncher::BindHelperForTesting(

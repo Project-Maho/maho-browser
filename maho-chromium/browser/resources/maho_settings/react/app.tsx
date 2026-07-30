@@ -16,6 +16,7 @@ import {
   LIVE_PANE_SECTION_MANIFEST,
   PANE_DEFINITION_MAP,
   PANE_DEFINITIONS,
+  panesForSettings,
 } from '../schema/panes.js';
 import {
   SETTING_METADATA,
@@ -146,15 +147,25 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
     return PANE_DEFINITIONS[0]!;
   }, [state.currentPaneKey]);
 
+  // Mail panes appear only when the mail.enabled setting is on, so the nav is
+  // derived from live settings instead of a static list.
+  const mailEnabled = useMemo(
+      () => state.settings.some(
+          s => s.key === 'mail.enabled' && s.value === 'true'),
+      [state.settings]);
+
+  const visiblePanes = useMemo(
+      () => panesForSettings(mailEnabled), [mailEnabled]);
+
   const panesByDomain = useMemo(() => {
     const grouped = new Map<string, PaneDefinition[]>();
-    for (const pane of PANE_DEFINITIONS) {
+    for (const pane of visiblePanes) {
       const list = grouped.get(pane.domain) || [];
       list.push(pane);
       grouped.set(pane.domain, list);
     }
     return grouped;
-  }, []);
+  }, [visiblePanes]);
 
   return (
     <div className={SETTINGS_SHELL_CLASS}>

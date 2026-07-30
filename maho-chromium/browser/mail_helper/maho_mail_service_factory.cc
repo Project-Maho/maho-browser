@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "base/no_destructor.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -25,6 +26,14 @@ MahoMailService* MahoMailServiceFactory::GetForProfile(Profile* profile) {
       GetInstance()->GetServiceForBrowserContext(profile, /*create=*/true));
 }
 
+MahoMailService* MahoMailServiceFactory::GetForProfileIfExists(Profile* profile) {
+  if (!profile) {
+    return nullptr;
+  }
+  return static_cast<MahoMailService*>(
+      GetInstance()->GetServiceForBrowserContext(profile, /*create=*/false));
+}
+
 MahoMailServiceFactory::MahoMailServiceFactory()
     : ProfileKeyedServiceFactory(
           "MahoMailService",
@@ -35,7 +44,9 @@ MahoMailServiceFactory::~MahoMailServiceFactory() = default;
 std::unique_ptr<KeyedService>
 MahoMailServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return std::make_unique<MahoMailService>();
+  return std::make_unique<MahoMailService>(
+      Profile::FromBrowserContext(context),
+      g_browser_process->os_crypt_async());
 }
 
 }  // namespace maho

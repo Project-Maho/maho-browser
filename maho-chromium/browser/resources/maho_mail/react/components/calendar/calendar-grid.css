@@ -1,0 +1,312 @@
+.maho-rbc-wrap {
+  position: relative;
+}
+
+.maho-rbc-wrap .rbc-calendar {
+  background: transparent;
+  color: var(--foreground);
+}
+
+.maho-rbc-wrap .rbc-toolbar {
+  color: var(--foreground);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.maho-rbc-wrap .rbc-toolbar button {
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+
+.maho-rbc-wrap .rbc-toolbar button:hover,
+.maho-rbc-wrap .rbc-toolbar button:focus {
+  background: color-mix(in srgb, var(--primary) 12%, var(--card));
+  border-color: var(--border);
+  color: var(--foreground);
+}
+
+.maho-rbc-wrap .rbc-toolbar button.rbc-active,
+.maho-rbc-wrap .rbc-toolbar button.rbc-active:hover {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.maho-rbc-wrap .rbc-toolbar-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.maho-rbc-wrap .rbc-month-view,
+.maho-rbc-wrap .rbc-time-view,
+.maho-rbc-wrap .rbc-agenda-view {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--background);
+}
+
+.maho-rbc-wrap .rbc-month-row,
+.maho-rbc-wrap .rbc-header,
+.maho-rbc-wrap .rbc-day-bg,
+.maho-rbc-wrap .rbc-time-content,
+.maho-rbc-wrap .rbc-time-header-content,
+.maho-rbc-wrap .rbc-time-gutter,
+.maho-rbc-wrap .rbc-timeslot-group,
+.maho-rbc-wrap .rbc-agenda-view table {
+  border-color: var(--border);
+}
+
+.maho-rbc-wrap .rbc-header {
+  padding: 8px 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+
+.maho-rbc-wrap .rbc-month-view .rbc-day-bg + .rbc-day-bg,
+.maho-rbc-wrap .rbc-month-view .rbc-month-row + .rbc-month-row {
+  border-color: var(--border);
+}
+
+.maho-rbc-wrap .rbc-off-range-bg {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+.maho-rbc-wrap .rbc-off-range {
+  color: var(--muted-foreground);
+  opacity: 0.45;
+}
+
+.maho-rbc-wrap .rbc-today {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.maho-rbc-wrap .rbc-date-cell {
+  color: var(--foreground);
+  padding: 4px 6px;
+  font-size: 0.8rem;
+}
+
+.maho-rbc-wrap .rbc-date-cell.rbc-now {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.maho-rbc-wrap .rbc-event,
+.maho-rbc-wrap .rbc-day-slot .rbc-background-event {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border: none;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.75rem;
+}
+
+.maho-rbc-wrap .rbc-event:focus {
+  outline: 2px solid var(--ring);
+}
+
+.maho-rbc-wrap .rbc-event-content {
+  font-size: 0.75rem;
+}
+
+.maho-rbc-wrap .rbc-show-more {
+  color: var(--primary);
+  background: transparent;
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0 4px;
+}
+
+.maho-rbc-wrap .rbc-time-slot {
+  color: var(--muted-foreground);
+}
+
+.maho-rbc-wrap .rbc-time-view .rbc-row {
+  min-height: 28px;
+}
+
+.maho-rbc-wrap .rbc-current-time-indicator {
+  background: var(--destructive);
+  height: 2px;
+}
+
+.maho-rbc-wrap .rbc-agenda-view table {
+  background: var(--background);
+}
+
+.maho-rbc-wrap .rbc-agenda-view table thead {
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+}
+
+.maho-rbc-wrap .rbc-agenda-view table td,
+.maho-rbc-wrap .rbc-agenda-view table th {
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+.maho-rbc-wrap .rbc-agenda-event-cell {
+  color: var(--foreground);
+}
+
+.maho-rbc-wrap .rbc-agenda-empty {
+  color: var(--muted-foreground);
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .maho-rbc-wrap, .maho-rbc-wrap * {
+    visibility: visible;
+  }
+  .maho-rbc-wrap {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+  }
+  .maho-rbc-wrap .rbc-event {
+    border: 1px solid #000 !important;
+    color: black !important;
+    background: transparent !important;
+  }
+}
+
+/* Weekend Hiding styles */
+/* Sunday Start (week-start-0): Sunday = child 1, Saturday = child 7 */
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-header .rbc-header:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-header .rbc-header:nth-child(7),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-row .rbc-day-bg:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-row .rbc-day-bg:nth-child(7),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-row .rbc-date-cell:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-row .rbc-date-cell:nth-child(7),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-row .rbc-row-segment:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-month-view .rbc-month-row .rbc-row-segment:nth-child(7),
+.calendar-hide-weekends.week-start-0 .rbc-time-view .rbc-time-header .rbc-header:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-time-view .rbc-time-header .rbc-header:nth-child(7),
+.calendar-hide-weekends.week-start-0 .rbc-time-view .rbc-day-bg:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-time-view .rbc-day-bg:nth-child(7),
+.calendar-hide-weekends.week-start-0 .rbc-time-view .rbc-time-header-content .rbc-row:nth-child(2) > .rbc-header:nth-child(1),
+.calendar-hide-weekends.week-start-0 .rbc-time-view .rbc-time-header-content .rbc-row:nth-child(2) > .rbc-header:nth-child(7) {
+  display: none !important;
+}
+
+/* Monday Start (week-start-1): Saturday = child 6, Sunday = child 7 */
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-header .rbc-header:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-header .rbc-header:nth-child(7),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-row .rbc-day-bg:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-row .rbc-day-bg:nth-child(7),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-row .rbc-date-cell:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-row .rbc-date-cell:nth-child(7),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-row .rbc-row-segment:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-month-view .rbc-month-row .rbc-row-segment:nth-child(7),
+.calendar-hide-weekends.week-start-1 .rbc-time-view .rbc-time-header .rbc-header:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-time-view .rbc-time-header .rbc-header:nth-child(7),
+.calendar-hide-weekends.week-start-1 .rbc-time-view .rbc-day-bg:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-time-view .rbc-day-bg:nth-child(7),
+.calendar-hide-weekends.week-start-1 .rbc-time-view .rbc-time-header-content .rbc-row:nth-child(2) > .rbc-header:nth-child(6),
+.calendar-hide-weekends.week-start-1 .rbc-time-view .rbc-time-header-content .rbc-row:nth-child(2) > .rbc-header:nth-child(7) {
+  display: none !important;
+}
+
+/* Saturday Start (week-start-6): Saturday = child 1, Sunday = child 2 */
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-header .rbc-header:nth-child(1),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-header .rbc-header:nth-child(2),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-row .rbc-day-bg:nth-child(1),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-row .rbc-day-bg:nth-child(2),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-row .rbc-date-cell:nth-child(1),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-row .rbc-date-cell:nth-child(2),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-row .rbc-row-segment:nth-child(1),
+.calendar-hide-weekends.week-start-6 .rbc-month-view .rbc-month-row .rbc-row-segment:nth-child(2),
+.calendar-hide-weekends.week-start-6 .rbc-time-view .rbc-time-header .rbc-header:nth-child(1),
+.calendar-hide-weekends.week-start-6 .rbc-time-view .rbc-time-header .rbc-header:nth-child(2),
+.calendar-hide-weekends.week-start-6 .rbc-time-view .rbc-day-bg:nth-child(1),
+.calendar-hide-weekends.week-start-6 .rbc-time-view .rbc-day-bg:nth-child(2),
+/* All-day banner cell improvements */
+.maho-rbc-wrap .rbc-time-header .rbc-allday-cell {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 5 !important;
+  background: var(--background) !important;
+  min-height: 32px !important;
+  border-bottom: 2px solid var(--border) !important;
+}
+
+.maho-rbc-wrap .rbc-allday-cell .rbc-event {
+  min-height: 20px !important;
+  line-height: 18px !important;
+  font-weight: 600 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
+  background-color: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+}
+
+/* Dark mode contrast check for all-day events */
+.dark .maho-rbc-wrap .rbc-allday-cell .rbc-event {
+  background-color: color-mix(in srgb, var(--primary) 85%, white) !important;
+  color: var(--primary-foreground) !important;
+}
+
+@media print {
+  @page {
+    size: landscape;
+  }
+  /* Hide sidebars, buttons, inputs, quickadd forms, timezones selector */
+  header, nav, aside, [role="dialog"], button, form, select, .no-print, .rbc-toolbar {
+    display: none !important;
+  }
+  
+  /* Month view page-break rules */
+  .rbc-month-view {
+    page-break-after: always;
+    page-break-inside: avoid;
+  }
+
+  .rbc-month-row {
+    page-break-inside: avoid;
+  }
+
+  .rbc-month-header {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  /* Week / Day views page break */
+  .rbc-time-view {
+    page-break-after: always;
+    page-break-inside: avoid;
+  }
+}
+
+.maho-rbc-wrap .rbc-time-slot.non-work-hour,
+.maho-rbc-wrap .rbc-timeslot-group.non-work-hour {
+  background-color: color-mix(in srgb, var(--muted) 25%, transparent);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0px,
+    transparent 6px,
+    color-mix(in srgb, var(--muted) 12%, transparent) 6px,
+    color-mix(in srgb, var(--muted) 12%, transparent) 12px
+  );
+}
+
+.maho-rbc-wrap .rbc-day-slot .rbc-time-slot.non-work-hour {
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+}

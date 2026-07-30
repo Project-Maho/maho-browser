@@ -19,6 +19,7 @@
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -27,6 +28,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_traffic_light_geometry.h"
@@ -60,7 +62,10 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ai/maho_ai_llm_client.h"
@@ -169,7 +174,7 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   traffic_light_spacer_->SetPreferredSize(gfx::Size(
       sidebar_layout::kTrafficLightAlignmentWidthDp,
       sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   auto* menu_layout = traffic_light_spacer_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
@@ -235,9 +240,11 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       base::BindRepeating(&MahoSidebarTopBarView::OnMailPressed,
                           weak_factory_.GetWeakPtr()),
       maho_lucide_icons::kInboxIcon, u"Mail");
-  // Mail deferred from this ship: wiring kept intact for a one-line revert, but
-  // the entry point stays hidden. Paired with the WebUI + helper defer gates.
-  mail_button_->SetVisible(false);
+  // Mail entry point follows the maho.mail.enabled pref (default false), the
+  // same gate used by chrome://maho-mail and the helper subprocess.
+  mail_button_->SetVisible(
+      browser_ && sidebar_prefs::IsMahoMailEnabled(
+                      browser_->profile()->GetPrefs()));
   ai_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
@@ -257,6 +264,19 @@ void MahoSidebarTopBarView::SetNavClusterVisible(bool visible) {
   if (nav_cluster_ && nav_cluster_->GetVisible() != visible) {
     nav_cluster_->SetVisible(visible);
   }
+}
+
+void MahoSidebarTopBarView::SetLeadingActionsVisible(bool visible) {
+  leading_actions_visible_ = visible;
+  if (leading_cluster_ && leading_cluster_->GetVisible() != visible) {
+    leading_cluster_->SetVisible(visible);
+  }
+}
+
+void MahoSidebarTopBarView::OnSidebarPaletteChanged(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  UpdateButtonImages();
 }
 
 void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
@@ -300,7 +320,7 @@ void MahoSidebarTopBarView::MaybeUpdateDynamicTopInset() {
 
 bool MahoSidebarTopBarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   if (ellipsis_button_ && ellipsis_button_->GetVisible()) {
     gfx::Point point_in_button = point;
     views::View::ConvertPointToTarget(this, ellipsis_button_,
@@ -342,7 +362,7 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
                         : sidebar_layout::kTopBarButtonSpacingDp);
   nav_layout->set_between_child_spacing(sidebar_layout::kTopBarButtonSpacingDp);
 
-  leading_cluster_->SetVisible(true);
+  leading_cluster_->SetVisible(leading_actions_visible_);
   leading_cluster_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, 0, 0,
@@ -358,7 +378,7 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
 }
 
 void MahoSidebarTopBarView::UpdateButtonImages() {
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   UpdateButtonState(ellipsis_button_, true, maho_lucide_icons::kEllipsisIcon,
                     u"Menu");
 #endif
@@ -392,11 +412,17 @@ void MahoSidebarTopBarView::UpdateButtonState(
   button->SetEnabled(enabled);
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
-  button->SetImageModel(
-      views::Button::STATE_NORMAL,
-      CreateTopBarButtonImage(icon,
-                              sidebar_layout::kTopBarIconSizeDp,
-                              GetTopBarButtonColor(enabled)));
+  ui::ImageModel image_model;
+  if (palette_.primary_text != SK_ColorTRANSPARENT) {
+    SkColor icon_color = enabled ? palette_.primary_text : palette_.disabled_text;
+    image_model = ui::ImageModel::FromVectorIcon(
+        icon, icon_color, sidebar_layout::kTopBarIconSizeDp);
+  } else {
+    image_model = CreateTopBarButtonImage(icon,
+                                          sidebar_layout::kTopBarIconSizeDp,
+                                          GetTopBarButtonColor(enabled));
+  }
+  button->SetImageModel(views::Button::STATE_NORMAL, image_model);
 }
 
 void MahoSidebarTopBarView::OnBackPressed(const ui::Event& event) {
@@ -440,12 +466,41 @@ void MahoSidebarTopBarView::OnMailPressed(const ui::Event& event) {
     return;
   }
 
-  NavigateParams params(browser_, GURL(maho::kMahoMailURL),
-                        ui::PAGE_TRANSITION_GENERATED);
+  // Mail opens as a regular browser tab rather than a floating overlay. The
+  // overlay did not observe TabStripModel, so it kept covering the content area
+  // after a tab switch; a tab inherits activation, restore, back/forward, and
+  // link handling from Chromium instead of reimplementing them. The tab is
+  // filtered out of the sidebar tab list (see IsSidebarEligibleUrl) because the
+  // control button above is the stable entry point.
+  const GURL mail_url(maho::kMahoMailURL);
+  TabStripModel* tab_strip = browser_->tab_strip_model();
+  if (tab_strip) {
+    for (int i = 0; i < tab_strip->count(); ++i) {
+      content::WebContents* contents = tab_strip->GetWebContentsAt(i);
+      if (!contents) {
+        continue;
+      }
+      content::NavigationEntry* entry =
+          contents->GetController().GetLastCommittedEntry();
+      if (!entry) {
+        continue;
+      }
+      const GURL& url = entry->GetVirtualURL();
+      const bool is_mail =
+          (url.SchemeIs("chrome") && url.host() == maho::kMahoMailHost) ||
+          (url.SchemeIs("maho") &&
+           url.host() == GURL(maho::kMahoMailPublicURL).host());
+      if (is_mail) {
+        tab_strip->ActivateTabAt(i);
+        return;
+      }
+    }
+  }
+
+  NavigateParams params(browser_, mail_url, ui::PAGE_TRANSITION_GENERATED);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
 }
-
 void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
   if (browser_) {
     sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
@@ -453,7 +508,7 @@ void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
 }
 
 bool MahoSidebarTopBarView::ShowAppMenu() {
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   return ShowAppMenuWithRunFlags(views::MenuRunner::SHOULD_SHOW_MNEMONICS |
                                  views::MenuRunner::INVOKED_FROM_KEYBOARD);
 #else
@@ -461,7 +516,7 @@ bool MahoSidebarTopBarView::ShowAppMenu() {
 #endif
 }
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 void MahoSidebarTopBarView::OnMenuPressed(const ui::Event& event) {
   ShowAppMenuWithRunFlags(event.IsKeyEvent()
                               ? (views::MenuRunner::SHOULD_SHOW_MNEMONICS |
@@ -512,15 +567,10 @@ void MahoSidebarTopBarView::ResetAppMenu(int generation) {
 }
 #endif
 
-void MahoSidebarTopBarView::SetPrivateIdentityIcon(
-    const ui::ImageModel& icon,
-    ui::ColorId text_color_id) {
-  // R-11: Presentation-only. No profile/pref reads.
-  // Stores the identity icon; actual rendering is done in OnThemeChanged via
-  // the private-window background set by SetPrivateAppearance on the sidebar.
-  // No-op if the top bar has not been built yet (icon is just stored).
-  (void)icon;
-  (void)text_color_id;
+void MahoSidebarTopBarView::SetPrivateAppearance() {
+  if (mail_button_) {
+    mail_button_->SetVisible(false);
+  }
 }
 
 }  // namespace maho

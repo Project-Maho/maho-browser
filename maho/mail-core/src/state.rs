@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use maho_core::db::SqlitePool;
 
@@ -68,6 +69,13 @@ pub fn set_ctx(ctx: Arc<AppCtx>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+pub fn clear_ctx_for_test() {
+    if let Ok(mut guard) = CTX.write() {
+        *guard = None;
+    }
+}
+
 /// Returns a clone of the current context handle, or `NotInitialized`.
 pub fn ctx() -> Result<Arc<AppCtx>> {
     let guard = CTX
@@ -78,6 +86,43 @@ pub fn ctx() -> Result<Arc<AppCtx>> {
 
 pub fn registry() -> &'static SyncRegistry {
     REGISTRY.get_or_init(SyncRegistry::default)
+}
+
+/// Guarded auto-start of an account's sync + backfill workers on `rt`, reusing
+/// the existing worker constructors. Returns `(sync_spawned, backfill_spawned)`;
+/// a `false` means a live worker already held that slot (idempotent no-op).
+pub fn start_account_workers(
+    rt: &tokio::runtime::Runtime,
+    ctx: &Arc<AppCtx>,
+    account_id: &str,
+) -> (bool, bool) {
+    let _guard = rt.enter();
+    let sync = registry().ensure_sync(account_id, {
+        let ctx = Arc::clone(ctx);
+        let id = account_id.to_string();
+        move || crate::sync::start_sync_worker(ctx, id)
+    });
+    let backfill = registry().ensure_backfill(account_id, {
+        let ctx = Arc::clone(ctx);
+        let id = account_id.to_string();
+        move || crate::backfill::start_backfill_worker(ctx, id)
+    });
+    (sync, backfill)
+}
+
+/// Best-effort auto-start invoked from onboarding paths. Uses the process
+/// [`ctx`] + [`crate::runtime::runtime`] globals; silently no-ops when either is
+/// unavailable (e.g. before keys are injected) so onboarding never fails on it.
+pub fn spawn_account_workers_if_ready(account_id: &str) {
+    let Ok(ctx) = ctx() else {
+        log::debug!("[mail-ffi] auto-start skipped for {account_id}: ctx not initialized");
+        return;
+    };
+    let Some(rt) = crate::runtime::runtime() else {
+        log::warn!("[mail-ffi] auto-start skipped for {account_id}: runtime unavailable");
+        return;
+    };
+    let _ = start_account_workers(rt, &ctx, account_id);
 }
 
 /// Handle to a single account's background workers (sync loop + backfill loop).
@@ -93,6 +138,17 @@ impl WorkerHandle {
         for task in &self.tasks {
             task.abort();
         }
+    }
+
+    /// A worker is live only while it has not been stopped AND at least one of
+    /// its supervising tasks is still running. A finished or panicked worker
+    /// (all tasks `is_finished`) is NOT live, so the guarded start helpers may
+    /// restart it.
+    pub fn is_live(&self) -> bool {
+        if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
+        self.tasks.iter().any(|task| !task.is_finished())
     }
 }
 
@@ -122,9 +178,33 @@ impl SyncRegistry {
 
     pub fn is_sync_running(&self, account_id: &str) -> bool {
         match self.sync.lock() {
-            Ok(m) => m.contains_key(account_id),
-            Err(p) => p.into_inner().contains_key(account_id),
+            Ok(m) => m.get(account_id).is_some_and(WorkerHandle::is_live),
+            Err(p) => p
+                .into_inner()
+                .get(account_id)
+                .is_some_and(WorkerHandle::is_live),
         }
+    }
+
+    /// Guarded, idempotent start for an account's sync worker. Under a single
+    /// lock, spawns and registers a worker ONLY if no live worker is already
+    /// present; a finished/panicked worker is replaced. Returns `true` when a
+    /// new worker was spawned, `false` when a live worker already held the slot.
+    pub fn ensure_sync<F>(&self, account_id: &str, spawn: F) -> bool
+    where
+        F: FnOnce() -> WorkerHandle,
+    {
+        let mut map = match self.sync.lock() {
+            Ok(m) => m,
+            Err(p) => p.into_inner(),
+        };
+        if map.get(account_id).is_some_and(WorkerHandle::is_live) {
+            return false;
+        }
+        if let Some(prev) = map.insert(account_id.to_string(), spawn()) {
+            prev.stop();
+        }
+        true
     }
 
     pub fn insert_backfill(&self, account_id: String, handle: WorkerHandle) -> bool {
@@ -143,8 +223,49 @@ impl SyncRegistry {
 
     pub fn is_backfill_running(&self, account_id: &str) -> bool {
         match self.backfill.lock() {
-            Ok(m) => m.contains_key(account_id),
-            Err(p) => p.into_inner().contains_key(account_id),
+            Ok(m) => m.get(account_id).is_some_and(WorkerHandle::is_live),
+            Err(p) => p
+                .into_inner()
+                .get(account_id)
+                .is_some_and(WorkerHandle::is_live),
+        }
+    }
+
+    /// Guarded, idempotent counterpart to [`Self::ensure_sync`] for the backfill
+    /// worker. Same single-lock claim-before-spawn semantics.
+    pub fn ensure_backfill<F>(&self, account_id: &str, spawn: F) -> bool
+    where
+        F: FnOnce() -> WorkerHandle,
+    {
+        let mut map = match self.backfill.lock() {
+            Ok(m) => m,
+            Err(p) => p.into_inner(),
+        };
+        if map.get(account_id).is_some_and(WorkerHandle::is_live) {
+            return false;
+        }
+        if let Some(prev) = map.insert(account_id.to_string(), spawn()) {
+            prev.stop();
+        }
+        true
+    }
+
+    /// Stop and drop the sync + backfill workers for a single account (used by
+    /// account deletion). No-op when the account has no running workers.
+    pub fn stop_account(&self, account_id: &str) {
+        let sync = match self.sync.lock() {
+            Ok(mut m) => m.remove(account_id),
+            Err(p) => p.into_inner().remove(account_id),
+        };
+        if let Some(handle) = sync {
+            handle.stop();
+        }
+        let backfill = match self.backfill.lock() {
+            Ok(mut m) => m.remove(account_id),
+            Err(p) => p.into_inner().remove(account_id),
+        };
+        if let Some(handle) = backfill {
+            handle.stop();
         }
     }
 
@@ -168,5 +289,276 @@ impl SyncRegistry {
         for (_, handle) in map.drain() {
             handle.stop();
         }
+    }
+}
+
+/// Pending PKCE entries older than this are evicted on the next store access.
+const PKCE_TTL: Duration = Duration::from_secs(600);
+
+/// One in-flight OAuth2 PKCE authorization, keyed by the opaque `state` token
+/// returned to the browser. Holds the verifier and the parameters needed to
+/// finish the exchange once the browser delivers the authorization code.
+#[derive(Clone)]
+pub struct PkceEntry {
+    pub code_verifier: String,
+    pub provider: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+    pub created_at: Instant,
+}
+
+/// Process-wide store of in-flight PKCE authorizations. Entries expire after
+/// [`PKCE_TTL`]; expired entries are purged lazily on every access.
+#[derive(Default)]
+pub struct PkceStore {
+    entries: Mutex<HashMap<String, PkceEntry>>,
+}
+
+impl PkceStore {
+    pub fn insert(&self, state: String, entry: PkceEntry) {
+        let mut map = match self.entries.lock() {
+            Ok(m) => m,
+            Err(p) => p.into_inner(),
+        };
+        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
+        map.insert(state, entry);
+    }
+
+    pub fn take(&self, state: &str) -> Option<PkceEntry> {
+        let mut map = match self.entries.lock() {
+            Ok(m) => m,
+            Err(p) => p.into_inner(),
+        };
+        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
+        map.remove(state)
+    }
+
+    pub fn purge_expired(&self) {
+        let mut map = match self.entries.lock() {
+            Ok(m) => m,
+            Err(p) => p.into_inner(),
+        };
+        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
+    }
+
+    pub fn contains(&self, state: &str) -> bool {
+        let mut map = match self.entries.lock() {
+            Ok(m) => m,
+            Err(p) => p.into_inner(),
+        };
+        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
+        map.contains_key(state)
+    }
+}
+
+use std::collections::HashSet;
+
+/// Store of cancelled OAuth2 state tokens. Checked in the loopback accept loop.
+#[derive(Default)]
+pub struct CancellationStore {
+    cancelled_states: Mutex<HashSet<String>>,
+}
+
+impl CancellationStore {
+    pub fn cancel(&self, state: String) -> bool {
+        let mut set = match self.cancelled_states.lock() {
+            Ok(s) => s,
+            Err(p) => p.into_inner(),
+        };
+        set.insert(state)
+    }
+
+    pub fn is_cancelled(&self, state: &str) -> bool {
+        let set = match self.cancelled_states.lock() {
+            Ok(s) => s,
+            Err(p) => p.into_inner(),
+        };
+        set.contains(state)
+    }
+
+    pub fn remove(&self, state: &str) -> bool {
+        let mut set = match self.cancelled_states.lock() {
+            Ok(s) => s,
+            Err(p) => p.into_inner(),
+        };
+        set.remove(state)
+    }
+}
+
+static PENDING_PKCE: OnceLock<PkceStore> = OnceLock::new();
+static CANCELLATION_STORE: OnceLock<CancellationStore> = OnceLock::new();
+
+pub fn pending_pkce() -> &'static PkceStore {
+    PENDING_PKCE.get_or_init(PkceStore::default)
+}
+
+pub fn cancellation_store() -> &'static CancellationStore {
+    CANCELLATION_STORE.get_or_init(CancellationStore::default)
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod sync_registry_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+
+    fn live_handle() -> WorkerHandle {
+        WorkerHandle {
+            stop: Arc::new(AtomicBool::new(false)),
+            tasks: vec![tokio::spawn(std::future::pending::<()>())],
+        }
+    }
+
+    fn finished_handle() -> WorkerHandle {
+        WorkerHandle {
+            stop: Arc::new(AtomicBool::new(false)),
+            tasks: vec![tokio::spawn(async {})],
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_sync_starts_once_and_is_idempotent_while_live() {
+        let reg = SyncRegistry::default();
+        let spawned = Arc::new(AtomicUsize::new(0));
+
+        let c = Arc::clone(&spawned);
+        assert!(
+            reg.ensure_sync("acc", move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                live_handle()
+            }),
+            "first ensure spawns the worker"
+        );
+        assert!(reg.is_sync_running("acc"), "live worker reports running");
+
+        let c = Arc::clone(&spawned);
+        assert!(
+            !reg.ensure_sync("acc", move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                live_handle()
+            }),
+            "second ensure while live does NOT spawn"
+        );
+        assert_eq!(spawned.load(Ordering::SeqCst), 1, "exactly one spawn");
+        reg.stop_all_sync();
+    }
+
+    #[tokio::test]
+    async fn ensure_sync_restarts_after_worker_finished() {
+        let reg = SyncRegistry::default();
+        let spawned = Arc::new(AtomicUsize::new(0));
+
+        let c = Arc::clone(&spawned);
+        assert!(reg.ensure_sync("acc", move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            finished_handle()
+        }));
+
+        // Drive the finished handle's task to completion, then confirm it is no
+        // longer considered running.
+        let mut settled = false;
+        for _ in 0..200 {
+            if !reg.is_sync_running("acc") {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(settled, "finished worker must be treated as NOT running");
+
+        let c = Arc::clone(&spawned);
+        assert!(
+            reg.ensure_sync("acc", move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                live_handle()
+            }),
+            "ensure restarts a finished worker"
+        );
+        assert_eq!(spawned.load(Ordering::SeqCst), 2, "restart spawned again");
+        reg.stop_all_sync();
+    }
+
+    #[tokio::test]
+    async fn ensure_backfill_is_idempotent_while_live() {
+        let reg = SyncRegistry::default();
+        let spawned = Arc::new(AtomicUsize::new(0));
+
+        let c = Arc::clone(&spawned);
+        assert!(reg.ensure_backfill("acc", move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            live_handle()
+        }));
+        assert!(reg.is_backfill_running("acc"));
+
+        let c = Arc::clone(&spawned);
+        assert!(!reg.ensure_backfill("acc", move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            live_handle()
+        }));
+        assert_eq!(spawned.load(Ordering::SeqCst), 1);
+        reg.stop_all_backfill();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod pkce_tests {
+    use super::*;
+
+    fn entry(provider: &str) -> PkceEntry {
+        PkceEntry {
+            code_verifier: "verifier".to_string(),
+            provider: provider.to_string(),
+            client_id: "client-id".to_string(),
+            client_secret: "client-secret".to_string(),
+            redirect_uri: "http://localhost".to_string(),
+            created_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn insert_then_take_returns_entry_once() {
+        let store = PkceStore::default();
+        store.insert("s1".to_string(), entry("gmail"));
+
+        assert!(store.contains("s1"));
+        let got = store.take("s1").expect("entry present");
+        assert_eq!(got.provider, "gmail");
+        assert_eq!(got.code_verifier, "verifier");
+        assert!(store.take("s1").is_none(), "entry consumed on take");
+        assert!(!store.contains("s1"));
+    }
+
+    #[test]
+    fn take_unknown_state_is_none() {
+        let store = PkceStore::default();
+        assert!(store.take("missing").is_none());
+        assert!(!store.contains("missing"));
+    }
+
+    #[test]
+    fn expired_entry_is_purged_on_take() {
+        let store = PkceStore::default();
+        let mut stale = entry("gmail");
+        stale.created_at = Instant::now()
+            .checked_sub(Duration::from_secs(700))
+            .expect("past instant");
+        store.insert("old".to_string(), stale);
+
+        assert!(!store.contains("old"), "expired entry must be purged");
+        assert!(store.take("old").is_none(), "expired entry must be purged");
+    }
+
+    #[test]
+    fn cancellation_store_roundtrip() {
+        let store = CancellationStore::default();
+        assert!(!store.is_cancelled("s1"));
+        assert!(store.cancel("s1".to_string()));
+        assert!(store.is_cancelled("s1"));
+        assert!(store.remove("s1"));
+        assert!(!store.is_cancelled("s1"));
     }
 }

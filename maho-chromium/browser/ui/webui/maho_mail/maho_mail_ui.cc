@@ -3,93 +3,76 @@
 #include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"
 
 #include <memory>
-#include <string>
+#include <utility>
 
-#include "base/files/file_util.h"
-#include "base/files/file_path.h"
-#include "base/functional/bind.h"
-#include "base/location.h"
-#include "base/path_service.h"
-#include "base/task/thread_pool.h"
-#include "base/memory/ref_counted_memory.h"
-#include "base/logging.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/grit/maho_mail_resources.h"
+#include "chrome/grit/maho_mail_resources_map.h"
 #include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
-#include "url/gurl.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/webui/maho_mail/maho_mail_page_handler.h"
+#include "maho/components/constants/webui_url_constants.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/webui/webui_util.h"
 
 // MahoMailUIConfig
 
 MahoMailUIConfig::MahoMailUIConfig()
-    : DefaultWebUIConfig("chrome", "maho-mail") {}
+    : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoMailHost) {}
 
-bool MahoMailUIConfig::IsWebUIEnabled(content::BrowserContext*) {
-  // Mail deferred from this ship: unregister chrome://maho-mail so the URL is
-  // unreachable, sealing the un-remediated mail attack surface. Restore the
-  // normal profile gate here to re-enable.
-  return false;
-}
-
-// MahoMailHTMLSource
-
-MahoMailHTMLSource::MahoMailHTMLSource(Profile* profile)
-    : profile_(profile) {}
-
-MahoMailHTMLSource::~MahoMailHTMLSource() = default;
-
-std::string MahoMailHTMLSource::GetSource() {
-  return "maho-mail";
-}
-
-void MahoMailHTMLSource::StartDataRequest(
-    const GURL& url,
-    const content::WebContents::Getter& wc_getter,
-    content::URLDataSource::GotDataCallback callback) {
-  std::string path(url.path());
-  if (path.empty() || path == "/") {
-    path = "/index.html";
-  }
-
-  // Serve static assets from the user's local workspace build directory
-  base::FilePath workspace_dist(FILE_PATH_LITERAL("/Users/indo/code/project/maho-workspace/mail/dist"));
-  base::FilePath file_path = workspace_dist.AppendASCII(path.substr(1));
-
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce([](const base::FilePath& file) -> std::string {
-        std::string contents;
-        if (!base::ReadFileToString(file, &contents)) {
-          LOG(WARNING) << "[MahoMailHTMLSource] Failed to read file: " << file.value();
-        }
-        return contents;
-      }, file_path),
-      base::BindOnce([](content::URLDataSource::GotDataCallback cb, std::string contents) {
-        std::move(cb).Run(base::MakeRefCounted<base::RefCountedString>(std::move(contents)));
-      }, std::move(callback)));
-}
-
-std::string MahoMailHTMLSource::GetMimeType(const GURL& url) {
-  std::string path(url.path());
-  if (path.ends_with(".js") || path.ends_with(".mjs")) {
-    return "application/javascript";
-  }
-  if (path.ends_with(".css")) {
-    return "text/css";
-  }
-  if (path.ends_with(".html")) {
-    return "text/html";
-  }
-  if (path.ends_with(".svg")) {
-    return "image/svg+xml";
-  }
-  return "text/html";
+bool MahoMailUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
+  // Mail is gated behind the maho.mail.enabled pref, which defaults to false
+  // while Mail is deferred from the current ship. With it off, chrome://maho-mail
+  // is never registered, so the un-remediated mail attack surface stays sealed.
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  return profile &&
+         maho::sidebar_prefs::IsMahoMailEnabled(profile->GetPrefs());
 }
 
 // MahoMailUI
 
+WEB_UI_CONTROLLER_TYPE_IMPL(MahoMailUI)
+
 MahoMailUI::MahoMailUI(content::WebUI* web_ui)
-    : WebUIController(web_ui) {
+    : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
   Profile* profile = Profile::FromWebUI(web_ui);
-  content::URLDataSource::Add(
-      profile, std::make_unique<MahoMailHTMLSource>(profile));
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      profile, maho::kMahoMailHost);
+  webui::SetupWebUIDataSource(source, kMahoMailResources,
+                              IDR_MAHO_MAIL_MAIL_HTML);
+  // app.ts registers a Trusted Types policy named "maho-mail-app" for its
+  // innerHTML sinks. SetupWebUIDataSource only allows the default policy set,
+  // so extend the trusted-types allowlist with the app's policy name; without
+  // it, createPolicy() throws and the page never renders.
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      base::StrCat({webui::kDefaultTrustedTypesPolicies, " maho-mail-app default;"}));
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ImgSrc,
+      "img-src 'self' chrome-res: data: blob:;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::MediaSrc,
+      "media-src 'self' chrome-res: data: blob:;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::FrameSrc,
+      "frame-src 'self' chrome-res: data: blob:;");
+}
+
+MahoMailUI::~MahoMailUI() = default;
+
+void MahoMailUI::BindInterface(
+    mojo::PendingReceiver<maho_mail::mojom::PageHandlerFactory> receiver) {
+  page_factory_receiver_.reset();
+  page_factory_receiver_.Bind(std::move(receiver));
+}
+
+void MahoMailUI::CreatePageHandler(
+    mojo::PendingRemote<maho_mail::mojom::Page> page,
+    mojo::PendingReceiver<maho_mail::mojom::PageHandler> receiver) {
+  auto* profile = Profile::FromWebUI(web_ui());
+  page_handler_ = std::make_unique<MahoMailPageHandler>(
+      std::move(receiver), std::move(page), profile, web_ui()->GetWebContents());
 }

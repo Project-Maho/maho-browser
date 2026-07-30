@@ -6,11 +6,13 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/process.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "maho/browser/mail_helper/maho_mail_helper.mojom.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
 namespace maho {
@@ -18,10 +20,48 @@ namespace maho {
 // Owns the out-of-process mail helper: spawns it, verifies a version handshake,
 // respawns it with exponential backoff on crash (bounded by a crash-loop cap),
 // and force-closes it on shutdown (best-effort, non-blocking).
-class MahoMailHelperLauncher {
+class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
  public:
+  class Observer {
+   public:
+    virtual void OnAuthRequired(const std::string& account_id,
+                                const std::string& provider,
+                                const std::string& reason) = 0;
+    virtual void OnAuthRefreshSucceeded(const std::string& account_id) = 0;
+    virtual void OnAccountsChanged() = 0;
+    virtual void OnSyncEvent(const std::string& event_type, const std::string& payload) {}
+    virtual void OnBackfillEvent(const std::string& event_type, const std::string& payload) {}
+    virtual void OnStatusChanged(const std::string& account_id, bool connected) {}
+    virtual void OnNewMail(const std::string& account_id) {}
+    virtual void OnMutation(const std::string& account_id, const std::string& payload) {}
+    virtual void OnOutbox(const std::string& account_id, const std::string& payload) {}
+    virtual void OnScheduler(const std::string& account_id, const std::string& payload) {}
+    virtual void OnAgentStream(const std::string& session_id, const std::string& chunk) {}
+    virtual void OnCalendar(const std::string& account_id, const std::string& payload) {}
+    virtual void OnImport(const std::string& payload) {}
+  };
+
   MahoMailHelperLauncher();
-  ~MahoMailHelperLauncher();
+  ~MahoMailHelperLauncher() override;
+
+  void SetObserver(Observer* observer) { observer_ = observer; }
+
+  // mojom::MahoMailHelperClient:
+  void OnSyncEvent(const std::string& event_type, const std::string& payload) override;
+  void OnBackfillEvent(const std::string& event_type, const std::string& payload) override;
+  void OnStatusChanged(const std::string& account_id, bool connected) override;
+  void OnAuthRequired(const std::string& account_id,
+                      const std::string& provider,
+                      const std::string& reason) override;
+  void OnAuthRefreshSucceeded(const std::string& account_id) override;
+  void OnAccountsChanged() override;
+  void OnNewMail(const std::string& account_id) override;
+  void OnMutation(const std::string& account_id, const std::string& payload) override;
+  void OnOutbox(const std::string& account_id, const std::string& payload) override;
+  void OnScheduler(const std::string& account_id, const std::string& payload) override;
+  void OnAgentStream(const std::string& session_id, const std::string& chunk) override;
+  void OnCalendar(const std::string& account_id, const std::string& payload) override;
+  void OnImport(const std::string& payload) override;
 
   MahoMailHelperLauncher(const MahoMailHelperLauncher&) = delete;
   MahoMailHelperLauncher& operator=(const MahoMailHelperLauncher&) = delete;
@@ -67,6 +107,7 @@ class MahoMailHelperLauncher {
    void OnConnectionError();
    void HandleFailureAndMaybeRelaunch();
    void ReinjectKeysIfPresent();
+   void OnKeysInjected(bool success);
    void ForceClose();
    base::TimeDelta ComputeBackoff() const;
 
@@ -93,11 +134,14 @@ class MahoMailHelperLauncher {
   base::TimeTicks crash_window_start_;
 
   base::Process process_;
-   mojo::Remote<mojom::MahoMailHelper> helper_;
+  mojo::Remote<mojom::MahoMailHelper> helper_;
+  mojo::Receiver<mojom::MahoMailHelperClient> client_receiver_{this};
 
-   base::OneShotTimer relaunch_timer_;
+  base::OneShotTimer relaunch_timer_;
 
-   base::WeakPtrFactory<MahoMailHelperLauncher> weak_ptr_factory_{this};
+  raw_ptr<Observer> observer_ = nullptr;
+
+  base::WeakPtrFactory<MahoMailHelperLauncher> weak_ptr_factory_{this};
 };
 
 }  // namespace maho

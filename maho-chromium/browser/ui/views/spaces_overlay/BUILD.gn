@@ -66,6 +66,7 @@ source_set("maho_spaces_overlay") {
     "//components/vector_icons",
     "//maho/browser:maho_space_profile_bridge",
     "//maho/browser/ui/views/sidebar:maho_spaces_board_data",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
     "//ui/base",
     "//ui/color",
     "//ui/compositor",
@@ -77,5 +78,6 @@ source_set("maho_spaces_overlay") {
     "//chrome/browser/favicon",
     "//components/favicon/core",
     "//components/favicon_base",
+    "//maho/browser/ui/views/library_overlay:maho_library_overlay",
   ]
 }

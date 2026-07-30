@@ -16,6 +16,7 @@ pub mod backfill;
 pub mod credentials;
 pub mod error;
 pub mod ffi;
+pub mod oauth;
 pub mod otp;
 pub mod read;
 pub mod runtime;

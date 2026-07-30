@@ -29,6 +29,13 @@ extern const char kOpenExternalLinksInMahoMini[];
 extern const char kMahoMiniWindowWidth[];
 extern const char kMahoMiniWindowHeight[];
 
+// Maho Mail feature flag. Mail is deferred from the current ship and stays off
+// until its security/integrity remediation pass completes, so this pref
+// defaults to false. It gates every Mail entry point together (sidebar button,
+// chrome://maho-mail, the helper subprocess, and the settings panes); flipping
+// only one of them leaves the surfaces inconsistent.
+extern const char kMahoMailEnabled[];
+
 int ClampSidebarWidthForLayout(int width);
 int GetSidebarWidthForLayout(int pref_width);
 
@@ -38,6 +45,10 @@ bool IsSidebarLayoutEnabled(const PrefService* prefs);
 bool IsSidebarPanelExpanded(const PrefService* prefs);
 // Toggle panel expanded/collapsed state.
 void ToggleSidebarPanelExpanded(PrefService* prefs);
+
+// Returns true when Maho Mail is enabled for this profile. False while Mail is
+// deferred, which is the default.
+bool IsMahoMailEnabled(const PrefService* prefs);
 
 // Legacy compat: equivalent to IsSidebarLayoutEnabled for callers that
 // previously used ShouldShowSidebarInShell.

@@ -34,14 +34,29 @@ pub enum MailFfiError {
     #[error("credential decryption failed: {0}")]
     CredentialDecrypt(String),
 
+    #[error("credential encryption failed: {0}")]
+    CredentialEncrypt(String),
+
+    #[error("invalid onboarding request: {0}")]
+    InvalidRequest(String),
+
     #[error("oauth2 refresh failed: {0}")]
     OAuth2Refresh(String),
+
+    #[error("oauth2 onboarding failed: {0}")]
+    OAuth(String),
+
+    #[error("unknown or expired oauth state: {0}")]
+    InvalidState(String),
 
     #[error("db pool error: {0}")]
     Pool(String),
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    #[error("invalid credential key: {0}")]
+    InvalidKey(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, MailFfiError>;

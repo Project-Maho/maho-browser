@@ -71,6 +71,7 @@
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_google_sign_in.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -239,6 +240,7 @@ const net::NetworkTrafficAnnotationTag kBillingPortalTrafficAnnotation =
 
 constexpr char kPasswordProviderModeMahoKey[] = "autofill.password_provider";
 constexpr char kPasswordsEnabledMahoKey[] = "autofill.passwords_enabled";
+constexpr char kMahoMailEnabledMahoKey[] = "mail.enabled";
 
 // ── Pref-based settings mapping ──
 constexpr char kHardwareAccelerationMahoKey[] =
@@ -1816,6 +1818,17 @@ MahoSettingsPageHandler::BuildSettingsSnapshot() {
   }
   add(kPasswordProviderModeMahoKey);
   add(kPasswordsEnabledMahoKey);
+  // Mail feature flag. The nav schema needs this at runtime to decide whether
+  // the "Maho Mail" section exists, and it is the same gate the sidebar button,
+  // chrome://maho-mail, and the helper subprocess read.
+  {
+    auto mail = maho_settings::mojom::SettingValue::New();
+    mail->key = kMahoMailEnabledMahoKey;
+    mail->value = maho::sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())
+                      ? "true"
+                      : "false";
+    settings.push_back(std::move(mail));
+  }
   AppendFfiSettings(settings);
   return settings;
 }
@@ -2181,6 +2194,10 @@ void MahoSettingsPageHandler::SetAIProvider(const std::string& provider) {
 
 void MahoSettingsPageHandler::SetAIBaseUrl(const std::string& url) {
   prefs_->SetString(ai::kBaseUrl, url);
+  // provider/api_key commit immediately; base_url and model must too. Leaving
+  // them on the lazy flush lets a shutdown persist a new api_key alongside a
+  // stale base_url/model, which authenticates against the wrong endpoint.
+  prefs_->CommitPendingWrite();
 }
 
 void MahoSettingsPageHandler::SetAIApiKey(const std::string& key) {
@@ -2193,6 +2210,7 @@ void MahoSettingsPageHandler::SetAIApiKey(const std::string& key) {
 
 void MahoSettingsPageHandler::SetAIModel(const std::string& model) {
   prefs_->SetString(ai::kModel, model);
+  prefs_->CommitPendingWrite();
 }
 
 void MahoSettingsPageHandler::SetAIApprovalPolicy(const std::string& policy) {
@@ -3253,6 +3271,24 @@ MahoSettingsPageHandler::PendingByokSave::operator=(PendingByokSave&&) =
 // ═══════════════════════════════════════════════════════════════════════════════
 // Auth — Login / Logout / GetAccountStatus / GetBillingInfo
 // ═══════════════════════════════════════════════════════════════════════════════
+
+void MahoSettingsPageHandler::SignInWithGoogle(
+    SignInWithGoogleCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+
+  // Shares OnRelayLoginCompleted with password login: an established session
+  // must refresh account status and billing prefs the same way regardless of
+  // which credential produced it.
+  maho::auth::StartGoogleSignIn(
+      profile_, *encryptor_,
+      base::BindOnce(&MahoSettingsPageHandler::OnRelayLoginCompleted,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
 
 void MahoSettingsPageHandler::Login(const std::string& email,
                                     const std::string& password,

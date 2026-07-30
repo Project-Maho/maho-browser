@@ -1,0 +1,59 @@
+import ("//ui/webui/resources/tools/build_webui.gni")
+import ("//ui/webui/resources/tools/generate_grd.gni")
+import ("//maho/build/templates/tailwind_css.gni")
+
+assert(!is_android)
+
+tailwind_css("build_tailwind") {
+  input = "react/theme/app.css"
+  output = "$target_gen_dir/app.generated.css"
+  depfile = "$target_gen_dir/build_tailwind.d"
+  sources = [
+    "../maho_common/react/theme/tokens.css",
+    "react/theme/app.css",
+  ]
+}
+
+action("bundle_react") {
+  script = "//third_party/node/node.py"
+  depfile = "$target_gen_dir/bundle_react.d"
+  inputs = [
+    "//third_party/node/node.py",
+    "maho_mail.mojom-webui.js.d.ts",
+    "react/tsconfig.json",
+    "bundle_react.mjs",
+  ]
+  outputs = [ "$target_gen_dir/app_bundle.js" ]
+  args = [
+    rebase_path("//maho/browser/resources/maho_mail/bundle_react.mjs", root_build_dir),
+    rebase_path(".", root_build_dir),
+    rebase_path("$target_gen_dir/app_bundle.js", root_build_dir),
+    rebase_path(depfile, root_build_dir),
+  ]
+}
+
+generate_grd("bundle_grdp") {
+  grd_prefix = "maho_mail_bundle"
+  out_grd = "$target_gen_dir/maho_mail_bundle.grdp"
+  input_files = [
+    "app_bundle.js",
+    "app.generated.css",
+  ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [
+    ":bundle_react",
+    ":build_tailwind",
+  ]
+}
+
+build_webui("resources") {
+  grd_prefix = "maho_mail"
+  static_files = [ "mail.html" ]
+  ts_files = [ "app.ts" ]
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+  webui_context_type = "trusted"
+  mojo_files_deps = [ "//maho/browser/ui/webui/maho_mail:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_mail/maho_mail.mojom-webui.ts" ]
+  extra_grdp_deps = [ ":bundle_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_mail_bundle.grdp" ]
+}
