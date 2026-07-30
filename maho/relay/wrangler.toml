@@ -10,7 +10,6 @@ command = "cargo install -q worker-build --version \"^0.1\" 2>/dev/null; worker-
 [env.production]
 routes = [
   { pattern = "relay.mahobrowser.com", custom_domain = true },
-  { pattern = "sync.mahobrowser.com", custom_domain = true },
   { pattern = "update.mahobrowser.com", custom_domain = true },
   { pattern = "updates.mahobrowser.com", custom_domain = true },
   { pattern = "proxy.mahobrowser.com", custom_domain = true },
@@ -26,21 +25,51 @@ migrations_dir = "migrations"
 name = "ROOM"
 class_name = "RoomDO"
 
+# Cloudflare Rate Limiting bindings (edge-backed, shared across isolates).
+# Verify staging accepts this binding shape before relying on it; if the plan
+# lacks rate-limit bindings, ratelimit.rs's `check` interface allows a DO fallback.
+[[env.production.unsafe.bindings]]
+name = "RL_SIGNUP"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[[env.production.unsafe.bindings]]
+name = "RL_LOGIN"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
+[[env.production.unsafe.bindings]]
+name = "RL_WAITLIST"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 5, period = 60 }
+
+[[env.production.unsafe.bindings]]
+name = "RL_REFRESH"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 30, period = 60 }
+
 [env.production.vars]
 REQUIRE_AUTH = "true"
 OPEN_REGISTRATION = "true"
-SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE = "3"
-LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = "10"
 MIN_PASSWORD_LENGTH = "12"
 MAX_ROOM_SIZE_MB = "50"
 MAX_MESSAGE_SIZE_BYTES = "1048576"
 MAX_CONNECTIONS_PER_ROOM = "5"
-MAX_CONNECTIONS_PER_IP = "20"
-MAX_ROOMS_PER_IP = "10"
 RETENTION_DAYS = "30"
 MAHO_FROM_EMAIL = "Maho <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://mahobrowser.com/verify"
 MAHO_ENV = "production"
+# LemonSqueezy variant IDs (public, not secrets). PLACEHOLDERS — replace with
+# real store IDs (D4) before go-live, else paid tiers record as free.
+LS_VARIANT_PRO = "1001"
+LS_VARIANT_MAX = "2002"
+LS_VARIANT_PAYG_10 = "4001"
+LS_VARIANT_PAYG_50 = "4002"
+LS_VARIANT_PAYG_100 = "4003"
 
 [[env.production.migrations]]
 tag = "v1"
@@ -62,21 +91,46 @@ migrations_dir = "migrations"
 name = "ROOM"
 class_name = "RoomDO"
 
+[[env.staging.unsafe.bindings]]
+name = "RL_SIGNUP"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.unsafe.bindings]]
+name = "RL_LOGIN"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.unsafe.bindings]]
+name = "RL_WAITLIST"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.unsafe.bindings]]
+name = "RL_REFRESH"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 60, period = 60 }
+
 [env.staging.vars]
 REQUIRE_AUTH = "true"
 OPEN_REGISTRATION = "true"          # staging allows registration for testing
-SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE = "60"
-LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = "60"
 MIN_PASSWORD_LENGTH = "8"
 MAX_ROOM_SIZE_MB = "50"
 MAX_MESSAGE_SIZE_BYTES = "1048576"
 MAX_CONNECTIONS_PER_ROOM = "5"
-MAX_CONNECTIONS_PER_IP = "20"
-MAX_ROOMS_PER_IP = "10"
 RETENTION_DAYS = "7"
 MAHO_FROM_EMAIL = "Maho Staging <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://relay-staging.mahobrowser.com/verify"
 MAHO_ENV = "staging"
+LS_VARIANT_PRO = "1001"
+LS_VARIANT_MAX = "2002"
+LS_VARIANT_PAYG_10 = "4001"
+LS_VARIANT_PAYG_50 = "4002"
+LS_VARIANT_PAYG_100 = "4003"
 
 [[env.staging.migrations]]
 tag = "v1"

@@ -10,6 +10,8 @@ pub struct SignupRequest {
     pub device_name: Option<String>,
     #[serde(default)]
     pub device_type: Option<String>,
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -20,6 +22,8 @@ pub struct LoginRequest {
     pub device_name: Option<String>,
     #[serde(default)]
     pub device_type: Option<String>,
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

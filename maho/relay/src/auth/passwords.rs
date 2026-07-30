@@ -40,16 +40,25 @@ struct GetRandomRng;
 impl RngCore for GetRandomRng {
     fn next_u32(&mut self) -> u32 {
         let mut bytes = [0u8; 4];
-        let _ = getrandom::getrandom(&mut bytes);
+        // These trait methods cannot return an error, so a CSPRNG failure must
+        // panic (caught by console_error_panic_hook -> 500) rather than proceed
+        // with predictable zero bytes for a password salt.
+        if let Err(e) = getrandom::getrandom(&mut bytes) {
+            panic!("csprng_failure in next_u32: {e}");
+        }
         u32::from_le_bytes(bytes)
     }
     fn next_u64(&mut self) -> u64 {
         let mut bytes = [0u8; 8];
-        let _ = getrandom::getrandom(&mut bytes);
+        if let Err(e) = getrandom::getrandom(&mut bytes) {
+            panic!("csprng_failure in next_u64: {e}");
+        }
         u64::from_le_bytes(bytes)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        let _ = getrandom::getrandom(dest);
+        if let Err(e) = getrandom::getrandom(dest) {
+            panic!("csprng_failure in fill_bytes: {e}");
+        }
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), RandError> {
         getrandom::getrandom(dest).map_err(|e| RandError::from(e.code()))

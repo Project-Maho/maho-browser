@@ -9,7 +9,6 @@ use worker::*;
 pub struct UploadSnapshotRequest {
     pub blob: String,
     pub hlc_ts_ceiling: i64,
-    pub creator_device_id: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -20,45 +19,57 @@ pub struct DownloadSnapshotResponse {
     pub blob: String,
 }
 
-const MAX_SNAPSHOT_BYTES: usize = 100 * 1024 * 1024;
-
 pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
-    let room_id = db::get_latest_room_for_user(&db, auth.user.id)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("no_room_for_user".to_string()))?;
+    let now = chrono::Utc::now().timestamp();
 
-    let payload: UploadSnapshotRequest = req
-        .json()
-        .await
-        .map_err(|e| AppError::BadRequest(format!("invalid_json: {e}")))?;
+    // Snapshot room is the caller's device room, independent of any WebSocket
+    // connection. Reject a room owned by another user; claim it if unowned.
+    let room_id = auth.device.room_id.clone();
+    match db::get_room_owner_user_id(&db, &room_id).await? {
+        Some(owner) if owner != auth.user.id => {
+            return Err(AppError::Unauthorized("room_owned_by_another_user".to_string()));
+        }
+        Some(_) => {}
+        None => {
+            db::claim_room_ownership(&db, &room_id, auth.user.id, now).await?;
+            // Re-verify fully fail-closed: after the ON CONFLICT DO NOTHING
+            // claim, require the owner to be exactly this user (a concurrent
+            // claim may have won; None should be unreachable but is rejected).
+            if db::get_room_owner_user_id(&db, &room_id).await? != Some(auth.user.id) {
+                return Err(AppError::Unauthorized(
+                    "room_owned_by_another_user".to_string(),
+                ));
+            }
+        }
+    }
+
+    let max_bytes = crate::config::max_snapshot_bytes(&env);
+
+    let payload: UploadSnapshotRequest = req.json().await.map_err(|e| {
+        console_error!("invalid_json detail (snapshot upload): {e}");
+        AppError::BadRequest("invalid_json".to_string())
+    })?;
+
+    // Reject oversize uploads on the encoded length before allocating a decode
+    // buffer, then confirm the exact decoded size.
+    if crate::config::base64_exceeds_cap(payload.blob.len(), max_bytes) {
+        return Err(AppError::BadRequest("snapshot_too_large".to_string()));
+    }
 
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(payload.blob.as_bytes())
         .map_err(|_| AppError::BadRequest("invalid_base64_blob".to_string()))?;
 
-    if decoded.len() > MAX_SNAPSHOT_BYTES {
+    if decoded.len() > max_bytes {
         return Err(AppError::BadRequest("snapshot_too_large".to_string()));
     }
 
-    let db = env.d1("MAHO_DB")?;
-    let now = chrono::Utc::now().timestamp();
-
-    let existing = db
-        .prepare("SELECT hlc_ts_ceiling FROM snapshots WHERE room_id = ?1")
-        .bind(&[db::js(&room_id)?])?
-        .first::<serde_json::Value>(None)
-        .await?;
-
-    if let Some(row) = existing {
-        if let Some(existing_hlc) = row.get("hlc_ts_ceiling").and_then(|v| v.as_i64()) {
-            if payload.hlc_ts_ceiling <= existing_hlc {
-                return Err(AppError::Conflict("snapshot_not_newer".to_string()));
-            }
-        }
-    }
-
+    // Single conditional upsert: the newer-hlc guard is in the statement, so no
+    // SELECT-then-write TOCTOU. Older/equal hlc returns no row -> snapshot_not_newer.
+    let blob_js: wasm_bindgen::JsValue =
+        serde_wasm_bindgen::to_value(&decoded).map_err(|e| AppError::Internal(e.to_string()))?;
     let stmt = db.prepare(
         "INSERT INTO snapshots (room_id, hlc_ts_ceiling, creator_device_id, blob, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)
@@ -66,20 +77,23 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
             hlc_ts_ceiling = ?2,
             creator_device_id = ?3,
             blob = ?4,
-            created_at = ?5",
+            created_at = ?5
+         WHERE excluded.hlc_ts_ceiling > snapshots.hlc_ts_ceiling
+         RETURNING room_id",
     );
-    let blob_js: wasm_bindgen::JsValue =
-        serde_wasm_bindgen::to_value(&decoded).map_err(|e| AppError::Internal(e.to_string()))?;
     let stmt = stmt.bind(&[
         db::js(&room_id)?,
         db::js(&payload.hlc_ts_ceiling)?,
-        db::js(&payload.creator_device_id)?,
+        db::js(&auth.device.id)?,
         blob_js,
         db::js(&now)?,
     ])?;
-    stmt.run().await?;
+    let applied = stmt.first::<serde_json::Value>(None).await?.is_some();
+    if !applied {
+        return Err(AppError::Conflict("snapshot_not_newer".to_string()));
+    }
 
-    let _ = db::touch_session_and_device(&db, auth.session.id, auth.device.id, now).await;
+    let _ = db::touch_session_and_device(&db, auth.user.id, auth.session.id, auth.device.id, now).await;
 
     Response::ok("")
         .map(|r| r.with_status(200))
@@ -89,12 +103,7 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
 pub async fn latest_snapshot(req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
-    let room_id = match db::get_latest_room_for_user(&db, auth.user.id).await? {
-        Some(r) => r,
-        None => return Response::error("not_found", 404).map_err(AppError::from),
-    };
-
-    let db = env.d1("MAHO_DB")?;
+    let room_id = auth.device.room_id.clone();
 
     #[derive(Deserialize)]
     struct SnapshotRow {

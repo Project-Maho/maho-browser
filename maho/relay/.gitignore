@@ -4,3 +4,8 @@
 /.wrangler
 node_modules
 *.wasm
+
+# Local dev secrets (never commit)
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

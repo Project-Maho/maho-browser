@@ -10,8 +10,6 @@ use crate::errors::{AppError, Result};
 use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::Mutex;
 use worker::*;
 
 const ACCESS_TOKEN_TTL_SECS: i64 = 60 * 60;
@@ -23,7 +21,7 @@ const LOGIN_LOCK_SECS: i64 = 15 * 60;
 /// A `!=` on `&str` short-circuits at the first differing byte, leaking how
 /// many leading bytes were guessed correctly. Token length is not secret, so
 /// an early length-mismatch is acceptable.
-fn service_token_matches(provided: &str, expected: &str) -> bool {
+pub(crate) fn service_token_matches(provided: &str, expected: &str) -> bool {
     use subtle::ConstantTimeEq;
     if expected.trim().is_empty() || provided.trim().is_empty() {
         return false;
@@ -31,33 +29,79 @@ fn service_token_matches(provided: &str, expected: &str) -> bool {
     provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1
 }
 
-fn check_rate_limit(ip: &str, limit_per_min: u32, now: i64) -> bool {
-    static LIMITER: std::sync::OnceLock<Mutex<HashMap<String, Vec<i64>>>> =
-        std::sync::OnceLock::new();
-    let mut map = match LIMITER.get_or_init(|| Mutex::new(HashMap::new())).lock() {
-        Ok(map) => map,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let timestamps = map.entry(ip.to_string()).or_default();
-
-    timestamps.retain(|&t| t > now - 60);
-
-    if timestamps.len() >= limit_per_min as usize {
-        false
-    } else {
-        timestamps.push(now);
-        true
-    }
+pub(crate) fn extract_bearer(req: &Request) -> Result<String> {
+    let auth_header = req
+        .headers()
+        .get("Authorization")?
+        .ok_or_else(|| AppError::Auth("missing authorization header".to_string()))?;
+    auth_header
+        .strip_prefix("Bearer ")
+        .or_else(|| auth_header.strip_prefix("bearer "))
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| AppError::Auth("invalid token format".to_string()))
 }
 
-fn js<T: serde::Serialize>(val: &T) -> std::result::Result<wasm_bindgen::JsValue, AppError> {
-    let js_val =
-        serde_wasm_bindgen::to_value(val).map_err(|e| AppError::Internal(e.to_string()))?;
-    if js_val.is_undefined() {
-        Ok(wasm_bindgen::JsValue::null())
-    } else {
-        Ok(js_val)
+pub(crate) fn require_service_token(req: &Request, env: &Env) -> Result<()> {
+    let token = extract_bearer(req)?;
+    let expected = env
+        .secret("MAHO_RELAY_SERVICE_TOKEN")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    if !service_token_matches(&token, &expected) {
+        return Err(AppError::Auth("invalid service token".to_string()));
     }
+    Ok(())
+}
+
+pub(crate) fn require_admin_token(req: &Request, env: &Env) -> Result<()> {
+    let token = extract_bearer(req)?;
+    let expected = env
+        .secret("MAHO_ADMIN_TOKEN")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    if expected.trim().is_empty() {
+        return Err(AppError::Internal(
+            "MAHO_ADMIN_TOKEN not configured".to_string(),
+        ));
+    }
+    if !service_token_matches(&token, &expected) {
+        return Err(AppError::Auth("invalid admin token".to_string()));
+    }
+    Ok(())
+}
+
+async fn resolve_device(
+    db: &D1Database,
+    user_id: i32,
+    client_device_id: Option<&str>,
+    device_name: &str,
+    device_type: &str,
+    now: i64,
+) -> Result<Device> {
+    if let Some(cid) = client_device_id {
+        if !is_valid_client_device_id(cid) {
+            return Err(AppError::BadRequest("invalid device_id".to_string()));
+        }
+        if let Some(device) = find_device_by_client_id(db, user_id, cid).await? {
+            touch_device(db, device.id, now).await?;
+            return Ok(device);
+        }
+        let room_id = uuid::Uuid::new_v4().simple().to_string();
+        if let Some(device) =
+            insert_device(db, user_id, device_name, device_type, &room_id, Some(cid), now).await?
+        {
+            return Ok(device);
+        }
+        // Lost a concurrent first-login race (partial unique index on
+        // (user_id, client_device_id)); the other login inserted it. Reuse it.
+        return find_device_by_client_id(db, user_id, cid)
+            .await?
+            .ok_or_else(|| AppError::Internal("device vanished after insert conflict".to_string()));
+    }
+    let room_id = uuid::Uuid::new_v4().simple().to_string();
+    insert_device(db, user_id, device_name, device_type, &room_id, None, now)
+        .await?
+        .ok_or_else(|| AppError::Internal("device insert returned no row".to_string()))
 }
 
 pub async fn signup(mut req: Request, env: Env) -> Result<Response> {
@@ -69,7 +113,7 @@ pub async fn signup(mut req: Request, env: Env) -> Result<Response> {
     let now = chrono::Utc::now().timestamp();
     let config = RelayConfig::from_env(&env);
 
-    if !check_rate_limit(&ip, config.signup_rate_limit_per_ip_per_minute, now) {
+    if !crate::ratelimit::check(&env, "RL_SIGNUP", &ip).await? {
         return Err(AppError::RateLimit(
             "signup rate limit exceeded".to_string(),
         ));
@@ -101,12 +145,19 @@ pub async fn signup(mut req: Request, env: Env) -> Result<Response> {
     let display_name = normalize_display_name(payload.display_name.as_deref(), &email);
     let device_name = normalize_device_name(payload.device_name.as_deref());
     let device_type = normalize_device_type(payload.device_type.as_deref());
-    let room_id = uuid::Uuid::new_v4().simple().to_string();
-    let access_token = generate_access_token_string();
-    let refresh_token = generate_refresh_token_string();
+    let access_token = generate_access_token_string()?;
+    let refresh_token = generate_refresh_token_string()?;
 
     let user = insert_user(&db, &email, &password_hash, &display_name, now).await?;
-    let device = insert_device(&db, user.id, &device_name, &device_type, &room_id, now).await?;
+    let device = resolve_device(
+        &db,
+        user.id,
+        payload.device_id.as_deref(),
+        &device_name,
+        &device_type,
+        now,
+    )
+    .await?;
 
     let access_hash = hash_token_str(&access_token).to_vec();
     let refresh_hash = hash_token_str(&refresh_token).to_vec();
@@ -146,9 +197,8 @@ pub async fn login(mut req: Request, env: Env) -> Result<Response> {
         .get("cf-connecting-ip")?
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let now = chrono::Utc::now().timestamp();
-    let config = RelayConfig::from_env(&env);
 
-    if !check_rate_limit(&ip, config.login_rate_limit_per_ip_per_minute, now) {
+    if !crate::ratelimit::check(&env, "RL_LOGIN", &ip).await? {
         return Err(AppError::RateLimit("login rate limit exceeded".to_string()));
     }
 
@@ -201,11 +251,18 @@ pub async fn login(mut req: Request, env: Env) -> Result<Response> {
 
     let device_name = normalize_device_name(payload.device_name.as_deref());
     let device_type = normalize_device_type(payload.device_type.as_deref());
-    let room_id = uuid::Uuid::new_v4().simple().to_string();
-    let access_token = generate_access_token_string();
-    let refresh_token = generate_refresh_token_string();
+    let access_token = generate_access_token_string()?;
+    let refresh_token = generate_refresh_token_string()?;
 
-    let device = insert_device(&db, user.id, &device_name, &device_type, &room_id, now).await?;
+    let device = resolve_device(
+        &db,
+        user.id,
+        payload.device_id.as_deref(),
+        &device_name,
+        &device_type,
+        now,
+    )
+    .await?;
 
     let access_hash = hash_token_str(&access_token).to_vec();
     let refresh_hash = hash_token_str(&refresh_token).to_vec();
@@ -247,6 +304,16 @@ pub async fn logout(req: Request, env: Env) -> Result<Response> {
 }
 
 pub async fn refresh(mut req: Request, env: Env) -> Result<Response> {
+    let ip = req
+        .headers()
+        .get("cf-connecting-ip")?
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    if !crate::ratelimit::check(&env, "RL_REFRESH", &ip).await? {
+        return Err(AppError::RateLimit(
+            "refresh rate limit exceeded".to_string(),
+        ));
+    }
+
     let payload = req.json::<RefreshRequest>().await?;
     let db = env.d1("MAHO_DB")?;
     let now = chrono::Utc::now().timestamp();
@@ -273,8 +340,8 @@ pub async fn refresh(mut req: Request, env: Env) -> Result<Response> {
         .await?
         .ok_or_else(|| AppError::Internal("device missing".to_string()))?;
 
-    let access_token = generate_access_token_string();
-    let refresh_token = generate_refresh_token_string();
+    let access_token = generate_access_token_string()?;
+    let refresh_token = generate_refresh_token_string()?;
 
     let access_hash = hash_token_str(&access_token).to_vec();
     let refresh_hash = hash_token_str(&refresh_token).to_vec();
@@ -326,33 +393,34 @@ pub async fn me(req: Request, env: Env) -> Result<Response> {
     Ok(Response::from_json(&me_res)?)
 }
 
-fn tier_ceiling_usd(tier: &str) -> f64 {
-    match tier {
-        "pro" => 2.10,
-        "max" => 13.30,
-        _ => 0.50,
-    }
-}
-
 pub async fn subscription(req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
 
-    // Get credit balance (raw SQL)
+    // D1 `first::<T>` deserializes a row as a JS object; a tuple type fails
+    // with invalid_type. Named struct required (see r/AGENTS.md CONVENTIONS).
+    #[derive(serde::Deserialize)]
+    struct CreditsRow {
+        balance_usd: f64,
+        lifetime_purchased_usd: f64,
+    }
     let stmt =
         db.prepare("SELECT balance_usd, lifetime_purchased_usd FROM credits WHERE user_id = ?1");
     let stmt = stmt.bind(&[js(&auth.user.id)?])?;
-    let credits_row = stmt.first::<(f64, f64)>(None).await?.unwrap_or((0.0, 0.0));
+    let credits_row = stmt.first::<CreditsRow>(None).await?;
+    let (balance, lifetime) = credits_row
+        .map(|r| (r.balance_usd, r.lifetime_purchased_usd))
+        .unwrap_or((0.0, 0.0));
 
     let sub_res = SubscriptionResponse {
-        tier_ceiling_usd: tier_ceiling_usd(&auth.user.tier),
+        tier_ceiling_usd: crate::config::tier_ceiling_usd(&auth.user.tier),
         tier: auth.user.tier,
         subscription_status: auth.user.subscription_status,
         subscription_expires_at: auth.user.subscription_expires_at,
         period_start_at: auth.user.period_start_at,
         anniversary_reset_day: auth.user.anniversary_reset_day,
-        credit_balance_usd: credits_row.0,
-        lifetime_purchased_usd: credits_row.1,
+        credit_balance_usd: balance,
+        lifetime_purchased_usd: lifetime,
         has_payment_method: auth.user.has_payment_method != 0.0,
     };
 
@@ -384,24 +452,7 @@ pub async fn delete_device(req: Request, env: Env, device_id_str: &str) -> Resul
 pub async fn introspect(mut req: Request, env: Env) -> Result<Response> {
     let payload = req.json::<IntrospectRequest>().await?;
 
-    let auth_header = req
-        .headers()
-        .get("Authorization")?
-        .ok_or_else(|| AppError::Auth("missing authorization header".to_string()))?;
-    let service_token = auth_header
-        .strip_prefix("Bearer ")
-        .or_else(|| auth_header.strip_prefix("bearer "))
-        .map(str::trim)
-        .ok_or_else(|| AppError::Auth("invalid service token format".to_string()))?;
-
-    let expected_service_token = env
-        .var("MAHO_RELAY_SERVICE_TOKEN")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-
-    if !service_token_matches(service_token, &expected_service_token) {
-        return Err(AppError::Auth("invalid service token".to_string()));
-    }
+    require_service_token(&req, &env)?;
 
     let db = env.d1("MAHO_DB")?;
     let token_hash = hash_token_str(&payload.token);
@@ -566,7 +617,7 @@ pub async fn verify(mut req: Request, env: Env) -> Result<Response> {
     stmt2.run().await?;
 
     let service_token = env
-        .var("MAHO_RELAY_SERVICE_TOKEN")
+        .secret("MAHO_RELAY_SERVICE_TOKEN")
         .map(|v| v.to_string())
         .unwrap_or_default();
 
@@ -581,24 +632,12 @@ pub async fn verify(mut req: Request, env: Env) -> Result<Response> {
 pub async fn consume_bypass(mut req: Request, env: Env) -> Result<Response> {
     let payload = req.json::<ConsumeBypassRequest>().await?;
 
-    let auth_header = req
-        .headers()
-        .get("Authorization")?
-        .ok_or_else(|| AppError::Auth("missing authorization header".to_string()))?;
-    let service_token = auth_header
-        .strip_prefix("Bearer ")
-        .or_else(|| auth_header.strip_prefix("bearer "))
-        .map(str::trim)
-        .ok_or_else(|| AppError::Auth("invalid service token format".to_string()))?;
+    require_service_token(&req, &env)?;
 
     let expected_service_token = env
-        .var("MAHO_RELAY_SERVICE_TOKEN")
+        .secret("MAHO_RELAY_SERVICE_TOKEN")
         .map(|v| v.to_string())
         .unwrap_or_default();
-
-    if !service_token_matches(service_token, &expected_service_token) {
-        return Err(AppError::Auth("invalid service token".to_string()));
-    }
 
     let (user_id, _expires_at) = parse_bypass_token(&payload.token, &expected_service_token)
         .ok_or_else(|| AppError::Auth("invalid or expired bypass token".to_string()))?;
@@ -607,21 +646,19 @@ pub async fn consume_bypass(mut req: Request, env: Env) -> Result<Response> {
     let token_hash = sha2::Sha256::digest(payload.token.as_bytes()).to_vec();
     let now = chrono::Utc::now().timestamp();
 
-    let stmt_check = db.prepare("SELECT user_id FROM consumed_bypass_tokens WHERE token_hash = ?1");
-    let stmt_check = stmt_check.bind(&[js(&token_hash)?])?;
-    let already_consumed = stmt_check.first::<i32>(Some("user_id")).await?.is_some();
+    let stmt_insert = db.prepare(
+        "INSERT INTO consumed_bypass_tokens (token_hash, user_id, consumed_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(token_hash) DO NOTHING
+         RETURNING user_id",
+    );
+    let stmt_insert = stmt_insert.bind(&[js(&token_hash)?, js(&user_id)?, js(&now)?])?;
+    let claimed = stmt_insert.first::<i32>(Some("user_id")).await?.is_some();
 
-    if already_consumed {
+    if !claimed {
         return Err(AppError::BadRequest(
             "bypass token already consumed".to_string(),
         ));
     }
-
-    let stmt_insert = db.prepare(
-        "INSERT INTO consumed_bypass_tokens (token_hash, user_id, consumed_at) VALUES (?1, ?2, ?3)",
-    );
-    let stmt_insert = stmt_insert.bind(&[js(&token_hash)?, js(&user_id)?, js(&now)?])?;
-    stmt_insert.run().await?;
 
     Ok(Response::from_json(&ConsumeBypassResponse { user_id })?)
 }
@@ -629,26 +666,14 @@ pub async fn consume_bypass(mut req: Request, env: Env) -> Result<Response> {
 pub async fn admin_force_verify_email(mut req: Request, env: Env) -> Result<Response> {
     let payload = req.json::<AdminForceVerifyEmailRequest>().await?;
 
-    let auth_header = req
-        .headers()
-        .get("Authorization")?
-        .ok_or_else(|| AppError::Auth("missing authorization header".to_string()))?;
-    let service_token = auth_header
-        .strip_prefix("Bearer ")
-        .or_else(|| auth_header.strip_prefix("bearer "))
-        .map(str::trim)
-        .ok_or_else(|| AppError::Auth("invalid service token format".to_string()))?;
+    require_admin_token(&req, &env)?;
 
-    let expected_service_token = env
-        .var("MAHO_RELAY_SERVICE_TOKEN")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-
-    if !service_token_matches(service_token, &expected_service_token) {
-        return Err(AppError::Auth("invalid service token".to_string()));
+    if payload.reason.trim().is_empty() {
+        return Err(AppError::BadRequest("reason required".to_string()));
     }
 
     let db = env.d1("MAHO_DB")?;
+    let now = chrono::Utc::now().timestamp();
     let exists = find_user_by_id(&db, payload.user_id).await?.is_some();
     if !exists {
         return Err(AppError::NotFound("user not found".to_string()));
@@ -657,6 +682,16 @@ pub async fn admin_force_verify_email(mut req: Request, env: Env) -> Result<Resp
     let stmt = db.prepare("UPDATE users SET email_verified = 1 WHERE id = ?1");
     let stmt = stmt.bind(&[js(&payload.user_id)?])?;
     stmt.run().await?;
+
+    insert_admin_audit(
+        &db,
+        "force_verify_email",
+        payload.user_id,
+        &payload.reason,
+        None,
+        now,
+    )
+    .await?;
 
     Ok(Response::from_json(&AdminForceVerifyEmailResponse {
         user_id: payload.user_id,
@@ -667,50 +702,36 @@ pub async fn admin_force_verify_email(mut req: Request, env: Env) -> Result<Resp
 pub async fn admin_set_credit_balance(mut req: Request, env: Env) -> Result<Response> {
     let payload = req.json::<AdminSetCreditBalanceRequest>().await?;
 
-    let auth_header = req
-        .headers()
-        .get("Authorization")?
-        .ok_or_else(|| AppError::Auth("missing authorization header".to_string()))?;
-    let service_token = auth_header
-        .strip_prefix("Bearer ")
-        .or_else(|| auth_header.strip_prefix("bearer "))
-        .map(str::trim)
-        .ok_or_else(|| AppError::Auth("invalid service token format".to_string()))?;
+    require_admin_token(&req, &env)?;
 
-    let expected_service_token = env
-        .var("MAHO_RELAY_SERVICE_TOKEN")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-
-    if !service_token_matches(service_token, &expected_service_token) {
-        return Err(AppError::Auth("invalid service token".to_string()));
+    if payload.reason.trim().is_empty() {
+        return Err(AppError::BadRequest("reason required".to_string()));
     }
 
     let db = env.d1("MAHO_DB")?;
     let now = chrono::Utc::now().timestamp();
 
-    let stmt_check = db.prepare("SELECT user_id FROM credits WHERE user_id = ?1");
-    let stmt_check = stmt_check.bind(&[js(&payload.user_id)?])?;
-    let exists = stmt_check.first::<i32>(Some("user_id")).await?.is_some();
+    let prev_balance = set_credit_balance(&db, payload.user_id, payload.new_balance_usd, now).await?;
+    let delta = payload.new_balance_usd - prev_balance;
 
-    if exists {
-        let stmt_up =
-            db.prepare("UPDATE credits SET balance_usd = ?1, updated_at = ?2 WHERE user_id = ?3");
-        let stmt_up = stmt_up.bind(&[
-            js(&payload.new_balance_usd)?,
-            js(&now)?,
-            js(&payload.user_id)?,
-        ])?;
-        stmt_up.run().await?;
-    } else {
-        let stmt_in = db.prepare("INSERT INTO credits (user_id, balance_usd, lifetime_purchased_usd, created_at, updated_at) VALUES (?1, ?2, 0.0, ?3, ?3)");
-        let stmt_in = stmt_in.bind(&[
-            js(&payload.user_id)?,
-            js(&payload.new_balance_usd)?,
-            js(&now)?,
-        ])?;
-        stmt_in.run().await?;
-    }
+    let detail = format!("{prev_balance:.4}->{:.4}", payload.new_balance_usd);
+    insert_admin_audit(
+        &db,
+        "set_credit_balance",
+        payload.user_id,
+        &payload.reason,
+        Some(&detail),
+        now,
+    )
+    .await?;
+
+    crate::billing::notify_proxy_credits_update(
+        &env,
+        payload.user_id,
+        payload.new_balance_usd,
+        delta,
+    )
+    .await;
 
     Ok(Response::from_json(&AdminSetCreditBalanceResponse {
         user_id: payload.user_id,

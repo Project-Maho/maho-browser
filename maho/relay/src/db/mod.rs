@@ -5,6 +5,8 @@ use worker::*;
 mod config_updates;
 pub use config_updates::{find_latest_config_update, insert_config_update, ConfigUpdate};
 
+pub mod jobs;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: i32,
@@ -37,6 +39,8 @@ pub struct Device {
     pub room_id: String,
     pub created_at: i64,
     pub last_seen: Option<i64>,
+    #[serde(default)]
+    pub client_device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,11 +145,13 @@ pub async fn insert_device(
     name: &str,
     device_type: &str,
     room_id: &str,
+    client_device_id: Option<&str>,
     now: i64,
-) -> Result<Device> {
+) -> Result<Option<Device>> {
     let stmt = db.prepare(
-        "INSERT INTO devices (user_id, name, device_type, room_id, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO devices (user_id, name, device_type, room_id, client_device_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(user_id, client_device_id) WHERE client_device_id IS NOT NULL DO NOTHING
          RETURNING *",
     );
     let stmt = stmt.bind(&[
@@ -153,25 +159,51 @@ pub async fn insert_device(
         js(&name)?,
         js(&device_type)?,
         js(&room_id)?,
+        js(&client_device_id)?,
         js(&now)?,
     ])?;
-    let device = stmt
-        .first::<Device>(None)
-        .await?
-        .ok_or_else(|| AppError::Internal("Failed to insert device".to_string()))?;
-    Ok(device)
+    Ok(stmt.first::<Device>(None).await?)
+}
+
+pub async fn find_device_by_client_id(
+    db: &D1Database,
+    user_id: i32,
+    client_device_id: &str,
+) -> Result<Option<Device>> {
+    let stmt =
+        db.prepare("SELECT * FROM devices WHERE user_id = ?1 AND client_device_id = ?2 LIMIT 1");
+    let stmt = stmt.bind(&[js(&user_id)?, js(&client_device_id)?])?;
+    let res = stmt.first::<Device>(None).await?;
+    Ok(res)
+}
+
+/// Whether a stable device to reuse or a fresh one to create.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeviceAction {
+    Reuse,
+    CreateNew,
+}
+
+/// Reuse only when the client sent a stable id AND a matching device exists;
+/// otherwise create a new device (preserving legacy behavior when no id given).
+pub fn pick_device(existing: Option<&Device>, provided_id: Option<&str>) -> DeviceAction {
+    match (provided_id, existing) {
+        (Some(_), Some(_)) => DeviceAction::Reuse,
+        _ => DeviceAction::CreateNew,
+    }
+}
+
+/// Client-supplied opaque device id constraint: 1..=64 of [A-Za-z0-9_-].
+pub fn is_valid_client_device_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 pub async fn find_device_by_id(db: &D1Database, id: i32) -> Result<Option<Device>> {
     let stmt = db.prepare("SELECT * FROM devices WHERE id = ?1");
     let stmt = stmt.bind(&[js(&id)?])?;
-    let res = stmt.first::<Device>(None).await?;
-    Ok(res)
-}
-
-pub async fn find_device_by_room_id(db: &D1Database, room_id: &str) -> Result<Option<Device>> {
-    let stmt = db.prepare("SELECT * FROM devices WHERE room_id = ?1");
-    let stmt = stmt.bind(&[js(&room_id)?])?;
     let res = stmt.first::<Device>(None).await?;
     Ok(res)
 }
@@ -239,13 +271,6 @@ pub async fn delete_session_by_id(db: &D1Database, id: i32) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_sessions_for_device(db: &D1Database, device_id: i32) -> Result<()> {
-    let stmt = db.prepare("DELETE FROM sessions WHERE device_id = ?1");
-    let stmt = stmt.bind(&[js(&device_id)?])?;
-    stmt.run().await?;
-    Ok(())
-}
-
 pub async fn delete_device_and_sessions(db: &D1Database, device_id: i32) -> Result<()> {
     let stmt1 = db
         .prepare("DELETE FROM sessions WHERE device_id = ?1")
@@ -289,6 +314,7 @@ pub async fn rotate_session_tokens(
 
 pub async fn touch_session_and_device(
     db: &D1Database,
+    user_id: i32,
     session_id: i32,
     device_id: i32,
     now: i64,
@@ -299,8 +325,25 @@ pub async fn touch_session_and_device(
     let stmt2 = db
         .prepare("UPDATE devices SET last_seen = ?1 WHERE id = ?2")
         .bind(&[js(&now)?, js(&device_id)?])?;
-    db.batch(vec![stmt1, stmt2]).await?;
+    let stmt3 = db
+        .prepare(
+            "INSERT INTO user_activity_days (user_id, day) VALUES (?1, ?2)
+             ON CONFLICT(user_id, day) DO NOTHING",
+        )
+        .bind(&[js(&user_id)?, js(&day_index(now))?])?;
+    db.batch(vec![stmt1, stmt2, stmt3]).await?;
     Ok(())
+}
+
+/// UTC day index: the number of whole days since the Unix epoch.
+pub fn day_index(unix_ts: i64) -> i64 {
+    unix_ts.div_euclid(86_400)
+}
+
+/// The day index at which a `created_at` account would count as retained on
+/// day N (D1 -> offset 1, D7 -> offset 7).
+pub fn retention_day(created_at: i64, offset_days: i64) -> i64 {
+    day_index(created_at) + offset_days
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -363,34 +406,40 @@ pub async fn get_room_owner_user_id(db: &D1Database, room_id: &str) -> Result<Op
     Ok(row.map(|r| r.user_id))
 }
 
-pub async fn get_latest_room_for_user(db: &D1Database, user_id: i32) -> Result<Option<String>> {
-    #[derive(Deserialize)]
-    struct RoomRow {
-        room_id: String,
-    }
-    let stmt = db.prepare(
-        "SELECT room_id FROM room_ownership WHERE user_id = ?1 ORDER BY claimed_at DESC LIMIT 1",
-    );
-    let stmt = stmt.bind(&[js(&user_id)?])?;
-    let row = stmt.first::<RoomRow>(None).await?;
-    Ok(row.map(|r| r.room_id))
-}
-
-pub async fn has_processed_event(db: &D1Database, event_id: &str) -> Result<bool> {
-    let stmt = db.prepare("SELECT 1 FROM processed_events WHERE event_id = ?1 LIMIT 1");
-    let stmt = stmt.bind(&[js(&event_id)?])?;
-    let res = stmt.first::<serde_json::Value>(None).await?;
-    Ok(res.is_some())
-}
-
-pub async fn mark_event_processed(db: &D1Database, event_id: &str, now: i64) -> Result<()> {
+/// Atomically claim a webhook event for processing.
+///
+/// Inserts the marker BEFORE any side effect and reports whether this call won
+/// the claim. `ON CONFLICT DO NOTHING RETURNING` yields a row only on a fresh
+/// insert, so a duplicate/concurrent delivery gets `Ok(false)` and must be
+/// treated as already-processed. Claiming first (not last) is what makes credit
+/// application idempotent under LemonSqueezy retries.
+pub async fn claim_event(db: &D1Database, event_id: &str, now: i64) -> Result<bool> {
     let stmt = db.prepare(
         "INSERT INTO processed_events (event_id, processed_at) VALUES (?1, ?2)
-         ON CONFLICT(event_id) DO NOTHING",
+         ON CONFLICT(event_id) DO NOTHING
+         RETURNING event_id",
     );
     let stmt = stmt.bind(&[js(&event_id)?, js(&now)?])?;
-    stmt.run().await?;
-    Ok(())
+    #[derive(Deserialize)]
+    struct ClaimRow {
+        #[allow(dead_code)]
+        event_id: String,
+    }
+    Ok(stmt.first::<ClaimRow>(None).await?.is_some())
+}
+
+/// Returns true when `incoming` is older than the last applied subscription
+/// event and must be skipped. `allow_equal` lets an equal-timestamp event still
+/// apply: downgrades (cancel/expire) pass `true` so they win ties against a
+/// paired `subscription_updated`, while upgrades pass `false` so they cannot
+/// overwrite a same-second downgrade. Mirrors the SQL guard in
+/// [`update_user_subscription`].
+pub fn is_stale_event(stored: Option<i64>, incoming: i64, allow_equal: bool) -> bool {
+    match stored {
+        Some(s) if allow_equal => incoming < s,
+        Some(s) => incoming <= s,
+        None => false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -405,20 +454,30 @@ pub async fn update_user_subscription(
     has_payment_method: Option<bool>,
     lemonsqueezy_customer_id: Option<String>,
     subscription_event_at: Option<i64>,
-) -> Result<()> {
+    allow_equal_event_at: bool,
+) -> Result<bool> {
     let has_payment_val: Option<f64> = has_payment_method.map(|b| if b { 1.0 } else { 0.0 });
-    let stmt = db.prepare(
+    // Downgrades win equal-timestamp ties (<=) so a paired subscription_updated
+    // cannot restore paid access at the same second; upgrades use < so they
+    // cannot overwrite a same-second downgrade. Only a fixed operator token is
+    // interpolated (no injection surface).
+    let cmp = if allow_equal_event_at { "<=" } else { "<" };
+    let sql = format!(
         "UPDATE users SET
             tier = ?1,
             subscription_status = ?2,
-            subscription_expires_at = COALESCE(?3, subscription_expires_at),
+            subscription_expires_at = CASE WHEN ?1 = 'free' THEN NULL
+                ELSE COALESCE(?3, subscription_expires_at) END,
             period_start_at = COALESCE(?4, period_start_at),
             anniversary_reset_day = COALESCE(?5, anniversary_reset_day),
             has_payment_method = COALESCE(?6, has_payment_method),
             lemonsqueezy_customer_id = COALESCE(?7, lemonsqueezy_customer_id),
             subscription_event_at = COALESCE(?8, subscription_event_at)
-         WHERE id = ?9",
+         WHERE id = ?9
+           AND (subscription_event_at IS NULL OR subscription_event_at {cmp} ?8)
+         RETURNING id"
     );
+    let stmt = db.prepare(&sql);
     let stmt = stmt.bind(&[
         js(&tier)?,
         js(&status)?,
@@ -430,8 +489,12 @@ pub async fn update_user_subscription(
         js(&subscription_event_at)?,
         js(&user_id)?,
     ])?;
-    stmt.run().await?;
-    Ok(())
+    #[derive(Deserialize)]
+    struct UpdatedRow {
+        #[allow(dead_code)]
+        id: i32,
+    }
+    Ok(stmt.first::<UpdatedRow>(None).await?.is_some())
 }
 
 pub async fn update_user_payment_method_and_customer(
@@ -462,11 +525,18 @@ pub async fn add_credit_balance(
     amount_usd: f64,
     now: i64,
 ) -> Result<f64> {
+    // First purchase inserts a fully-populated row (created_at, updated_at,
+    // lifetime_purchased_usd, last_purchase_at all stamped); the schema marks
+    // created_at/updated_at NOT NULL with no default, so omitting them fails the
+    // insert. A subsequent top-up increments both the spendable balance and the
+    // lifetime-purchased total and refreshes the purchase timestamps.
     let stmt = db.prepare(
-        "INSERT INTO credits (user_id, balance_usd, updated_at)
-         VALUES (?1, ?2, ?3)
+        "INSERT INTO credits (user_id, balance_usd, lifetime_purchased_usd, last_purchase_at, created_at, updated_at)
+         VALUES (?1, ?2, ?2, ?3, ?3, ?3)
          ON CONFLICT(user_id) DO UPDATE SET
             balance_usd = balance_usd + ?2,
+            lifetime_purchased_usd = lifetime_purchased_usd + ?2,
+            last_purchase_at = ?3,
             updated_at = ?3
          RETURNING balance_usd",
     );
@@ -482,37 +552,206 @@ pub async fn add_credit_balance(
     Ok(row.balance_usd)
 }
 
+/// Field values produced by applying a PAYG purchase (`amount_usd` at `now`) to
+/// a credit row. This is the pure, host-testable mirror of the upsert SQL in
+/// [`add_credit_balance`] (D1 is wasm-only, so the arithmetic is validated here
+/// instead of against a live database). `existing` is `None` for a first
+/// purchase (row inserted) and `Some((balance_usd, lifetime_purchased_usd))`
+/// for a subsequent top-up (row updated).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CreditTopup {
+    pub balance_usd: f64,
+    pub lifetime_purchased_usd: f64,
+    pub last_purchase_at: i64,
+    pub updated_at: i64,
+}
+
+pub fn topup_effect(existing: Option<(f64, f64)>, amount_usd: f64, now: i64) -> CreditTopup {
+    let (balance, lifetime) = existing.unwrap_or((0.0, 0.0));
+    CreditTopup {
+        balance_usd: balance + amount_usd,
+        lifetime_purchased_usd: lifetime + amount_usd,
+        last_purchase_at: now,
+        updated_at: now,
+    }
+}
+
+/// Atomically consume `amount_usd` from a user's PAYG credit balance.
+///
+/// The deduction is a single conditional `UPDATE ... WHERE balance_usd >= ?amount`,
+/// so concurrent consume calls cannot double-spend: there is no read-then-write
+/// window. On success the row's `last_consumption_at` and `updated_at` are stamped.
+/// Returns `Some(new_balance)` when the balance covered the amount and was
+/// debited, or `None` when the row is missing or the balance was insufficient
+/// (in which case the stored balance is left untouched).
+pub async fn try_consume_credit(
+    db: &D1Database,
+    user_id: i32,
+    amount_usd: f64,
+    now: i64,
+) -> Result<Option<f64>> {
+    let stmt = db.prepare(
+        "UPDATE credits
+         SET balance_usd = balance_usd - ?2,
+             last_consumption_at = ?3,
+             updated_at = ?3
+         WHERE user_id = ?1 AND balance_usd >= ?2
+         RETURNING balance_usd",
+    );
+    let stmt = stmt.bind(&[js(&user_id)?, js(&amount_usd)?, js(&now)?])?;
+    #[derive(Deserialize)]
+    struct CreditRow {
+        balance_usd: f64,
+    }
+    Ok(stmt.first::<CreditRow>(None).await?.map(|r| r.balance_usd))
+}
+
 pub async fn chargeback_credit(
     db: &D1Database,
     user_id: i32,
     amount_usd: f64,
     now: i64,
 ) -> Result<f64> {
+    // Atomic clamped deduction: no read-then-write race, and never below zero.
+    // A refund for a user with no credits row is a no-op (returns 0.0).
+    let stmt = db.prepare(
+        "UPDATE credits SET balance_usd = MAX(0, balance_usd - ?2), updated_at = ?3
+         WHERE user_id = ?1
+         RETURNING balance_usd",
+    );
+    let stmt = stmt.bind(&[js(&user_id)?, js(&amount_usd)?, js(&now)?])?;
+    #[derive(Deserialize)]
+    struct CreditRow {
+        balance_usd: f64,
+    }
+    Ok(stmt
+        .first::<CreditRow>(None)
+        .await?
+        .map(|r| r.balance_usd)
+        .unwrap_or(0.0))
+}
+
+/// Incremental refund (cents) to charge back given the previously recorded
+/// cumulative and the new cumulative. None when not strictly greater (a stale
+/// or duplicate refund event).
+pub fn refund_delta_cents(prior_cents: i64, new_cents: i64) -> Option<i64> {
+    if new_cents > prior_cents {
+        Some(new_cents - prior_cents)
+    } else {
+        None
+    }
+}
+
+/// Advance the recorded cumulative refund for `order_id` to `new_cents` and
+/// return the incremental cents to charge back (None if not newer). The
+/// conditional upsert only advances on a strictly larger cumulative, so a
+/// concurrent event that already advanced past `new_cents` makes this a no-op.
+/// Refund events are low-frequency and each is processed once via the webhook
+/// claim key, so the pre-read delta is correct in practice; truly concurrent
+/// distinct refunds on one order (very rare) could over-deduct.
+pub async fn record_refund_delta(
+    db: &D1Database,
+    order_id: &str,
+    new_cents: i64,
+    now: i64,
+) -> Result<Option<i64>> {
+    #[derive(Deserialize)]
+    struct RefundRow {
+        refunded_cents: i64,
+    }
+    let prior = db
+        .prepare("SELECT refunded_cents FROM order_refunds WHERE order_id = ?1")
+        .bind(&[js(&order_id)?])?
+        .first::<RefundRow>(None)
+        .await?
+        .map(|r| r.refunded_cents)
+        .unwrap_or(0);
+
+    let Some(delta) = refund_delta_cents(prior, new_cents) else {
+        return Ok(None);
+    };
+
+    let applied = db
+        .prepare(
+            "INSERT INTO order_refunds (order_id, refunded_cents, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(order_id) DO UPDATE SET refunded_cents = ?2, updated_at = ?3
+               WHERE excluded.refunded_cents > order_refunds.refunded_cents
+             RETURNING order_id",
+        )
+        .bind(&[js(&order_id)?, js(&new_cents)?, js(&now)?])?
+        .first::<serde_json::Value>(None)
+        .await?
+        .is_some();
+
+    Ok(if applied { Some(delta) } else { None })
+}
+
+pub async fn get_credit_balance_usd(db: &D1Database, user_id: i32) -> Result<f64> {
     let stmt = db.prepare("SELECT balance_usd FROM credits WHERE user_id = ?1");
     let stmt = stmt.bind(&[js(&user_id)?])?;
     #[derive(Deserialize)]
     struct CreditRow {
         balance_usd: f64,
     }
-    let current = stmt
+    Ok(stmt
         .first::<CreditRow>(None)
+        .await?
+        .map(|r| r.balance_usd)
+        .unwrap_or(0.0))
+}
+
+/// Set an existing user's credit balance to an absolute value (used by the
+/// admin/chargeback flows). Prefer [`try_consume_credit`] for spend paths, which
+/// deducts conditionally and atomically.
+pub async fn set_credit_balance(
+    db: &D1Database,
+    user_id: i32,
+    new_balance_usd: f64,
+    now: i64,
+) -> Result<f64> {
+    #[derive(Deserialize)]
+    struct BalanceRow {
+        balance_usd: f64,
+    }
+    let prev = db
+        .prepare("SELECT balance_usd FROM credits WHERE user_id = ?1")
+        .bind(&[js(&user_id)?])?
+        .first::<BalanceRow>(None)
         .await?
         .map(|r| r.balance_usd)
         .unwrap_or(0.0);
 
-    let deduction = amount_usd.min(current);
-    let new_balance = current - deduction;
-
     let stmt = db.prepare(
-        "INSERT INTO credits (user_id, balance_usd, updated_at)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(user_id) DO UPDATE SET
-            balance_usd = ?2,
-            updated_at = ?3",
+        "INSERT INTO credits (user_id, balance_usd, lifetime_purchased_usd, created_at, updated_at)
+         VALUES (?1, ?2, 0.0, ?3, ?3)
+         ON CONFLICT(user_id) DO UPDATE SET balance_usd = ?2, updated_at = ?3",
     );
-    let stmt = stmt.bind(&[js(&user_id)?, js(&new_balance)?, js(&now)?])?;
+    let stmt = stmt.bind(&[js(&user_id)?, js(&new_balance_usd)?, js(&now)?])?;
     stmt.run().await?;
-    Ok(new_balance)
+    Ok(prev)
+}
+
+pub async fn insert_admin_audit(
+    db: &D1Database,
+    action: &str,
+    target_user_id: i32,
+    reason: &str,
+    detail: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    let stmt = db.prepare(
+        "INSERT INTO admin_audit (action, target_user_id, reason, detail, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    );
+    let stmt = stmt.bind(&[
+        js(&action)?,
+        js(&target_user_id)?,
+        js(&reason)?,
+        js(&detail)?,
+        js(&now)?,
+    ])?;
+    stmt.run().await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -526,41 +765,29 @@ pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>) -> Res
     let blob_len = blob.len() as i64;
 
     #[derive(Deserialize)]
-    struct MetaRow {
+    struct SeqRow {
         next_seq: i64,
-        total_bytes: i64,
     }
 
-    let meta = db
-        .prepare("SELECT next_seq, total_bytes FROM room_meta WHERE room_id = ?1")
-        .bind(&[js(&room_id)?])?
-        .first::<MetaRow>(None)
-        .await?;
+    // Atomic seq allocation: one upsert increments next_seq and RETURNs it, so
+    // concurrent messages to a room cannot read the same seq and collide on the
+    // idx_messages_room_seq unique index.
+    let row = db
+        .prepare(
+            "INSERT INTO room_meta (room_id, next_seq, last_activity, total_bytes)
+             VALUES (?1, 1, ?2, ?3)
+             ON CONFLICT(room_id) DO UPDATE SET
+                next_seq = room_meta.next_seq + 1,
+                last_activity = ?2,
+                total_bytes = room_meta.total_bytes + ?3
+             RETURNING next_seq",
+        )
+        .bind(&[js(&room_id)?, js(&now)?, js(&blob_len)?])?
+        .first::<SeqRow>(None)
+        .await?
+        .ok_or_else(|| AppError::Internal("room_meta upsert returned no row".to_string()))?;
 
-    let seq = match meta {
-        Some(m) => {
-            let assigned = m.next_seq;
-            db.prepare(
-                "UPDATE room_meta SET next_seq = ?1, last_activity = ?2, total_bytes = ?3 WHERE room_id = ?4"
-            )
-                .bind(&[
-                    js(&(assigned + 1))?,
-                    js(&now)?,
-                    js(&(m.total_bytes + blob_len))?,
-                    js(&room_id)?,
-                ])?
-                .run().await?;
-            assigned
-        }
-        None => {
-            db.prepare(
-                "INSERT INTO room_meta (room_id, next_seq, last_activity, total_bytes) VALUES (?1, 1, ?2, ?3)"
-            )
-                .bind(&[js(&room_id)?, js(&now)?, js(&blob_len)?])?
-                .run().await?;
-            0
-        }
-    };
+    let seq = assigned_seq(row.next_seq);
 
     let blob_js =
         serde_wasm_bindgen::to_value(&blob).map_err(|e| AppError::Internal(e.to_string()))?;
@@ -570,6 +797,16 @@ pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>) -> Res
         .await?;
 
     Ok(seq)
+}
+
+/// Assigned seq given the post-increment `next_seq` the room_meta upsert
+/// returned (first message -> 0). A gap appears if the message INSERT later
+/// fails; that is safe because catchup queries `seq > since_seq` tolerate gaps.
+/// A failed insert also over-counts `room_meta.total_bytes` (the upsert already
+/// added the size); the scheduled retention job recomputes total_bytes from the
+/// actual messages, so any drift self-corrects on the next run.
+pub fn assigned_seq(returned_next_seq: i64) -> i64 {
+    returned_next_seq - 1
 }
 
 pub async fn get_messages_since(
@@ -598,15 +835,118 @@ pub async fn get_room_size(db: &D1Database, room_id: &str) -> Result<i64> {
     Ok(row.map(|r| r.total_bytes).unwrap_or(0))
 }
 
-pub async fn get_room_next_seq(db: &D1Database, room_id: &str) -> Result<i64> {
-    #[derive(Deserialize)]
-    struct SeqRow {
-        next_seq: i64,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topup_first_purchase_seeds_balance_lifetime_and_timestamps() {
+        let effect = topup_effect(None, 10.0, 1_700_000_000);
+        assert_eq!(
+            effect,
+            CreditTopup {
+                balance_usd: 10.0,
+                lifetime_purchased_usd: 10.0,
+                last_purchase_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+            }
+        );
     }
-    let row = db
-        .prepare("SELECT next_seq FROM room_meta WHERE room_id = ?1")
-        .bind(&[js(&room_id)?])?
-        .first::<SeqRow>(None)
-        .await?;
-    Ok(row.map(|r| r.next_seq).unwrap_or(1))
+
+    #[test]
+    fn topup_repeat_purchase_increments_balance_and_lifetime() {
+        let existing = Some((3.0, 10.0));
+        let effect = topup_effect(existing, 50.0, 1_700_000_500);
+        assert_eq!(
+            effect,
+            CreditTopup {
+                balance_usd: 53.0,
+                lifetime_purchased_usd: 60.0,
+                last_purchase_at: 1_700_000_500,
+                updated_at: 1_700_000_500,
+            }
+        );
+    }
+
+    #[test]
+    fn topup_lifetime_never_decreases_when_balance_was_spent_down() {
+        let existing = Some((0.0, 100.0));
+        let effect = topup_effect(existing, 25.0, 42);
+        assert_eq!(effect.balance_usd, 25.0);
+        assert_eq!(effect.lifetime_purchased_usd, 125.0);
+    }
+
+    #[test]
+    fn is_stale_event_boundaries() {
+        // Upgrades (allow_equal = false): equal timestamp is stale (loses tie).
+        assert!(!is_stale_event(None, 100, false));
+        assert!(is_stale_event(Some(100), 100, false));
+        assert!(!is_stale_event(Some(100), 101, false));
+        assert!(is_stale_event(Some(100), 99, false));
+        // Downgrades (allow_equal = true): equal timestamp applies (wins tie).
+        assert!(!is_stale_event(Some(100), 100, true));
+        assert!(!is_stale_event(Some(100), 101, true));
+        assert!(is_stale_event(Some(100), 99, true));
+    }
+
+    fn sample_device() -> Device {
+        Device {
+            id: 1,
+            user_id: 7,
+            name: "d".to_string(),
+            device_type: "desktop".to_string(),
+            room_id: "r".to_string(),
+            created_at: 0,
+            last_seen: None,
+            client_device_id: Some("abc".to_string()),
+        }
+    }
+
+    #[test]
+    fn pick_device_reuses_only_with_id_and_existing() {
+        let d = sample_device();
+        assert_eq!(pick_device(Some(&d), Some("abc")), DeviceAction::Reuse);
+        assert_eq!(pick_device(None, Some("abc")), DeviceAction::CreateNew);
+        assert_eq!(pick_device(Some(&d), None), DeviceAction::CreateNew);
+        assert_eq!(pick_device(None, None), DeviceAction::CreateNew);
+    }
+
+    #[test]
+    fn client_device_id_validation() {
+        assert!(is_valid_client_device_id("Abc-123_XYZ"));
+        assert!(is_valid_client_device_id(&"a".repeat(64)));
+        assert!(!is_valid_client_device_id(""));
+        assert!(!is_valid_client_device_id(&"a".repeat(65)));
+        assert!(!is_valid_client_device_id("has space"));
+        assert!(!is_valid_client_device_id("emoji😀"));
+    }
+
+    #[test]
+    fn assigned_seq_derivation() {
+        assert_eq!(assigned_seq(1), 0);
+        assert_eq!(assigned_seq(2), 1);
+        assert_eq!(assigned_seq(100), 99);
+    }
+
+    #[test]
+    fn refund_delta_only_charges_the_increment() {
+        // First refund of $2 on a $10 order.
+        assert_eq!(refund_delta_cents(0, 200), Some(200));
+        // Second partial refund raising cumulative to $5 -> charge the $3 delta.
+        assert_eq!(refund_delta_cents(200, 500), Some(300));
+        // Duplicate/stale event at same or lower cumulative -> nothing.
+        assert_eq!(refund_delta_cents(500, 500), None);
+        assert_eq!(refund_delta_cents(500, 300), None);
+    }
+
+    #[test]
+    fn day_index_and_retention_boundaries() {
+        // 1_700_000_000 = 2023-11-14T22:13:20Z -> day 19675, still that day at +86399s.
+        assert_eq!(day_index(1_700_000_000), 19_675);
+        assert_eq!(day_index(19_675 * 86_400), 19_675);
+        assert_eq!(day_index(19_675 * 86_400 - 1), 19_674);
+        // D1 / D7 offsets from a signup on day 19675.
+        assert_eq!(retention_day(1_700_000_000, 1), 19_676);
+        assert_eq!(retention_day(1_700_000_000, 7), 19_682);
+    }
 }

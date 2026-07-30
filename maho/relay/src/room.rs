@@ -1,4 +1,5 @@
 use crate::auth::tokens::hash_token_str;
+use crate::config::RelayConfig;
 use crate::db;
 use crate::errors::AppError;
 use crate::RoomDO;
@@ -7,10 +8,8 @@ use serde::{Deserialize, Serialize};
 use worker::*;
 
 const AUTH_TIMEOUT_SECS: u64 = 5;
-const MAX_MESSAGE_SIZE: usize = 1_048_576;
 const MAX_MESSAGES_PER_MIN: u32 = 100;
-const MAX_ROOM_BYTES: i64 = 50 * 1_048_576;
-const MAX_CONNECTIONS_PER_ROOM: usize = 5;
+const MAX_UNAUTH_CONNECTIONS_PER_ROOM: usize = 2;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WsCtx {
@@ -79,9 +78,25 @@ pub async fn handle_do_fetch(room: &mut RoomDO, req: Request) -> Result<Response
         room.room_id = Some(key.clone());
     }
 
+    let config = RelayConfig::from_env(&room.env);
+
+    // Count authenticated vs unauthenticated sockets separately: an idle
+    // unauthenticated socket must not consume an authenticated slot (that is
+    // the DoS the auth-timeout alarm defends against), and gets a lower cap.
     let existing = room.state.get_websockets();
-    if existing.len() >= MAX_CONNECTIONS_PER_ROOM {
+    let mut authed = 0usize;
+    let mut unauthed = 0usize;
+    for sock in existing.iter() {
+        match sock.deserialize_attachment::<WsCtx>() {
+            Ok(Some(c)) if c.authenticated => authed += 1,
+            _ => unauthed += 1,
+        }
+    }
+    if authed >= config.max_connections_per_room as usize {
         return Response::error("too_many_connections", 429);
+    }
+    if unauthed >= MAX_UNAUTH_CONNECTIONS_PER_ROOM {
+        return Response::error("too_many_unauthenticated_connections", 429);
     }
 
     let pair = WebSocketPair::new()?;
@@ -93,7 +108,43 @@ pub async fn handle_do_fetch(room: &mut RoomDO, req: Request) -> Result<Response
     server.serialize_attachment(&ctx)?;
     room.state.accept_web_socket(&server);
 
+    // Arm an alarm so a socket that never sends the auth message is reaped even
+    // if it stays silent (the per-message timeout only fires on inbound data).
+    let _ = room
+        .state
+        .storage()
+        .set_alarm(std::time::Duration::from_secs(AUTH_TIMEOUT_SECS + 1))
+        .await;
+
     Response::from_websocket(client)
+}
+
+/// Durable Object alarm: close unauthenticated sockets that outlived the auth
+/// timeout, and re-arm while any unauthenticated socket remains.
+pub async fn handle_alarm(room: &mut RoomDO) -> Result<Response> {
+    let now = chrono::Utc::now().timestamp();
+    let mut remaining_unauth = false;
+    for sock in room.state.get_websockets().iter() {
+        let ctx: Option<WsCtx> = sock.deserialize_attachment().ok().flatten();
+        let Some(ctx) = ctx else { continue };
+        if ctx.authenticated {
+            continue;
+        }
+        if now - ctx.connected_at > AUTH_TIMEOUT_SECS as i64 {
+            let _ = sock.send_with_str(r#"{"type":"error","msg":"auth_timeout"}"#);
+            let _ = sock.close::<&str>(Some(1008), Some("auth_timeout"));
+        } else {
+            remaining_unauth = true;
+        }
+    }
+    if remaining_unauth {
+        let _ = room
+            .state
+            .storage()
+            .set_alarm(std::time::Duration::from_secs(AUTH_TIMEOUT_SECS + 1))
+            .await;
+    }
+    Response::ok("alarm_handled")
 }
 
 pub async fn handle_ws_message(
@@ -111,12 +162,14 @@ pub async fn handle_ws_message(
         return process_auth(room, ws, message, ctx).await;
     }
 
+    let config = RelayConfig::from_env(&room.env);
+
     let (payload_bytes, echo_text): (Vec<u8>, Option<String>) = match message {
         WebSocketIncomingMessage::String(t) => (t.as_bytes().to_vec(), Some(t)),
         WebSocketIncomingMessage::Binary(b) => (b, None),
     };
 
-    if payload_bytes.len() > MAX_MESSAGE_SIZE {
+    if payload_bytes.len() > config.max_message_size_bytes {
         let _ = ws.send_with_str(r#"{"type":"error","msg":"message_too_large"}"#);
         return Ok(());
     }
@@ -143,7 +196,7 @@ pub async fn handle_ws_message(
     };
 
     match db::get_room_size(&db, &room_id).await {
-        Ok(size) if size + payload_bytes.len() as i64 > MAX_ROOM_BYTES => {
+        Ok(size) if size + payload_bytes.len() as i64 > config.max_room_size_mb as i64 * 1_048_576 => {
             let _ = ws.send_with_str(r#"{"type":"error","msg":"room_size_limit_exceeded"}"#);
             let _ = ws.serialize_attachment(&ctx);
             return Ok(());
@@ -257,12 +310,7 @@ async fn process_auth(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let require_auth = room
-        .env
-        .var("REQUIRE_AUTH")
-        .ok()
-        .map(|v| v.to_string().eq_ignore_ascii_case("true"))
-        .unwrap_or(true);
+    let require_auth = RelayConfig::from_env(&room.env).require_auth;
 
     let db = room.env.d1("MAHO_DB")?;
 
@@ -293,7 +341,7 @@ async fn process_auth(
                     }
                 }
                 if let Err(e) =
-                    db::touch_session_and_device(&db, context.session.id, context.device.id, now)
+                    db::touch_session_and_device(&db, context.user.id, context.session.id, context.device.id, now)
                         .await
                 {
                     console_error!("touch_session_and_device failed: {e}");

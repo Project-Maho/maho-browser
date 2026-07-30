@@ -7,6 +7,10 @@ pub mod billing;
 pub mod config;
 pub mod db;
 pub mod errors;
+pub mod jobs;
+pub mod jobs_routes;
+pub mod metrics;
+pub mod ratelimit;
 pub mod room;
 pub mod sync;
 pub mod updates;
@@ -107,6 +111,12 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(e) => e.to_response(),
             }
         })
+        .get_async("/admin/metrics/funnel", |req, ctx| async move {
+            match metrics::funnel(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
         .post_async("/billing/lemonsqueezy", |req, ctx| async move {
             match billing::lemonsqueezy_webhook(req, ctx.env).await {
                 Ok(res) => Ok(res),
@@ -121,6 +131,55 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/billing/invoices", |req, ctx| async move {
             match billing::invoices(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .get_async("/billing/credit_balance", |req, ctx| async move {
+            match billing::get_credit_balance(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/billing/credit_balance", |req, ctx| async move {
+            match billing::get_credit_balance(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/billing/consume_credit", |req, ctx| async move {
+            match billing::consume_credit(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/jobs/create", |req, ctx| async move {
+            match jobs_routes::create_job(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .get_async("/jobs/:id", |req, ctx| async move {
+            let id = ctx.param("id").map(|s| s.to_string()).unwrap_or_default();
+            match jobs_routes::get_job(req, ctx.env, &id).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/jobs/complete", |req, ctx| async move {
+            match jobs_routes::complete_job(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/jobs/progress", |req, ctx| async move {
+            match jobs_routes::progress_job(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/jobs/fail", |req, ctx| async move {
+            match jobs_routes::fail_job(req, ctx.env).await {
                 Ok(res) => Ok(res),
                 Err(e) => e.to_response(),
             }
@@ -167,38 +226,60 @@ pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) 
         return;
     };
     let now = chrono::Utc::now().timestamp();
-    let retention_days = env
-        .var("RETENTION_DAYS")
-        .ok()
-        .and_then(|v| v.to_string().parse::<i64>().ok())
-        .unwrap_or(30);
-    let cutoff = now - (retention_days * 86_400);
+    let retention_days = config::RelayConfig::from_env(&env).retention_days as i64;
+    let messages_cutoff = now - (retention_days * 86_400);
+    let bypass_cutoff = now - (30 * 86_400);
+    // processed_events must outlive the webhook retry window so claim-first
+    // idempotency still recognizes a retried event. admin_audit is never pruned.
+    let events_cutoff = now - (90 * 86_400);
+    let jobs_cutoff = now - (90 * 86_400);
 
-    match db
-        .prepare("DELETE FROM messages WHERE created_at < ?1")
-        .bind(&[cutoff.into()])
+    prune(&db, "messages", "DELETE FROM messages WHERE created_at < ?1", messages_cutoff).await;
+
+    // Messages just pruned no longer count toward room_meta.total_bytes; recompute
+    // so a room cannot stay permanently locked at room_size_limit_exceeded.
+    if let Err(e) = db
+        .prepare(
+            "UPDATE room_meta SET total_bytes = COALESCE(
+                (SELECT SUM(LENGTH(blob)) FROM messages WHERE messages.room_id = room_meta.room_id), 0)",
+        )
+        .run()
+        .await
     {
-        Ok(stmt) => {
-            if let Err(e) = stmt.run().await {
-                console_error!("scheduled: prune messages err: {e}");
-            }
-        }
-        Err(e) => console_error!("scheduled: bind messages err: {e}"),
+        console_error!("scheduled: recompute total_bytes err: {e}");
     }
 
-    match db
-        .prepare("DELETE FROM sessions WHERE refresh_expires_at < ?1")
-        .bind(&[now.into()])
-    {
-        Ok(stmt) => {
-            if let Err(e) = stmt.run().await {
-                console_error!("scheduled: prune sessions err: {e}");
-            }
-        }
-        Err(e) => console_error!("scheduled: bind sessions err: {e}"),
-    }
+    prune(&db, "sessions", "DELETE FROM sessions WHERE refresh_expires_at < ?1", now).await;
+    prune(&db, "consumed_bypass_tokens", "DELETE FROM consumed_bypass_tokens WHERE consumed_at < ?1", bypass_cutoff).await;
+    prune(&db, "processed_events", "DELETE FROM processed_events WHERE processed_at < ?1", events_cutoff).await;
+    prune(
+        &db,
+        "handoff_jobs",
+        "DELETE FROM handoff_jobs WHERE status IN ('completed','failed') AND updated_at < ?1",
+        jobs_cutoff,
+    )
+    .await;
+
+    prune(
+        &db,
+        "user_activity_days",
+        "DELETE FROM user_activity_days WHERE day < ?1",
+        db::day_index(now) - 90,
+    )
+    .await;
 
     console_log!("scheduled maintenance done");
+}
+
+async fn prune(db: &D1Database, label: &str, sql: &str, cutoff: i64) {
+    match db.prepare(sql).bind(&[cutoff.into()]) {
+        Ok(stmt) => {
+            if let Err(e) = stmt.run().await {
+                console_error!("scheduled: prune {label} err: {e}");
+            }
+        }
+        Err(e) => console_error!("scheduled: bind {label} err: {e}"),
+    }
 }
 
 #[durable_object]
@@ -220,6 +301,10 @@ impl DurableObject for RoomDO {
 
     async fn fetch(&mut self, req: Request) -> Result<Response> {
         room::handle_do_fetch(self, req).await
+    }
+
+    async fn alarm(&mut self) -> Result<Response> {
+        room::handle_alarm(self).await
     }
 
     async fn websocket_message(

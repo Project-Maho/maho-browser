@@ -1,8 +1,7 @@
+use crate::db::js;
 use crate::errors::{AppError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::Mutex;
 use worker::*;
 
 const VALID_SOURCES: &[&str] = &["browser", "mail", "general"];
@@ -20,35 +19,6 @@ pub struct CreateWaitlistResponse {
     pub already_signed_up: bool,
 }
 
-fn check_rate_limit(ip_hash: &str, limit_per_min: u32, now: i64) -> bool {
-    static LIMITER: std::sync::OnceLock<Mutex<HashMap<String, Vec<i64>>>> =
-        std::sync::OnceLock::new();
-    let mut map = match LIMITER.get_or_init(|| Mutex::new(HashMap::new())).lock() {
-        Ok(map) => map,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let timestamps = map.entry(ip_hash.to_string()).or_default();
-
-    timestamps.retain(|&t| t > now - 60);
-
-    if timestamps.len() >= limit_per_min as usize {
-        false
-    } else {
-        timestamps.push(now);
-        true
-    }
-}
-
-fn js<T: serde::Serialize>(val: &T) -> std::result::Result<wasm_bindgen::JsValue, AppError> {
-    let js_val =
-        serde_wasm_bindgen::to_value(val).map_err(|e| AppError::Internal(e.to_string()))?;
-    if js_val.is_undefined() {
-        Ok(wasm_bindgen::JsValue::null())
-    } else {
-        Ok(js_val)
-    }
-}
-
 pub async fn handler(mut req: Request, env: Env) -> Result<Response> {
     let payload = req.json::<CreateWaitlistRequest>().await?;
     let ip = req
@@ -62,7 +32,7 @@ pub async fn handler(mut req: Request, env: Env) -> Result<Response> {
     hasher.update(ip.as_bytes());
     let ip_hash = format!("{:x}", hasher.finalize());
 
-    if !check_rate_limit(&ip_hash, 5, now) {
+    if !crate::ratelimit::check(&env, "RL_WAITLIST", &ip_hash).await? {
         return Err(AppError::RateLimit("rate_limit_exceeded".to_string()));
     }
 
@@ -95,22 +65,13 @@ pub async fn handler(mut req: Request, env: Env) -> Result<Response> {
 
     let db = env.d1("MAHO_DB")?;
 
-    // Idempotent check
-    let stmt_check = db.prepare("SELECT id FROM waitlist_signups WHERE email = ?1");
-    let stmt_check = stmt_check.bind(&[js(&email)?])?;
-    let exists = stmt_check.first::<i32>(Some("id")).await?.is_some();
-
-    if exists {
-        return Ok(Response::from_json(&CreateWaitlistResponse {
-            ok: true,
-            already_signed_up: true,
-        })?);
-    }
-
-    // Insert into waitlist_signups
+    // Dedup on the full (email, source) unique index (not email alone), and a
+    // single conditional insert removes the check-then-insert race.
     let stmt_insert = db.prepare(
         "INSERT INTO waitlist_signups (email, source, ip_hash, created_at, metadata)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(email, source) DO NOTHING
+         RETURNING id",
     );
     let stmt_insert = stmt_insert.bind(&[
         js(&email)?,
@@ -119,10 +80,10 @@ pub async fn handler(mut req: Request, env: Env) -> Result<Response> {
         js(&now)?,
         js(&metadata_str)?,
     ])?;
-    stmt_insert.run().await?;
+    let inserted = stmt_insert.first::<i32>(Some("id")).await?.is_some();
 
     Ok(Response::from_json(&CreateWaitlistResponse {
         ok: true,
-        already_signed_up: false,
+        already_signed_up: !inserted,
     })?)
 }

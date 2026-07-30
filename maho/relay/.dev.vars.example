@@ -1,0 +1,58 @@
+# maho-relay local dev secrets/vars — sanitized template.
+# Copy to `.dev.vars` (gitignored) and fill in local values. NEVER commit real
+# secrets. Wrangler loads `.dev.vars` for `wrangler dev`.
+
+# Shared secret authenticating service-to-service calls (billing-proxy -> relay,
+# relay -> billing-proxy). Must match the billing-proxy SERVICE_TOKEN.
+MAHO_RELAY_SERVICE_TOKEN="dev-service-token-change-me"
+
+# Admin secret gating /auth/admin/* (set_credit_balance, force_verify_email).
+# Distinct from the service token so a leaked proxy token cannot mint credits.
+# Fail-closed: routes return 500 "not configured" when unset.
+MAHO_ADMIN_TOKEN="dev-admin-token-change-me"
+
+# Argon2 password-hash pepper. Use a long random string in every environment.
+ARGON2_PEPPER="dev-argon2-pepper-change-me"
+
+# LemonSqueezy webhook HMAC secret (verifies inbound billing webhooks).
+LS_WEBHOOK_SECRET="dev-ls-webhook-secret-change-me"
+
+# LemonSqueezy REST API key (portal sessions + invoices). Leave empty to disable.
+LEMONSQUEEZY_API_KEY=""
+
+# LemonSqueezy variant IDs (public product IDs, not secrets). Replace with real
+# store IDs; placeholders below match dev/staging test fixtures.
+LS_VARIANT_PRO="1001"
+LS_VARIANT_MAX="2002"
+LS_VARIANT_PAYG_10="4001"
+LS_VARIANT_PAYG_50="4002"
+LS_VARIANT_PAYG_100="4003"
+
+# Resend API key for verification emails. Leave empty to skip sending in dev.
+RESEND_API_KEY=""
+
+# Billing-proxy base URL the relay notifies on tier/credit/topup changes.
+MAHO_PROXY_URL="http://localhost:18787"
+
+# Environment name. Set to "development"/"local"/"dev" to expose dev-only tokens;
+# any other value (or unset) is treated as production and fails closed.
+MAHO_ENV="development"
+
+# Verification email sender + link base.
+MAHO_FROM_EMAIL="Maho <noreply@example.com>"
+MAHO_VERIFY_URL="http://localhost:5555/verify"
+
+# Dev-only: allow open signup. Leave closed ("false"/unset) outside local dev.
+OPEN_REGISTRATION="true"
+REQUIRE_AUTH="true"
+MIN_PASSWORD_LENGTH="12"
+
+# Rate limiting is enforced by Cloudflare Rate Limiting bindings (RL_SIGNUP,
+# RL_LOGIN, RL_WAITLIST, RL_REFRESH) declared in wrangler.toml. In `wrangler dev`
+# without those bindings, ratelimit.rs allows requests (dev-only fail-open).
+
+# Sync/room caps.
+MAX_CONNECTIONS_PER_ROOM="10"
+MAX_ROOM_SIZE_MB="25"
+MAX_MESSAGE_SIZE_BYTES="1048576"
+RETENTION_DAYS="30"
