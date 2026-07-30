@@ -1622,6 +1622,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                "  base::FilePath lastProfilePath = GetStartupProfilePathMac();\n"
+            ),
+            new=(
+                "  // Maho onboarding is a top-level product window, but it is not a\n"
+                "  // BrowserWindowInterface and therefore is absent from GetBrowserWindows().\n"
+                "  // Reactivate it before Chromium interprets the empty browser list as a\n"
+                "  // request to create a regular browser window.\n"
+                "  if (maho::MahoWelcomeWindow::ActivateIfOpen()) {\n"
+                "    return NO;\n"
+                "  }\n"
+                "\n"
+                "  base::FilePath lastProfilePath = GetStartupProfilePathMac();\n"
+            ),
+            description="Activate the Maho welcome window before macOS creates a browser",
+            guard="MahoWelcomeWindow::ActivateIfOpen()",
+        ),
+        Replacement(
+            old=(
                 "void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,\n"
                 "                                  Profile* profile) {\n"
                 "  if (!profile)\n"

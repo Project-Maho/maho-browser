@@ -11,6 +11,32 @@ _APP_CONTROLLER_MM_PATH = "chrome/browser/app_controller_mac.mm"
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+    def test_macos_reopen_activates_welcome_before_creating_browser(self):
+        replacements = REPLACEMENTS[_APP_CONTROLLER_MM_PATH]
+
+        include_patch = next(
+            item
+            for item in replacements
+            if item.description
+            == "Include the Maho welcome window for native URL login-gate presentation"
+        )
+        self.assertIn(
+            '#include "maho/browser/ui/views/welcome/maho_welcome_window.h"',
+            include_patch.new,
+        )
+
+        reopen_patch = next(
+            item
+            for item in replacements
+            if item.description
+            == "Activate the Maho welcome window before macOS creates a browser"
+        )
+        self.assertIn("MahoWelcomeWindow::ActivateIfOpen()", reopen_patch.new)
+        self.assertLess(
+            reopen_patch.new.index("MahoWelcomeWindow::ActivateIfOpen()"),
+            reopen_patch.new.index("GetStartupProfilePathMac()"),
+        )
+
     def test_url_alias_dep_uses_context_menus_when_password_provider_is_absent(self):
         source = (
             'static_library("browser") {\n'

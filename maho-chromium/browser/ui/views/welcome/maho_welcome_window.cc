@@ -171,6 +171,18 @@ void MahoWelcomeWindow::Show(Profile* profile) {
                                 storage->weak_factory_.GetWeakPtr()));
 }
 
+bool MahoWelcomeWindow::ActivateIfOpen() {
+  auto& storage = GetSingletonStorage();
+  if (!storage) {
+    return false;
+  }
+  if (storage->widget_) {
+    storage->widget_->Show();
+    storage->widget_->Activate();
+  }
+  return true;
+}
+
 // static
 void MahoWelcomeWindow::CloseInstance() {
   auto& storage = GetSingletonStorage();

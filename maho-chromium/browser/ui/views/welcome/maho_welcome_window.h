@@ -37,6 +37,7 @@ class MahoWelcomeWindow : public views::WidgetObserver {
 
   // Create + show the welcome window.  If one already exists, activates it.
   static void Show(Profile* profile);
+  static bool ActivateIfOpen();
 
   // Close the active welcome window if any.  Safe to call when none exists.
   static void CloseInstance();
