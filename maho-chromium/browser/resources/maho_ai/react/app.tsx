@@ -1,20 +1,18 @@
-import React, {Component, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {Component, useCallback, useEffect, useMemo, useRef} from 'react';
 import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {toast} from 'sonner';
 
 import type {MahoAiStore} from '../store.js';
 import {createFileAttachment, isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
-import type {AppState, TimelineEntry} from '../types.js';
+import type {AISelectionRequest, AppState, QuickAction, TimelineEntry} from '../types.js';
 import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
 import {SuggestionChips} from './features/compact/compact-stage.js';
-import {TabTidyModal} from './features/compact/tab-tidy-modal.js';
 import {VoiceInputModal} from './features/compact/voice-input-modal.js';
 import {SlashEditors} from './features/compact/slash-editors.js';
-import type {TidyFolderSuggestion} from './features/compact/tab-tidy-modal.js';
 import {
   Composer,
   type ComposerHandlers,
@@ -127,8 +125,6 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   const state = useAppState(store);
   const bootstrappedRef = useRef(false);
   const [handlerTimedOut, setHandlerTimedOut] = React.useState(false);
-  const [tidySuggestions, setTidySuggestions] = useState<TidyFolderSuggestion[] | null>(null);
-  const [tidyLoading, setTidyLoading] = useState(false);
   useEffect(() => {
     (window as unknown as Record<string, unknown>)['__mahoAiMounted'] = true;
     applyTheme("auto");
@@ -282,15 +278,12 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     runSubmission(store.submitPrompt());
   }, [runSubmission, store]);
 
-  const handleSuggestionSelect = useCallback((text: string) => {
-    store.setComposerPrompt(text);
-    const stateSnapshot = store.getSnapshot();
-    if (!stateSnapshot.currentSessionId) {
-      runSubmission(store.startSessionThenSubmit());
-      return;
-    }
+  const handleQuickActionSelect = useCallback((action: QuickAction) => {
+    runSubmission(store.submitQuickAction(action));
+  }, [runSubmission, store]);
 
-    runSubmission(store.submitPrompt());
+  const handleRegenerate = useCallback(() => {
+    runSubmission(store.regenerateLastResponse());
   }, [runSubmission, store]);
 
   const handleVoiceFinal = useCallback((transcript: string, controls: VoiceFinalControls) => {
@@ -369,8 +362,8 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onRemoveAttachment: attachment => {
       store.toggleAttachment(attachment);
     },
-    onSetActiveAI: (providerId: string, modelId: string) => {
-      return store.setActiveAI(providerId, modelId);
+    onSetAISelection: (selection: AISelectionRequest) => {
+      return store.setAISelection(selection);
     },
     onOpenSettings: () => {
       void store.openSettings();
@@ -386,8 +379,8 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onClosePanel: () => {
       void store.closePanel();
     },
-    onOpenSettings: () => {
-      void store.openSettings();
+    onOpenSettings: (paneKey?: string) => {
+      void store.openSettings(paneKey);
     },
     onConnectMcp: () => {
       void store.openSettings('maho-ai-developers');
@@ -406,30 +399,10 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onSetViewMode: (mode: ViewMode) => {
       void store.setViewMode(mode);
     },
-    onSetActiveAI: (providerId: string, modelId: string) => {
-      return store.setActiveAI(providerId, modelId);
+    onSetAISelection: (selection: AISelectionRequest) => {
+      return store.setAISelection(selection);
     },
   }), [store]);
-
-  const handleTidyTabs = () => {
-    if (tidyLoading) return;
-    setTidyLoading(true);
-    const openTabsItems = state.openTabs.items;
-    const tabs = openTabsItems.map(t => ({tabId: t.tabId, title: t.title, url: t.url}));
-    void store.requestTabTidy(tabs).then(folders => {
-      setTidyLoading(false);
-      if (folders.length > 0) {
-        setTidySuggestions(folders.map(f => ({name: f.name, tabIds: f.tabIds})));
-      }
-    }).catch(() => {
-      setTidyLoading(false);
-    });
-  };
-
-  const handleTidyApply = (selected: TidyFolderSuggestion[]) => {
-    setTidySuggestions(null);
-    void store.applyTabTidyFolders(selected.map(f => ({name: f.name, tabIds: f.tabIds})));
-  };
 
   const sessionEvents = state.currentSessionId ?
       (state.eventsBySessionId[state.currentSessionId] || []) :
@@ -456,6 +429,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                 <DeveloperWorkspace
                   onConnect={modeHandlers.onConnectMcp}
                   onNewSession={modeHandlers.onNewSession}
+                  onOpenSettings={modeHandlers.onOpenSettings}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
                   onResumeSession={modeHandlers.onResumeSession}
                   onSearch={modeHandlers.onSearch}
@@ -472,33 +446,30 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   onConnect={modeHandlers.onConnectMcp}
                   onGetViewMode={modeHandlers.onGetViewMode}
                   onOpenSettings={modeHandlers.onOpenSettings}
+                  onRegenerate={handleRegenerate}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
                   onSetViewMode={modeHandlers.onSetViewMode}
                   onStartSession={modeHandlers.onNewSession}
-                  onTidyTabs={handleTidyTabs}
                   readOnly={readOnly}
-                  state={state}
                   thinkingLabel={thinkingLabel}
                 />
               )}
             </div>
             <div className="sticky bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-transparent pt-1">
               <SlashEditors store={store} />
-              {!state.developerMode ? (
-                <SuggestionChips disabled={readOnly || pendingTurn} onSelect={handleSuggestionSelect} />
-              ) : null}
+              <SuggestionChips
+                attachmentCount={state.composer.attachments.length}
+                developerMode={state.developerMode}
+                disabled={readOnly || pendingTurn}
+                hasMessages={hasMessages}
+                prompt={state.composer.prompt}
+                onSelect={handleQuickActionSelect}
+              />
               <Composer handlers={composerHandlers} state={state} />
             </div>
           </>
         )}
       </section>
-      {tidySuggestions && (
-        <TabTidyModal
-          folders={tidySuggestions}
-          onApply={handleTidyApply}
-          onDismiss={() => setTidySuggestions(null)}
-        />
-      )}
       {state.voice.active ? (
         <VoiceInputModal
           state={state}

@@ -74,11 +74,12 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   void SubmitPrompt(
       const std::string& session_id,
-                    const std::string& prompt,
-                    bool attach_browser_context,
-                    maho_ai::mojom::InteractionMode mode,
-                    std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
-                        attachments) override;
+      const std::string& prompt,
+      bool attach_browser_context,
+      maho_ai::mojom::InteractionMode mode,
+      std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
+          attachments,
+      maho_ai::mojom::ChatIntent chat_intent) override;
   void CancelTurn(const std::string& session_id) override;
   void RespondToApproval(const std::string& session_id,
                          const std::string& approval_id,
@@ -87,6 +88,10 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void OpenSettings() override;
   void OpenSettingsPane(const std::string& pane_key) override;
   void GetAISettings(GetAISettingsCallback callback) override;
+  void SetAISelection(const std::string& provider_id,
+                      const std::string& model_id,
+                      maho_ai::mojom::ReasoningEffort reasoning_effort,
+                      SetAISelectionCallback callback) override;
   void GetViewMode(GetViewModeCallback callback) override;
   void SetViewMode(maho_ai::mojom::ViewMode mode) override;
 
@@ -180,6 +185,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
       maho_ai::mojom::InteractionMode mode,
       std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
           attachments,
+      maho_ai::mojom::ChatIntent chat_intent,
       Correlation correlation,
       base::OnceClosure before_runtime_submit);
 
@@ -198,6 +204,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
       base::OnceClosure before_runtime_submit,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
+      maho_ai::mojom::ChatIntent chat_intent,
       MahoAiPageContextExtractor::PageContextResult ctx);
 
   // Phase B picker path: called once context extraction completes for a
@@ -208,6 +215,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
       base::OnceClosure before_runtime_submit,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
+      maho_ai::mojom::ChatIntent chat_intent,
       std::string tab_label,
       MahoAiPageContextExtractor::PageContextResult ctx);
 
@@ -230,6 +238,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
     ~PendingAttachmentBatch();
     std::string user_prompt;
     maho_ai::mojom::InteractionMode mode;
+    maho_ai::mojom::ChatIntent chat_intent;
     Correlation correlation;
     base::OnceClosure before_runtime_submit;
     std::vector<AttachmentSlot> slots;
@@ -261,6 +270,12 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   void PersistSessionList(bool synchronous = false);
   void LoadPersistedSessions();
+
+  // Re-adopts the newest persisted session as the live session so closing and
+  // reopening the panel continues the previous conversation instead of
+  // silently starting a new one. No-op when a session is already active, when
+  // persistence is disabled, or when the newest session has no stored events.
+  void AdoptMostRecentPersistedSessionAsActive();
   void PersistEventLog(const std::string& session_id, bool synchronous = false);
   void PersistEventLogForSession(
       const std::string& session_id,
@@ -294,6 +309,9 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   static bool RevalidateAiThunk(base::WeakPtr<MahoAIPageHandler> self);
   static Browser* ResolveBoundBrowserThunk(
       base::WeakPtr<MahoAIPageHandler> self);
+  void PrepareForViewModeHandoff();
+  void RestoreViewModeHandoff(
+      maho::MahoAiIngressCoordinator::SessionHandoff handoff);
 
   // Session state for the new contract.
   std::string active_session_id_;

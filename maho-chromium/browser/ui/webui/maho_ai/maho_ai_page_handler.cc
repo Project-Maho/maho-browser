@@ -1,8 +1,10 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
 
+#include <algorithm>
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -39,6 +41,7 @@
 #include "maho/browser/ai/maho_ai_security_utils.h"
 #include "maho/browser/ai/maho_credential_redaction.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
+#include "maho/browser/ai/maho_model_list_fetcher.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -74,6 +77,98 @@ constexpr size_t kMaxPersistedEvents = 500;
 // Capped at 100 sessions to keep profile prefs loading fast on startup
 // while providing sufficient history size for regular usage.
 constexpr size_t kMaxPersistedSessions = 100;
+
+struct AIProviderDefinition {
+  const char* id;
+  const char* label;
+  bool accepts_dynamic_model;
+};
+
+constexpr AIProviderDefinition kAIProviderOptions[] = {
+    {"maho-managed", "Maho Managed", false},
+    {"openai", "OpenAI", false},
+    {"anthropic", "Anthropic", false},
+    {"openai-compatible", "OpenAI-compatible", true},
+    {"local-server", "Local Server", true},
+};
+
+bool IsSelectableProvider(const std::string& provider_id) {
+  for (const auto& provider : kAIProviderOptions) {
+    if (provider_id == provider.id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool AcceptsDynamicModel(const std::string& provider_id) {
+  for (const auto& provider : kAIProviderOptions) {
+    if (provider_id == provider.id) {
+      return provider.accepts_dynamic_model;
+    }
+  }
+  return false;
+}
+
+std::vector<std::string> GetSelectableModels(
+    const std::string& provider_id,
+    const std::string& active_provider_id,
+    const std::string& active_model_id) {
+  std::vector<std::string> models =
+      maho::ai::MahoModelListFetcher::GetHardcodedFallback(provider_id);
+  if (provider_id == active_provider_id && !active_model_id.empty() &&
+      std::find(models.begin(), models.end(), active_model_id) == models.end()) {
+    models.push_back(active_model_id);
+  }
+  return models;
+}
+
+bool IsSelectableModel(const std::string& provider_id,
+                       const std::string& model_id,
+                       const std::string& active_provider_id,
+                       const std::string& active_model_id) {
+  if (model_id.empty()) {
+    return false;
+  }
+
+  const std::vector<std::string> models =
+      GetSelectableModels(provider_id, active_provider_id, active_model_id);
+  return AcceptsDynamicModel(provider_id) ||
+         std::find(models.begin(), models.end(), model_id) != models.end();
+}
+
+bool IsValidReasoningEffort(maho_ai::mojom::ReasoningEffort effort) {
+  switch (effort) {
+    case maho_ai::mojom::ReasoningEffort::kLow:
+    case maho_ai::mojom::ReasoningEffort::kMedium:
+    case maho_ai::mojom::ReasoningEffort::kHigh:
+      return true;
+  }
+  return false;
+}
+
+maho_ai::mojom::ReasoningEffort ReasoningEffortFromPref(
+    const std::string& effort) {
+  if (effort == "low") {
+    return maho_ai::mojom::ReasoningEffort::kLow;
+  }
+  if (effort == "high") {
+    return maho_ai::mojom::ReasoningEffort::kHigh;
+  }
+  return maho_ai::mojom::ReasoningEffort::kMedium;
+}
+
+const char* ReasoningEffortToPref(maho_ai::mojom::ReasoningEffort effort) {
+  switch (effort) {
+    case maho_ai::mojom::ReasoningEffort::kLow:
+      return "low";
+    case maho_ai::mojom::ReasoningEffort::kMedium:
+      return "medium";
+    case maho_ai::mojom::ReasoningEffort::kHigh:
+      return "high";
+  }
+  return "medium";
+}
 
 std::string GetRuntimeUnavailableMessage() {
   return "OpenCode runtime is not available. "
@@ -214,6 +309,51 @@ maho_ai::mojom::ApprovalDecision ApprovalDecisionFromString(
   return maho_ai::mojom::ApprovalDecision::kNone;
 }
 
+constexpr char kSafeCredentialFailureText[] =
+    "Your saved AI credential could not be used.";
+
+maho_ai::mojom::CredentialErrorCode CredentialErrorCodeFromRuntime(
+    MahoAiRuntimeErrorCode code) {
+  switch (code) {
+    case MahoAiRuntimeErrorCode::kProviderNotConfigured:
+      return maho_ai::mojom::CredentialErrorCode::kProviderNotConfigured;
+    case MahoAiRuntimeErrorCode::kCredentialUnusable:
+      return maho_ai::mojom::CredentialErrorCode::kCredentialUnusable;
+    case MahoAiRuntimeErrorCode::kSecureStoreUnavailable:
+      return maho_ai::mojom::CredentialErrorCode::kSecureStoreUnavailable;
+    case MahoAiRuntimeErrorCode::kCredentialDecryptFailed:
+      return maho_ai::mojom::CredentialErrorCode::kCredentialDecryptFailed;
+    case MahoAiRuntimeErrorCode::kManagedAuthUnavailable:
+      return maho_ai::mojom::CredentialErrorCode::kManagedAuthUnavailable;
+    case MahoAiRuntimeErrorCode::kUnsupportedProvider:
+      return maho_ai::mojom::CredentialErrorCode::kUnsupportedProvider;
+  }
+  return maho_ai::mojom::CredentialErrorCode::kGeneric;
+}
+
+maho_ai::mojom::CredentialErrorCode CredentialErrorCodeFromPersistedSymbol(
+    const std::string& symbol) {
+  if (symbol == "provider_not_configured") {
+    return maho_ai::mojom::CredentialErrorCode::kProviderNotConfigured;
+  }
+  if (symbol == "credential_unusable") {
+    return maho_ai::mojom::CredentialErrorCode::kCredentialUnusable;
+  }
+  if (symbol == "secure_store_unavailable") {
+    return maho_ai::mojom::CredentialErrorCode::kSecureStoreUnavailable;
+  }
+  if (symbol == "credential_decrypt_failed") {
+    return maho_ai::mojom::CredentialErrorCode::kCredentialDecryptFailed;
+  }
+  if (symbol == "managed_auth_unavailable") {
+    return maho_ai::mojom::CredentialErrorCode::kManagedAuthUnavailable;
+  }
+  if (symbol == "unsupported_provider") {
+    return maho_ai::mojom::CredentialErrorCode::kUnsupportedProvider;
+  }
+  return maho_ai::mojom::CredentialErrorCode::kGeneric;
+}
+
 maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
     const base::DictValue& dict,
     const std::string& owning_session_id) {
@@ -237,6 +377,13 @@ maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
   const std::string* text = dict.FindString("text");
   if (text) {
     event->text = *text;
+  }
+  const std::string* credential_error_code =
+      dict.FindString("credential_error_code");
+  if (credential_error_code) {
+    event->credential_error_code =
+        CredentialErrorCodeFromPersistedSymbol(*credential_error_code);
+    event->text = kSafeCredentialFailureText;
   }
 
   const base::DictValue* tc = dict.FindDict("tool_call");
@@ -454,6 +601,10 @@ MahoAIPageHandler::MahoAIPageHandler(
       maho::ai_prefs::kModel,
       base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
                           base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kReasoningEffort,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
 
   if (token_ && token_->context_class() == MahoPrivateContextClass::kRegular &&
       browser_) {
@@ -472,6 +623,9 @@ MahoAIPageHandler::MahoAIPageHandler(
       auto* coordinator =
           maho::MahoAiIngressCoordinator::GetOrCreateForBrowser(target_browser);
       ask_maho_coordinator_ = coordinator->GetWeakPtr();
+      if (auto handoff = coordinator->TakeSessionHandoff()) {
+        RestoreViewModeHandoff(std::move(*handoff));
+      }
       ask_maho_registration_ = coordinator->RegisterConsumer(
           consumer_type,
           base::BindRepeating(&MahoAIPageHandler::OnAskMahoDispatch,
@@ -506,6 +660,71 @@ Browser* MahoAIPageHandler::ResolveBoundBrowserThunk(
     return nullptr;
   }
   return self->browser_.get();
+}
+
+void MahoAIPageHandler::PrepareForViewModeHandoff() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (active_session_id_.empty() || !ask_maho_coordinator_) {
+    return;
+  }
+
+  PersistEventLog(active_session_id_, true);
+  PersistSessionList(true);
+
+  std::vector<maho_ai::mojom::RuntimeEventPtr> replay_events;
+  replay_events.reserve(session_event_log_.size());
+  for (const auto& event : session_event_log_) {
+    replay_events.push_back(event->Clone());
+  }
+
+  ask_maho_coordinator_->StoreSessionHandoff({
+      MakeActiveSessionInfo(), std::move(replay_events),
+      std::move(active_ingress_request_id_), active_ingress_delivery_id_});
+
+  active_session_id_.clear();
+  session_title_.clear();
+  runtime_session_id_.clear();
+  last_runtime_state_.clear();
+  session_status_ = maho_ai::mojom::SessionStatus::kCreated;
+  session_created_at_ = 0;
+  session_updated_at_ = 0;
+  event_sequence_ = 0;
+  tool_call_count_ = 0;
+  session_event_log_.clear();
+  active_ingress_request_id_.clear();
+  active_ingress_delivery_id_ = 0;
+}
+
+void MahoAIPageHandler::RestoreViewModeHandoff(
+    maho::MahoAiIngressCoordinator::SessionHandoff handoff) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!handoff.session || handoff.session->session_id.empty()) {
+    return;
+  }
+
+  auto session = std::move(handoff.session);
+  active_session_id_ = session->session_id;
+  session_title_ = session->title.value_or("");
+  runtime_session_id_ = session->runtime_session_id.value_or("");
+  last_runtime_state_ = session->last_runtime_state.value_or("");
+  session_status_ = session->status;
+  session_created_at_ = session->created_at;
+  session_updated_at_ = session->updated_at.value_or(session_created_at_);
+  tool_call_count_ = session->tool_call_count;
+  session_event_log_ = std::move(handoff.replay_events);
+  event_sequence_ = 0;
+  for (const auto& event : session_event_log_) {
+    if (event->sequence > event_sequence_) {
+      event_sequence_ = event->sequence;
+    }
+  }
+  active_ingress_request_id_ = std::move(handoff.ingress_request_id);
+  active_ingress_delivery_id_ = handoff.ingress_delivery_id;
+
+  std::erase_if(persisted_sessions_, [this](const auto& persisted) {
+    return persisted->session_id == active_session_id_;
+  });
+  PersistSessionList(true);
 }
 
 MahoAIPageHandler::~MahoAIPageHandler() {
@@ -705,8 +924,14 @@ maho_ai::mojom::RuntimeEventPtr MahoAIPageHandler::ToMojoEvent(
   mojo_event->kind = InternalToMojoEventKind(event.type);
   mojo_event->sequence = ++event_sequence_;
   mojo_event->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
-  mojo_event->text =
-      maho::credential_redaction::RedactCredentialText(event.text);
+  if (event.runtime_error_code.has_value()) {
+    mojo_event->credential_error_code =
+        CredentialErrorCodeFromRuntime(*event.runtime_error_code);
+    mojo_event->text = kSafeCredentialFailureText;
+  } else {
+    mojo_event->text =
+        maho::credential_redaction::RedactCredentialText(event.text);
+  }
 
   if (event.type == MahoAiRuntimeEventType::kToolRequest) {
     auto tool_call = maho_ai::mojom::ToolCallInfo::New();
@@ -989,7 +1214,8 @@ void MahoAIPageHandler::StartSession(
   if (initial_prompt.has_value() && !initial_prompt->empty()) {
     SubmitPrompt(active_session_id_, *initial_prompt,
                  /*attach_browser_context=*/true, mode,
-                 /*attachments=*/std::nullopt);
+                 /*attachments=*/std::nullopt,
+                 maho_ai::mojom::ChatIntent::kFreeform);
   }
 }
 
@@ -1239,11 +1465,12 @@ void MahoAIPageHandler::SubmitPrompt(
     bool attach_browser_context,
     maho_ai::mojom::InteractionMode mode,
     std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
-        attachments) {
+        attachments,
+    maho_ai::mojom::ChatIntent chat_intent) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   SubmitPromptInternal(
       session_id, prompt, attach_browser_context, mode, std::move(attachments),
-      Correlation{session_id, std::nullopt}, base::DoNothing());
+      chat_intent, Correlation{session_id, std::nullopt}, base::DoNothing());
 }
 
 void MahoAIPageHandler::SubmitPromptInternal(
@@ -1253,6 +1480,7 @@ void MahoAIPageHandler::SubmitPromptInternal(
     maho_ai::mojom::InteractionMode mode,
     std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
         attachments,
+    maho_ai::mojom::ChatIntent chat_intent,
     Correlation correlation,
     base::OnceClosure before_runtime_submit) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -1263,6 +1491,20 @@ void MahoAIPageHandler::SubmitPromptInternal(
   }
 
   if (session_id != active_session_id_) {
+    // The addressed session is no longer active (e.g. another session was
+    // selected between Ask Maho creating its session and this submit landing).
+    // Dropping the prompt here used to be silent: the panel showed a spinner
+    // that vanished with no message and no error. Surface it instead.
+    if (before_runtime_submit) {
+      std::move(before_runtime_submit).Run();
+    }
+    MahoAiRuntimeEvent stale_event;
+    stale_event.type = MahoAiRuntimeEventType::kError;
+    stale_event.text =
+        "This request could not be delivered because the conversation changed. "
+        "Please try again.";
+    OnRuntimeEventForSession(correlation.session_id, correlation.request_id,
+                             std::move(stale_event));
     return;
   }
 
@@ -1308,6 +1550,7 @@ void MahoAIPageHandler::SubmitPromptInternal(
     auto batch = std::make_shared<PendingAttachmentBatch>();
     batch->user_prompt = prompt;
     batch->mode = mode;
+    batch->chat_intent = chat_intent;
     batch->correlation = correlation;
     batch->before_runtime_submit = std::move(before_runtime_submit);
 
@@ -1334,7 +1577,7 @@ void MahoAIPageHandler::SubmitPromptInternal(
         std::move(batch->before_runtime_submit).Run();
       }
       adapter->SubmitMessage(
-          prompt, maho_ai::mojom::ChatIntent::kFreeform,
+          prompt, batch->chat_intent,
           /*attach_browser_context=*/false, mode,
           base::BindRepeating(&MahoAIPageHandler::OnRuntimeEventForSession,
                               weak_factory_.GetWeakPtr(),
@@ -1386,7 +1629,8 @@ void MahoAIPageHandler::SubmitPromptInternal(
     page_context_extractor_->GetPageContext(
         base::BindOnce(&MahoAIPageHandler::OnContextExtractedThenSubmit,
                        weak_factory_.GetWeakPtr(), std::move(correlation),
-                       std::move(before_runtime_submit), prompt, mode));
+                       std::move(before_runtime_submit), prompt, mode,
+                       chat_intent));
     return;
   }
 
@@ -1394,7 +1638,7 @@ void MahoAIPageHandler::SubmitPromptInternal(
     std::move(before_runtime_submit).Run();
   }
   adapter->SubmitMessage(
-      prompt, maho_ai::mojom::ChatIntent::kFreeform,
+      prompt, chat_intent,
       /*attach_browser_context=*/false, mode,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEventForSession,
                           weak_factory_.GetWeakPtr(), correlation.session_id,
@@ -1406,6 +1650,7 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
     base::OnceClosure before_runtime_submit,
     std::string user_prompt,
     maho_ai::mojom::InteractionMode mode,
+    maho_ai::mojom::ChatIntent chat_intent,
     MahoAiPageContextExtractor::PageContextResult ctx) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -1414,6 +1659,24 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
   if (!adapter) {
     return;
   }
+
+  bool is_required_page_intent =
+      (chat_intent == maho_ai::mojom::ChatIntent::kSummarizeCurrentPage ||
+       chat_intent == maho_ai::mojom::ChatIntent::kQuizCurrentPage);
+
+  std::string trimmed_text(base::TrimWhitespaceASCII(ctx.main_text, base::TRIM_ALL));
+  if (is_required_page_intent && (!ctx.HasUsableContent() || trimmed_text.empty())) {
+    if (before_runtime_submit) {
+      std::move(before_runtime_submit).Run();
+    }
+    MahoAiRuntimeEvent error_event;
+    error_event.type = MahoAiRuntimeEventType::kError;
+    error_event.text = "This quick action requires readable page content.";
+    OnRuntimeEventForSession(correlation.session_id, correlation.request_id,
+                             std::move(error_event));
+    return;
+  }
+
   MahoAiRuntimeEvent ctx_event;
   ctx_event.type = MahoAiRuntimeEventType::kBrowserContextInjected;
 
@@ -1473,7 +1736,7 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
     std::move(before_runtime_submit).Run();
   }
   adapter->SubmitMessage(
-      final_prompt, maho_ai::mojom::ChatIntent::kFreeform,
+      final_prompt, chat_intent,
       /*attach_browser_context=*/false, mode,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEventForSession,
                           weak_factory_.GetWeakPtr(), correlation.session_id,
@@ -1485,6 +1748,7 @@ void MahoAIPageHandler::OnTabContextExtractedThenSubmit(
     base::OnceClosure before_runtime_submit,
     std::string user_prompt,
     maho_ai::mojom::InteractionMode mode,
+    maho_ai::mojom::ChatIntent chat_intent,
     std::string tab_label,
     MahoAiPageContextExtractor::PageContextResult ctx) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -1552,7 +1816,7 @@ void MahoAIPageHandler::OnTabContextExtractedThenSubmit(
     std::move(before_runtime_submit).Run();
   }
   adapter->SubmitMessage(
-      final_prompt, maho_ai::mojom::ChatIntent::kFreeform,
+      final_prompt, chat_intent,
       /*attach_browser_context=*/false, mode,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEventForSession,
                           weak_factory_.GetWeakPtr(), correlation.session_id,
@@ -1648,7 +1912,7 @@ void MahoAIPageHandler::OnAttachmentSlotCompleted(
     std::move(batch->before_runtime_submit).Run();
   }
   adapter->SubmitMessage(
-      final_prompt, maho_ai::mojom::ChatIntent::kFreeform,
+      final_prompt, batch->chat_intent,
       /*attach_browser_context=*/false, batch->mode,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEventForSession,
                           weak_factory_.GetWeakPtr(),
@@ -1749,12 +2013,55 @@ maho_ai::mojom::AISettingsInfoPtr MahoAIPageHandler::BuildAISettingsInfo()
   auto info = maho_ai::mojom::AISettingsInfo::New();
   info->active_provider_id = prefs_->GetString(maho::ai_prefs::kProvider);
   info->active_model_id = prefs_->GetString(maho::ai_prefs::kModel);
+  info->active_reasoning_effort = ReasoningEffortFromPref(
+      prefs_->GetString(maho::ai_prefs::kReasoningEffort));
+  for (const auto& definition : kAIProviderOptions) {
+    auto provider = maho_ai::mojom::AIProviderOption::New();
+    provider->id = definition.id;
+    provider->label = definition.label;
+    for (const auto& model_id : GetSelectableModels(
+             definition.id, info->active_provider_id, info->active_model_id)) {
+      provider->model_options.push_back(
+          maho_ai::mojom::AIModelOption::New(model_id, model_id));
+    }
+    info->provider_options.push_back(std::move(provider));
+  }
+  info->reasoning_options.push_back(maho_ai::mojom::ReasoningOption::New(
+      maho_ai::mojom::ReasoningEffort::kLow, "Low"));
+  info->reasoning_options.push_back(maho_ai::mojom::ReasoningOption::New(
+      maho_ai::mojom::ReasoningEffort::kMedium, "Medium"));
+  info->reasoning_options.push_back(maho_ai::mojom::ReasoningOption::New(
+      maho_ai::mojom::ReasoningEffort::kHigh, "High"));
   return info;
 }
 
 void MahoAIPageHandler::GetAISettings(GetAISettingsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::move(callback).Run(BuildAISettingsInfo());
+}
+
+void MahoAIPageHandler::SetAISelection(
+    const std::string& provider_id,
+    const std::string& model_id,
+    maho_ai::mojom::ReasoningEffort reasoning_effort,
+    SetAISelectionCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const std::string active_provider_id =
+      prefs_->GetString(maho::ai_prefs::kProvider);
+  const std::string active_model_id = prefs_->GetString(maho::ai_prefs::kModel);
+  if (!IsSelectableProvider(provider_id) ||
+      !IsSelectableModel(provider_id, model_id, active_provider_id,
+                         active_model_id) ||
+      !IsValidReasoningEffort(reasoning_effort)) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  prefs_->SetString(maho::ai_prefs::kProvider, provider_id);
+  prefs_->SetString(maho::ai_prefs::kModel, model_id);
+  prefs_->SetString(maho::ai_prefs::kReasoningEffort,
+                    ReasoningEffortToPref(reasoning_effort));
+  std::move(callback).Run(true);
 }
 
 void MahoAIPageHandler::OnAISettingsPrefsChanged() {
@@ -1792,6 +2099,10 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
       popup_params.trusted_source = true;
       popup_params.omit_from_session_restore = true;
       Browser* popup = Browser::Create(popup_params);
+      if (!popup) {
+        return;
+      }
+      PrepareForViewModeHandoff();
       chrome::AddTabAt(popup, GURL(maho::kMahoAIPublicURL),
                        /*index=*/-1, /*foreground=*/true);
       maho::MahoAiPopupLifetimeTracker::Get()->TrackPopup(browser_, popup);
@@ -1803,6 +2114,7 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
       Browser* tabbed_browser = chrome::FindTabbedBrowser(
           browser_->profile(), /*match_original_profiles=*/false);
       if (tabbed_browser && tabbed_browser->GetFeatures().side_panel_ui()) {
+        PrepareForViewModeHandoff();
         tabbed_browser->GetFeatures().side_panel_ui()->Show(
             SidePanelEntryId::kMahoAiPanel);
         tabbed_browser->window()->Activate();
@@ -2105,6 +2417,13 @@ void MahoAIPageHandler::LoadPersistedSessions() {
     persisted_sessions_.push_back(std::move(info));
   }
 
+  // The panel's WebUI (and therefore this handler) is destroyed whenever the
+  // panel is closed, so without adoption every reopen would start an empty
+  // conversation even though the previous one is still persisted. Adopt the
+  // most recent persisted session as the live one so the conversation
+  // continues until the user explicitly starts a new chat.
+  AdoptMostRecentPersistedSessionAsActive();
+
   // Orphan event logs cleanup on startup.
   {
     std::unordered_set<std::string> valid_ids;
@@ -2130,6 +2449,38 @@ void MahoAIPageHandler::LoadPersistedSessions() {
       }
     }
   }
+}
+
+void MahoAIPageHandler::AdoptMostRecentPersistedSessionAsActive() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!active_session_id_.empty() || persisted_sessions_.empty()) {
+    return;
+  }
+  if (!prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
+    return;
+  }
+
+  // `persisted_sessions_` is newest-first, so the front entry is the session
+  // the user was last talking to.
+  const maho_ai::mojom::SessionInfoPtr& newest = persisted_sessions_.front();
+  if (newest->session_id.empty()) {
+    return;
+  }
+
+  std::vector<maho_ai::mojom::RuntimeEventPtr> replay =
+      LoadPersistedEventLog(newest->session_id);
+  if (replay.empty()) {
+    // Nothing to continue: leave the panel on a genuinely empty conversation
+    // so the empty-state quick actions remain available.
+    return;
+  }
+
+  active_session_id_ = newest->session_id;
+  session_created_at_ = newest->created_at;
+  session_event_log_ = std::move(replay);
+  session_status_ = maho_ai::mojom::SessionStatus::kIdle;
+  persisted_sessions_.erase(persisted_sessions_.begin());
 }
 
 void MahoAIPageHandler::PersistEventLog(const std::string& session_id,
@@ -2537,8 +2888,9 @@ void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
     return;
   }
 
-  // Build the request URL.
-  GURL request_url(relay_url + "/billing/credit_balance");
+  // /billing/credit_balance is service-token-gated (billing-proxy only) and
+  // rejects a user token; /auth/subscription is the user-token credit route.
+  GURL request_url(relay_url + "/auth/subscription");
   if (!request_url.is_valid()) {
     auto info = maho_ai::mojom::CreditBalanceInfo::New();
     info->balance_usd = 0.0f;
@@ -2605,9 +2957,14 @@ void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
 
             if (net_error != net::OK || http_status != 200 ||
                 !response_body.has_value()) {
+              // A rejected token (401/403) means the relay session expired, not
+              // a real $0 balance. Surface it so the UI can prompt re-login
+              // instead of showing a fabricated zero.
+              info->session_expired =
+                  (http_status == 401 || http_status == 403);
               DVLOG(1) << "MahoAIPageHandler::GetCreditBalance: request failed "
                        << "(net=" << net_error << " http=" << http_status
-                       << ")";
+                       << " session_expired=" << info->session_expired << ")";
               std::move(cb).Run(std::move(info));
               return;
             }
@@ -2620,7 +2977,7 @@ void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
             }
 
             const base::DictValue& dict = parsed->GetDict();
-            std::optional<double> balance = dict.FindDouble("balance_usd");
+            std::optional<double> balance = dict.FindDouble("credit_balance_usd");
             if (balance.has_value()) {
               info->balance_usd = static_cast<float>(*balance);
             }
@@ -3049,6 +3406,7 @@ void MahoAIPageHandler::OnAskMahoDispatch(
       session_id, dispatch.query,
       /*attach_browser_context=*/false, dispatch.mode,
       /*attachments=*/std::nullopt,
+      maho_ai::mojom::ChatIntent::kFreeform,
       Correlation{active_session_id_, dispatch.request_id},
       base::BindOnce(
           [](base::WeakPtr<MahoAIPageHandler> self, std::string request_id,

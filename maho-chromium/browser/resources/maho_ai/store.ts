@@ -12,20 +12,35 @@ import {
   ViewMode,
 } from './maho_ai.mojom-webui.js';
 import {
-   AppState,
-   ComposerAttachment,
-   CreditBalanceInfo,
-    CURRENT_PAGE_ATTACHMENT,
+    AI_REASONING_EFFORT,
+    DEFAULT_AI_REASONING_OPTIONS,
+    AppState,
+    AIModelOptionPayload,
+    AIModelOptionRecord,
+    AIProviderOptionPayload,
+    AIProviderOptionRecord,
+    AIReasoningEffort,
+    AIReasoningOptionPayload,
+    AIReasoningOptionRecord,
+    AISelectionRequest,
+    AISettingsInfoPayload,
+    AISettingsState,
+    ComposerAttachment,
+    CreditBalanceInfo,
+     CURRENT_PAGE_ATTACHMENT,
     DEFAULT_VOICE_STATE,
     DEFAULT_HISTORY_SEARCH_STATE,
     DEFAULT_BOOKMARKS_SEARCH_STATE,
    DEFAULT_OPEN_TABS_STATE,
    createFileAttachment,
    createInitialState,
+   getEventText,
    getSubmitContextAttachments,
    hasCurrentPageAttachment,
     isRenderableTimelineEvent,
-   TimelineEntry,
+    ChatIntent,
+    QuickAction,
+    TimelineEntry,
    VoiceStatus,
   } from './types.js';
 import {notifyListeners} from '../maho_common/react/store_utils.js';
@@ -34,6 +49,115 @@ import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
 import {toast} from 'sonner';
 
 type ToastTone = 'danger'|'info'|'success';
+
+type SubmissionRequest = {
+  readonly prompt: string;
+  readonly attachments: ReturnType<typeof getSubmitContextAttachments>;
+  readonly attachBrowserContext: boolean;
+  readonly mode: InteractionMode;
+  readonly intent: ChatIntent;
+  readonly previousBlockedReason: AppState['chatBlockedReason'];
+  readonly isQuickAction: boolean;
+};
+
+interface AISelectionRemote {
+  setAISelection(
+      providerId: string,
+      modelId: string,
+      reasoningEffort: AIReasoningEffort): Promise<{accepted: boolean}>;
+}
+
+function supportsAISelection(
+    pageHandler: PageHandlerRemote): pageHandler is PageHandlerRemote&AISelectionRemote {
+  return 'setAISelection' in pageHandler &&
+      typeof pageHandler.setAISelection === 'function';
+}
+
+function normalizeIdentifier(value?: string|null): string|null {
+  const trimmed = value?.trim() || '';
+  return trimmed ? trimmed : null;
+}
+
+function normalizeReasoningEffort(
+    value?: AIReasoningEffort|null): AIReasoningEffort|null {
+  switch (value) {
+    case AI_REASONING_EFFORT.kLow:
+    case AI_REASONING_EFFORT.kMedium:
+    case AI_REASONING_EFFORT.kHigh:
+      return value;
+    default:
+      return null;
+  }
+}
+
+function normalizeModelOptions(
+    options?: readonly AIModelOptionPayload[]|null): AIModelOptionRecord[] {
+  const normalized: AIModelOptionRecord[] = [];
+  for (const option of options || []) {
+    const id = normalizeIdentifier(option.id);
+    if (!id) {
+      continue;
+    }
+    normalized.push({
+      id,
+      label: normalizeIdentifier(option.label) || id,
+    });
+  }
+  return normalized;
+}
+
+function normalizeProviderOptions(
+    options?: readonly AIProviderOptionPayload[]|null): AIProviderOptionRecord[] {
+  const normalized: AIProviderOptionRecord[] = [];
+  for (const option of options || []) {
+    const id = normalizeIdentifier(option.id);
+    if (!id) {
+      continue;
+    }
+    normalized.push({
+      id,
+      label: normalizeIdentifier(option.label) || id,
+      modelOptions: normalizeModelOptions(option.modelOptions),
+    });
+  }
+  return normalized;
+}
+
+function normalizeReasoningOptions(
+    options?: readonly AIReasoningOptionPayload[]|null): readonly AIReasoningOptionRecord[] {
+  const normalized: AIReasoningOptionRecord[] = [];
+  for (const option of options || []) {
+    const effort = normalizeReasoningEffort(option.effort);
+    if (effort === null) {
+      continue;
+    }
+    normalized.push({
+      effort,
+      label: normalizeIdentifier(option.label) || 'Reasoning',
+    });
+  }
+  return normalized.length ? normalized : DEFAULT_AI_REASONING_OPTIONS;
+}
+
+function normalizeAISettings(info: AISettingsInfoPayload): AISettingsState {
+  return {
+    activeModelId: normalizeIdentifier(info.activeModelId),
+    activeProviderId: normalizeIdentifier(info.activeProviderId),
+    activeReasoningEffort:
+        normalizeReasoningEffort(info.activeReasoningEffort) || AI_REASONING_EFFORT.kMedium,
+    providerOptions: normalizeProviderOptions(info.providerOptions),
+    reasoningOptions: normalizeReasoningOptions(info.reasoningOptions),
+  };
+}
+
+function toLegacyProviderRecords(providerOptions: readonly AIProviderOptionRecord[]):
+    AppState['aiProviders'] {
+  return providerOptions.map(provider => ({
+    displayName: provider.label,
+    id: provider.id,
+    models: provider.modelOptions.map(model => model.id),
+  }));
+}
 
 function cloneState(state: AppState): AppState {
   return {
@@ -55,7 +179,14 @@ function cloneState(state: AppState): AppState {
     bookmarksSearch: {...state.bookmarksSearch, items: [...state.bookmarksSearch.items]},
     toast: state.toast ? {...state.toast} : null,
     aiProviders: state.aiProviders.map(provider => ({...provider, models: [...provider.models]})),
-    aiSettings: {...state.aiSettings},
+    aiSettings: {
+      ...state.aiSettings,
+      providerOptions: state.aiSettings.providerOptions.map(provider => ({
+        ...provider,
+        modelOptions: provider.modelOptions.map(model => ({...model})),
+      })),
+      reasoningOptions: state.aiSettings.reasoningOptions.map(option => ({...option})),
+    },
     turnPendingBySessionId: {...state.turnPendingBySessionId},
     contextsBySessionId: Object.fromEntries(
         Object.entries(state.contextsBySessionId).map(([key, value]) => [key, [...value]])),
@@ -79,6 +210,15 @@ export function createMahoAiStore(): MahoAiStore {
 export class MahoAiStore {
   private state = createInitialState();
   private listeners = new Set<Listener>();
+  private readonly acceptedAskMahoSessionIds = new Set<string>();
+  private readonly pendingRuntimeEventsBySessionId = new Map<string, RuntimeEvent[]>();
+  private selectionRevision = 0;
+  private submissionInFlight = false;
+  /**
+   * Intent of the most recent submission per session. Regeneration replays the
+   * same typed intent so quick-action turns keep their directive and context.
+   */
+  private readonly lastIntentBySessionId = new Map<string, ChatIntent>();
   // RAF-coalesced notify: multiple patches within one frame (e.g. streaming
   // tokens) collapse into a single React render, killing sub-frame flicker.
   private notifyScheduled = false;
@@ -99,11 +239,12 @@ export class MahoAiStore {
     return () => this.listeners.delete(listener);
   }
 
-  async bootstrap(initialPrompt?: string): Promise<void> {
+  async bootstrap(): Promise<void> {
+    const selectionRevision = this.selectionRevision;
+    const currentSessionId = this.state.currentSessionId;
     this.patch(state => {
       state.booting = true;
       state.bootError = null;
-      state.composer.prompt = initialPrompt || '';
     });
 
     try {
@@ -112,6 +253,7 @@ export class MahoAiStore {
         this.pageHandler.getSessionList(),
       ]);
 
+      let sessionIdToResume: string|null = null;
       this.patch(next => {
         next.connectionState = state;
         next.activeAdapterName = activeAdapterName || 'OpenCode';
@@ -122,13 +264,20 @@ export class MahoAiStore {
           }
         }
         next.sessionOrder = sortSessionIds(next.sessionsById);
-        next.currentSessionId = sessions[0]?.sessionId || null;
+        if (this.selectionRevision === selectionRevision) {
+          if (!next.currentSessionId) {
+            next.currentSessionId = sessions[0]?.sessionId || null;
+            sessionIdToResume = next.currentSessionId;
+          } else if (next.currentSessionId === currentSessionId) {
+            sessionIdToResume = currentSessionId;
+          }
+        }
         next.initialized = true;
         next.booting = false;
       });
 
-      if (this.state.currentSessionId) {
-        await this.resumeSession(this.state.currentSessionId);
+      if (sessionIdToResume) {
+        await this.resumeSession(sessionIdToResume);
       }
 
       try {
@@ -244,41 +393,54 @@ export class MahoAiStore {
 
   /**
    * Creates a new session without forwarding the prompt through
-   * StartSession(initial_prompt), then submits the pending composer state
-   * (prompt + attachments) via the normal submitPrompt path.  Use this for
-   * first-send when there is no current session so that attachment state is
-   * preserved correctly.
+   * StartSession(initial_prompt), then submits the captured composer request
+   * after the session is ready. Use this for first-send when there is no
+   * current session so async setup cannot replace the original request.
    */
   async startSessionThenSubmit(): Promise<void> {
-    const mode = this.state.developerMode ?
-        InteractionMode.kDeveloper :
-        InteractionMode.kAssistant;
-    // Pass null prompt so the backend does not auto-submit anything.
-    const {session} = await this.pageHandler.startSession(null, mode);
+    const request = this.beginSubmission();
+    if (!request) {
+      return;
+    }
 
-    this.patch(state => {
-      state.sessionsById[session.sessionId] = session;
-      state.sessionOrder = sortSessionIds(state.sessionsById);
-      state.currentSessionId = session.sessionId;
-      state.selectedInspector = {kind: 'session', id: session.sessionId};
-      // Do NOT clear the prompt or mark turnPending here; submitPrompt will.
-      state.eventsBySessionId[session.sessionId] = [];
-    });
+    let sessionId: string|null = null;
+    try {
+      // Pass null prompt so the backend does not auto-submit anything.
+      const {session} = await this.pageHandler.startSession(null, request.mode);
+      sessionId = session.sessionId;
 
-    await this.resumeSession(session.sessionId, false);
-    await this.submitPrompt();
+      this.patch(state => {
+        state.sessionsById[session.sessionId] = session;
+        state.sessionOrder = sortSessionIds(state.sessionsById);
+        state.currentSessionId = session.sessionId;
+        state.selectedInspector = {kind: 'session', id: session.sessionId};
+        state.turnPendingBySessionId[session.sessionId] = true;
+        state.eventsBySessionId[session.sessionId] = [];
+      });
+
+      await this.resumeSession(session.sessionId, false);
+      await this.submitCapturedRequest(session.sessionId, request);
+    } catch (error) {
+      this.rollbackSubmission(sessionId, request);
+      throw error;
+    } finally {
+      this.submissionInFlight = false;
+    }
   }
 
   async resumeSession(sessionId: string, fetchHistory = true): Promise<void> {
+    const selectionRevision = ++this.selectionRevision;
     const {session, replayEvents} = await this.pageHandler.resumeSession(sessionId);
 
     this.patch(state => {
-      state.currentSessionId = sessionId;
+      if (this.selectionRevision === selectionRevision) {
+        state.currentSessionId = sessionId;
+        state.selectedInspector = {kind: 'session', id: sessionId};
+      }
       if (session) {
         state.sessionsById[session.sessionId] = session;
         state.sessionOrder = sortSessionIds(state.sessionsById);
       }
-      state.selectedInspector = {kind: 'session', id: sessionId};
       this.updateContextSnapshot(state, sessionId, replayEvents);
       if (replayEvents.length) {
         state.eventsBySessionId[sessionId] = replayEvents.filter(isRenderableTimelineEvent)
@@ -286,7 +448,8 @@ export class MahoAiStore {
       }
     });
 
-    if (fetchHistory) {
+    if (fetchHistory && this.selectionRevision === selectionRevision &&
+        this.state.currentSessionId === sessionId) {
       await this.loadHistory(sessionId);
     }
   }
@@ -518,37 +681,272 @@ export class MahoAiStore {
     input.click();
   }
 
-  async setActiveAI(providerId: string, modelId: string): Promise<void> {
-    this.patch(state => {
-      state.aiSettings = {
-        activeModelId: modelId,
-        activeProviderId: providerId,
-      };
-    });
+  async setAISelection(selection: AISelectionRequest): Promise<boolean> {
+    const providerId = selection.providerId.trim();
+    const modelId = selection.modelId.trim();
+    const reasoningEffort = normalizeReasoningEffort(selection.reasoningEffort);
+    if (!providerId || !modelId || reasoningEffort === null) {
+      await this.refreshAISettings();
+      return false;
+    }
+
+    if (!supportsAISelection(this.pageHandler)) {
+      console.warn('[maho-ai] SetAISelection is unavailable on this page handler');
+      await this.refreshAISettings();
+      return false;
+    }
+
+    try {
+      const {accepted} = await this.pageHandler.setAISelection(
+          providerId, modelId, reasoningEffort);
+      await this.refreshAISettings();
+      return accepted;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[maho-ai] SetAISelection failed', message);
+      await this.refreshAISettings();
+      return false;
+    }
   }
 
   async submitPrompt(): Promise<void> {
     const sessionId = this.state.currentSessionId;
     const session = sessionId ? this.state.sessionsById[sessionId] : null;
-    const prompt = this.state.composer.prompt.trim();
-    if (!sessionId || !prompt || session?.isReadOnly) {
+    if (!sessionId || session?.isReadOnly || this.state.turnPendingBySessionId[sessionId]) {
       return;
     }
 
-    const attachments = getSubmitContextAttachments(this.state.composer.attachments);
-    const attachBrowserContext = attachments === null &&
-        hasCurrentPageAttachment(this.state.composer.attachments);
-    const mode = this.state.developerMode ?
-        InteractionMode.kDeveloper :
-        InteractionMode.kAssistant;
+    const request = this.beginSubmission();
+    if (!request) {
+      return;
+    }
+
+    try {
+      this.patch(state => {
+        state.turnPendingBySessionId[sessionId] = true;
+      });
+      await this.submitCapturedRequest(sessionId, request);
+    } catch (error) {
+      this.rollbackSubmission(sessionId, request);
+      throw error;
+    } finally {
+      this.submissionInFlight = false;
+    }
+  }
+
+  async submitQuickAction(action: QuickAction): Promise<void> {
+    if (this.submissionInFlight) {
+      return;
+    }
+
+    const sessionId = this.state.currentSessionId;
+    const session = sessionId ? this.state.sessionsById[sessionId] : null;
+    if (session?.isReadOnly || (sessionId && this.state.turnPendingBySessionId[sessionId])) {
+      return;
+    }
+
+    const request: SubmissionRequest = {
+      prompt: action.userPrompt,
+      attachments: null,
+      attachBrowserContext: true,
+      mode: InteractionMode.kAssistant,
+      intent: action.intent,
+      previousBlockedReason: this.state.chatBlockedReason,
+      isQuickAction: true,
+    };
+
+    this.submissionInFlight = true;
+
+    if (!sessionId) {
+      let createdSessionId: string|null = null;
+      try {
+        const {session: newSession} = await this.pageHandler.startSession(null, request.mode);
+        createdSessionId = newSession.sessionId;
+
+        this.patch(state => {
+          state.sessionsById[newSession.sessionId] = newSession;
+          state.sessionOrder = sortSessionIds(state.sessionsById);
+          state.currentSessionId = newSession.sessionId;
+          state.selectedInspector = {kind: 'session', id: newSession.sessionId};
+          state.turnPendingBySessionId[newSession.sessionId] = true;
+          state.eventsBySessionId[newSession.sessionId] = [];
+        });
+
+        await this.resumeSession(newSession.sessionId, false);
+        await this.submitCapturedRequest(newSession.sessionId, request);
+      } catch (error) {
+        this.rollbackSubmission(createdSessionId, request);
+        throw error;
+      } finally {
+        this.submissionInFlight = false;
+      }
+    } else {
+      try {
+        this.patch(state => {
+          state.turnPendingBySessionId[sessionId] = true;
+        });
+        await this.submitCapturedRequest(sessionId, request);
+      } catch (error) {
+        this.rollbackSubmission(sessionId, request);
+        throw error;
+      } finally {
+        this.submissionInFlight = false;
+      }
+    }
+  }
+
+  /**
+   * Resubmits the most recent user prompt of the active session so the user can
+   * ask for a different answer without retyping it. The composer is untouched:
+   * the prompt is recovered from the session's own event log.
+   */
+  async regenerateLastResponse(): Promise<void> {
+    if (this.submissionInFlight) {
+      return;
+    }
+
+    const sessionId = this.state.currentSessionId;
+    if (!sessionId) {
+      return;
+    }
+    const session = this.state.sessionsById[sessionId];
+    if (session?.isReadOnly || this.state.turnPendingBySessionId[sessionId]) {
+      return;
+    }
+
+    const prompt = this.findLastUserPrompt(sessionId);
+    if (!prompt) {
+      return;
+    }
+
+    // A quick-action turn only behaves correctly when its typed intent and page
+    // context are reapplied; resending it as plain freeform strips the
+    // Summary/Quiz directive and leaves the model without the page it must use.
+    const intent =
+        this.lastIntentBySessionId.get(sessionId) ?? ChatIntent.kFreeform;
+    const isPageIntent = intent === ChatIntent.kSummarizeCurrentPage ||
+        intent === ChatIntent.kQuizCurrentPage;
+
+    const request: SubmissionRequest = {
+      prompt,
+      attachments: null,
+      attachBrowserContext: isPageIntent,
+      mode: this.state.developerMode ? InteractionMode.kDeveloper :
+                                      InteractionMode.kAssistant,
+      intent,
+      previousBlockedReason: this.state.chatBlockedReason,
+      // Behaves like a quick action for rollback: the prompt was never in the
+      // composer, so a failure must not push it there.
+      isQuickAction: true,
+    };
+
+    this.submissionInFlight = true;
+    try {
+      this.patch(state => {
+        state.turnPendingBySessionId[sessionId] = true;
+      });
+      await this.submitCapturedRequest(sessionId, request);
+    } catch (error) {
+      this.rollbackSubmission(sessionId, request);
+      throw error;
+    } finally {
+      this.submissionInFlight = false;
+    }
+  }
+
+  /** Returns the newest user prompt text of `sessionId`, or null when absent. */
+  private findLastUserPrompt(sessionId: string): string|null {
+    const events = this.state.eventsBySessionId[sessionId] || [];
+    for (let i = events.length - 1; i >= 0; --i) {
+      const {event} = events[i];
+      if (event.kind !== RuntimeEventKind.kUserPrompt) {
+        continue;
+      }
+      const text = getEventText(event).trim();
+      if (text) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  private beginSubmission(): SubmissionRequest|null {
+    if (this.submissionInFlight) {
+      return null;
+    }
+
+    const prompt = this.state.composer.prompt.trim();
+    if (!prompt) {
+      return null;
+    }
+
+    const composerAttachments = this.state.composer.attachments.map(attachment => ({...attachment}));
+    const attachments = getSubmitContextAttachments(composerAttachments);
+    const request: SubmissionRequest = {
+      prompt,
+      attachments,
+      attachBrowserContext: attachments === null && hasCurrentPageAttachment(composerAttachments),
+      mode: this.state.developerMode ? InteractionMode.kDeveloper : InteractionMode.kAssistant,
+      intent: ChatIntent.kFreeform,
+      previousBlockedReason: this.state.chatBlockedReason,
+      isQuickAction: false,
+    };
     this.patch(state => {
-      state.turnPendingBySessionId[sessionId] = true;
       state.composer.prompt = '';
       state.chatBlockedReason = null;
     });
+    this.submissionInFlight = true;
+    return request;
+  }
 
+  private async submitCapturedRequest(
+      sessionId: string, request: SubmissionRequest): Promise<void> {
+    this.lastIntentBySessionId.set(sessionId, request.intent);
     await this.pageHandler.submitPrompt(
-        sessionId, prompt, attachBrowserContext, mode, attachments);
+        sessionId,
+        request.prompt,
+        request.attachBrowserContext,
+        request.mode,
+        request.attachments,
+        request.intent);
+  }
+
+  private rollbackSubmission(sessionId: string|null, request: SubmissionRequest): void {
+    this.patch(state => {
+      if (sessionId) {
+        state.turnPendingBySessionId[sessionId] = false;
+      }
+      if (!request.isQuickAction) {
+        if (!state.composer.prompt) {
+          state.composer.prompt = request.prompt;
+        }
+        state.chatBlockedReason = request.previousBlockedReason;
+      }
+    });
+  }
+
+  async ingestAskMahoSessionAccepted(requestId: string, session: SessionInfo): Promise<void> {
+    if (this.acceptedAskMahoSessionIds.has(session.sessionId)) {
+      return;
+    }
+
+    this.acceptedAskMahoSessionIds.add(session.sessionId);
+    ++this.selectionRevision;
+    const pendingEvents = this.pendingRuntimeEventsBySessionId.get(session.sessionId) || [];
+    this.pendingRuntimeEventsBySessionId.delete(session.sessionId);
+
+    this.patch(state => {
+      state.sessionsById[session.sessionId] = session;
+      state.sessionOrder = sortSessionIds(state.sessionsById);
+      state.currentSessionId = session.sessionId;
+      state.selectedInspector = {kind: 'session', id: session.sessionId};
+      state.eventsBySessionId[session.sessionId] = state.eventsBySessionId[session.sessionId] || [];
+      state.turnPendingBySessionId[session.sessionId] = true;
+      state.composer.focusRequest += 1;
+      for (const event of pendingEvents) {
+        this.applyRuntimeEvent(state, session.sessionId, event);
+      }
+    });
   }
 
   async cancelTurn(): Promise<void> {
@@ -627,48 +1025,18 @@ export class MahoAiStore {
 
   private bindCallbacks() {
     this.callbackRouter.onRuntimeEvent.addListener((event: RuntimeEvent) => {
-      const sessionId = this.state.currentSessionId;
-      if (!sessionId) {
+      const sessionId = event.sessionId;
+      if (!this.state.sessionsById[sessionId]) {
+        console.warn('[maho-ai] runtime event deferred for unknown session', sessionId);
+        const pendingEvents = this.pendingRuntimeEventsBySessionId.get(sessionId) || [];
+        if (!pendingEvents.some(pendingEvent => pendingEvent.sequence === event.sequence)) {
+          this.pendingRuntimeEventsBySessionId.set(sessionId, [...pendingEvents, event]);
+        }
         return;
       }
 
       this.patch(state => {
-        this.appendEventInternal(state, sessionId, event);
-        if (event.toolCall?.callId) {
-          state.toolCallsById[event.toolCall.callId] = event.toolCall;
-          state.selectedInspector = {kind: 'tool', id: event.toolCall.callId};
-        }
-        if (event.toolResult?.callId) {
-          state.toolResultsByCallId[event.toolResult.callId] = event.toolResult;
-          state.selectedInspector = {kind: 'tool', id: event.toolResult.callId};
-        }
-        if (event.approvalRequest?.approvalId) {
-          state.approvalsById[event.approvalRequest.approvalId] = event.approvalRequest;
-          state.selectedInspector = {kind: 'approval', id: event.approvalRequest.approvalId};
-        }
-        if (event.approvalResult?.approvalId) {
-          state.approvalResultsById[event.approvalResult.approvalId] = event.approvalResult;
-          state.selectedInspector = {kind: 'approval', id: event.approvalResult.approvalId};
-        }
-        if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
-          state.turnPendingBySessionId[sessionId] = false;
-          if (event.kind === RuntimeEventKind.kError) {
-            const errorText = event.text || '';
-            if (errorText.includes('402') || errorText.toLowerCase().includes('quota') ||
-                errorText.toLowerCase().includes('payment required') ||
-                errorText.toLowerCase().includes('deny-paid')) {
-              state.chatBlockedReason = 'quota-exhausted';
-            }
-          }
-        }
-        if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
-          const existing = state.contextsBySessionId[sessionId] || [];
-          state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
-        }
-        if (event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
-          const activeSpaceId = state.activeWorkspace?.spaceId ?? null;
-          void this.loadAiExtensibility(activeSpaceId);
-        }
+        this.applyRuntimeEvent(state, sessionId, event);
       });
     });
 
@@ -686,9 +1054,13 @@ export class MahoAiStore {
     });
 
     this.callbackRouter.onAISettingsChanged.addListener(
-        (info: {activeProviderId: string; activeModelId: string}) => {
+        (info: AISettingsInfoPayload) => {
           this.applyAISettings(info);
         });
+
+    this.callbackRouter.onAskMahoSessionAccepted.addListener((requestId: string, session: SessionInfo) => {
+      void this.ingestAskMahoSessionAccepted(requestId, session);
+    });
 
     this.bindCreditBalanceRefresh();
   }
@@ -720,12 +1092,11 @@ export class MahoAiStore {
     }
   }
 
-  private applyAISettings(info: {activeProviderId: string; activeModelId: string}): void {
+  private applyAISettings(info: AISettingsInfoPayload): void {
+    const aiSettings = normalizeAISettings(info);
     this.patch(state => {
-      state.aiSettings = {
-        activeProviderId: info.activeProviderId || null,
-        activeModelId: info.activeModelId || null,
-      };
+      state.aiSettings = aiSettings;
+      state.aiProviders = toLegacyProviderRecords(aiSettings.providerOptions);
     });
   }
 
@@ -759,6 +1130,54 @@ export class MahoAiStore {
 
     const nextEntry: TimelineEntry = {sessionId, event};
     state.eventsBySessionId[sessionId] = [...existing, nextEntry];
+  }
+
+  private applyRuntimeEvent(state: AppState, sessionId: string, event: RuntimeEvent): void {
+    const isSelectedSession = state.currentSessionId === sessionId;
+    this.appendEventInternal(state, sessionId, event);
+    if (event.toolCall?.callId) {
+      state.toolCallsById[event.toolCall.callId] = event.toolCall;
+      if (isSelectedSession) {
+        state.selectedInspector = {kind: 'tool', id: event.toolCall.callId};
+      }
+    }
+    if (event.toolResult?.callId) {
+      state.toolResultsByCallId[event.toolResult.callId] = event.toolResult;
+      if (isSelectedSession) {
+        state.selectedInspector = {kind: 'tool', id: event.toolResult.callId};
+      }
+    }
+    if (event.approvalRequest?.approvalId) {
+      state.approvalsById[event.approvalRequest.approvalId] = event.approvalRequest;
+      if (isSelectedSession) {
+        state.selectedInspector = {kind: 'approval', id: event.approvalRequest.approvalId};
+      }
+    }
+    if (event.approvalResult?.approvalId) {
+      state.approvalResultsById[event.approvalResult.approvalId] = event.approvalResult;
+      if (isSelectedSession) {
+        state.selectedInspector = {kind: 'approval', id: event.approvalResult.approvalId};
+      }
+    }
+    if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
+      state.turnPendingBySessionId[sessionId] = false;
+      if (isSelectedSession && event.kind === RuntimeEventKind.kError) {
+        const errorText = event.text || '';
+        if (errorText.includes('402') || errorText.toLowerCase().includes('quota') ||
+            errorText.toLowerCase().includes('payment required') ||
+            errorText.toLowerCase().includes('deny-paid')) {
+          state.chatBlockedReason = 'quota-exhausted';
+        }
+      }
+    }
+    if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
+      const existing = state.contextsBySessionId[sessionId] || [];
+      state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
+    }
+    if (event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
+      const activeSpaceId = state.activeWorkspace?.spaceId ?? null;
+      void this.loadAiExtensibility(activeSpaceId);
+    }
   }
 
   private updateContextSnapshot(state: AppState, sessionId: string, events: RuntimeEvent[]) {

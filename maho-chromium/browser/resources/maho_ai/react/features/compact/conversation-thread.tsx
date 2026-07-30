@@ -6,54 +6,82 @@ import {useAutoScroll} from '../../hooks/use-auto-scroll.js';
 import type {TimelineEntry} from '../../../types.js';
 import {collectConversationItems} from '../../../views/conversation_thread.js';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
+import {Markdown} from '../../components/markdown.js';
 import {ConversationMessage} from './conversation-message.js';
 import {ConversationSystemItem} from './conversation-system-item.js';
 import {PendingThought} from './pending-thought.js';
 
 function ThinkingBubble({item}: {item: ConversationItem}) {
   const [expanded, setExpanded] = useState(false);
-  const preview = item.text.length > 80 && !expanded
-      ? `${item.text.slice(0, 80).trimEnd()}\u2026`
-      : item.text;
 
   return (
     <article className="w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none">
-      <button
-        type="button"
-        className="flex w-full items-start gap-3 rounded-xl border border-border/80 bg-secondary/60 px-3 py-2 text-left shadow-sm transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        onClick={() => setExpanded(!expanded)}>
-        <div className="min-w-0 flex-1">
-          <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Thinking</span>
-          <span className="block whitespace-pre-wrap text-xs italic leading-5 text-muted-foreground">{preview}</span>
-        </div>
-        {item.text.length > 80 ? (
+      <div className="overflow-hidden rounded-xl border border-border/70 bg-secondary/35">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          className="flex w-full items-center gap-2 px-3 py-2 text-left text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+          onClick={() => setExpanded(!expanded)}>
+          <span className="min-w-0 flex-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+            Thinking
+          </span>
           <ChevronDown className={cn(
-              'mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform',
+              'size-3.5 shrink-0 transition-transform',
               expanded && 'rotate-180')} />
+        </button>
+        {expanded ? (
+          <Markdown
+            className="border-t border-border/60 px-3 py-3 text-xs leading-5 text-muted-foreground [&_p]:m-0 [&_p:not(:last-child)]:mb-3 [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-2 [&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-background/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/70 [&_pre]:p-3"
+            text={item.text}
+          />
         ) : null}
-      </button>
+      </div>
     </article>
   );
 }
 
 export function ConversationThread(
     {
+      bottomPadding,
       entries,
+      onOpenSettings,
+      onRegenerate,
       onRespondToApproval,
       readOnly,
       thinkingLabel,
+      topPadding,
     }: {
+      bottomPadding: number;
       entries: TimelineEntry[];
+      onOpenSettings: (paneKey: string) => void;
+      onRegenerate?: () => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       readOnly: boolean;
       thinkingLabel: string | null;
+      topPadding: number;
     }) {
   const items = useMemo(() => collectConversationItems(entries), [entries]);
-  const listRef = useAutoScroll<HTMLDivElement>(items);
+  // Only the newest assistant answer can be regenerated; older turns are
+  // history and resubmitting their prompt would not replace them.
+  const lastAssistantKey = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; --i) {
+      if (items[i].role === 'assistant' && !items[i].kind) {
+        return items[i].key;
+      }
+    }
+    return null;
+  }, [items]);
+  const autoScrollDependency = useMemo(
+      () => ({bottomPadding, items, thinkingLabel, topPadding}),
+      [bottomPadding, items, thinkingLabel, topPadding]);
+  const listRef = useAutoScroll<HTMLDivElement>(autoScrollDependency);
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col px-0 pb-0 pt-3">
-      <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 pb-6 pt-2 max-[520px]:gap-3 max-[520px]:pb-5">
+    <main className="flex min-h-0 flex-1 flex-col">
+      <div
+          ref={listRef}
+          className="flex min-h-0 flex-1 flex-col justify-start gap-4 overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-[520px]:gap-3 max-[520px]:px-3"
+          style={{paddingBottom: bottomPadding, paddingTop: topPadding}}>
         {items.map(item => {
           if (item.kind === 'thinking') {
             return <ThinkingBubble key={item.key} item={item} />;
@@ -64,15 +92,20 @@ export function ConversationThread(
                 key={item.key}
                 item={item}
                 readOnly={readOnly}
+                onOpenSettings={onOpenSettings}
                 onRespondToApproval={onRespondToApproval}
               />
             );
           }
+          const isLastAssistant =
+              item.role === 'assistant' && item.key === lastAssistantKey;
           return (
             <ConversationMessage
               key={item.key}
               item={item}
-              label={item.role === 'user' ? 'You' : 'Maho'}
+              onRegenerate={
+                  isLastAssistant && !readOnly && !thinkingLabel ? onRegenerate :
+                                                                   undefined}
             />
           );
         })}

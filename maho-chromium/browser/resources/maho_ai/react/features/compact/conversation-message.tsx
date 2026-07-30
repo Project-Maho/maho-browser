@@ -1,33 +1,79 @@
-import React from 'react';
-import {formatTimestamp} from '../../lib/format-timestamp.js';
+import React, {useEffect, useState} from 'react';
+import {toast} from 'sonner';
 import {Button} from '@ui/button';
 import {Markdown} from '../../components/markdown.js';
 import {cn} from '@lib/utils';
-import {Edit, Trash2} from '@icons/lucide';
+import {Check, Copy, RefreshCw} from '@icons/lucide';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
 
-function UserControls() {
+type CopyStatus = 'copied'|'failed'|'idle';
+
+/** How long the transient copy result stays on the button, in milliseconds. */
+const COPY_STATUS_RESET_MS = 1800;
+
+const COPY_STATUS_LABEL: Record<Exclude<CopyStatus, 'idle'>, string> = {
+  copied: 'Copied',
+  failed: 'Copy failed',
+};
+
+function AssistantActions(
+    {onRegenerate, text}: {onRegenerate?: () => void; text: string}) {
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
+
+  useEffect(() => {
+    if (copyStatus === 'idle') {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setCopyStatus('idle'), COPY_STATUS_RESET_MS);
+    return () => window.clearTimeout(timer);
+  }, [copyStatus]);
+
+  const copyResponse = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus('copied');
+    } catch (error: unknown) {
+      // Clipboard access can be denied or unavailable; surface it instead of
+      // leaving the button silently inert.
+      console.error('[maho-ai] Failed to copy assistant response', error);
+      toast.error('Could not copy the response to the clipboard.');
+      setCopyStatus('failed');
+    }
+  };
+
   return (
-    <div className="pointer-events-none flex gap-1 self-end px-1 opacity-0 transition-opacity duration-150 group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100 max-[520px]:pointer-events-auto max-[520px]:opacity-100">
+    <div className="flex gap-1 px-1 text-muted-foreground">
       <Button
-        aria-label="Edit your message"
-        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:-translate-y-px hover:border-border hover:bg-surface-hover hover:text-foreground"
+        aria-label={copyStatus === 'idle' ? 'Copy response' : COPY_STATUS_LABEL[copyStatus]}
+        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground"
         variant="ghost"
-        size="sm">
-        <Edit className="size-4" />
+        size="sm"
+        type="button"
+        onClick={() => void copyResponse()}>
+        {copyStatus === 'copied' ?
+          <Check aria-hidden="true" className="size-4" /> :
+          <Copy aria-hidden="true" className="size-4" />}
       </Button>
-      <Button
-        aria-label="Delete your message"
-        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:-translate-y-px hover:border-border hover:bg-surface-hover hover:text-foreground"
-        variant="ghost"
-        size="sm">
-        <Trash2 className="size-4" />
-      </Button>
+      {onRegenerate ? (
+        <Button
+          aria-label="Regenerate response"
+          className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground"
+          variant="ghost"
+          size="sm"
+          type="button"
+          onClick={onRegenerate}>
+          <RefreshCw aria-hidden="true" className="size-4" />
+        </Button>
+      ) : null}
+      <span aria-live="polite" className="sr-only" role="status">
+        {copyStatus === 'idle' ? '' : COPY_STATUS_LABEL[copyStatus]}
+      </span>
     </div>
   );
 }
 
-const markdownBubbleClassName = cn(
+const markdownMessageClassName = cn(
     'grid gap-3',
     '[&_p]:m-0',
     '[&_p:not(:last-child)]:mb-3',
@@ -45,36 +91,30 @@ const markdownBubbleClassName = cn(
 
 export const ConversationMessage = React.memo(
     function ConversationMessage(
-        {item, label}: {item: ConversationItem; label: string}) {
+        {item, onRegenerate}:
+            {item: ConversationItem; onRegenerate?: () => void}) {
   const isUser = item.role === 'user';
-  const bubbleClassName = cn(
-      'relative min-w-0 max-w-[92%] break-words rounded-2xl px-4 py-3 text-sm leading-6',
+  const messageClassName = cn(
+      'relative min-w-0 break-words text-sm leading-6',
       isUser ?
-        'rounded-tr-md bg-primary/10 text-foreground' :
-        'rounded-tl-md bg-muted text-foreground',
-      item.markdown && markdownBubbleClassName);
+        'max-w-[82%] rounded-2xl rounded-tr-md bg-secondary px-4 py-3 text-foreground' :
+        'w-full max-w-full px-1 text-foreground',
+      item.markdown && markdownMessageClassName);
 
   return (
     <article className={cn(
-        'group/message grid w-full max-w-full gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none',
+        'group/message grid w-full max-w-full gap-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none',
         isUser ? 'justify-items-end' : 'justify-items-start')}>
-      <div className={cn(
-          'flex items-center gap-2 px-1 text-[11px] leading-4',
-          isUser && 'justify-end')}>
-        <span className="font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
-        <span className="invisible opacity-0 transition-opacity duration-150 group-hover/message:visible group-hover/message:opacity-100 group-focus-within/message:visible group-focus-within/message:opacity-100 max-[520px]:visible max-[520px]:opacity-100">
-          {formatTimestamp(item.timestamp)}
-        </span>
-      </div>
       {item.markdown ?
-        <Markdown className={bubbleClassName} text={item.text} /> :
-        <div className={bubbleClassName}>{item.text}</div>}
-      {isUser ? <UserControls /> : null}
+        <Markdown className={messageClassName} text={item.text} /> :
+        <div className={messageClassName}>{item.text}</div>}
+      {isUser ? null :
+        <AssistantActions onRegenerate={onRegenerate} text={item.text} />}
     </article>
   );
     },
     (prev, next) =>
-        prev.label === next.label &&
+        prev.onRegenerate === next.onRegenerate &&
         prev.item.key === next.item.key &&
         prev.item.text === next.item.text &&
         prev.item.role === next.item.role &&

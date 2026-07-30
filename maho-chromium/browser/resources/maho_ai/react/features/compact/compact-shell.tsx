@@ -1,44 +1,80 @@
-import React from 'react';
+import type {RefObject} from 'react';
 import {CompactStage} from './compact-stage.js';
 import {CompactTopbar} from './compact-topbar.js';
 import {ConversationThread} from './conversation-thread.js';
 import type {MahoAiStore} from '../../../store.js';
-import type {AppState, TimelineEntry, ViewMode} from '../../../types.js';
+import type {TimelineEntry, ViewMode} from '../../../types.js';
 
 import {TrustCeremony} from '../trust-ceremony/trust-ceremony.js';
 
 export function CompactShell(
     {
       store,
+      bottomPadding = 0,
       entries,
       hasMessages,
       onClosePanel,
+      onConnect,
       onGetViewMode,
       onOpenSettings,
+      onRegenerate,
       onRespondToApproval,
       onSetViewMode,
       onStartSession,
-      onTidyTabs,
       readOnly,
-      state,
       thinkingLabel,
+      topOverlayRef,
+      topPadding = 0,
     }: {
       store: MahoAiStore;
+      bottomPadding?: number;
       entries: TimelineEntry[];
       hasMessages: boolean;
       onClosePanel: () => void;
+      onConnect?: () => void;
       onGetViewMode: () => Promise<ViewMode>;
-      onOpenSettings: () => void;
+      onOpenSettings: (paneKey?: string) => void;
+      onRegenerate?: () => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       onSetViewMode: (mode: ViewMode) => void;
       onStartSession: () => void;
-      onTidyTabs?: () => void;
       readOnly: boolean;
-      state: AppState;
       thinkingLabel: string | null;
+      topOverlayRef?: RefObject<HTMLDivElement | null>;
+      topPadding?: number;
     }) {
+  if (hasMessages || thinkingLabel) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div
+            ref={topOverlayRef}
+            className="relative z-20 grid shrink-0 gap-3 bg-background px-3 pb-2 pt-3 after:pointer-events-none after:absolute after:inset-x-0 after:bottom-[-1.5rem] after:h-6 after:bg-gradient-to-b after:from-background after:to-transparent max-[520px]:gap-2 max-[520px]:px-2 max-[520px]:pb-2 max-[520px]:pt-2">
+          <CompactTopbar
+            store={store}
+            onClosePanel={onClosePanel}
+            onGetViewMode={onGetViewMode}
+            onOpenSettings={onOpenSettings}
+            onSetViewMode={onSetViewMode}
+            onStartSession={onStartSession}
+          />
+          <TrustCeremony store={store} />
+        </div>
+        <ConversationThread
+          bottomPadding={bottomPadding}
+          entries={entries}
+          onOpenSettings={onOpenSettings}
+          onRegenerate={onRegenerate}
+          onRespondToApproval={onRespondToApproval}
+          readOnly={readOnly}
+          thinkingLabel={thinkingLabel}
+          topPadding={topPadding}
+        />
+      </div>
+    );
+  }
+
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col gap-3 max-[520px]:gap-2">
       <CompactTopbar
         store={store}
         onClosePanel={onClosePanel}
@@ -46,17 +82,9 @@ export function CompactShell(
         onOpenSettings={onOpenSettings}
         onSetViewMode={onSetViewMode}
         onStartSession={onStartSession}
-        onTidyTabs={onTidyTabs}
       />
       <TrustCeremony store={store} />
-      {hasMessages || thinkingLabel ? (
-        <ConversationThread
-          entries={entries}
-          onRespondToApproval={onRespondToApproval}
-          readOnly={readOnly}
-          thinkingLabel={thinkingLabel}
-        />
-      ) : <CompactStage state={state} />}
-    </>
+      <CompactStage onConnect={onConnect} />
+    </div>
   );
 }
