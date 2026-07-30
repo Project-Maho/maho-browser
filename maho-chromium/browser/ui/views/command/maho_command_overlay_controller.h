@@ -93,6 +93,10 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   // itself if the post-open grace window has not elapsed.
   void MaybeHideAfterDeactivation();
 
+  // Drops the widget retained by FinishHideAnimation() once the hide has
+  // unwound back to the message loop.
+  void DestroyClosingWidget();
+
   // Outside-click dismissal: forwards Chrome-targeted mouse presses so a click
   // outside the palette (and its picker) closes it, without seeing other apps.
   void StartOutsideClickMonitor();
@@ -106,6 +110,10 @@ class MahoCommandOverlayController : public views::WidgetObserver,
 
   raw_ptr<Browser> browser_;
   std::unique_ptr<views::Widget> widget_;
+  // Widget whose hide animation finished and which is awaiting destruction on a
+  // follow-up task. Owned here so window teardown destroys it even when that
+  // task never runs.
+  std::unique_ptr<views::Widget> closing_widget_;
   raw_ptr<MahoCommandOverlayView> overlay_view_ = nullptr;
   raw_ptr<views::View> anchor_ = nullptr;
   raw_ptr<views::Widget> parent_widget_ = nullptr;
@@ -125,6 +133,12 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   base::TimeTicks open_start_ticks_;
 
   base::WeakPtrFactory<MahoCommandOverlayController> weak_factory_{this};
+
+  // Separate factory for the deferred `closing_widget_` drop: the widget
+  // teardown path invalidates `weak_factory_`, which would otherwise cancel
+  // that cleanup task.
+  base::WeakPtrFactory<MahoCommandOverlayController> widget_teardown_weak_factory_{
+      this};
 };
 
 }  // namespace maho

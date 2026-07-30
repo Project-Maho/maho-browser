@@ -120,6 +120,7 @@ MahoCommandOverlayController::~MahoCommandOverlayController() {
     widget_->RemoveObserver(this);
     widget_.reset();
   }
+  closing_widget_.reset();
   anchor_ = nullptr;
 }
 
@@ -183,11 +184,23 @@ void MahoCommandOverlayController::FinishHideAnimation() {
 
   widget_->RemoveObserver(this);
   widget_->Hide();
-  std::unique_ptr<views::Widget> widget = std::move(widget_);
   is_hiding_ = false;
+  overlay_view_ = nullptr;
+  // Retain ownership in `closing_widget_` instead of handing the widget to a
+  // posted task: at browser shutdown the message loop stops before such a task
+  // can run, which strands the widget and its entire View tree, leaking the
+  // Views and their AXPlatformNodes. The controller is owned by BrowserView, so
+  // keeping the widget here guarantees it is destroyed with the window even if
+  // the follow-up task never runs.
+  closing_widget_ = std::move(widget_);
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
-      base::BindOnce([](std::unique_ptr<views::Widget>) {}, std::move(widget)));
+      base::BindOnce(&MahoCommandOverlayController::DestroyClosingWidget,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoCommandOverlayController::DestroyClosingWidget() {
+  closing_widget_.reset();
 }
 
 void MahoCommandOverlayController::RestoreFocusToPreShowView() {
@@ -238,9 +251,18 @@ void MahoCommandOverlayController::OnWidgetDestroying(
       parent_widget_->RemoveObserver(this);
       parent_widget_ = nullptr;
     }
-    // The widget is already in its destruction path, so the controller must
-    // relinquish ownership without attempting to delete it again here.
-    widget_.release();
+    // The widget is created WIDGET_OWNS_NATIVE_WIDGET, so nothing else deletes
+    // the views::Widget when its native widget goes away: releasing ownership
+    // here abandoned the Widget together with its whole RootView tree, leaking
+    // the Views and their AXPlatformNodes. Take the Widget into
+    // `closing_widget_` instead and drop it once this notification has unwound;
+    // holding it on the controller also guarantees destruction at window
+    // teardown if that task never runs.
+    closing_widget_ = std::move(widget_);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&MahoCommandOverlayController::DestroyClosingWidget,
+                       widget_teardown_weak_factory_.GetWeakPtr()));
   }
 }
 
