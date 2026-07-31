@@ -183,7 +183,6 @@ build_webui("build") {
     "icons/arrow-right.svg",
     "icons/arrow-up-right.svg",
     "icons/chevron-down.svg",
-    "icons/maho-logo.svg",
     "icons/x.svg",
   ]
 
