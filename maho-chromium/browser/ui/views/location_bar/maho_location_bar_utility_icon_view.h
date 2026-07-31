@@ -6,6 +6,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/widget/widget_observer.h"
@@ -34,6 +35,7 @@ class MahoLocationBarUtilityIconView : public views::ToggleImageButton {
   // Show the icon because the user is hovering the pill region.
   void SetHoverVisible(bool hover_visible);
   void SetPanelIsShowing(bool showing);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   bool IsPanelOpenForTesting() const { return panel_is_showing_; }
   bool IsHoverVisibleForTesting() const { return hover_visible_; }
@@ -54,6 +56,7 @@ class MahoLocationBarUtilityIconView : public views::ToggleImageButton {
   bool panel_is_showing_ = false;
   bool affordance_visible_ = false;
   bool hover_visible_ = false;
+  MahoSidebarPalette palette_;
 };
 
 }  // namespace maho

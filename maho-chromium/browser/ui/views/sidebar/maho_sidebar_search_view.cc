@@ -331,6 +331,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
           weak_factory_.GetWeakPtr())));
   utility_icon_->SetPreferredSize(gfx::Size(kSearchPillActionShellWidthDp,
                                             kSearchPillActionShellHeightDp));
+  utility_icon_->SetSidebarPalette(palette_);
   utility_icon_->SetHoverVisible(false);
   idle_layout->SetFlexForView(text_stack_raw, 1);
   idle_layout->SetFlexForView(utility_icon_slot_, 0);
@@ -785,6 +786,7 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
   }
   if (utility_icon_) {
     utility_icon_->SetBackground(nullptr);
+    utility_icon_->SetSidebarPalette(palette_);
   }
   primary_label_->SetEnabledColor(show_placeholder ? ui::kColorSysOnSurfaceSubtle
                                                     : ui::kColorSysOnSurface);

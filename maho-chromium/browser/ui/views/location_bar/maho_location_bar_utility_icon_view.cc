@@ -28,28 +28,41 @@ constexpr int kUtilityButtonHeight = 20;  // Shorter than pill height; verticall
 constexpr int kUtilityIconSize = 14;      // SF Symbol render size; small to avoid visual weight.
 constexpr int kUtilityButtonCornerRadius = 7;  // Matches copy button chip.
 
-ui::ImageModel CreateUtilityButtonImage(ui::ColorId color_id) {
+ui::ImageModel CreateUtilityButtonImage(ui::ColorVariant color) {
   return ui::ImageModel::FromVectorIcon(
-      maho_lucide_icons::kSlidersHorizontalIcon, color_id, kUtilityIconSize);
+      maho_lucide_icons::kSlidersHorizontalIcon, color, kUtilityIconSize);
 }
 
-void UpdateUtilityButtonImages(views::ToggleImageButton* button) {
+void UpdateUtilityButtonImages(views::ToggleImageButton* button,
+                               const MahoSidebarPalette& palette) {
+  const ui::ColorVariant normal_color =
+      palette.neutral_glyph != SK_ColorTRANSPARENT
+          ? ui::ColorVariant(palette.neutral_glyph)
+          : ui::ColorVariant(ui::kColorSysOnSurface);
+  const ui::ColorVariant active_color =
+      palette.primary_text != SK_ColorTRANSPARENT
+          ? ui::ColorVariant(palette.primary_text)
+          : ui::ColorVariant(ui::kColorSysOnSurface);
+  const ui::ColorVariant disabled_color =
+      palette.disabled_text != SK_ColorTRANSPARENT
+          ? ui::ColorVariant(palette.disabled_text)
+          : ui::ColorVariant(ui::kColorIconDisabled);
   button->SetImageModel(views::Button::STATE_NORMAL,
-                        CreateUtilityButtonImage(ui::kColorSysOnSurfaceSubtle));
+                        CreateUtilityButtonImage(normal_color));
   button->SetImageModel(views::Button::STATE_HOVERED,
-                        CreateUtilityButtonImage(ui::kColorSysOnSurface));
+                        CreateUtilityButtonImage(active_color));
   button->SetImageModel(views::Button::STATE_PRESSED,
-                        CreateUtilityButtonImage(ui::kColorSysOnSurface));
+                        CreateUtilityButtonImage(active_color));
   button->SetImageModel(views::Button::STATE_DISABLED,
-                        CreateUtilityButtonImage(ui::kColorIconDisabled));
+                        CreateUtilityButtonImage(disabled_color));
   button->SetToggledImageModel(views::Button::STATE_NORMAL,
-                               CreateUtilityButtonImage(ui::kColorSysOnSurface));
+                               CreateUtilityButtonImage(active_color));
   button->SetToggledImageModel(views::Button::STATE_HOVERED,
-                               CreateUtilityButtonImage(ui::kColorSysOnSurface));
+                               CreateUtilityButtonImage(active_color));
   button->SetToggledImageModel(views::Button::STATE_PRESSED,
-                               CreateUtilityButtonImage(ui::kColorSysOnSurface));
+                               CreateUtilityButtonImage(active_color));
   button->SetToggledImageModel(views::Button::STATE_DISABLED,
-                               CreateUtilityButtonImage(ui::kColorIconDisabled));
+                               CreateUtilityButtonImage(disabled_color));
 }
 
 }  // namespace
@@ -71,7 +84,7 @@ MahoLocationBarUtilityIconView::MahoLocationBarUtilityIconView(
   SetImageVerticalAlignment(ALIGN_MIDDLE);
   SetInstallFocusRingOnFocus(true);
   views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
-  UpdateUtilityButtonImages(this);
+  UpdateUtilityButtonImages(this, palette_);
   UpdateButtonChrome();
 }
 
@@ -84,7 +97,14 @@ void MahoLocationBarUtilityIconView::StateChanged(ButtonState old_state) {
 
 void MahoLocationBarUtilityIconView::OnThemeChanged() {
   views::ToggleImageButton::OnThemeChanged();
-  UpdateUtilityButtonImages(this);
+  UpdateUtilityButtonImages(this, palette_);
+  UpdateButtonChrome();
+}
+
+void MahoLocationBarUtilityIconView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  UpdateUtilityButtonImages(this, palette_);
   UpdateButtonChrome();
 }
 
@@ -118,9 +138,12 @@ void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
   const bool active = GetToggled() || GetState() == STATE_HOVERED ||
                       GetState() == STATE_PRESSED;
   SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+  const SkColor active_background =
+      palette_.row_active != SK_ColorTRANSPARENT
+          ? palette_.row_active
+          : kMahoColorTabRowActiveBackground;
   SetBackground(active ? views::CreateRoundedRectBackground(
-                             kMahoColorTabRowActiveBackground,
-                             kUtilityButtonCornerRadius)
+                             active_background, kUtilityButtonCornerRadius)
                        : nullptr);
 }
 
