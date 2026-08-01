@@ -63,6 +63,8 @@ RETENTION_DAYS = "30"
 MAHO_FROM_EMAIL = "Maho <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://mahobrowser.com/verify"
 MAHO_ENV = "production"
+# Google Sign-In client IDs allowed as id_token `aud` (public, not secrets).
+GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
 # LemonSqueezy variant IDs (public, not secrets). PLACEHOLDERS — replace with
 # real store IDs (D4) before go-live, else paid tiers record as free.
 LS_VARIANT_PRO = "1001"
@@ -94,25 +96,25 @@ class_name = "RoomDO"
 [[env.staging.unsafe.bindings]]
 name = "RL_SIGNUP"
 type = "ratelimit"
-namespace_id = "1001"
+namespace_id = "1005"
 simple = { limit = 60, period = 60 }
 
 [[env.staging.unsafe.bindings]]
 name = "RL_LOGIN"
 type = "ratelimit"
-namespace_id = "1002"
+namespace_id = "1006"
 simple = { limit = 60, period = 60 }
 
 [[env.staging.unsafe.bindings]]
 name = "RL_WAITLIST"
 type = "ratelimit"
-namespace_id = "1003"
+namespace_id = "1007"
 simple = { limit = 60, period = 60 }
 
 [[env.staging.unsafe.bindings]]
 name = "RL_REFRESH"
 type = "ratelimit"
-namespace_id = "1004"
+namespace_id = "1008"
 simple = { limit = 60, period = 60 }
 
 [env.staging.vars]
@@ -126,7 +128,8 @@ RETENTION_DAYS = "7"
 MAHO_FROM_EMAIL = "Maho Staging <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://relay-staging.mahobrowser.com/verify"
 MAHO_ENV = "staging"
-LS_VARIANT_PRO = "1001"
+GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
+LS_VARIANT_PRO = "1970139"
 LS_VARIANT_MAX = "2002"
 LS_VARIANT_PAYG_10 = "4001"
 LS_VARIANT_PAYG_50 = "4002"

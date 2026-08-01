@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_methods)]
 
+use std::cell::RefCell;
+
 use worker::*;
 
 pub mod auth;
@@ -44,6 +46,12 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(e) => e.to_response(),
             }
         })
+        .post_async("/auth/oauth/google", |req, ctx| async move {
+            match auth::routes::oauth_google(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
         .post_async("/auth/logout", |req, ctx| async move {
             match auth::routes::logout(req, ctx.env).await {
                 Ok(res) => Ok(res),
@@ -64,6 +72,12 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/auth/subscription", |req, ctx| async move {
             match auth::routes::subscription(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .delete_async("/auth/account", |req, ctx| async move {
+            match auth::routes::delete_account_route(req, ctx.env).await {
                 Ok(res) => Ok(res),
                 Err(e) => e.to_response(),
             }
@@ -234,7 +248,13 @@ pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) 
     let events_cutoff = now - (90 * 86_400);
     let jobs_cutoff = now - (90 * 86_400);
 
-    prune(&db, "messages", "DELETE FROM messages WHERE created_at < ?1", messages_cutoff).await;
+    prune(
+        &db,
+        "messages",
+        "DELETE FROM messages WHERE created_at < ?1",
+        messages_cutoff,
+    )
+    .await;
 
     // Messages just pruned no longer count toward room_meta.total_bytes; recompute
     // so a room cannot stay permanently locked at room_size_limit_exceeded.
@@ -249,9 +269,27 @@ pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) 
         console_error!("scheduled: recompute total_bytes err: {e}");
     }
 
-    prune(&db, "sessions", "DELETE FROM sessions WHERE refresh_expires_at < ?1", now).await;
-    prune(&db, "consumed_bypass_tokens", "DELETE FROM consumed_bypass_tokens WHERE consumed_at < ?1", bypass_cutoff).await;
-    prune(&db, "processed_events", "DELETE FROM processed_events WHERE processed_at < ?1", events_cutoff).await;
+    prune(
+        &db,
+        "sessions",
+        "DELETE FROM sessions WHERE refresh_expires_at < ?1",
+        now,
+    )
+    .await;
+    prune(
+        &db,
+        "consumed_bypass_tokens",
+        "DELETE FROM consumed_bypass_tokens WHERE consumed_at < ?1",
+        bypass_cutoff,
+    )
+    .await;
+    prune(
+        &db,
+        "processed_events",
+        "DELETE FROM processed_events WHERE processed_at < ?1",
+        events_cutoff,
+    )
+    .await;
     prune(
         &db,
         "handoff_jobs",
@@ -286,29 +324,28 @@ async fn prune(db: &D1Database, label: &str, sql: &str, cutoff: i64) {
 pub struct RoomDO {
     state: State,
     env: Env,
-    room_id: Option<String>,
+    room_id: RefCell<Option<String>>,
 }
 
-#[durable_object]
 impl DurableObject for RoomDO {
     fn new(state: State, env: Env) -> Self {
         Self {
             state,
             env,
-            room_id: None,
+            room_id: RefCell::new(None),
         }
     }
 
-    async fn fetch(&mut self, req: Request) -> Result<Response> {
+    async fn fetch(&self, req: Request) -> Result<Response> {
         room::handle_do_fetch(self, req).await
     }
 
-    async fn alarm(&mut self) -> Result<Response> {
+    async fn alarm(&self) -> Result<Response> {
         room::handle_alarm(self).await
     }
 
     async fn websocket_message(
-        &mut self,
+        &self,
         ws: WebSocket,
         message: WebSocketIncomingMessage,
     ) -> Result<()> {
@@ -316,7 +353,7 @@ impl DurableObject for RoomDO {
     }
 
     async fn websocket_close(
-        &mut self,
+        &self,
         ws: WebSocket,
         _code: usize,
         _reason: String,
@@ -325,7 +362,23 @@ impl DurableObject for RoomDO {
         room::handle_ws_close(self, ws).await
     }
 
-    async fn websocket_error(&mut self, ws: WebSocket, _error: Error) -> Result<()> {
+    async fn websocket_error(&self, ws: WebSocket, _error: Error) -> Result<()> {
         room::handle_ws_close(self, ws).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn room_do_uses_the_workers_rs_shared_callback_contract() {
+        // Given: workers-rs 0.6 invokes Durable Object callbacks through shared references.
+        fn requires_durable_object<T: DurableObject>() {}
+
+        // When: RoomDO is checked against the runtime trait.
+        requires_durable_object::<RoomDO>();
+
+        // Then: callback receiver changes remain covered by the trait contract.
     }
 }

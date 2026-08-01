@@ -55,7 +55,7 @@ pub async fn ws_upgrade(req: Request, env: Env) -> crate::errors::Result<Respons
     stub.fetch_with_request(req).await.map_err(AppError::from)
 }
 
-pub async fn handle_do_fetch(room: &mut RoomDO, req: Request) -> Result<Response> {
+pub async fn handle_do_fetch(room: &RoomDO, req: Request) -> Result<Response> {
     let upgrade = req.headers().get("Upgrade")?.unwrap_or_default();
     if !upgrade.eq_ignore_ascii_case("websocket") {
         return Response::error("expected_websocket_upgrade", 400);
@@ -74,8 +74,8 @@ pub async fn handle_do_fetch(room: &mut RoomDO, req: Request) -> Result<Response
         _ => return Response::error("invalid_room_key", 400),
     };
 
-    if room.room_id.is_none() {
-        room.room_id = Some(key.clone());
+    if room.room_id.borrow().is_none() {
+        room.room_id.replace(Some(key.clone()));
     }
 
     let config = RelayConfig::from_env(&room.env);
@@ -121,7 +121,7 @@ pub async fn handle_do_fetch(room: &mut RoomDO, req: Request) -> Result<Response
 
 /// Durable Object alarm: close unauthenticated sockets that outlived the auth
 /// timeout, and re-arm while any unauthenticated socket remains.
-pub async fn handle_alarm(room: &mut RoomDO) -> Result<Response> {
+pub async fn handle_alarm(room: &RoomDO) -> Result<Response> {
     let now = chrono::Utc::now().timestamp();
     let mut remaining_unauth = false;
     for sock in room.state.get_websockets().iter() {
@@ -148,7 +148,7 @@ pub async fn handle_alarm(room: &mut RoomDO) -> Result<Response> {
 }
 
 pub async fn handle_ws_message(
-    room: &mut RoomDO,
+    room: &RoomDO,
     ws: WebSocket,
     message: WebSocketIncomingMessage,
 ) -> Result<()> {
@@ -187,7 +187,7 @@ pub async fn handle_ws_message(
     }
 
     let db = room.env.d1("MAHO_DB")?;
-    let room_id = match room.room_id.clone() {
+    let room_id = match room.room_id.borrow().clone() {
         Some(r) => r,
         None => {
             let _ = ws.send_with_str(r#"{"type":"error","msg":"room_not_initialized"}"#);
@@ -196,7 +196,9 @@ pub async fn handle_ws_message(
     };
 
     match db::get_room_size(&db, &room_id).await {
-        Ok(size) if size + payload_bytes.len() as i64 > config.max_room_size_mb as i64 * 1_048_576 => {
+        Ok(size)
+            if size + payload_bytes.len() as i64 > config.max_room_size_mb as i64 * 1_048_576 =>
+        {
             let _ = ws.send_with_str(r#"{"type":"error","msg":"room_size_limit_exceeded"}"#);
             let _ = ws.serialize_attachment(&ctx);
             return Ok(());
@@ -244,12 +246,12 @@ pub async fn handle_ws_message(
     Ok(())
 }
 
-pub async fn handle_ws_close(_room: &mut RoomDO, _ws: WebSocket) -> Result<()> {
+pub async fn handle_ws_close(_room: &RoomDO, _ws: WebSocket) -> Result<()> {
     Ok(())
 }
 
 async fn process_auth(
-    room: &mut RoomDO,
+    room: &RoomDO,
     ws: WebSocket,
     message: WebSocketIncomingMessage,
     mut ctx: WsCtx,
@@ -294,14 +296,15 @@ async fn process_auth(
         }
     };
 
-    if let Some(existing) = &room.room_id {
-        if existing != &key {
+    let room_id = room.room_id.borrow().clone();
+    if let Some(existing) = room_id {
+        if existing != key {
             let _ = ws.send_with_str(r#"{"type":"error","msg":"room_mismatch"}"#);
             let _ = ws.close::<&str>(Some(1008), Some("room_mismatch"));
             return Ok(());
         }
     } else {
-        room.room_id = Some(key.clone());
+        room.room_id.replace(Some(key.clone()));
     }
 
     let token = auth_msg
@@ -340,9 +343,14 @@ async fn process_auth(
                         return Ok(());
                     }
                 }
-                if let Err(e) =
-                    db::touch_session_and_device(&db, context.user.id, context.session.id, context.device.id, now)
-                        .await
+                if let Err(e) = db::touch_session_and_device(
+                    &db,
+                    context.user.id,
+                    context.session.id,
+                    context.device.id,
+                    now,
+                )
+                .await
                 {
                     console_error!("touch_session_and_device failed: {e}");
                 }

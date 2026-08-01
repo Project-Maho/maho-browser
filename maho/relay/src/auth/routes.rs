@@ -1,3 +1,4 @@
+use crate::auth::google;
 use crate::auth::middleware::get_auth_context;
 use crate::auth::models::*;
 use crate::auth::passwords::{hash_password, verify_password};
@@ -16,6 +17,7 @@ const ACCESS_TOKEN_TTL_SECS: i64 = 60 * 60;
 const REFRESH_TOKEN_TTL_SECS: i64 = 60 * 60 * 24 * 30;
 const LOGIN_LOCK_THRESHOLD: i32 = 10;
 const LOGIN_LOCK_SECS: i64 = 15 * 60;
+const GOOGLE_PROVIDER: &str = "google";
 
 /// Constant-time service-token comparison to avoid a timing side-channel.
 /// A `!=` on `&str` short-circuits at the first differing byte, leaking how
@@ -87,8 +89,16 @@ async fn resolve_device(
             return Ok(device);
         }
         let room_id = uuid::Uuid::new_v4().simple().to_string();
-        if let Some(device) =
-            insert_device(db, user_id, device_name, device_type, &room_id, Some(cid), now).await?
+        if let Some(device) = insert_device(
+            db,
+            user_id,
+            device_name,
+            device_type,
+            &room_id,
+            Some(cid),
+            now,
+        )
+        .await?
         {
             return Ok(device);
         }
@@ -96,7 +106,9 @@ async fn resolve_device(
         // (user_id, client_device_id)); the other login inserted it. Reuse it.
         return find_device_by_client_id(db, user_id, cid)
             .await?
-            .ok_or_else(|| AppError::Internal("device vanished after insert conflict".to_string()));
+            .ok_or_else(|| {
+                AppError::Internal("device vanished after insert conflict".to_string())
+            });
     }
     let room_id = uuid::Uuid::new_v4().simple().to_string();
     insert_device(db, user_id, device_name, device_type, &room_id, None, now)
@@ -221,6 +233,12 @@ pub async fn login(mut req: Request, env: Env) -> Result<Response> {
         return Err(AppError::Auth("account is temporarily locked".to_string()));
     }
 
+    // An OAuth-only account stores password_hash = ''. Reject before Argon2 so
+    // verify_password is never reached with an empty stored hash.
+    if user.password_hash.is_empty() {
+        return Err(AppError::Auth("invalid credentials".to_string()));
+    }
+
     let pepper = env.secret("ARGON2_PEPPER")?.to_string();
     let password_ok = verify_password(&payload.password, &user.password_hash, pepper.as_bytes())?;
 
@@ -295,6 +313,153 @@ pub async fn login(mut req: Request, env: Env) -> Result<Response> {
     Ok(Response::from_json(&auth_res)?)
 }
 
+pub async fn oauth_google(mut req: Request, env: Env) -> Result<Response> {
+    let payload = req.json::<GoogleOAuthRequest>().await?;
+    let ip = req
+        .headers()
+        .get("cf-connecting-ip")?
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let now = chrono::Utc::now().timestamp();
+    let config = RelayConfig::from_env(&env);
+
+    if !crate::ratelimit::check(&env, "RL_LOGIN", &ip).await? {
+        return Err(AppError::RateLimit("login rate limit exceeded".to_string()));
+    }
+
+    if payload.id_token.trim().is_empty() {
+        return Err(AppError::BadRequest("id_token is required".to_string()));
+    }
+
+    let identity = google::verify_id_token(
+        &payload.id_token,
+        &config.google_oauth_allowed_auds,
+        &payload.nonce,
+        now,
+    )
+    .await?;
+
+    let db = env.d1("MAHO_DB")?;
+
+    let nonce_hash = google::hash_nonce(&identity.nonce).to_vec();
+    if !claim_oauth_nonce(&db, &nonce_hash, now).await? {
+        return Err(AppError::Auth("id_token already used".to_string()));
+    }
+
+    let user = match find_oauth_identity(&db, GOOGLE_PROVIDER, &identity.provider_sub).await? {
+        Some(existing) => {
+            touch_oauth_identity(&db, existing.id, now).await?;
+            find_user_by_id(&db, existing.user_id)
+                .await?
+                .ok_or_else(|| AppError::Internal("linked user missing".to_string()))?
+        }
+        None => resolve_google_user(&db, &config, &identity, now).await?,
+    };
+
+    let device_name = normalize_device_name(payload.device_name.as_deref());
+    let device_type = normalize_device_type(payload.device_type.as_deref());
+    let access_token = generate_access_token_string()?;
+    let refresh_token = generate_refresh_token_string()?;
+
+    let device = resolve_device(
+        &db,
+        user.id,
+        payload.device_id.as_deref(),
+        &device_name,
+        &device_type,
+        now,
+    )
+    .await?;
+
+    let access_hash = hash_token_str(&access_token).to_vec();
+    let refresh_hash = hash_token_str(&refresh_token).to_vec();
+
+    let session = insert_session(
+        &db,
+        &NewSession {
+            user_id: user.id,
+            device_id: device.id,
+            token_hash: &access_hash,
+            refresh_hash: &refresh_hash,
+            expires_at: now + ACCESS_TOKEN_TTL_SECS,
+            refresh_expires_at: now + REFRESH_TOKEN_TTL_SECS,
+            now,
+        },
+    )
+    .await?;
+
+    let account = public_user_with_google_metadata(&db, user).await?;
+    let auth_res = AuthResponse {
+        access_token,
+        refresh_token,
+        token_type: "Bearer",
+        expires_at: session.expires_at,
+        refresh_expires_at: session.refresh_expires_at,
+        account,
+        device: PublicDevice::from(device),
+        session: PublicSession::from(session),
+    };
+
+    Ok(Response::from_json(&auth_res)?)
+}
+
+/// Resolves the account for a first-time Google identity: link to an existing
+/// same-email account only when Google asserts the address is verified,
+/// otherwise an attacker could pre-register an unverified Google address to
+/// hijack a password account. When no account exists, create one.
+async fn resolve_google_user(
+    db: &D1Database,
+    config: &RelayConfig,
+    identity: &google::VerifiedIdentity,
+    now: i64,
+) -> Result<User> {
+    if let Some(existing) = find_user_by_email(db, &identity.email).await? {
+        if !identity.email_verified {
+            return Err(AppError::Conflict(
+                "email already exists; sign in with your password to link Google".to_string(),
+            ));
+        }
+        link_oauth_identity(
+            db,
+            existing.id,
+            GOOGLE_PROVIDER,
+            &identity.provider_sub,
+            &identity.email,
+            now,
+        )
+        .await?;
+        if existing.email_verified == 0.0 {
+            mark_email_verified(db, existing.id).await?;
+        }
+        return find_user_by_id(db, existing.id)
+            .await?
+            .ok_or_else(|| AppError::Internal("linked user missing".to_string()));
+    }
+
+    if !config.open_registration {
+        return Err(AppError::BadRequest("registration is disabled".to_string()));
+    }
+
+    let display_name = normalize_display_name(identity.display_name.as_deref(), &identity.email);
+    let user = insert_oauth_user(
+        db,
+        &identity.email,
+        &display_name,
+        identity.email_verified,
+        now,
+    )
+    .await?;
+    link_oauth_identity(
+        db,
+        user.id,
+        GOOGLE_PROVIDER,
+        &identity.provider_sub,
+        &identity.email,
+        now,
+    )
+    .await?;
+    Ok(user)
+}
+
 pub async fn logout(req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
@@ -359,13 +524,14 @@ pub async fn refresh(mut req: Request, env: Env) -> Result<Response> {
 
     touch_device(&db, device.id, now).await?;
 
+    let account = public_user_with_google_metadata(&db, user).await?;
     let auth_res = AuthResponse {
         access_token,
         refresh_token,
         token_type: "Bearer",
         expires_at: updated.expires_at,
         refresh_expires_at: updated.refresh_expires_at,
-        account: PublicUser::from(user),
+        account,
         device: PublicDevice::from(device),
         session: PublicSession::from(updated),
     };
@@ -383,8 +549,9 @@ pub async fn me(req: Request, env: Env) -> Result<Response> {
         .map(PublicDevice::from)
         .collect();
 
+    let account = public_user_with_google_metadata(&db, auth.user).await?;
     let me_res = MeResponse {
-        account: PublicUser::from(auth.user),
+        account,
         devices,
         current_device: PublicDevice::from(auth.device),
         current_session: PublicSession::from(auth.session),
@@ -425,6 +592,14 @@ pub async fn subscription(req: Request, env: Env) -> Result<Response> {
     };
 
     Ok(Response::from_json(&sub_res)?)
+}
+
+pub async fn delete_account_route(req: Request, env: Env) -> Result<Response> {
+    let db = env.d1("MAHO_DB")?;
+    let auth = get_auth_context(&req, &db).await?;
+
+    delete_account(&db, auth.user.id, &auth.user.email).await?;
+    Ok(Response::from_json(&DeleteAccountResponse { ok: true })?)
 }
 
 pub async fn delete_device(req: Request, env: Env, device_id_str: &str) -> Result<Response> {
@@ -567,7 +742,7 @@ async fn send_verification_email(
     })
     .map_err(|e| AppError::Internal(format!("failed to serialize verification email: {e}")))?;
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("Content-Type", "application/json")?;
     headers.set("Authorization", &format!("Bearer {api_key}"))?;
 
@@ -711,7 +886,8 @@ pub async fn admin_set_credit_balance(mut req: Request, env: Env) -> Result<Resp
     let db = env.d1("MAHO_DB")?;
     let now = chrono::Utc::now().timestamp();
 
-    let prev_balance = set_credit_balance(&db, payload.user_id, payload.new_balance_usd, now).await?;
+    let prev_balance =
+        set_credit_balance(&db, payload.user_id, payload.new_balance_usd, now).await?;
     let delta = payload.new_balance_usd - prev_balance;
 
     let detail = format!("{prev_balance:.4}->{:.4}", payload.new_balance_usd);
@@ -749,7 +925,7 @@ pub fn parse_bypass_token(token: &str, service_token: &str) -> Option<(i32, i64)
     let sig_hex = parts[2];
 
     let sig_bytes = {
-        if sig_hex.len() % 2 != 0 {
+        if !sig_hex.len().is_multiple_of(2) {
             return None;
         }
         let mut bytes = Vec::with_capacity(sig_hex.len() / 2);
@@ -790,6 +966,25 @@ fn generate_bypass_token(user_id: i32, service_token: &str) -> Result<String> {
     Ok(format!("{user_id}:{expires_at}:{sig}"))
 }
 
+async fn public_user_with_google_metadata(db: &D1Database, user: User) -> Result<PublicUser> {
+    let metadata = find_google_account_metadata(db, user.id).await?;
+    Ok(account_with_google_metadata(
+        PublicUser::from(user),
+        metadata,
+    ))
+}
+
+fn account_with_google_metadata(
+    mut account: PublicUser,
+    metadata: Option<OAuthAccountMetadata>,
+) -> PublicUser {
+    if let Some(metadata) = metadata {
+        account.oauth_provider = Some(metadata.provider);
+        account.oauth_provider_sub = Some(metadata.provider_sub);
+    }
+    account
+}
+
 impl From<User> for PublicUser {
     fn from(value: User) -> Self {
         Self {
@@ -800,6 +995,8 @@ impl From<User> for PublicUser {
             locked_until: value.locked_until,
             failed_login_attempts: value.failed_login_attempts,
             last_failed_login_at: value.last_failed_login_at,
+            oauth_provider: None,
+            oauth_provider_sub: None,
         }
     }
 }
@@ -834,8 +1031,47 @@ impl From<Session> for PublicSession {
 
 #[cfg(test)]
 mod tests {
-    use super::should_expose_dev_token;
+    use super::account_with_google_metadata;
     use super::service_token_matches;
+    use super::should_expose_dev_token;
+    use crate::auth::models::PublicUser;
+    use crate::db::OAuthAccountMetadata;
+
+    fn public_user() -> PublicUser {
+        PublicUser {
+            id: 7,
+            email: "account@example.com".to_string(),
+            display_name: "Account User".to_string(),
+            created_at: 1_700_000_000,
+            locked_until: None,
+            failed_login_attempts: 0,
+            last_failed_login_at: None,
+            oauth_provider: None,
+            oauth_provider_sub: None,
+        }
+    }
+
+    #[test]
+    fn refresh_account_exposes_canonical_google_identity_pair() {
+        let account = account_with_google_metadata(
+            public_user(),
+            Some(OAuthAccountMetadata {
+                provider: "google".to_string(),
+                provider_sub: "canonical-sub".to_string(),
+            }),
+        );
+
+        assert_eq!(account.oauth_provider.as_deref(), Some("google"));
+        assert_eq!(account.oauth_provider_sub.as_deref(), Some("canonical-sub"));
+    }
+
+    #[test]
+    fn refresh_account_omits_google_identity_pair_when_unlinked() {
+        let account = account_with_google_metadata(public_user(), None);
+
+        assert_eq!(account.oauth_provider, None);
+        assert_eq!(account.oauth_provider_sub, None);
+    }
 
     #[test]
     fn service_token_matches_validation() {

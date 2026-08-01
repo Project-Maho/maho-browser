@@ -14,6 +14,7 @@ relay/
 │   ├── lib.rs          # Worker entry + Router (all route registrations) + scheduled() retention job + RoomDO
 │   ├── auth/           # Signup/login/refresh/verify/bypass + middleware
 │   │   ├── routes.rs   # HTTP handlers; service/admin token helpers (require_service_token/require_admin_token/extract_bearer)
+│   │   ├── google.rs   # Google id_token verification (RS256 via WebCrypto, JWKS fetch, claim/nonce validation)
 │   │   ├── tokens.rs   # Opaque token issue/hash (CSPRNG failures propagate, never 0-fill)
 │   │   ├── passwords.rs # Argon2 hashing
 │   │   ├── models.rs   # User/session types
@@ -54,6 +55,7 @@ Auth subject column prevents the T3-class bug (a client calling a service-only r
 |-------|--------|--------|--------------|
 | `/health` | GET | Health | none |
 | `/auth/signup`, `/auth/login`, `/auth/logout`, `/auth/refresh` | POST | Auth | none (credentials in body) |
+| `/auth/oauth/google` | POST | Auth | none (Google id_token in body) |
 | `/auth/me`, `/auth/subscription` | GET | Auth | user |
 | `/auth/devices/:id` | DELETE | Auth | user |
 | `/auth/request_verify`, `/auth/verify` | POST | Auth | user |
@@ -104,6 +106,7 @@ Auth subject column prevents the T3-class bug (a client calling a service-only r
 - `CONFIG_UPDATE_ADMIN_TOKEN` — separate token for `POST /updates/config` (kept distinct on purpose).
 - `ARGON2_PEPPER`, `LS_WEBHOOK_SECRET`, `LEMONSQUEEZY_API_KEY`, `RESEND_API_KEY` — as before.
 - `LS_VARIANT_*` (public product IDs, `[env.*.vars]`, not secrets) — must be the real store variant IDs or paid tiers record as free.
+- `GOOGLE_OAUTH_ALLOWED_AUDS` (public client IDs, `[env.*.vars]`, not secrets) — comma-separated Google OAuth client IDs accepted as id_token `aud`. Empty = `/auth/oauth/google` fails closed. Google client *secrets* are never stored here: all clients are public PKCE clients.
 - Removed keys (do not reintroduce without an implementation): `MAX_CONNECTIONS_PER_IP`, `MAX_ROOMS_PER_IP`, `*_RATE_LIMIT_PER_IP_PER_MINUTE` (superseded by the edge rate-limit backend).
 
 ## COMMANDS

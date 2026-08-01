@@ -27,6 +27,18 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct GoogleOAuthRequest {
+    pub id_token: String,
+    pub nonce: String,
+    #[serde(default)]
+    pub device_name: Option<String>,
+    #[serde(default)]
+    pub device_type: Option<String>,
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,
 }
@@ -52,6 +64,10 @@ pub struct PublicUser {
     pub locked_until: Option<i64>,
     pub failed_login_attempts: i32,
     pub last_failed_login_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_provider_sub: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,6 +107,11 @@ pub struct LogoutResponse {
 
 #[derive(Debug, Serialize)]
 pub struct DeleteDeviceResponse {
+    pub ok: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteAccountResponse {
     pub ok: bool,
 }
 
@@ -218,4 +239,50 @@ pub struct SubscriptionResponse {
     pub credit_balance_usd: f64,
     pub lifetime_purchased_usd: f64,
     pub has_payment_method: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PublicUser;
+
+    fn account(oauth_provider: Option<&str>, oauth_provider_sub: Option<&str>) -> PublicUser {
+        PublicUser {
+            id: 7,
+            email: "account@example.com".to_string(),
+            display_name: "Account User".to_string(),
+            created_at: 1_700_000_000,
+            locked_until: None,
+            failed_login_attempts: 0,
+            last_failed_login_at: None,
+            oauth_provider: oauth_provider.map(str::to_string),
+            oauth_provider_sub: oauth_provider_sub.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn baseline_password_account_response_omits_oauth_metadata() {
+        let json = serde_json::to_value(account(None, None)).expect("serialize password account");
+        let object = json.as_object().expect("account serializes as an object");
+        assert!(!object.contains_key("oauth_provider"));
+        assert!(!object.contains_key("oauth_provider_sub"));
+    }
+
+    #[test]
+    fn google_login_account_exposes_canonical_identity_metadata() {
+        let json = serde_json::to_value(account(Some("google"), Some("google-sub-123")))
+            .expect("serialize Google login account");
+        assert_eq!(json["oauth_provider"], "google");
+        assert_eq!(json["oauth_provider_sub"], "google-sub-123");
+        assert!(json.get("google_id").is_none());
+        assert!(json.get("access_token").is_none());
+        assert!(json.get("refresh_token").is_none());
+    }
+
+    #[test]
+    fn authenticated_me_account_exposes_canonical_identity_metadata() {
+        let json = serde_json::to_value(account(Some("google"), Some("google-sub-456")))
+            .expect("serialize authenticated account");
+        assert_eq!(json["oauth_provider"], "google");
+        assert_eq!(json["oauth_provider_sub"], "google-sub-456");
+    }
 }

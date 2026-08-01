@@ -40,6 +40,8 @@ pub struct WebhookAttributes {
     pub variant_id: Option<i32>,
     pub status: Option<String>,
     pub renews_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub expires_at: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub total: Option<i32>,
@@ -103,7 +105,7 @@ fn verify_signature(secret: &str, body: &[u8], signature_hex: &str) -> bool {
 }
 
 fn hex_decode(hex_str: &str) -> Option<Vec<u8>> {
-    if hex_str.len() % 2 != 0 {
+    if !hex_str.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::new();
@@ -167,6 +169,30 @@ fn customer_id_to_string(v: &serde_json::Value) -> String {
     }
 }
 
+fn subscription_period_end(attributes: &WebhookAttributes) -> Option<i64> {
+    attributes
+        .ends_at
+        .as_deref()
+        .or(attributes.expires_at.as_deref())
+        .or(attributes.renews_at.as_deref())
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|date_time| date_time.timestamp())
+}
+
+fn subscription_tier_for_event<'a>(
+    event_name: &str,
+    mapped_tier: Option<&'a str>,
+    period_end: Option<i64>,
+    now_sec: i64,
+) -> Option<&'a str> {
+    match event_name {
+        "subscription_expired" => Some("free"),
+        "subscription_cancelled" if period_end.is_some_and(|end| end > now_sec) => mapped_tier,
+        "subscription_cancelled" => Some("free"),
+        _ => mapped_tier,
+    }
+}
+
 async fn notify_proxy_tier_update(
     env: &Env,
     user_id: i32,
@@ -213,7 +239,7 @@ async fn notify_proxy_tier_update(
         }
     };
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     let _ = headers.set("Content-Type", "application/json");
     let _ = headers.set("Authorization", &format!("Bearer {service_token}"));
 
@@ -285,7 +311,7 @@ pub(crate) async fn notify_proxy_credits_update(
         }
     };
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     let _ = headers.set("Content-Type", "application/json");
     let _ = headers.set("Authorization", &format!("Bearer {service_token}"));
 
@@ -350,7 +376,7 @@ async fn notify_proxy_topup(env: &Env, user_id: i32, amount_usd: f64) {
         }
     };
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     let _ = headers.set("Content-Type", "application/json");
     let _ = headers.set("Authorization", &format!("Bearer {service_token}"));
 
@@ -472,28 +498,23 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
             .clone()
             .unwrap_or_else(|| "active".to_string());
 
-        // Terminal events (cancel/expire) downgrade to free immediately —
-        // intentional per ADR 0009 R-1, which treats post-cancellation usage as
-        // a risk to prevent (no grace period until ends_at). For active events,
-        // an unmapped variant yields None so the tier is left unchanged rather
-        // than wrongly downgraded.
-        let is_downgrade = matches!(
+        let mapped_tier = match variant_map.map_variant(variant_id) {
+            Some(VariantKind::Subscription(t)) => Some(t),
+            _ => {
+                console_error!(
+                    "unmapped LS variant_id={variant_id} event={event_name} user={user_id}"
+                );
+                None
+            }
+        };
+        let period_end = subscription_period_end(&payload.data.attributes);
+        let tier = subscription_tier_for_event(event_name, mapped_tier, period_end, now_sec);
+        // Cancellation must retain lifecycle-event ordering precedence even when
+        // its future period end means the paid tier remains active for now.
+        let wins_equal_event_tie = matches!(
             event_name.as_str(),
             "subscription_cancelled" | "subscription_expired"
         );
-        let tier: Option<&str> = if is_downgrade {
-            Some("free")
-        } else {
-            match variant_map.map_variant(variant_id) {
-                Some(VariantKind::Subscription(t)) => Some(t),
-                _ => {
-                    console_error!(
-                        "unmapped LS variant_id={variant_id} event={event_name} user={user_id}"
-                    );
-                    None
-                }
-            }
-        };
 
         if let Some(tier) = tier {
             let created_at_sec = payload
@@ -517,13 +538,7 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
                 .map(|dt| dt.timestamp())
                 .unwrap_or(created_at_sec);
 
-            let expires_at = payload
-                .data
-                .attributes
-                .renews_at
-                .as_ref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.timestamp());
+            let expires_at = period_end;
 
             let created_dt = Utc
                 .timestamp_opt(created_at_sec, 0)
@@ -542,7 +557,7 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
 
             let has_payment = match event_name.as_str() {
                 "subscription_created" => Some(true),
-                "subscription_cancelled" | "subscription_expired" => Some(false),
+                "subscription_expired" => Some(false),
                 _ => None,
             };
 
@@ -557,7 +572,7 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
                 has_payment,
                 customer_id_str,
                 Some(event_at_sec),
-                is_downgrade,
+                wins_equal_event_tie,
             )
             .await?;
 
@@ -617,7 +632,9 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
                         notify_proxy_credits_update(&env, user_id, new_balance, amount_usd).await;
                     }
                     Err(e) => {
-                        console_error!("add_credit_balance failed user={user_id} event={event_id}: {e}");
+                        console_error!(
+                            "add_credit_balance failed user={user_id} event={event_id}: {e}"
+                        );
                         return Err(AppError::Internal(format!("failed to add credit: {e}")));
                     }
                 }
@@ -641,7 +658,9 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
                             .await;
                     }
                     Err(e) => {
-                        console_error!("chargeback_credit failed user={user_id} event={event_id}: {e}");
+                        console_error!(
+                            "chargeback_credit failed user={user_id} event={event_id}: {e}"
+                        );
                         return Err(AppError::Internal(format!("failed to refund credit: {e}")));
                     }
                 }
@@ -682,7 +701,7 @@ pub async fn portal_session(req: Request, env: Env) -> Result<Response> {
         }
     };
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     let _ = headers.set("Authorization", &format!("Bearer {api_key}"));
     let _ = headers.set("Accept", "application/vnd.api+json");
     let _ = headers.set("Content-Type", "application/vnd.api+json");
@@ -738,7 +757,7 @@ pub async fn invoices(req: Request, env: Env) -> Result<Response> {
         _ => return Response::from_json(&empty).map_err(AppError::from),
     };
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     let _ = headers.set("Authorization", &format!("Bearer {api_key}"));
     let _ = headers.set("Accept", "application/vnd.api+json");
     let _ = headers.set("Content-Type", "application/vnd.api+json");
@@ -864,11 +883,16 @@ pub async fn get_credit_balance(mut req: Request, env: Env) -> Result<Response> 
         last_consumption_at: Option<i64>,
     }
 
-    let (balance_usd, lifetime_purchased_usd, last_consumption_at) = if let Some(row) = stmt.first::<CreditRow>(None).await? {
-        (row.balance_usd, row.lifetime_purchased_usd, row.last_consumption_at)
-    } else {
-        (0.0, 0.0, None)
-    };
+    let (balance_usd, lifetime_purchased_usd, last_consumption_at) =
+        if let Some(row) = stmt.first::<CreditRow>(None).await? {
+            (
+                row.balance_usd,
+                row.lifetime_purchased_usd,
+                row.last_consumption_at,
+            )
+        } else {
+            (0.0, 0.0, None)
+        };
 
     let resp = CreditBalanceResponse {
         balance_usd,
@@ -957,6 +981,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancelled_subscription_keeps_paid_tier_until_period_end() {
+        let payload: LemonSqueezyWebhook = serde_json::from_value(serde_json::json!({
+            "meta": {
+                "event_name": "subscription_cancelled",
+                "custom_data": { "user_id": "42" }
+            },
+            "data": {
+                "id": "subscription-1",
+                "type": "subscriptions",
+                "attributes": {
+                    "variant_id": 123,
+                    "status": "cancelled",
+                    "ends_at": "2026-08-31T00:00:00Z"
+                }
+            }
+        }))
+        .unwrap();
+        let period_end = subscription_period_end(&payload.data.attributes).unwrap();
+
+        assert_eq!(
+            subscription_tier_for_event(
+                &payload.meta.event_name,
+                Some("pro"),
+                Some(period_end),
+                period_end - 1,
+            ),
+            Some("pro")
+        );
+        assert_eq!(
+            subscription_tier_for_event(
+                &payload.meta.event_name,
+                Some("pro"),
+                Some(period_end),
+                period_end,
+            ),
+            Some("free")
+        );
+        assert_eq!(
+            subscription_tier_for_event(
+                "subscription_expired",
+                Some("pro"),
+                Some(period_end),
+                period_end - 1,
+            ),
+            Some("free")
+        );
+    }
+
+    #[test]
     fn test_billing_credit_balance_response_serialization() {
         let resp = CreditBalanceResponse {
             balance_usd: 10.0,
@@ -991,7 +1064,9 @@ mod tests {
         // balance is left untouched and the outcome is Insufficient.
         assert_eq!(
             decide_credit_consume(0.10, 0.50),
-            ConsumeDecision::Insufficient { remaining_usd: 0.10 }
+            ConsumeDecision::Insufficient {
+                remaining_usd: 0.10
+            }
         );
     }
 

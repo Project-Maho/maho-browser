@@ -76,7 +76,13 @@ pub struct JobRecord {
 }
 
 impl JobRecord {
-    pub fn new(id: String, user_id: i32, job_type: String, estimated_cost_usd: f64, now: i64) -> Self {
+    pub fn new(
+        id: String,
+        user_id: i32,
+        job_type: String,
+        estimated_cost_usd: f64,
+        now: i64,
+    ) -> Self {
         Self {
             id,
             user_id,
@@ -144,8 +150,12 @@ pub fn decide_complete(
     now: i64,
 ) -> CompleteOutcome {
     match job.status {
-        JobStatus::Completed => CompleteOutcome::AlreadyBilled { record: job.clone() },
-        JobStatus::Failed => CompleteOutcome::InvalidState { current: JobStatus::Failed },
+        JobStatus::Completed => CompleteOutcome::AlreadyBilled {
+            record: job.clone(),
+        },
+        JobStatus::Failed => CompleteOutcome::InvalidState {
+            current: JobStatus::Failed,
+        },
         JobStatus::Pending | JobStatus::Running => {
             let bill_usd = bill_amount(final_cost_usd);
             let mut record = job.clone();
@@ -198,7 +208,9 @@ pub struct MemoryJobStore {
 
 impl MemoryJobStore {
     pub fn new() -> Self {
-        Self { jobs: HashMap::new() }
+        Self {
+            jobs: HashMap::new(),
+        }
     }
 
     pub fn create(
@@ -212,7 +224,13 @@ impl MemoryJobStore {
         if let Some(existing) = self.jobs.get(id) {
             return CreateOutcome::AlreadyExists(existing.clone());
         }
-        let record = JobRecord::new(id.to_string(), user_id, job_type.to_string(), estimated_cost_usd, now);
+        let record = JobRecord::new(
+            id.to_string(),
+            user_id,
+            job_type.to_string(),
+            estimated_cost_usd,
+            now,
+        );
         self.jobs.insert(id.to_string(), record.clone());
         CreateOutcome::Created(record)
     }
@@ -236,7 +254,13 @@ impl MemoryJobStore {
         Some(outcome)
     }
 
-    pub fn fail(&mut self, id: &str, error: &str, retryable: bool, now: i64) -> Option<FailOutcome> {
+    pub fn fail(
+        &mut self,
+        id: &str,
+        error: &str,
+        retryable: bool,
+        now: i64,
+    ) -> Option<FailOutcome> {
         let job = self.jobs.get(id)?.clone();
         let outcome = decide_fail(&job, error.to_string(), retryable, now);
         if let FailOutcome::Failed(record) = &outcome {
@@ -279,7 +303,9 @@ mod tests {
         store.jobs.insert(id.clone(), progressed);
 
         // A brand-new poll (reconnect) sees the durable state.
-        let polled = store.get(&id).expect("job must still exist after disconnect");
+        let polled = store
+            .get(&id)
+            .expect("job must still exist after disconnect");
         assert_eq!(polled.status, JobStatus::Running);
         assert_eq!(polled.steps_completed, 3);
     }
@@ -288,7 +314,9 @@ mod tests {
     fn complete_bills_exactly_once() {
         let (mut store, id) = store_with_job();
 
-        let first = store.complete(&id, 0.42, Some("artifact-1".into()), 2_000).unwrap();
+        let first = store
+            .complete(&id, 0.42, Some("artifact-1".into()), 2_000)
+            .unwrap();
         match first {
             CompleteOutcome::Billed { record, bill_usd } => {
                 assert_eq!(bill_usd, 0.42);
@@ -301,11 +329,17 @@ mod tests {
         }
 
         // Replayed completion (e.g. retried network call) must NOT bill again.
-        let replay = store.complete(&id, 0.42, Some("artifact-1".into()), 3_000).unwrap();
+        let replay = store
+            .complete(&id, 0.42, Some("artifact-1".into()), 3_000)
+            .unwrap();
         match replay {
             CompleteOutcome::AlreadyBilled { record } => {
                 assert_eq!(record.billed_usd, 0.42, "balance must not double-charge");
-                assert_eq!(record.billed_at, Some(2_000), "original bill timestamp stands");
+                assert_eq!(
+                    record.billed_at,
+                    Some(2_000),
+                    "original bill timestamp stands"
+                );
             }
             other => panic!("replay must be idempotent: {other:?}"),
         }
@@ -331,7 +365,12 @@ mod tests {
         let (mut store, id) = store_with_job();
         store.fail(&id, "boom", false, 2_000).unwrap();
         let outcome = store.complete(&id, 0.42, None, 3_000).unwrap();
-        assert_eq!(outcome, CompleteOutcome::InvalidState { current: JobStatus::Failed });
+        assert_eq!(
+            outcome,
+            CompleteOutcome::InvalidState {
+                current: JobStatus::Failed
+            }
+        );
         // And the stored record stays failed and unbilled.
         let record = store.get(&id).unwrap();
         assert_eq!(record.status, JobStatus::Failed);
@@ -359,7 +398,11 @@ mod tests {
         let second = store.fail(&id, "second", false, 3_000).unwrap();
         match second {
             FailOutcome::AlreadyFailed(record) => {
-                assert_eq!(record.error.as_deref(), Some("first"), "first failure reason stands");
+                assert_eq!(
+                    record.error.as_deref(),
+                    Some("first"),
+                    "first failure reason stands"
+                );
                 assert!(record.retryable);
             }
             other => panic!("expected idempotent fail: {other:?}"),
@@ -384,7 +427,12 @@ mod tests {
 
     #[test]
     fn job_status_round_trips() {
-        for s in [JobStatus::Pending, JobStatus::Running, JobStatus::Completed, JobStatus::Failed] {
+        for s in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::Completed,
+            JobStatus::Failed,
+        ] {
             assert_eq!(JobStatus::parse(s.as_str()), Some(s));
         }
         assert_eq!(JobStatus::parse("bogus"), None);

@@ -117,6 +117,140 @@ pub async fn insert_user(
     Ok(user)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthIdentity {
+    pub id: i32,
+    pub user_id: i32,
+    pub provider: String,
+    pub provider_sub: String,
+    pub email: String,
+    pub created_at: i64,
+    pub last_login_at: Option<i64>,
+}
+
+pub async fn insert_oauth_user(
+    db: &D1Database,
+    email: &str,
+    display_name: &str,
+    email_verified: bool,
+    now: i64,
+) -> Result<User> {
+    let stmt = db.prepare(
+        "INSERT INTO users (email, password_hash, display_name, created_at, failed_login_attempts, email_verified, has_payment_method, tier, subscription_status)
+         VALUES (?1, '', ?2, ?3, 0, ?4, 0, 'free', 'none')
+         RETURNING *",
+    );
+    let verified_flag: i32 = if email_verified { 1 } else { 0 };
+    let stmt = stmt.bind(&[
+        js(&email)?,
+        js(&display_name)?,
+        js(&now)?,
+        js(&verified_flag)?,
+    ])?;
+    stmt.first::<User>(None)
+        .await?
+        .ok_or_else(|| AppError::Internal("oauth user insert returned no row".to_string()))
+}
+
+pub async fn find_oauth_identity(
+    db: &D1Database,
+    provider: &str,
+    provider_sub: &str,
+) -> Result<Option<OAuthIdentity>> {
+    let stmt =
+        db.prepare("SELECT * FROM oauth_identities WHERE provider = ?1 AND provider_sub = ?2");
+    let stmt = stmt.bind(&[js(&provider)?, js(&provider_sub)?])?;
+    Ok(stmt.first::<OAuthIdentity>(None).await?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuthAccountMetadata {
+    pub provider: String,
+    pub provider_sub: String,
+}
+
+const FIND_GOOGLE_ACCOUNT_METADATA_SQL: &str =
+    "SELECT provider, provider_sub FROM oauth_identities \
+     WHERE user_id = ?1 AND provider = 'google' ORDER BY id";
+
+fn valid_google_account_metadata(metadata: &OAuthAccountMetadata) -> bool {
+    !metadata.provider_sub.trim().is_empty()
+}
+
+pub async fn find_google_account_metadata(
+    db: &D1Database,
+    user_id: i32,
+) -> Result<Option<OAuthAccountMetadata>> {
+    let stmt = db.prepare(FIND_GOOGLE_ACCOUNT_METADATA_SQL);
+    let stmt = stmt.bind(&[js(&user_id)?])?;
+    let rows = stmt.all().await?;
+    let metadata: Vec<OAuthAccountMetadata> = rows.results()?;
+    Ok(metadata.into_iter().find(valid_google_account_metadata))
+}
+
+/// Links an identity, tolerating a concurrent duplicate link of the same
+/// `(provider, provider_sub)`: the partial unique index turns the loser of the
+/// race into a no-op insert, and the existing row is returned instead.
+pub async fn link_oauth_identity(
+    db: &D1Database,
+    user_id: i32,
+    provider: &str,
+    provider_sub: &str,
+    email: &str,
+    now: i64,
+) -> Result<OAuthIdentity> {
+    let stmt = db.prepare(
+        "INSERT INTO oauth_identities (user_id, provider, provider_sub, email, created_at, last_login_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+         ON CONFLICT(provider, provider_sub) DO NOTHING
+         RETURNING *",
+    );
+    let stmt = stmt.bind(&[
+        js(&user_id)?,
+        js(&provider)?,
+        js(&provider_sub)?,
+        js(&email)?,
+        js(&now)?,
+    ])?;
+    if let Some(identity) = stmt.first::<OAuthIdentity>(None).await? {
+        return Ok(identity);
+    }
+    find_oauth_identity(db, provider, provider_sub)
+        .await?
+        .ok_or_else(|| AppError::Internal("oauth identity vanished after conflict".to_string()))
+}
+
+pub async fn touch_oauth_identity(db: &D1Database, id: i32, now: i64) -> Result<()> {
+    let stmt = db.prepare("UPDATE oauth_identities SET last_login_at = ?2 WHERE id = ?1");
+    let stmt = stmt.bind(&[js(&id)?, js(&now)?])?;
+    stmt.run().await?;
+    Ok(())
+}
+
+pub async fn mark_email_verified(db: &D1Database, user_id: i32) -> Result<()> {
+    let stmt = db.prepare("UPDATE users SET email_verified = 1 WHERE id = ?1");
+    let stmt = stmt.bind(&[js(&user_id)?])?;
+    stmt.run().await?;
+    Ok(())
+}
+
+/// Claims a one-time OAuth nonce. `Ok(false)` means it was already used, so the
+/// caller must reject the id_token as a replay.
+pub async fn claim_oauth_nonce(db: &D1Database, nonce_hash: &[u8], now: i64) -> Result<bool> {
+    let stmt = db.prepare(
+        "INSERT INTO consumed_oauth_nonces (nonce_hash, consumed_at) VALUES (?1, ?2)
+         ON CONFLICT(nonce_hash) DO NOTHING
+         RETURNING consumed_at",
+    );
+    let stmt = stmt.bind(&[js(&nonce_hash)?, js(&now)?])?;
+    #[derive(Deserialize)]
+    struct ClaimRow {
+        #[allow(dead_code)]
+        consumed_at: i64,
+    }
+    Ok(stmt.first::<ClaimRow>(None).await?.is_some())
+}
+
 pub async fn update_user_login_state(
     db: &D1Database,
     id: i32,
@@ -279,6 +413,80 @@ pub async fn delete_device_and_sessions(db: &D1Database, device_id: i32) -> Resu
         .prepare("DELETE FROM devices WHERE id = ?1")
         .bind(&[js(&device_id)?])?;
     db.batch(vec![stmt1, stmt2]).await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountDeletionAction {
+    Delete,
+    Anonymize,
+    RetainUnlinked,
+}
+
+/// Complete schema inventory for account deletion. The three retained tables
+/// contain billing idempotency/refund or OAuth replay records but no user id,
+/// so they cannot be safely targeted and contain no relay account identifier.
+pub fn account_deletion_plan() -> &'static [(&'static str, AccountDeletionAction)] {
+    use AccountDeletionAction::{Anonymize, Delete, RetainUnlinked};
+    &[
+        ("messages", Delete),
+        ("snapshots", Delete),
+        ("room_meta", Delete),
+        ("room_ownership", Delete),
+        ("sessions", Delete),
+        ("oauth_identities", Delete),
+        ("consumed_bypass_tokens", Delete),
+        ("user_activity_days", Delete),
+        ("handoff_jobs", Delete),
+        ("credits", Delete),
+        ("devices", Delete),
+        ("waitlist_signups", Delete),
+        ("admin_audit", Anonymize),
+        ("users", Delete),
+        ("processed_events", RetainUnlinked),
+        ("order_refunds", RetainUnlinked),
+        ("consumed_oauth_nonces", RetainUnlinked),
+    ]
+}
+
+const DELETE_ACCOUNT_SQL: &str = "
+DELETE FROM messages WHERE room_id IN (SELECT room_id FROM room_ownership WHERE user_id = ?1 UNION SELECT room_id FROM devices WHERE user_id = ?1);
+DELETE FROM snapshots WHERE room_id IN (SELECT room_id FROM room_ownership WHERE user_id = ?1 UNION SELECT room_id FROM devices WHERE user_id = ?1);
+DELETE FROM room_meta WHERE room_id IN (SELECT room_id FROM room_ownership WHERE user_id = ?1 UNION SELECT room_id FROM devices WHERE user_id = ?1);
+DELETE FROM room_ownership WHERE user_id = ?1;
+DELETE FROM sessions WHERE user_id = ?1;
+DELETE FROM oauth_identities WHERE user_id = ?1;
+DELETE FROM consumed_bypass_tokens WHERE user_id = ?1;
+DELETE FROM user_activity_days WHERE user_id = ?1;
+DELETE FROM handoff_jobs WHERE user_id = ?1;
+DELETE FROM credits WHERE user_id = ?1;
+DELETE FROM devices WHERE user_id = ?1;
+DELETE FROM waitlist_signups WHERE lower(email) = lower(?2);
+UPDATE admin_audit SET target_user_id = 0 WHERE target_user_id = ?1;
+DELETE FROM users WHERE id = ?1;
+";
+
+/// Deletes account-linked service data in one D1 transaction. Admin audit rows
+/// are retained for operational accountability but detached to sentinel user id
+/// 0; their schema prohibits NULL and stores no email or other direct PII.
+pub async fn delete_account(db: &D1Database, user_id: i32, email: &str) -> Result<()> {
+    let mut statements = Vec::new();
+    for sql in DELETE_ACCOUNT_SQL
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let stmt = db.prepare(sql);
+        let stmt = if sql.contains("?2") {
+            stmt.bind(&[js(&user_id)?, js(&email)?])?
+        } else {
+            stmt.bind(&[js(&user_id)?])?
+        };
+        statements.push(stmt);
+    }
+    // D1 batch executes sequentially as one transaction and rolls the whole
+    // batch back if any statement fails.
+    db.batch(statements).await?;
     Ok(())
 }
 
@@ -926,6 +1134,265 @@ mod tests {
         assert_eq!(assigned_seq(1), 0);
         assert_eq!(assigned_seq(2), 1);
         assert_eq!(assigned_seq(100), 99);
+    }
+
+    #[test]
+    fn google_account_metadata_lookup_handles_present_absent_and_malformed_rows() {
+        use rusqlite::{params, Connection};
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0002_create_auth_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0021_add_oauth_identities.sql"
+        ))
+        .unwrap();
+        db.execute(
+            "INSERT INTO users (id, email, password_hash, display_name, created_at) \
+             VALUES (1, 'google@example.com', '', 'Google', 1), \
+                    (2, 'other@example.com', 'hash', 'Other', 1), \
+                    (3, 'malformed@example.com', '', 'Malformed', 1), \
+                    (4, 'password@example.com', 'hash', 'Password', 1), \
+                    (5, 'whitespace@example.com', '', 'Whitespace', 1), \
+                    (6, 'tab@example.com', '', 'Tab', 1), \
+                    (7, 'newline@example.com', '', 'Newline', 1), \
+                    (8, 'malformed-first@example.com', '', 'Malformed First', 1), \
+                    (9, 'multiple-valid@example.com', '', 'Multiple Valid', 1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO oauth_identities (user_id, provider, provider_sub, email, created_at) \
+             VALUES (1, 'google', 'canonical-sub', 'google@example.com', 1), \
+                    (2, 'github', 'other-sub', 'other@example.com', 1), \
+                    (3, 'google', '', 'malformed@example.com', 1), \
+                    (5, 'google', '   ', 'whitespace@example.com', 1), \
+                    (6, 'google', char(9), 'tab@example.com', 1), \
+                    (7, 'google', char(10), 'newline@example.com', 1), \
+                    (8, 'google', char(13), 'malformed-first@example.com', 1), \
+                    (8, 'google', 'valid-later-sub', 'malformed-first@example.com', 2), \
+                    (9, 'google', 'lowest-id-sub', 'multiple-valid@example.com', 1), \
+                    (9, 'google', 'higher-id-sub', 'multiple-valid@example.com', 2)",
+            [],
+        )
+        .unwrap();
+
+        let lookup = |user_id| {
+            let mut stmt = db.prepare(FIND_GOOGLE_ACCOUNT_METADATA_SQL).unwrap();
+            let found = stmt
+                .query_map(params![user_id], |row| {
+                    Ok(OAuthAccountMetadata {
+                        provider: row.get(0)?,
+                        provider_sub: row.get(1)?,
+                    })
+                })
+                .unwrap()
+                .map(std::result::Result::unwrap)
+                .find(valid_google_account_metadata);
+            found
+        };
+
+        assert_eq!(
+            lookup(1),
+            Some(OAuthAccountMetadata {
+                provider: "google".to_string(),
+                provider_sub: "canonical-sub".to_string(),
+            })
+        );
+        assert_eq!(lookup(2), None, "non-Google identities are not exposed");
+        assert_eq!(
+            lookup(3),
+            None,
+            "empty provider_sub is treated as malformed"
+        );
+        assert_eq!(lookup(4), None, "absent identities omit OAuth metadata");
+        assert_eq!(
+            lookup(5),
+            None,
+            "space-only provider_sub is treated as malformed"
+        );
+        assert_eq!(
+            lookup(6),
+            None,
+            "tab-only provider_sub is treated as malformed"
+        );
+        assert_eq!(
+            lookup(7),
+            None,
+            "newline-only provider_sub is treated as malformed"
+        );
+        assert_eq!(
+            lookup(8),
+            Some(OAuthAccountMetadata {
+                provider: "google".to_string(),
+                provider_sub: "valid-later-sub".to_string(),
+            }),
+            "a malformed older row must not hide a valid later identity"
+        );
+        assert_eq!(
+            lookup(9),
+            Some(OAuthAccountMetadata {
+                provider: "google".to_string(),
+                provider_sub: "lowest-id-sub".to_string(),
+            }),
+            "multiple valid identities choose the lowest id deterministically"
+        );
+    }
+
+    #[test]
+    fn account_deletion_removes_linked_service_data_and_only_retains_detached_audit_data() {
+        use rusqlite::{params, Connection};
+
+        let db = Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("../../migrations/0001_create_tables.sql"),
+            include_str!("../../migrations/0002_create_auth_tables.sql"),
+            include_str!("../../migrations/0003_add_billing.sql"),
+            include_str!("../../migrations/0004_add_email_verification.sql"),
+            include_str!("../../migrations/0005_add_consumed_bypass_tokens.sql"),
+            include_str!("../../migrations/0006_add_payg_credits.sql"),
+            include_str!("../../migrations/0007_add_has_payment_method.sql"),
+            include_str!("../../migrations/0008_add_waitlist_signups.sql"),
+            include_str!("../../migrations/0009_add_subscription_event_at.sql"),
+            include_str!("../../migrations/0010_create_snapshots.sql"),
+            include_str!("../../migrations/0011_create_room_ownership.sql"),
+            include_str!("../../migrations/0012_create_config_updates.sql"),
+            include_str!("../../migrations/0014_create_handoff_jobs.sql"),
+            include_str!("../../migrations/0015_create_admin_audit.sql"),
+            include_str!("../../migrations/0016_add_client_device_id.sql"),
+            include_str!("../../migrations/0017_config_updates_composite_pk.sql"),
+            include_str!("../../migrations/0018_create_user_activity_days.sql"),
+            include_str!("../../migrations/0019_drop_funnel_events.sql"),
+            include_str!("../../migrations/0020_create_order_refunds.sql"),
+            include_str!("../../migrations/0021_add_oauth_identities.sql"),
+        ] {
+            db.execute_batch(migration).unwrap();
+        }
+
+        db.execute("INSERT INTO users (id,email,password_hash,display_name,created_at) VALUES (1,?1,'hash','Delete',1),(2,'keep@example.com','hash','Keep',1)", ["delete@example.com"]).unwrap();
+        db.execute("INSERT INTO devices (id,user_id,name,device_type,room_id,created_at) VALUES (10,1,'d','desktop','delete-room',1),(20,2,'d','desktop','keep-room',1)", []).unwrap();
+        db.execute("INSERT INTO sessions (user_id,device_id,token_hash,refresh_hash,expires_at,refresh_expires_at,created_at) VALUES (1,10,x'01',x'02',9,9,1),(2,20,x'03',x'04',9,9,1)", []).unwrap();
+        db.execute(
+            "INSERT INTO room_ownership VALUES ('delete-room',1,1),('keep-room',2,1)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO messages (room_id,seq,blob,created_at) VALUES ('delete-room',0,x'01',1),('keep-room',0,x'02',1)", []).unwrap();
+        db.execute(
+            "INSERT INTO room_meta VALUES ('delete-room',1,1,1),('keep-room',1,1,1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO snapshots VALUES ('delete-room',1,1,10,x'01'),('keep-room',1,1,20,x'02')",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO oauth_identities (user_id,provider,provider_sub,email,created_at) VALUES (1,'google','delete-sub','delete@example.com',1),(2,'google','keep-sub','keep@example.com',1)", []).unwrap();
+        db.execute(
+            "INSERT INTO consumed_bypass_tokens VALUES (x'01',1,1),(x'02',2,1)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO user_activity_days VALUES (1,1),(2,1)", [])
+            .unwrap();
+        db.execute("INSERT INTO handoff_jobs (id,user_id,job_type,created_at,updated_at) VALUES ('delete-job',1,'research',1,1),('keep-job',2,'research',1,1)", []).unwrap();
+        db.execute("INSERT INTO credits (user_id,balance_usd,lifetime_purchased_usd,created_at,updated_at) VALUES (1,5,5,1,1),(2,5,5,1,1)", []).unwrap();
+        db.execute("INSERT INTO waitlist_signups (email,ip_hash,created_at) VALUES ('delete@example.com','x',1),('keep@example.com','y',1)", []).unwrap();
+        db.execute("INSERT INTO admin_audit (action,target_user_id,reason,created_at) VALUES ('set_credit_balance',1,'retained detached',1),('set_credit_balance',2,'keep',1)", []).unwrap();
+        db.execute(
+            "INSERT INTO processed_events VALUES ('billing-event',1)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO order_refunds VALUES ('order-1',100,1)", [])
+            .unwrap();
+        db.execute("INSERT INTO consumed_oauth_nonces VALUES (x'09',1)", [])
+            .unwrap();
+
+        let tx = db.unchecked_transaction().unwrap();
+        for sql in DELETE_ACCOUNT_SQL
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if sql.contains("?2") {
+                tx.execute(sql, params![1, "delete@example.com"]).unwrap();
+            } else {
+                tx.execute(sql, [1]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+
+        for table in [
+            "users",
+            "devices",
+            "sessions",
+            "room_ownership",
+            "messages",
+            "room_meta",
+            "snapshots",
+            "oauth_identities",
+            "consumed_bypass_tokens",
+            "user_activity_days",
+            "handoff_jobs",
+            "credits",
+        ] {
+            let remaining: i64 = db
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                remaining, 1,
+                "{table} should retain only the other user's row"
+            );
+        }
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM waitlist_signups WHERE lower(email)=lower('delete@example.com')", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM admin_audit WHERE target_user_id=0",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        for table in ["processed_events", "order_refunds", "consumed_oauth_nonces"] {
+            let retained: i64 = db
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                retained, 1,
+                "{table} is retained because it has no account identifier"
+            );
+        }
+
+        use AccountDeletionAction::{Anonymize, Delete, RetainUnlinked};
+        assert_eq!(
+            account_deletion_plan(),
+            &[
+                ("messages", Delete),
+                ("snapshots", Delete),
+                ("room_meta", Delete),
+                ("room_ownership", Delete),
+                ("sessions", Delete),
+                ("oauth_identities", Delete),
+                ("consumed_bypass_tokens", Delete),
+                ("user_activity_days", Delete),
+                ("handoff_jobs", Delete),
+                ("credits", Delete),
+                ("devices", Delete),
+                ("waitlist_signups", Delete),
+                ("admin_audit", Anonymize),
+                ("users", Delete),
+                ("processed_events", RetainUnlinked),
+                ("order_refunds", RetainUnlinked),
+                ("consumed_oauth_nonces", RetainUnlinked)
+            ]
+        );
     }
 
     #[test]

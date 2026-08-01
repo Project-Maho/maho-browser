@@ -68,6 +68,18 @@ else
   echo "  SKIP  auth signup tests on production (OPEN_REGISTRATION=false)"
 fi
 
+RES=$(curl -sw '\n%{http_code}' -X POST "$BASE/auth/oauth/google" \
+  -H 'Content-Type: application/json' \
+  -d '{"id_token":"not-a-jwt","nonce":"n"}')
+CODE=$(echo "$RES" | tail -1)
+check "401" "$CODE" "POST /auth/oauth/google rejects a malformed id_token"
+
+RES=$(curl -sw '\n%{http_code}' -X POST "$BASE/auth/oauth/google" \
+  -H 'Content-Type: application/json' \
+  -d '{"id_token":"","nonce":"n"}')
+CODE=$(echo "$RES" | tail -1)
+check "400" "$CODE" "POST /auth/oauth/google rejects an empty id_token"
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

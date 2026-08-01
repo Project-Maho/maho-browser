@@ -29,7 +29,9 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let room_id = auth.device.room_id.clone();
     match db::get_room_owner_user_id(&db, &room_id).await? {
         Some(owner) if owner != auth.user.id => {
-            return Err(AppError::Unauthorized("room_owned_by_another_user".to_string()));
+            return Err(AppError::Unauthorized(
+                "room_owned_by_another_user".to_string(),
+            ));
         }
         Some(_) => {}
         None => {
@@ -93,7 +95,8 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
         return Err(AppError::Conflict("snapshot_not_newer".to_string()));
     }
 
-    let _ = db::touch_session_and_device(&db, auth.user.id, auth.session.id, auth.device.id, now).await;
+    let _ =
+        db::touch_session_and_device(&db, auth.user.id, auth.session.id, auth.device.id, now).await;
 
     Response::ok("")
         .map(|r| r.with_status(200))

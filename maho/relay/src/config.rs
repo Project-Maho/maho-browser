@@ -9,6 +9,7 @@ pub struct RelayConfig {
     pub max_message_size_bytes: usize,
     pub max_connections_per_room: u32,
     pub retention_days: u32,
+    pub google_oauth_allowed_auds: Vec<String>,
 }
 
 impl RelayConfig {
@@ -53,6 +54,11 @@ impl RelayConfig {
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(30);
 
+        let google_oauth_allowed_auds = env
+            .var("GOOGLE_OAUTH_ALLOWED_AUDS")
+            .map(|v| crate::auth::google::parse_audiences(&v.to_string()))
+            .unwrap_or_default();
+
         Self {
             require_auth,
             open_registration,
@@ -61,6 +67,7 @@ impl RelayConfig {
             max_message_size_bytes,
             max_connections_per_room,
             retention_days,
+            google_oauth_allowed_auds,
         }
     }
 }
