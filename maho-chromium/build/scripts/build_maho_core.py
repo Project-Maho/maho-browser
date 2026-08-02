@@ -13,6 +13,18 @@ import importlib.util
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _MAHO_SCRIPTS_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..', 'maho', 'scripts'))
+_DEFAULT_GOOGLE_CLIENT_ID = (
+    '650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com'
+)
+
+
+def mail_oauth_build_env():
+    cargo_env = os.environ.copy()
+    google_client_id = cargo_env.get(
+        'MAHO_GOOGLE_CLIENT_ID', _DEFAULT_GOOGLE_CLIENT_ID)
+    cargo_env.setdefault('MAHO_GOOGLE_CLIENT_ID', google_client_id)
+    cargo_env.setdefault('GMAIL_CLIENT_ID', google_client_id)
+    return cargo_env
 
 
 def load_build_lock():
@@ -31,6 +43,16 @@ WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
 MAHO_ROOT = os.path.join(WORKSPACE_ROOT, 'maho')
 MAHO_CHROMIUM_ROOT = os.path.join(WORKSPACE_ROOT, 'maho-chromium')
 PREBUILT_DIR = os.path.join(MAHO_CHROMIUM_ROOT, 'third_party', 'maho', 'prebuilt')
+
+
+def _atomic_place_lib(src_lib, dst_lib):
+    # Atomic install: a concurrent build's linker must never read a half-written
+    # lib. Copy to a temp, ranlib the temp, then os.replace (atomic rename).
+    tmp = dst_lib + '.tmp'
+    shutil.copy2(src_lib, tmp)
+    if sys.platform == 'darwin':
+        subprocess.run(['ranlib', '-c', tmp], check=True)
+    os.replace(tmp, dst_lib)
 
 
 def get_target_triple(target=None):
@@ -64,32 +86,34 @@ def get_target_triple(target=None):
 
 
 def build_stt_ffi_prebuilt(rust_target, cpu_dir):
-    """Build the standalone maho-stt-ffi static lib and copy it to prebuilt/.
+    """Build the maho-stt-ffi static lib and copy it to prebuilt/.
 
-    maho-stt-ffi is its own cargo workspace (not a member of maho/), so it is
-    built from its crate dir rather than via `-p` from MAHO_ROOT.
+    maho-stt-ffi is a member of the maho/ workspace, so it shares one Rust
+    runtime with maho-ffi. Building it standalone would embed a second copy and
+    the two staticlibs would then define the same std symbols (Arc::drop_slow,
+    thread-local shims, __rust_no_alloc_shim_is_unstable), which lld-link
+    rejects when linking chrome.dll.
     """
     lib_name = 'maho_stt_ffi.lib' if sys.platform == 'win32' else 'libmaho_stt_ffi.a'
-    crate_dir = os.path.join(MAHO_ROOT, 'crates', 'maho-stt-ffi')
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     print(f'Building maho-stt-ffi for {rust_target}...')
     subprocess.run(
-        ['cargo', 'build', '--release', '--target', rust_target],
-        cwd=crate_dir,
+        ['cargo', 'build', '--release', '--target', rust_target,
+         '-p', 'maho-stt-ffi'],
+        cwd=MAHO_ROOT,
         check=True,
     )
 
-    src_lib = os.path.join(crate_dir, 'target', rust_target, 'release', lib_name)
+    release_dir = os.path.join(MAHO_ROOT, 'target', rust_target, 'release')
+    src_lib = os.path.join(release_dir, lib_name)
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
-    if 'windows' in rust_target:
-        privatize_windows_lib(src_lib, os.path.dirname(src_lib), 'mahostt')
-    shutil.copy2(src_lib, dst_lib)
-    if sys.platform == 'darwin':
-        subprocess.run(['ranlib', '-c', dst_lib], check=True)
+    if 'windows' in rust_target or 'linux' in rust_target:
+        privatize_rust_staticlib(src_lib, release_dir, 'mahostt')
+    _atomic_place_lib(src_lib, dst_lib)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -105,6 +129,10 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
     lib_name = 'maho_mail_ffi.lib' if sys.platform == 'win32' else 'libmaho_mail_ffi.a'
     crate_dir = os.path.join(MAHO_ROOT, 'mail-core')
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
+
+    if not os.path.isdir(crate_dir):
+        print(f'Skipping maho-mail-ffi: {crate_dir} not found (Mail deferred)')
+        return
     os.makedirs(output_dir, exist_ok=True)
 
     print(f'Building maho-mail-ffi for {rust_target}...')
@@ -112,17 +140,16 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
         ['cargo', 'build', '--release', '--target', rust_target],
         cwd=crate_dir,
         check=True,
+        env=mail_oauth_build_env(),
     )
 
     src_lib = os.path.join(crate_dir, 'target', rust_target, 'release', lib_name)
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
-    if 'windows' in rust_target:
-        privatize_windows_lib(src_lib, os.path.dirname(src_lib), 'mahomail')
-    shutil.copy2(src_lib, dst_lib)
-    if sys.platform == 'darwin':
-        subprocess.run(['ranlib', '-c', dst_lib], check=True)
+    if 'windows' in rust_target or 'linux' in rust_target:
+        privatize_rust_staticlib(src_lib, os.path.dirname(src_lib), 'mahomail')
+    _atomic_place_lib(src_lib, dst_lib)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -134,7 +161,7 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
         print(f'Copied {src_header} -> {dst_header}')
 
 
-def _find_llvm_tools():
+def _find_llvm_tools() -> tuple[str, str, str]:
     """Locate llvm-nm/llvm-ar/llvm-objcopy from an installed rustup toolchain
     (the llvm-tools component ships them under a toolchain's sysroot).
 
@@ -160,8 +187,20 @@ def _find_llvm_tools():
     for base in bases:
         tools = [os.path.join(base, n + exe) for n in names]
         if all(os.path.exists(p) for p in tools):
-            return tuple(tools)
-    sys.exit('Windows symbol privatization needs llvm-nm/llvm-ar/llvm-objcopy; '
+            return tools[0], tools[1], tools[2]
+    chromium_llvm = os.path.join(
+        WORKSPACE_ROOT, 'chromium', 'src', 'third_party', 'llvm-build',
+        'Release+Asserts', 'bin')
+    tools = [os.path.join(chromium_llvm, name) for name in names]
+    if all(os.path.exists(path) for path in tools):
+        return tools[0], tools[1], tools[2]
+    if sys.platform.startswith('linux'):
+        nm = shutil.which('nm')
+        ar = shutil.which('ar')
+        objcopy = shutil.which('objcopy')
+        if nm and ar and objcopy:
+            return nm, ar, objcopy
+    sys.exit('Rust staticlib privatization needs llvm-nm/llvm-ar/llvm-objcopy; '
              'install the rustup llvm-tools component: rustup component add llvm-tools')
 
 
@@ -180,20 +219,44 @@ def _defined_extern_symbols(nm, libs):
     return syms
 
 
-def privatize_windows_lib(lib_path, release_dir, prefix):
-    """Rename this Rust staticlib's bundled vendored-OpenSSL symbols and its
-    Rust runtime symbols to a per-lib private prefix.
+def _is_private_rust_runtime_symbol(symbol):
+    """True when this defined symbol is a bundled Rust runtime copy.
 
-    A Rust staticlib bundles the native static libs it links (here SQLCipher's
-    vendored OpenSSL) plus a full copy of the Rust runtime. When several such
-    libs are linked into chrome.dll alongside Chromium's BoringSSL and its own
-    Rust std, the shared symbol names (EVP_*/SHA*/HMAC*/AES_*/bn_*/vpaes_* and
-    rust_eh_personality / the ___rustc allocator+panic namespace) collide
-    (LNK2005). objcopy --redefine-syms renames both definitions and references
-    consistently within each object, so the crypto/runtime stays self-contained
-    while no longer clashing at the final link. Undefined allocator entry points
-    (___rust_alloc etc.) are left alone so they still resolve to Chromium's
+    Each Rust staticlib embeds its own std/alloc/core, so linking two of them
+    into chrome.dll makes these definitions collide (LNK2005). Renaming them
+    per-lib keeps each runtime self-contained. `___rust_alloc` and friends stay
+    untouched: those are *undefined* here and must still bind to Chromium's
     shared PartitionAlloc shim.
+    """
+    if symbol == 'rust_eh_personality' or '___rustc' in symbol:
+        return True
+    # Matched anywhere in the name, not as a prefix: the alloc shim flag also
+    # appears as a dllimport thunk (`__imp___rust_no_alloc_shim_is_unstable`).
+    if 'rust_no_alloc_shim' in symbol:
+        return True
+    # Monomorphized generics, trait impls and thread-local shims all carry the
+    # defining crate path in the mangled name, either as `core::` / `_ZN4core`
+    # or, for `impl` blocks, mangled inside the symbol as `core..` after a
+    # leading `_$LT$` (`<`). The alloc shim entry points match none of these.
+    # rustc_demangle / addr2line / gimli / miniz_oxide are pulled in by std's
+    # backtrace support, so they ship inside the bundled runtime too.
+    return any(marker in symbol for marker in (
+        'std::', 'core::', 'alloc::',
+        'std..', 'core..', 'alloc..',
+        '_ZN3std', '_ZN4core', '_ZN5alloc',
+        'rustc_demangle', 'addr2line', 'gimli', 'miniz_oxide',
+        'panic_unwind', 'unwind::', 'object::',
+    ))
+
+
+def privatize_rust_staticlib(lib_path, release_dir, prefix):
+    """Rename embedded Rust runtime symbols to a per-library private prefix.
+
+    Rust staticlibs bundle a full runtime. Chromium also links Rust std, so
+    symbols such as `rust_eh_personality` collide at the final link. objcopy
+    rewrites definitions and references within each member consistently.
+    Windows additionally privatizes bundled OpenSSL symbols, while Linux only
+    requires the Rust runtime rewrite.
     """
     nm, ar, objcopy = _find_llvm_tools()
     ossl_libs = (
@@ -203,7 +266,7 @@ def privatize_windows_lib(lib_path, release_dir, prefix):
                                  '**', 'libssl.lib'), recursive=True))
     rename = {s: f'{prefix}_{s}' for s in _defined_extern_symbols(nm, ossl_libs)}
     for s in _defined_extern_symbols(nm, [lib_path]):
-        if s == 'rust_eh_personality' or '___rustc' in s:
+        if _is_private_rust_runtime_symbol(s):
             rename[s] = f'{prefix}_{s}'
     if not rename:
         return
@@ -224,10 +287,9 @@ def privatize_windows_lib(lib_path, release_dir, prefix):
                 if not n.lower().endswith('.dll')]
         done = []
         for o in objs:
-            r = subprocess.run([objcopy, f'--redefine-syms={map_path}', o],
-                               capture_output=True, text=True)
-            if r.returncode == 0:
-                done.append(o)
+            subprocess.run([objcopy, f'--redefine-syms={map_path}', o],
+                           check=True, capture_output=True, text=True)
+            done.append(o)
         for i in range(0, len(done), 200):
             subprocess.run([ar, 'r', lib_path] + done[i:i + 200],
                            check=True, capture_output=True)
@@ -237,13 +299,46 @@ def privatize_windows_lib(lib_path, release_dir, prefix):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def build_rust_prebuilt(target=None):
+def build_rust_prebuilt(target=None, incremental=False):
     rust_target, cpu_dir, lib_name = get_target_triple(target)
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     print(f'Building maho-core for {rust_target}...')
     cargo_env = os.environ.copy()
+    # Google Sign-In client id, read by maho-core via option_env!. Public
+    # identifier, not a secret; unset simply leaves Google sign-in unconfigured
+    # (resolve_client_id then errors instead of building a bad auth URL).
+    cargo_env.setdefault('MAHO_GOOGLE_CLIENT_ID',
+                         _DEFAULT_GOOGLE_CLIENT_ID)
+    linux_sysroots = {
+        'x86_64-unknown-linux-gnu': 'debian_bullseye_amd64-sysroot',
+        'aarch64-unknown-linux-gnu': 'debian_bullseye_arm64-sysroot',
+    }
+    if rust_target in linux_sysroots:
+        chromium_src = os.path.join(WORKSPACE_ROOT, 'chromium', 'src')
+        clang = os.path.join(
+            chromium_src, 'third_party', 'llvm-build', 'Release+Asserts',
+            'bin', 'clang')
+        sysroot = os.path.join(
+            chromium_src, 'build', 'linux', linux_sysroots[rust_target])
+        target_env = rust_target.replace('-', '_')
+        cargo_env[f'CC_{target_env}'] = clang
+        existing_cflags = cargo_env.get(f'CFLAGS_{target_env}', '')
+        cargo_env[f'CFLAGS_{target_env}'] = ' '.join(filter(None, (
+            existing_cflags,
+            f'--target={rust_target}',
+            f'--sysroot={sysroot}',
+        )))
+    if incremental:
+        # Local dev only. maho/.cargo/config.toml disables cargo's incremental
+        # compilation so the sccache rustc-wrapper can cache units, but that
+        # cache measures 1.21% hits (9 of 745), so the trade is a loss for the
+        # edit-rebuild loop. Release builds keep the non-incremental path:
+        # incremental widens codegen-unit boundaries and costs cross-CGU
+        # optimization in the lib that ships linked into the browser.
+        cargo_env['CARGO_INCREMENTAL'] = '1'
+        cargo_env['RUSTC_WRAPPER'] = ''  # empty overrides the config wrapper
     if 'windows' in rust_target:
         win32_syms = [
             'sqlite3_win32_is_nt', 'sqlite3_win32_sleep',
@@ -275,12 +370,10 @@ def build_rust_prebuilt(target=None):
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
 
-    if 'windows' in rust_target:
-        privatize_windows_lib(src_lib, os.path.dirname(src_lib), 'mahoffi')
+    if 'windows' in rust_target or 'linux' in rust_target:
+        privatize_rust_staticlib(src_lib, os.path.dirname(src_lib), 'mahoffi')
 
-    shutil.copy2(src_lib, dst_lib)
-    if sys.platform == 'darwin':
-        subprocess.run(['ranlib', '-c', dst_lib], check=True)
+    _atomic_place_lib(src_lib, dst_lib)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -363,10 +456,21 @@ def build_rust_prebuilt(target=None):
 def main():
     parser = argparse.ArgumentParser(description='Build maho-core Rust static library.')
     parser.add_argument('--target', help='Explicit Rust target triple for cross-compilation.')
+    parser.add_argument('--mail-only', action='store_true',
+                        help='Build only the standalone Mail FFI prebuilt.')
     args = parser.parse_args()
 
     with build_lock():
-        build_rust_prebuilt(args.target)
+        run_build(args.target, args.mail_only)
+
+
+def run_build(target, mail_only):
+    if not mail_only:
+        build_rust_prebuilt(target)
+        return
+
+    rust_target, cpu_dir, _ = get_target_triple(target)
+    build_mail_ffi_prebuilt(rust_target, cpu_dir)
 
 
 if __name__ == '__main__':
