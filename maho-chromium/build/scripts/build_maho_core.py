@@ -45,14 +45,21 @@ MAHO_CHROMIUM_ROOT = os.path.join(WORKSPACE_ROOT, 'maho-chromium')
 PREBUILT_DIR = os.path.join(MAHO_CHROMIUM_ROOT, 'third_party', 'maho', 'prebuilt')
 
 
-def _atomic_place_lib(src_lib, dst_lib):
+def _atomic_place_lib(src_lib, dst_lib, release_dir=None, private_prefix=None):
     # Atomic install: a concurrent build's linker must never read a half-written
     # lib. Copy to a temp, ranlib the temp, then os.replace (atomic rename).
     tmp = dst_lib + '.tmp'
-    shutil.copy2(src_lib, tmp)
-    if sys.platform == 'darwin':
-        subprocess.run(['ranlib', '-c', tmp], check=True)
-    os.replace(tmp, dst_lib)
+    try:
+        shutil.copy2(src_lib, tmp)
+        if private_prefix:
+            privatize_rust_staticlib(tmp, release_dir, private_prefix)
+        if sys.platform == 'darwin':
+            subprocess.run(['ranlib', '-c', tmp], check=True)
+        os.replace(tmp, dst_lib)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def get_target_triple(target=None):
@@ -111,9 +118,9 @@ def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
-    if 'windows' in rust_target or 'linux' in rust_target:
-        privatize_rust_staticlib(src_lib, release_dir, 'mahostt')
-    _atomic_place_lib(src_lib, dst_lib)
+    _atomic_place_lib(
+        src_lib, dst_lib, release_dir,
+        'mahostt' if 'windows' in rust_target or 'linux' in rust_target else None)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -147,9 +154,9 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
-    if 'windows' in rust_target or 'linux' in rust_target:
-        privatize_rust_staticlib(src_lib, os.path.dirname(src_lib), 'mahomail')
-    _atomic_place_lib(src_lib, dst_lib)
+    _atomic_place_lib(
+        src_lib, dst_lib, os.path.dirname(src_lib),
+        'mahomail' if 'windows' in rust_target or 'linux' in rust_target else None)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -280,11 +287,8 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
         extdir = os.path.join(workdir, 'ext')
         os.makedirs(extdir)
         subprocess.run([ar, 'x', lib_path], cwd=extdir, check=True)
-        # Only real object members (unique names) are rewritten and spliced
-        # back; system import stubs (*.dll, duplicate-named) are left untouched
-        # in lib_path.
         objs = [os.path.join(extdir, n) for n in os.listdir(extdir)
-                if not n.lower().endswith('.dll')]
+                if n.lower().endswith(('.o', '.obj'))]
         done = []
         for o in objs:
             subprocess.run([objcopy, f'--redefine-syms={map_path}', o],
@@ -370,10 +374,9 @@ def build_rust_prebuilt(target=None, incremental=False):
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
 
-    if 'windows' in rust_target or 'linux' in rust_target:
-        privatize_rust_staticlib(src_lib, os.path.dirname(src_lib), 'mahoffi')
-
-    _atomic_place_lib(src_lib, dst_lib)
+    _atomic_place_lib(
+        src_lib, dst_lib, os.path.dirname(src_lib),
+        'mahoffi' if 'windows' in rust_target or 'linux' in rust_target else None)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 

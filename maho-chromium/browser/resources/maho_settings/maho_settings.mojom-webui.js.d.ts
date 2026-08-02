@@ -439,6 +439,8 @@ export class PageHandlerRemote {
   };
   getSettings(): Promise<{settings: SettingValue[]}>;
   setSetting(key: string, value: string): Promise<{success: boolean}>;
+  getSearchEngines(): Promise<{engines: SearchEngineInfo[]}>;
+  setDefaultSearchEngine(keyword: string): Promise<{success: boolean}>;
   getBrowserVersionInfo(): Promise<{info: BrowserVersionInfo}>;
   checkForBrowserUpdates(): Promise<void>;
   applyBrowserUpdateAndRestart(): Promise<void>;
