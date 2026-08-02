@@ -22,10 +22,6 @@
 
 class Browser;
 
-namespace views {
-class ImageButton;
-}
-
 namespace maho {
 
 class MahoSidebarNowPlayingView;
@@ -114,7 +110,6 @@ class MahoSidebarContainerView : public views::View,
   void OnPanelExpandedChanged();
   void OnSidebarWidthChanged();
   void ApplyPanelState();
-  void UpdateCollapsedExpandButtonBounds();
   // Private/OTR: read/write in-memory state, never sidebar prefs. Regular:
   // delegate to PrefService (byte-identical to prior behavior).
   bool ReadPanelExpanded() const;
@@ -143,7 +138,6 @@ class MahoSidebarContainerView : public views::View,
 
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> sidebar_view_ = nullptr;
-  raw_ptr<views::ImageButton> collapsed_expand_button_ = nullptr;
   raw_ptr<views::View> resize_handle_view_ = nullptr;
   raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
   PrefChangeRegistrar pref_registrar_;

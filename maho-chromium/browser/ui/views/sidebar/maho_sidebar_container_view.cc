@@ -19,21 +19,15 @@
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
-#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
 #include "maho_sidebar_now_playing_view.h"
-#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/display/screen.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/events/event.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/resize_area.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
-#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
@@ -102,34 +96,6 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
   reveal_animation_.SetTweenType(gfx::Tween::EASE_OUT);
 
   sidebar_view_ = AddChildView(std::make_unique<MahoSidebarView>(browser));
-  const MahoSidebarPalette& palette =
-      static_cast<MahoSidebarView*>(sidebar_view_)->sidebar_palette();
-  auto expand_button = views::CreateVectorImageButtonWithNativeTheme(
-      base::BindRepeating(
-          [](base::WeakPtr<MahoSidebarContainerView> container,
-             const ui::Event&) {
-            if (container) {
-              container->TogglePanelExpanded();
-            }
-      },
-      weak_factory_.GetWeakPtr()),
-      maho_lucide_icons::kPanelLeftIcon,
-      sidebar_layout::kTopBarIconSizeDp, palette.neutral_glyph,
-      palette.primary_text, palette.primary_text);
-  expand_button->SetTooltipText(u"Expand Sidebar");
-  expand_button->SetAccessibleName(u"Expand Sidebar");
-  expand_button->GetViewAccessibility().AddAction(
-      ax::mojom::Action::kDoDefault);
-  expand_button->GetViewAccessibility().SetDefaultActionVerb(
-      ax::mojom::DefaultActionVerb::kClick);
-  expand_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
-  expand_button->SetRequestFocusOnPress(false);
-  expand_button->SetPreferredSize(
-      gfx::Size(sidebar_layout::kTopBarButtonSizeDp,
-                sidebar_layout::kTopBarButtonSizeDp));
-  expand_button->SetProperty(views::kViewIgnoredByLayoutKey, true);
-  views::InstallCircleHighlightPathGenerator(expand_button.get());
-  collapsed_expand_button_ = AddChildView(std::move(expand_button));
   resize_handle_view_ = AddChildView(std::make_unique<views::ResizeArea>(this));
 
   is_private_ = browser->profile()->IsIncognitoProfile() &&
@@ -208,20 +174,7 @@ void MahoSidebarContainerView::OnThemeChanged() {
 
 void MahoSidebarContainerView::Layout(PassKey) {
   LayoutSuperclass<views::View>(this);
-  UpdateCollapsedExpandButtonBounds();
   UpdateResizeHandleBounds();
-}
-
-void MahoSidebarContainerView::UpdateCollapsedExpandButtonBounds() {
-  if (!collapsed_expand_button_) {
-    return;
-  }
-  const int button_size = sidebar_layout::kTopBarButtonSizeDp;
-  const int x = std::max(0, (width() - button_size) / 2);
-  const int y = sidebar_layout::kRailInsetTopDp +
-                sidebar_layout::kTopBarTrafficLightAlignmentHeightDp +
-                sidebar_layout::kSectionSpacingDp;
-  collapsed_expand_button_->SetBounds(x, y, button_size, button_size);
 }
 
 void MahoSidebarContainerView::UpdateResizeHandleBounds() {
@@ -310,8 +263,6 @@ void MahoSidebarContainerView::OnSidebarWidthChanged() {
 void MahoSidebarContainerView::ApplyPanelState() {
   const bool pinned = ReadPanelExpanded();
   const bool was_pinned = was_panel_expanded_;
-
-  collapsed_expand_button_->SetVisible(!pinned);
 
   if (pinned) {
     reveal_animation_.Reset(1.0);
