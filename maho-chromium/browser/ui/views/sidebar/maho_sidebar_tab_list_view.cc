@@ -901,6 +901,17 @@ bool IsSidebarEligibleUrl(const GURL& url) {
   return true;
 }
 
+void FilterSidebarIneligibleTabs(std::vector<SidebarTreeNode>* nodes) {
+  CHECK(nodes);
+  std::erase_if(*nodes, [](SidebarTreeNode& node) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      return !node.url.empty() && !IsSidebarEligibleUrl(GURL(node.url));
+    }
+    FilterSidebarIneligibleTabs(&node.children);
+    return node.kind == SidebarNodeKind::kSplitGroup && node.children.empty();
+  });
+}
+
 const GURL& GetVisibleOrCommittedSidebarUrl(content::WebContents* contents) {
   CHECK(contents);
   return contents->GetVisibleURL().is_empty() ? contents->GetLastCommittedURL()
@@ -5472,6 +5483,11 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
         BuildLiveStripFallbackTabListModel(browser, active_space_id_);
     effective_model = &fallback_model;
   }
+
+  MahoSidebarTabListModel filtered_model = *effective_model;
+  FilterSidebarIneligibleTabs(&filtered_model.pinned_tree);
+  FilterSidebarIneligibleTabs(&filtered_model.normal_tree);
+  effective_model = &filtered_model;
 
   MahoSidebarTabListModel private_model;
   if (private_mode_) {

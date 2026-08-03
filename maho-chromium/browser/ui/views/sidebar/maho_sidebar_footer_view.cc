@@ -126,19 +126,54 @@ class MahoFooterIconButton : public views::MdTextButton {
     UpdateHoverBackground();
   }
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette,
+                         const gfx::VectorIcon& icon) {
+    palette_ = palette;
+    icon_ = &icon;
+    UpdateIcon();
+    UpdateHoverBackground();
+  }
+
  private:
+  void UpdateIcon() {
+    if (!icon_) {
+      return;
+    }
+    const SkColor color = palette_.neutral_glyph != SK_ColorTRANSPARENT
+                              ? palette_.neutral_glyph
+                              : SK_ColorTRANSPARENT;
+    if (color != SK_ColorTRANSPARENT) {
+      SetImageModel(views::Button::STATE_NORMAL,
+                    ui::ImageModel::FromVectorIcon(*icon_, color,
+                                                   kFooterButtonIconSize));
+    }
+  }
+
   void UpdateHoverBackground() {
     const ButtonState state = GetState();
     if (state == STATE_PRESSED) {
-      SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorTabRowActiveBackground, kFooterControlCornerRadius));
+      if (palette_.row_active != SK_ColorTRANSPARENT) {
+        SetBackground(views::CreateRoundedRectBackground(
+            palette_.row_active, kFooterControlCornerRadius));
+      } else {
+        SetBackground(views::CreateRoundedRectBackground(
+            kMahoColorTabRowActiveBackground, kFooterControlCornerRadius));
+      }
     } else if (state == STATE_HOVERED) {
-      SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorTabRowHoverBackground, kFooterControlCornerRadius));
+      if (palette_.row_hover != SK_ColorTRANSPARENT) {
+        SetBackground(views::CreateRoundedRectBackground(
+            palette_.row_hover, kFooterControlCornerRadius));
+      } else {
+        SetBackground(views::CreateRoundedRectBackground(
+            kMahoColorTabRowHoverBackground, kFooterControlCornerRadius));
+      }
     } else {
       SetBackground(nullptr);
     }
   }
+
+  MahoSidebarPalette palette_;
+  raw_ptr<const gfx::VectorIcon> icon_ = nullptr;
 };
 
 BEGIN_METADATA(MahoFooterIconButton)
@@ -290,14 +325,6 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
   update_pill_label_->SetTextStyle(views::style::STYLE_BODY_5);
   update_pill_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
-  footer_separator_ = AddChildView(std::make_unique<views::View>());
-  footer_separator_->SetPreferredSize(gfx::Size(0, 1));
-  footer_separator_->SetProperty(views::kMarginsKey,
-                                 gfx::Insets::TLBR(0, 8, 0, 8));
-  footer_separator_->SetBackground(
-      views::CreateSolidBackground(kMahoColorFooterDivider));
-  footer_separator_->SetBorder(nullptr);
-
   footer_region_ = AddChildView(std::make_unique<views::View>());
   auto* footer_row_layout =
       footer_region_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -379,6 +406,21 @@ MahoSidebarFooterView::~MahoSidebarFooterView() {
 
 void MahoSidebarFooterView::RefreshPreferredSize() {
   PreferredSizeChanged();
+}
+
+void MahoSidebarFooterView::OnSidebarPaletteChanged(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  UpdateFooterChromeAppearance();
+  UpdateFadeMask();
+  if (!dot_container_) {
+    return;
+  }
+  for (views::View* child : dot_container_->children()) {
+    if (auto* dot = views::AsViewClass<MahoSidebarSpaceDotView>(child)) {
+      dot->SetSidebarPalette(palette_);
+    }
+  }
 }
 
 void MahoSidebarFooterView::Update(const MahoSidebarFooterModel& model) {
@@ -602,6 +644,7 @@ void MahoSidebarFooterView::RebuildDots(
 
     auto dot = std::make_unique<MahoSidebarSpaceDotView>();
     dot->Configure(sid, name, icon, dot_color, active);
+    dot->SetSidebarPalette(palette_);
     dot->set_delegate(this);
     dot_container_->AddChildView(std::move(dot));
   }
@@ -620,10 +663,6 @@ void MahoSidebarFooterView::RebuildDots(
 
 void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
   SetBackground(nullptr);
-  if (footer_separator_) {
-    footer_separator_->SetBackground(
-        views::CreateSolidBackground(kMahoColorFooterDivider));
-  }
   if (footer_region_) {
     footer_region_->SetBackground(nullptr);
     footer_region_->SetBorder(nullptr);
@@ -631,7 +670,8 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
   spaces_cluster_->SetBackground(nullptr);
   spaces_cluster_->SetBorder(nullptr);
 
-  auto style_button = [](views::MdTextButton* button) {
+  auto style_button = [this](views::MdTextButton* button,
+                             const gfx::VectorIcon& icon) {
     if (!button) {
       return;
     }
@@ -641,17 +681,27 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
     button->layer()->SetFillsBoundsOpaquely(false);
     button->SetTextSubpixelRenderingEnabled(false);
     button->layer()->SetOpacity(button->GetEnabled()
-                                    ? kFooterButtonEnabledOpacity
-                                    : kFooterButtonDisabledOpacity);
+                                     ? kFooterButtonEnabledOpacity
+                                     : kFooterButtonDisabledOpacity);
+    auto* footer_button = static_cast<MahoFooterIconButton*>(button);
+    footer_button->SetSidebarPalette(palette_, icon);
   };
-  style_button(archive_button_);
-  style_button(plus_button_);
+  style_button(archive_button_, GetMahoSidebarArchiveboxIcon());
+  style_button(plus_button_, vector_icons::kAddIcon);
 
   if (archive_button_) {
-    archive_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+    if (palette_.neutral_glyph != SK_ColorTRANSPARENT) {
+      archive_button_->SetEnabledTextColors(palette_.neutral_glyph);
+    } else {
+      archive_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+    }
   }
   if (plus_button_) {
-    plus_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+    if (palette_.neutral_glyph != SK_ColorTRANSPARENT) {
+      plus_button_->SetEnabledTextColors(palette_.neutral_glyph);
+    } else {
+      plus_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+    }
   }
 }
 
@@ -922,7 +972,10 @@ void MahoSidebarFooterView::UpdateFadeMask() {
   const bool show_right = max_scroll > 0 && scroll_x < max_scroll - 2;
 
   static_cast<MahoSidebarFadeMaskView*>(fade_mask_.get())
-      ->SetFadeState(show_left, show_right, SK_ColorTRANSPARENT);
+      ->SetFadeState(show_left, show_right,
+                     palette_.surface_stops.empty()
+                         ? SK_ColorTRANSPARENT
+                         : palette_.surface_stops.front());
 }
 
 void MahoSidebarFooterView::ScrollToActiveSpace() {

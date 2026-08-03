@@ -10,6 +10,7 @@
 #include "base/observer_list.h"
 #include "components/global_media_controls/public/media_item_ui.h"
 #include "components/media_message_center/media_notification_view.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "ui/views/view.h"
 
@@ -70,6 +71,7 @@ class MahoNowPlayingCard : public media_message_center::MediaNotificationView,
   void UpdateWithVolume(float volume) override;
   void UpdateDeviceSelectorVisibility(bool visible) override;
   void UpdateDeviceSelectorAvailability(bool has_devices) override;
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   // global_media_controls::MediaItemUI:
   void AddObserver(global_media_controls::MediaItemUIObserver* observer) override;
@@ -125,6 +127,7 @@ class MahoNowPlayingCard : public media_message_center::MediaNotificationView,
   raw_ptr<global_media_controls::MediaActionButton> next_button_ = nullptr;
   raw_ptr<views::ImageButton> mute_button_ = nullptr;
   raw_ptr<NotePulseOverlay> note_pulse_ = nullptr;
+  MahoSidebarPalette palette_;
 };
 
 }  // namespace maho

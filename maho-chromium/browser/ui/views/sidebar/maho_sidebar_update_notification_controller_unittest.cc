@@ -100,7 +100,7 @@ TEST_F(MahoSidebarUpdateNotificationControllerTest,
       std::string(version_info::GetVersionNumber()));
 
   auto* manager = MahoUpdateManager::GetInstance();
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, TestingBrowserProcess::GetGlobal()->GetTestingLocalState());
   ASSERT_TRUE(manager->is_simulating_for_testing());
 
   MahoSidebarUpdateNotificationController controller(
@@ -119,7 +119,7 @@ TEST_F(MahoSidebarUpdateNotificationControllerTest,
       prefs::kMahoUpdateEnabled, false);
 
   auto* manager = MahoUpdateManager::GetInstance();
-  manager->Initialize(nullptr);
+  manager->Initialize(nullptr, TestingBrowserProcess::GetGlobal()->GetTestingLocalState());
   // Kill-switch makes Initialize early-return; state stays kIdle, no
   // delegate runs, so kReadyToInstall is unreachable from production flow.
   EXPECT_EQ(manager->GetState(), UpdateState::kIdle);

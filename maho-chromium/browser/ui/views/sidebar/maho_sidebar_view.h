@@ -19,6 +19,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/translate/content/browser/content_translate_driver.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -136,10 +137,12 @@ class MahoSidebarView
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
   void ScheduleRefreshAll();
+  static void RefreshSpaceThemeForBrowser(Browser* browser);
   // Synchronous, inline variant of RefreshAll for latency-sensitive callers
   // (e.g. a drag drop): rebuilds now instead of posting to base::ThreadPool.
   void RefreshAllSynchronously();
   void RefreshFavoritesSynchronouslyAfterDrop();
+  void SetSharedBrowserGlassActive(bool active);
   // T5: Coalesced cosmetic refresh — debounces title/URL/favicon updates so
   // rapid-fire cosmetic events collapse into a single UpdateTabList() pass.
   // Structural changes (create/close/reorder) cancel any pending cosmetic
@@ -147,6 +150,13 @@ class MahoSidebarView
   // B2: While the ScrollView is actively scrolling, cosmetic refreshes are
   // held (pending) and applied only after a short scroll-idle interval.
   void ScheduleCosmeticRefresh();
+  using SidebarPaletteChangedCallback =
+      base::RepeatingCallback<void(const MahoSidebarPalette&)>;
+  base::CallbackListSubscription AddSidebarPaletteChangedCallback(
+      SidebarPaletteChangedCallback callback);
+  const MahoSidebarPalette& sidebar_palette() const {
+    return palette_host_.palette();
+  }
   // Test-only accessors for live browser tests. Keep minimal.
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
     return favorites_view_;
@@ -197,6 +207,22 @@ class MahoSidebarView
   int cosmetic_apply_count_for_testing() const {
     return cosmetic_apply_count_for_testing_;
   }
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return sidebar_palette();
+  }
+  int palette_compute_count_for_testing() const {
+    return palette_host_.compute_count_for_testing();
+  }
+  int palette_apply_count_for_testing() const {
+    return palette_host_.apply_count_for_testing();
+  }
+  int palette_repaint_count_for_testing() const {
+    return palette_repaint_count_for_testing_;
+  }
+  bool palette_opaque_for_testing() const {
+    return palette_host_.opaque_for_testing();
+  }
+  float grain_texture_for_testing() const;
   // B2 test-only: fire the scroll-idle transition immediately (bypasses the
   // real timer so tests remain deterministic without wall-clock sleeps).
   void SimulateScrollIdleForTesting() {
@@ -275,7 +301,10 @@ class MahoSidebarView
   }
 
  private:
+  void RefreshSpaceTheme();
   void BuildUi();
+  void UpdateSidebarPalette(MahoSidebarPaletteUpdateReason reason);
+  void ApplyPaletteSnapshot(const MahoSidebarPalette& palette);
   void OnTabListScrolled();
   void UpdateSidebarBorderForOverlay();
   // Returns true when the docked sidebar must paint an opaque themed background
@@ -386,6 +415,21 @@ class MahoSidebarView
       nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   raw_ptr<MahoSidebarGrainOverlayView> grain_overlay_ = nullptr;
+  MahoSidebarPaletteHost palette_host_;
+  base::RepeatingCallbackList<void(const MahoSidebarPalette&)>
+      palette_changed_callbacks_;
+  base::CallbackListSubscription top_bar_palette_subscription_;
+  base::CallbackListSubscription search_palette_subscription_;
+  base::CallbackListSubscription favorites_palette_subscription_;
+  base::CallbackListSubscription footer_palette_subscription_;
+  base::CallbackListSubscription create_space_palette_subscription_;
+  base::CallbackListSubscription archive_palette_subscription_;
+  base::CallbackListSubscription downloads_palette_subscription_;
+  base::CallbackListSubscription media_palette_subscription_;
+  base::CallbackListSubscription now_playing_palette_subscription_;
+  base::CallbackListSubscription update_notification_palette_subscription_;
+  int palette_repaint_count_for_testing_ = 0;
+  bool shared_browser_glass_active_ = false;
 
   std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;

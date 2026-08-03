@@ -12,6 +12,7 @@
 #include "cc/paint/draw_looper.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_shader.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkScalar.h"
@@ -225,7 +226,7 @@ MahoSidebarUpdateNotificationView::MahoSidebarUpdateNotificationView() {
 
   heading_ = header_->AddChildView(std::make_unique<views::Label>());
   heading_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-  heading_->SetEnabledColor(ui::kColorSysOnSurface);
+  heading_->SetEnabledColor(kMahoColorSidebarPrimaryText);
   heading_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   heading_->SetElideBehavior(gfx::ELIDE_TAIL);
   heading_->SetSubpixelRenderingEnabled(false);
@@ -234,7 +235,7 @@ MahoSidebarUpdateNotificationView::MahoSidebarUpdateNotificationView() {
 
   divider_ = AddChildView(std::make_unique<views::View>());
   divider_->SetPreferredSize(gfx::Size(0, 1));
-  divider_->SetBackground(views::CreateSolidBackground(ui::kColorSysDivider));
+  divider_->SetBackground(views::CreateSolidBackground(kMahoColorDivider));
   divider_->SetPaintToLayer();
   divider_->layer()->SetFillsBoundsOpaquely(false);
 
@@ -255,6 +256,33 @@ MahoSidebarUpdateNotificationView::MahoSidebarUpdateNotificationView() {
 
 MahoSidebarUpdateNotificationView::~MahoSidebarUpdateNotificationView() =
     default;
+
+void MahoSidebarUpdateNotificationView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (heading_) {
+    heading_->SetEnabledColor(palette_.primary_text);
+  }
+  if (divider_) {
+    divider_->SetBackground(views::CreateSolidBackground(palette_.outline));
+  }
+  for (const auto& action_row : action_rows_) {
+    if (!action_row) {
+      continue;
+    }
+    const auto* action_button = views::AsViewClass<ActionRowButton>(
+        action_row.get());
+    const SkColor label_color = action_button && action_button->is_special()
+                                    ? SK_ColorWHITE
+                                    : palette_.primary_text;
+    for (views::View* child : action_row->children()) {
+      if (auto* label = views::AsViewClass<views::Label>(child)) {
+        label->SetEnabledColor(label_color);
+      }
+    }
+  }
+  SchedulePaint();
+}
 
 void MahoSidebarUpdateNotificationView::Update(
     const MahoSidebarUpdateNotificationModel &model) {
@@ -286,17 +314,15 @@ void MahoSidebarUpdateNotificationView::OnPaintBackground(gfx::Canvas *canvas) {
   if (!GetVisible()) {
     return;
   }
-  const auto *color_provider = GetColorProvider();
-  if (!color_provider) {
-    return;
-  }
   gfx::RectF rect(GetLocalBounds());
   rect.Inset(gfx::InsetsF::TLBR(2, 2, 2, 2));
 
   cc::PaintFlags shadow_flags;
   shadow_flags.setAntiAlias(true);
   shadow_flags.setStyle(cc::PaintFlags::kFill_Style);
-  shadow_flags.setColor(color_provider->GetColor(ui::kColorSysSurface1));
+  shadow_flags.setColor(palette_.normal_contrast_surfaces.empty()
+                            ? palette_.row_selected
+                            : palette_.normal_contrast_surfaces.front());
   cc::DrawLooperBuilder looper;
   looper.AddShadow(
       /*offset=*/{0, 2},
@@ -310,7 +336,7 @@ void MahoSidebarUpdateNotificationView::OnPaintBackground(gfx::Canvas *canvas) {
   stroke_flags.setAntiAlias(true);
   stroke_flags.setStyle(cc::PaintFlags::kStroke_Style);
   stroke_flags.setStrokeWidth(1);
-  stroke_flags.setColor(color_provider->GetColor(ui::kColorSysDivider));
+  stroke_flags.setColor(palette_.outline);
   canvas->DrawRoundRect(rect, kCardCornerRadius, stroke_flags);
 }
 
@@ -458,8 +484,7 @@ void MahoSidebarUpdateNotificationView::RebuildBody(
     auto *label =
         button->AddChildView(std::make_unique<views::Label>(action.label));
     label->SetTextStyle(views::style::STYLE_BODY_4);
-    label->SetEnabledColor(action.special ? SK_ColorWHITE
-                                          : ui::kColorSysOnSurface);
+    label->SetEnabledColor(action.special ? SK_ColorWHITE : palette_.primary_text);
     label->SetHorizontalAlignment(action.special ? gfx::ALIGN_CENTER
                                                  : gfx::ALIGN_LEFT);
     label->SetSubpixelRenderingEnabled(false);

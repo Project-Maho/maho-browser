@@ -3809,6 +3809,29 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       MailTabIsExcludedFromCoreBackedTabList) {
+  MahoSidebarTabListView* list_view = GetTabListView();
+  ASSERT_TRUE(list_view);
+
+  MahoSidebarTabListModel model;
+  model.active_space_id = "mail-filter-space";
+
+  SidebarTreeNode regular_tab = MakeProjectionTab("regular-tab");
+  regular_tab.url = "https://example.test/";
+  model.normal_tree.push_back(std::move(regular_tab));
+
+  SidebarTreeNode mail_tab = MakeProjectionTab("mail-tab");
+  mail_tab.url = "chrome://maho-mail/";
+  model.normal_tree.push_back(std::move(mail_tab));
+
+  list_view->RebuildRowsForTesting(model, browser());
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_NE(nullptr, list_view->FindTabRowByIdForTesting("regular-tab"));
+  EXPECT_EQ(nullptr, list_view->FindTabRowByIdForTesting("mail-tab"));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                        ActionRowStaysBetweenPinnedSeparatorAndNormalSection) {
   SeedProfile(1);
   MahoSidebarTabListView* list_view = GetTabListView();

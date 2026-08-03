@@ -108,6 +108,13 @@ void MahoSidebarProcessingPlaceholderView::SetButtonSurface(
   button_surface_ = button_surface;
 }
 
+void MahoSidebarProcessingPlaceholderView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  palette_ = palette;
+  SchedulePaint();
+}
+
 void MahoSidebarProcessingPlaceholderView::Start(
     Mode mode,
     base::OnceClosure hidden_callback) {
@@ -405,19 +412,14 @@ void MahoSidebarProcessingPlaceholderView::OnPaint(gfx::Canvas* canvas) {
   if (phase_ == Phase::kIdle) {
     return;
   }
-  const ui::ColorProvider* provider = GetColorProvider();
-  if (!provider) {
-    return;
-  }
-
   const double width = static_cast<double>(GetLocalBounds().width());
   const double height = static_cast<double>(GetLocalBounds().height());
   const double center_x = width / 2.0;
   const double center_y = height / 2.0;
   const double progress = phase_animation_.GetCurrentValue();
 
-  const SkColor normal_color = provider->GetColor(ui::kColorSysOnSurfaceSubtle);
-  const SkColor accent_color = provider->GetColor(kMahoColorAccentBlueBright);
+  const SkColor normal_color = palette_.secondary_text;
+  const SkColor accent_color = palette_.focus_ring;
 
   if (!ShouldRenderRich()) {
     // Renders static centered dots/spark

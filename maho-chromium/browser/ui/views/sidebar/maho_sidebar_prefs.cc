@@ -77,8 +77,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kOpenExternalLinksInMahoMini, false);
   registry->RegisterIntegerPref(kMahoMiniWindowWidth, 0);
   registry->RegisterIntegerPref(kMahoMiniWindowHeight, 0);
-  // Mail stays off until its security/integrity remediation pass completes.
-  registry->RegisterBooleanPref(kMahoMailEnabled, false);
+  registry->RegisterBooleanPref(kMahoMailEnabled, true);
 }
 
 void MigrateFromLegacyVisiblePref(PrefService* prefs) {

@@ -16,7 +16,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/i18n/case_conversion.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/models/image_model.h"
@@ -36,7 +35,6 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "components/vector_icons/vector_icons.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 
 namespace maho {
@@ -231,7 +229,7 @@ class MediaSectionHeaderView : public views::View {
     auto* label = AddChildView(std::make_unique<views::Label>(
         title + u" · " + count_text + (count == 1 ? u" item" : u" items")));
     label->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    label->SetEnabledColor(ui::kColorSysOnSurface);
+    label->SetEnabledColor(kMahoColorSidebarPrimaryText);
     label->SetAutoColorReadabilityEnabled(false);
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   }
@@ -247,8 +245,12 @@ class MediaRowView : public views::View {
   using ActionCallback =
       base::RepeatingCallback<void(const std::string&, MediaActionKind)>;
 
-  MediaRowView(const DownloadItem& item, ActionCallback action_callback)
-      : item_id_(item.id), action_callback_(std::move(action_callback)) {
+  MediaRowView(const DownloadItem& item,
+               ActionCallback action_callback,
+               const MahoSidebarPalette& palette)
+      : item_id_(item.id),
+        action_callback_(std::move(action_callback)),
+        palette_(palette) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal,
         gfx::Insets::TLBR(kRowPaddingDp, kRowPaddingDp, kRowPaddingDp,
@@ -260,13 +262,13 @@ class MediaRowView : public views::View {
     auto* icon_tile = AddChildView(std::make_unique<views::View>());
     icon_tile->SetPreferredSize(gfx::Size(24, 24));
     icon_tile->SetBackground(views::CreateRoundedRectBackground(
-        ui::kColorSysSurface3, 8));
+        palette_.row_selected, 8));
     icon_tile->SetLayoutManager(std::make_unique<views::FillLayout>());
     auto* icon_label = icon_tile->AddChildView(std::make_unique<views::Label>(
         MediaKindGlyph(MediaKindForItem(item))));
     icon_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     icon_label->SetTextStyle(views::style::STYLE_BODY_5_BOLD);
-    icon_label->SetEnabledColor(ui::kColorSysOnSurface);
+    icon_label->SetEnabledColor(palette_.primary_text);
     icon_label->SetAutoColorReadabilityEnabled(false);
     icon_label->GetViewAccessibility().SetIsIgnored(true);
 
@@ -281,7 +283,7 @@ class MediaRowView : public views::View {
     auto* title = text_column->AddChildView(
         std::make_unique<views::Label>(item.filename));
     title->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    title->SetEnabledColor(ui::kColorSysOnSurface);
+    title->SetEnabledColor(palette_.primary_text);
     title->SetAutoColorReadabilityEnabled(false);
     title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title->SetMultiLine(false);
@@ -290,7 +292,7 @@ class MediaRowView : public views::View {
     auto* subtitle = text_column->AddChildView(
         std::make_unique<views::Label>(MediaSubtitleText(item)));
     subtitle->SetTextStyle(views::style::STYLE_BODY_5);
-    subtitle->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    subtitle->SetEnabledColor(palette_.secondary_text);
     subtitle->SetAutoColorReadabilityEnabled(false);
     subtitle->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     subtitle->SetMultiLine(false);
@@ -348,6 +350,7 @@ class MediaRowView : public views::View {
   std::string item_id_;
   ActionCallback action_callback_;
   std::vector<views::Button*> action_buttons_;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(MediaRowView)
@@ -364,10 +367,20 @@ MahoSidebarMediaView::MahoSidebarMediaView() {
 
 MahoSidebarMediaView::~MahoSidebarMediaView() = default;
 
+void MahoSidebarMediaView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (search_field_) {
+    search_field_->SetTextColor(palette_.primary_text);
+    search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  ReloadMedia();
+}
+
 void MahoSidebarMediaView::BuildUi() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
-  SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface1,
-                                                   kPanelCornerRadiusDp));
+  SetBackground(views::CreateRoundedRectBackground(
+      kMahoColorLibraryContentBackground, kPanelCornerRadiusDp));
 
   auto* surface = AddChildView(std::make_unique<views::View>());
   auto* surface_layout = surface->SetLayoutManager(
@@ -386,7 +399,7 @@ void MahoSidebarMediaView::BuildUi() {
 
   auto* header = surface->AddChildView(std::make_unique<views::Label>(u"Media"));
   header->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-  header->SetEnabledColor(ui::kColorSysOnSurface);
+  header->SetEnabledColor(kMahoColorSidebarPrimaryText);
   header->SetAutoColorReadabilityEnabled(false);
   header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
@@ -474,7 +487,7 @@ void MahoSidebarMediaView::BuildUi() {
   empty_state_view_ = surface->AddChildView(
       std::make_unique<views::Label>(u"No media items"));
   empty_state_view_->SetTextStyle(views::style::STYLE_BODY_4);
-  empty_state_view_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  empty_state_view_->SetEnabledColor(kMahoColorSidebarSecondaryText);
   empty_state_view_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   empty_state_view_->SetMultiLine(true);
   empty_state_view_->SetAutoColorReadabilityEnabled(false);
@@ -582,7 +595,8 @@ void MahoSidebarMediaView::ReloadMedia() {
     for (const auto& item : group.items) {
       rows_container->AddChildView(std::make_unique<MediaRowView>(
           item, base::BindRepeating(&MahoSidebarMediaView::HandleMediaAction,
-                                    weak_factory_.GetWeakPtr())));
+                                     weak_factory_.GetWeakPtr()),
+          palette_));
     }
   }
 

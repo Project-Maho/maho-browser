@@ -167,6 +167,12 @@ void MahoSidebarSpaceDotView::SetSelected(bool selected) {
   UpdateAppearance();
 }
 
+void MahoSidebarSpaceDotView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  SchedulePaint();
+}
+
 gfx::Size MahoSidebarSpaceDotView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
   return gfx::Size(kViewSize, kViewSize);
@@ -184,14 +190,20 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
 
     const auto* cp = GetColorProvider();
     const bool is_hovered_no_icon = is_hovered_ && !has_icon_ && !is_active_;
-    const SkColor fill = is_active_
-                             ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
-                             : (cp ? cp->GetColor(is_hovered_no_icon
-                                                      ? ui::kColorSysOnSurface
-                                                      : ui::kColorSysOnSurfaceSubtle)
-                                   : (is_hovered_no_icon
-                                          ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
-                                          : SkColorSetRGB(0xA2, 0xA8, 0xB6)));
+    const SkColor fallback_fill =
+        is_active_
+            ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
+            : (cp ? cp->GetColor(is_hovered_no_icon
+                                      ? ui::kColorSysOnSurface
+                                      : ui::kColorSysOnSurfaceSubtle)
+                  : (is_hovered_no_icon ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
+                                        : SkColorSetRGB(0xA2, 0xA8, 0xB6)));
+    const SkColor fill =
+        is_active_ && palette_.primary_text != SK_ColorTRANSPARENT
+            ? palette_.primary_text
+            : (!is_active_ && palette_.neutral_glyph != SK_ColorTRANSPARENT
+                   ? palette_.neutral_glyph
+                   : fallback_fill);
     const int base_alpha = is_active_ ? 212 : 72;
     const int peak_alpha = is_active_ ? 240 : 200;
     const float lerped_alpha =
@@ -214,7 +226,10 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
     halo_flags.setAntiAlias(true);
     halo_flags.setStyle(cc::PaintFlags::kStroke_Style);
     halo_flags.setStrokeWidth(1.0f);
-    halo_flags.setColor(SkColorSetARGB(0x12, 0xFF, 0xFF, 0xFF));
+    const SkColor halo_color = palette_.outline != SK_ColorTRANSPARENT
+                                   ? palette_.outline
+                                   : SK_ColorWHITE;
+    halo_flags.setColor(SkColorSetA(halo_color, 0x12));
     canvas->DrawCircle(center, radius + 0.8f, halo_flags);
   }
 }

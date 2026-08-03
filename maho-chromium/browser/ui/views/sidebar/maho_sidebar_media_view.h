@@ -10,6 +10,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
@@ -46,6 +47,7 @@ class MahoSidebarMediaView : public views::View,
   ~MahoSidebarMediaView() override;
 
   void ReloadMedia();
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   views::ScrollView* scroll_view_for_testing() { return scroll_view_; }
   views::View* list_container_for_testing() { return list_container_; }
@@ -75,6 +77,7 @@ class MahoSidebarMediaView : public views::View,
   base::OneShotTimer search_debounce_timer_;
   std::optional<MediaKind> active_filter_;
   std::vector<DownloadItem> cached_media_items_;
+  MahoSidebarPalette palette_;
 
   base::WeakPtrFactory<MahoSidebarMediaView> weak_factory_{this};
 };

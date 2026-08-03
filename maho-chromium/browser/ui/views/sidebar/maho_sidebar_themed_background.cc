@@ -4,16 +4,11 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <optional>
 
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_shader.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
-#include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRRect.h"
-#include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -21,21 +16,16 @@
 
 namespace maho {
 
-namespace {
-
-SkColor MaybeForceOpaque(SkColor color, bool opaque) {
-  return opaque ? SkColorSetA(color, 0xFF) : color;
-}
-
-}  // namespace
-
 void PaintMahoSidebarThemedBackground(gfx::Canvas* canvas,
+                                      const MahoSidebarPalette& palette,
                                       const gfx::Rect& bounds,
-                                      const ui::ColorProvider* provider,
                                       bool opaque,
                                       const SkVector radii[4],
-                                      int gradient_span_dp) {
-  if (!provider || bounds.IsEmpty()) {
+                                      int gradient_span_dp,
+                                      const gfx::Rect* gradient_bounds) {
+  const std::vector<SkColor>& colors =
+      opaque ? palette.opaque_contrast_stops : palette.surface_stops;
+  if (bounds.IsEmpty() || colors.empty()) {
     return;
   }
 
@@ -43,35 +33,20 @@ void PaintMahoSidebarThemedBackground(gfx::Canvas* canvas,
   rrect.setRectRadii(gfx::RectToSkRect(bounds), radii);
   const SkPath clip_path = SkPath::RRect(rrect);
 
-  // Decide how many themed stops to render (1 = solid).
-  std::optional<MahoSpaceThemeState::ThemeData> theme_data =
-      MahoSpaceThemeState::GetThemeData();
-  int stop_count = 1;
-  if (theme_data && !theme_data->achromatic &&
-      (theme_data->kind == MahoSpaceThemeState::ThemeKind::kGradient ||
-       theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen)) {
-    stop_count = static_cast<int>(
-        std::min<size_t>(theme_data->stops.size(), static_cast<size_t>(3)));
-    if (stop_count < 1) {
-      stop_count = 1;
-    }
-  }
+  const int stop_count = static_cast<int>(
+      std::min<size_t>(colors.size(), static_cast<size_t>(3)));
 
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
   flags.setStyle(cc::PaintFlags::kFill_Style);
 
   if (stop_count <= 1) {
-    flags.setColor(MaybeForceOpaque(
-        provider->GetColor(kMahoColorSidebarBackground), opaque));
+    flags.setColor(colors.front());
   } else {
-    const SkColor4f colors[3] = {
-        SkColor4f::FromColor(MaybeForceOpaque(
-            provider->GetColor(kMahoColorSidebarBackground), opaque)),
-        SkColor4f::FromColor(MaybeForceOpaque(
-            provider->GetColor(kMahoColorSidebarGradientStop1), opaque)),
-        SkColor4f::FromColor(MaybeForceOpaque(
-            provider->GetColor(kMahoColorSidebarGradientStop2), opaque)),
+    const SkColor4f gradient_colors[3] = {
+        SkColor4f::FromColor(colors[0]),
+        SkColor4f::FromColor(colors[1]),
+        SkColor4f::FromColor(stop_count == 3 ? colors[2] : colors[1]),
     };
     const SkScalar stops_two[2] = {0.0f, 1.0f};
     const SkScalar stops_three[3] = {0.0f, 0.5f, 1.0f};
@@ -80,17 +55,19 @@ void PaintMahoSidebarThemedBackground(gfx::Canvas* canvas,
     // `gradient_span_dp` bounds the diagonal to a `span x span` box anchored at
     // the top-left (kClamp holds the last stop beyond it) so a very wide surface
     // (full-viewport Spaces overlay) keeps the rail's tint density.
+    const gfx::Rect& shader_bounds = gradient_bounds ? *gradient_bounds : bounds;
     const float span =
         gradient_span_dp > 0 ? static_cast<float>(gradient_span_dp) : 0.0f;
     const SkPoint points[2] = {
-        SkPoint::Make(bounds.x(), bounds.y()),
+        SkPoint::Make(shader_bounds.x(), shader_bounds.y()),
         span > 0.0f
-            ? SkPoint::Make(bounds.x() + span, bounds.y() + span)
-            : SkPoint::Make(bounds.right(), bounds.bottom()),
+            ? SkPoint::Make(shader_bounds.x() + span,
+                            shader_bounds.y() + span)
+            : SkPoint::Make(shader_bounds.right(), shader_bounds.bottom()),
     };
     flags.setShader(cc::PaintShader::MakeLinearGradient(
-        points, colors, stop_count == 2 ? stops_two : stops_three, stop_count,
-        SkTileMode::kClamp));
+        points, gradient_colors, stop_count == 2 ? stops_two : stops_three,
+        stop_count, SkTileMode::kClamp));
   }
 
   canvas->Save();

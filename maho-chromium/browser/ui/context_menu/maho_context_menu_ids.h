@@ -19,7 +19,7 @@ enum MahoTabContextMenuCommand {
   IDC_MAHO_TAB_MUTE = 57007,
   IDC_MAHO_TAB_UNMUTE = 57008,
   IDC_MAHO_TAB_MOVE_TO_SPACE = 57009,
-  IDC_MAHO_TAB_ADD_FAVORITE = 57010,  // L3-EXEMPT
+  IDC_MAHO_TAB_ADD_FAVORITE = 57010,     // L3-EXEMPT
   IDC_MAHO_TAB_REMOVE_FAVORITE = 57011,  // L3-EXEMPT
   IDC_MAHO_TAB_COPY_URL = 57012,
   IDC_MAHO_TAB_RELOAD = 57013,
@@ -82,6 +82,12 @@ enum MahoFavoritesContextMenuCommand {
   IDC_MAHO_FAV_MOVE_TO_SPACE = 57055,
   IDC_MAHO_FAV_DUPLICATE = 57056,
   IDC_MAHO_FAV_REMOVE = 57057,
+  // Tab actions shared with the tab context menu, exposed on favorites when the
+  // favorite resolves to a live tab in the current strip.
+  IDC_MAHO_FAV_BOOST = 57058,
+  IDC_MAHO_FAV_RELOAD = 57059,
+  IDC_MAHO_FAV_MUTE = 57060,
+  IDC_MAHO_FAV_UNMUTE = 57061,
 };
 
 // Folder context menu: 57070-57079
@@ -98,7 +104,8 @@ constexpr int IDC_MAHO_TAB_MOVE_SPACE_BASE = 57200;
 constexpr int IDC_MAHO_TAB_MOVE_SPACE_MAX = 57299;
 
 inline bool IsMoveToSpaceCommand(int id) {
-  return id >= IDC_MAHO_TAB_MOVE_SPACE_BASE && id <= IDC_MAHO_TAB_MOVE_SPACE_MAX;
+  return id >= IDC_MAHO_TAB_MOVE_SPACE_BASE &&
+         id <= IDC_MAHO_TAB_MOVE_SPACE_MAX;
 }
 
 inline int MoveToSpaceIndex(int id) {

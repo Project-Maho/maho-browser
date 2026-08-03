@@ -175,15 +175,29 @@ class SearchPillActionButton : public views::ImageButton {
     UpdateChip();
   }
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    UpdateChip();
+  }
+
  private:
   void UpdateChip() {
     const bool active =
         GetState() == STATE_HOVERED || GetState() == STATE_PRESSED;
-    SetBackground(active ? views::CreateRoundedRectBackground(
-                               kMahoColorTabRowActiveBackground,
-                               kSearchPillActionChipCornerRadiusDp)
-                         : nullptr);
+    if (!active) {
+      SetBackground(nullptr);
+      return;
+    }
+    if (palette_.row_active != SK_ColorTRANSPARENT) {
+      SetBackground(views::CreateRoundedRectBackground(
+          palette_.row_active, kSearchPillActionChipCornerRadiusDp));
+      return;
+    }
+    SetBackground(views::CreateRoundedRectBackground(
+        kMahoColorTabRowActiveBackground, kSearchPillActionChipCornerRadiusDp));
   }
+
+  MahoSidebarPalette palette_;
 };
 
 }  // namespace
@@ -350,6 +364,12 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
 }
 
 MahoSidebarSearchView::~MahoSidebarSearchView() = default;
+
+void MahoSidebarSearchView::OnSidebarPaletteChanged(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  UpdateSearchChrome();
+}
 
 void MahoSidebarSearchView::OnThemeChanged() {
   views::View::OnThemeChanged();
@@ -788,8 +808,38 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
     utility_icon_->SetBackground(nullptr);
     utility_icon_->SetSidebarPalette(palette_);
   }
-  primary_label_->SetEnabledColor(show_placeholder ? ui::kColorSysOnSurfaceSubtle
-                                                    : ui::kColorSysOnSurface);
+  if (palette_.primary_text != SK_ColorTRANSPARENT) {
+    SkColor primary_color = show_placeholder ? palette_.secondary_text
+                                             : palette_.primary_text;
+    primary_label_->SetEnabledColor(primary_color);
+    secondary_label_->SetEnabledColor(palette_.secondary_text);
+    textfield_->SetTextColor(palette_.primary_text);
+    textfield_->set_placeholder_text_color(palette_.secondary_text);
+  } else {
+    primary_label_->SetEnabledColor(show_placeholder ? ui::kColorSysOnSurfaceSubtle
+                                                      : ui::kColorSysOnSurface);
+  }
+  if (copy_url_button_) {
+    auto* action_button = static_cast<SearchPillActionButton*>(copy_url_button_.get());
+    action_button->SetSidebarPalette(palette_);
+    if (palette_.neutral_glyph != SK_ColorTRANSPARENT) {
+      action_button->SetImageModel(
+          views::Button::STATE_NORMAL,
+          ui::ImageModel::FromVectorIcon(maho_lucide_icons::kLinkIcon,
+                                         palette_.neutral_glyph,
+                                         kSearchPillActionIconSizeDp));
+      action_button->SetImageModel(
+          views::Button::STATE_HOVERED,
+          ui::ImageModel::FromVectorIcon(maho_lucide_icons::kLinkIcon,
+                                         palette_.primary_text,
+                                         kSearchPillActionIconSizeDp));
+      action_button->SetImageModel(
+          views::Button::STATE_PRESSED,
+          ui::ImageModel::FromVectorIcon(maho_lucide_icons::kLinkIcon,
+                                         palette_.primary_text,
+                                         kSearchPillActionIconSizeDp));
+    }
+  }
   primary_label_->SetTextStyle(views::style::STYLE_BODY_3);
   textfield_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::VH(0, kSearchTextfieldHorizontalInsetDp)));

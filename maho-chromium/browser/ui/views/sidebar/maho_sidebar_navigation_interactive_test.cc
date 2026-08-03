@@ -47,15 +47,21 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/events/test/test_event.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
 #include "base/values.h"
 #include "url/gurl.h"
 
@@ -127,10 +133,60 @@ views::Label* FindLabelWithText(views::View* root, const std::u16string& text) {
   return nullptr;
 }
 
+views::Button* FindButtonWithAccessibleName(views::View* root,
+                                            const std::u16string& name) {
+  if (!root) {
+    return nullptr;
+  }
+
+  if (auto* button = views::AsViewClass<views::Button>(root)) {
+    ui::AXNodeData data;
+    button->GetViewAccessibility().GetAccessibleNodeData(&data);
+    if (data.GetString16Attribute(ax::mojom::StringAttribute::kName) == name) {
+      return button;
+    }
+  }
+
+  for (views::View* child : root->children()) {
+    if (views::Button* found = FindButtonWithAccessibleName(child, name)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+const SidebarTreeNode* FindTabById(
+    const std::vector<SidebarTreeNode>& nodes,
+    const std::string& tab_id) {
+  for (const auto& node : nodes) {
+    if (node.kind == SidebarNodeKind::kTab && node.tab_id == tab_id) {
+      return &node;
+    }
+    if (const SidebarTreeNode* match = FindTabById(node.children, tab_id)) {
+      return match;
+    }
+  }
+  return nullptr;
+}
+
 ui::AXNodeData GetAccessibilityNodeData(views::View* view) {
   ui::AXNodeData data;
   view->GetViewAccessibility().GetAccessibleNodeData(&data);
   return data;
+}
+
+std::vector<uint8_t> SnapshotImageBytes(const gfx::ImageSkia& image) {
+  std::vector<uint8_t> out;
+  for (float scale : {1.0f, 2.0f, 3.0f}) {
+    const SkBitmap& bitmap = image.GetRepresentation(scale).GetBitmap();
+    const size_t size = bitmap.computeByteSize();
+    if (size == 0 || !bitmap.getPixels()) {
+      continue;
+    }
+    const uint8_t* pixels = static_cast<const uint8_t*>(bitmap.getPixels());
+    out.insert(out.end(), pixels, pixels + size);
+  }
+  return out;
 }
 
 class MahoSidebarNavigationInteractiveTest
@@ -173,6 +229,35 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_TRUE(GetContainerView()->sidebar_view());
   EXPECT_TRUE(GetContainerView()->GetVisible());
   EXPECT_FALSE(GetContainerView()->sidebar_view()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       CollapsedPanelExposesUsableExpandSidebarButton) {
+  SeedSidebarPrefs(true, false);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+
+  MahoSidebarContainerView* container = GetContainerView();
+  ASSERT_TRUE(container);
+  views::Button* expand_button =
+      FindButtonWithAccessibleName(container, u"Expand Sidebar");
+  ASSERT_TRUE(expand_button);
+  EXPECT_TRUE(expand_button->GetVisible());
+  EXPECT_FALSE(expand_button->GetBoundsInScreen().IsEmpty());
+  EXPECT_EQ(views::View::FocusBehavior::ALWAYS,
+            expand_button->GetFocusBehavior());
+
+  const ui::AXNodeData data = GetAccessibilityNodeData(expand_button);
+  EXPECT_EQ(ax::mojom::Role::kButton, data.role);
+  EXPECT_EQ(u"Expand Sidebar",
+            data.GetString16Attribute(ax::mojom::StringAttribute::kName));
+  EXPECT_TRUE(data.HasAction(ax::mojom::Action::kDoDefault));
+
+  views::test::ButtonTestApi(expand_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  ExpectSidebarPanelExpanded(true);
+  EXPECT_TRUE(container->sidebar_view()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
@@ -284,6 +369,176 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   auto new_state = GetViewState();
   int new_count = static_cast<int>(new_state.tab_list.normal_tree.size());
   EXPECT_EQ(initial_count - 1, new_count);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       PinnedLiveCloseAffordanceSurvivesThemeChange) {
+  SeedProfile(2);
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindActiveTabRowForTesting();
+    return r && r->section_for_testing() == MahoSidebarTabSection::kPinned;
+  })) << "SeedProfile(2)'s active tab must render as a pinned sidebar row";
+  auto* row = tab_list_->FindActiveTabRowForTesting();
+  ASSERT_TRUE(row) << "SeedProfile(2)'s active tab must have a sidebar row";
+  ASSERT_EQ(MahoSidebarTabSection::kPinned, row->section_for_testing())
+      << "SeedProfile(2) pins the active tab; expected it in the pinned section";
+  ASSERT_FALSE(row->is_suspended());
+
+  views::ImageButton* close_button = row->close_button_for_testing();
+  ASSERT_TRUE(close_button);
+  EXPECT_EQ(u"Unload tab", close_button->GetTooltipText());
+  EXPECT_EQ(u"Unload tab",
+            GetAccessibilityNodeData(close_button).GetString16Attribute(
+                ax::mojom::StringAttribute::kName));
+  const std::vector<uint8_t> live_pinned_bytes =
+      SnapshotImageBytes(close_button->GetImage(views::Button::STATE_NORMAL));
+  ASSERT_FALSE(live_pinned_bytes.empty());
+
+  ASSERT_TRUE(row->GetWidget());
+  row->GetWidget()->ThemeChanged();
+
+  const std::vector<uint8_t> themed_bytes =
+      SnapshotImageBytes(close_button->GetImage(views::Button::STATE_NORMAL));
+  EXPECT_EQ(live_pinned_bytes, themed_bytes)
+      << "Theme change must preserve the pinned minus close affordance";
+  EXPECT_EQ(u"Unload tab", close_button->GetTooltipText());
+  EXPECT_EQ(u"Unload tab",
+            GetAccessibilityNodeData(close_button).GetString16Attribute(
+                ax::mojom::StringAttribute::kName));
+
+  row->SetSuspended(true);
+  EXPECT_EQ(u"Close tab", close_button->GetTooltipText());
+  EXPECT_EQ(u"Close tab",
+            GetAccessibilityNodeData(close_button).GetString16Attribute(
+                ax::mojom::StringAttribute::kName));
+  const std::vector<uint8_t> suspended_bytes =
+      SnapshotImageBytes(close_button->GetImage(views::Button::STATE_NORMAL));
+  ASSERT_FALSE(suspended_bytes.empty());
+  EXPECT_NE(live_pinned_bytes, suspended_bytes)
+      << "Active live pinned tab must show the minus (unload) close affordance, "
+         "distinct from the suspended X (close) affordance";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       PinnedLiveCloseButtonSuspendsBeforeDeleting) {
+  SeedProfile(2);
+
+  observer_.Clear();
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindActiveTabRowForTesting();
+    return r && r->section_for_testing() == MahoSidebarTabSection::kPinned;
+  })) << "SeedProfile(2)'s active tab must render as a pinned sidebar row";
+  auto* row = tab_list_->FindActiveTabRowForTesting();
+  ASSERT_TRUE(row) << "SeedProfile(2)'s active tab must have a sidebar row";
+  ASSERT_EQ(MahoSidebarTabSection::kPinned, row->section_for_testing())
+      << "SeedProfile(2) pins the active tab; expected it in the pinned section";
+  ASSERT_FALSE(row->is_suspended());
+  const std::string tab_id = row->tab_id_for_testing();
+  ASSERT_FALSE(tab_id.empty());
+  views::ImageButton* close_button = row->close_button_for_testing();
+  ASSERT_TRUE(close_button);
+
+  views::test::ButtonTestApi(close_button).NotifyClick(ui::test::TestEvent());
+  RunAllPendingTasks();
+  ResolveViews();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return observer_.HasEvent("suspend_tab"); }));
+  EXPECT_FALSE(observer_.HasEvent("close_tab"));
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    const auto current_state = GetViewState();
+    const SidebarTreeNode* current_tab =
+        FindTabById(current_state.tab_list.pinned_tree, tab_id);
+    return current_tab && current_tab->is_suspended;
+  })) << "first pinned close press must suspend without deleting the tab";
+
+  const auto final_state = GetViewState();
+  const SidebarTreeNode* suspended_tab =
+      FindTabById(final_state.tab_list.pinned_tree, tab_id);
+  ASSERT_TRUE(suspended_tab);
+  EXPECT_TRUE(suspended_tab->is_suspended);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       PinnedSuspendUsesFastPathWithoutFullRebuild) {
+  SeedProfile(2);
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindActiveTabRowForTesting();
+    return r && r->section_for_testing() == MahoSidebarTabSection::kPinned;
+  })) << "SeedProfile(2)'s active tab must render as a pinned sidebar row";
+  observer_.Clear();
+
+  auto* row = tab_list_->FindActiveTabRowForTesting();
+  ASSERT_TRUE(row);
+  const std::string tab_id = row->tab_id_for_testing();
+  ASSERT_FALSE(tab_id.empty());
+  views::ImageButton* close_button = row->close_button_for_testing();
+  ASSERT_TRUE(close_button);
+
+  const int rebuilds_before = tab_list_->rebuild_rows_count_for_testing();
+
+  views::test::ButtonTestApi(close_button).NotifyClick(ui::test::TestEvent());
+  RunAllPendingTasks();
+  ResolveViews();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return observer_.HasEvent("suspend_tab"); }));
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindTabRowByIdForTesting(tab_id);
+    return r && r->is_suspended();
+  })) << "suspended pinned row must flip to X in place";
+
+  EXPECT_EQ(rebuilds_before, tab_list_->rebuild_rows_count_for_testing())
+      << "suspending a pinned tab must not trigger a full RebuildRows";
+  EXPECT_EQ(row, tab_list_->FindTabRowByIdForTesting(tab_id))
+      << "the suspended row must be updated in place, not recreated";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       PinnedWakeUsesFastPathFlippingRowInPlace) {
+  SeedProfile(2);
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindActiveTabRowForTesting();
+    return r && r->section_for_testing() == MahoSidebarTabSection::kPinned;
+  })) << "SeedProfile(2)'s active tab must render as a pinned sidebar row";
+  observer_.Clear();
+
+  auto* row = tab_list_->FindActiveTabRowForTesting();
+  ASSERT_TRUE(row);
+  const std::string tab_id = row->tab_id_for_testing();
+  ASSERT_FALSE(tab_id.empty());
+  views::ImageButton* close_button = row->close_button_for_testing();
+  ASSERT_TRUE(close_button);
+
+  views::test::ButtonTestApi(close_button).NotifyClick(ui::test::TestEvent());
+  RunAllPendingTasks();
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindTabRowByIdForTesting(tab_id);
+    return r && r->is_suspended();
+  })) << "pinned tab must first suspend to X";
+  RunAllPendingTasks();
+
+  auto* suspended_row = tab_list_->FindTabRowByIdForTesting(tab_id);
+  ASSERT_TRUE(suspended_row);
+  const int rebuilds_before_wake = tab_list_->rebuild_rows_count_for_testing();
+
+  tab_list_->ActivateTabById(tab_id);
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    auto* r = tab_list_->FindTabRowByIdForTesting(tab_id);
+    return r && !r->is_suspended();
+  })) << "woken pinned row must flip back to minus in place";
+
+  EXPECT_EQ(rebuilds_before_wake, tab_list_->rebuild_rows_count_for_testing())
+      << "waking a suspended pinned tab must not trigger a full RebuildRows";
+  EXPECT_EQ(suspended_row, tab_list_->FindTabRowByIdForTesting(tab_id))
+      << "the woken row must be updated in place, not recreated";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
@@ -482,7 +737,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(container->IsAutoHideMode());
-  EXPECT_EQ(sidebar_layout::kHoverTriggerWidthDp,
+  EXPECT_EQ(sidebar_layout::kCollapsedRailWidthDp,
             container->GetPreferredSize().width());
   EXPECT_FALSE(container->sidebar_view()->GetVisible());
 
@@ -787,6 +1042,48 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_EQ(2u, captured_actions.size());
   EXPECT_EQ(real_path.value(), captured_actions[1].first);
   EXPECT_EQ(DownloadActionKind::kReveal, captured_actions[1].second);
+
+  maho_core_free(core);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                        DownloadsRemoveWorksForHistoricalCoreOnlyDownload) {
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+  ScopedCoreOverride scoped_core(core);
+
+  // Seed a completed download straight into the core store with no file path
+  // and without registering it with the live DownloadManager/bridge, mirroring
+  // a historical download loaded after a restart (no live download::DownloadItem
+  // exists for it). A completed no-file-path download renders a single Remove
+  // action at index 0.
+  std::string historical_id =
+      StartDownload(core, "old-report.zip", "https://example.org/old.zip", 100);
+  ASSERT_FALSE(historical_id.empty());
+  char* raw_complete = maho_core_complete_download(core, historical_id.c_str());
+  ASSERT_TRUE(raw_complete);
+  maho_string_free(raw_complete);
+
+  ResolveViews();
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kDownloads);
+  base::RunLoop().RunUntilIdle();
+
+  auto* downloads_view = sidebar->downloads_view_for_testing();
+  ASSERT_TRUE(downloads_view);
+  ASSERT_TRUE(FindDownloadRow(downloads_view, historical_id))
+      << "Historical download should render a row";
+
+  auto* remove_button =
+      downloads_view->download_action_button_for_testing(historical_id, 0);
+  ASSERT_TRUE(remove_button);
+  views::test::ButtonTestApi(remove_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(FindDownloadRow(downloads_view, historical_id))
+      << "Remove must delete the historical (core-only) download from the "
+         "store and refresh the list even without a live DownloadItem";
 
   maho_core_free(core);
 }
@@ -1130,7 +1427,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                       LibraryRailBackButtonAnchorsBottomLeft) {
+                       LibraryRailBackButtonAnchorsBottomCenter) {
   ResolveViews();
 
   auto* sidebar = GetSidebarView();
@@ -1146,12 +1443,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   const gfx::Rect rail_bounds = rail->GetBoundsInScreen();
   const gfx::Rect back_bounds = back_button->GetBoundsInScreen();
-  const int expected_left =
-      rail_bounds.x() + sidebar_layout::kLibraryRailUtilitySpacingDp;
+  const int expected_center_x =
+      rail_bounds.x() + (rail_bounds.width() - back_bounds.width()) / 2;
   const int expected_bottom =
       rail_bounds.bottom() - sidebar_layout::kLibraryRailBottomInsetDp;
 
-  EXPECT_EQ(expected_left, back_bounds.x());
+  EXPECT_EQ(expected_center_x, back_bounds.x());
   EXPECT_EQ(expected_bottom, back_bounds.bottom());
 }
 
@@ -1624,6 +1921,49 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
       << "Empty state must remain hidden after a suppressed production reload request";
   EXPECT_GT(archive_view->GetBoundsInScreen().height(), 0)
       << "Archive pane must have non-zero height confirming it is laid out";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       LibraryDownloadsLabelStaysSingleLineAtMinimumWidth) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kDownloads);
+  base::RunLoop().RunUntilIdle();
+
+  auto* container = GetContainerView();
+  ASSERT_TRUE(container);
+  container->SetBounds(0, 0, 280, 1000);
+  container->InvalidateLayout();
+
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
+  EXPECT_EQ(92, rail->GetPreferredSize().width());
+  EXPECT_EQ(92, rail->width());
+
+  auto* downloads_button = rail->button_for_category_for_testing(
+      MahoSidebarLibraryRailView::Category::kDownloads);
+  ASSERT_TRUE(downloads_button);
+  EXPECT_EQ(80, downloads_button->GetPreferredSize().width());
+  EXPECT_EQ(80, downloads_button->width());
+
+  views::Label* downloads_label = nullptr;
+  for (views::View* child : downloads_button->children()) {
+    if (views::IsViewClass<views::Label>(child)) {
+      downloads_label = static_cast<views::Label*>(child);
+      break;
+    }
+  }
+  ASSERT_TRUE(downloads_label);
+  EXPECT_EQ(u"Downloads", downloads_label->GetText());
+  EXPECT_LE(downloads_label->GetPreferredSize().width(), 68);
+  EXPECT_FALSE(downloads_label->GetMultiLine());
+  EXPECT_EQ(gfx::NO_ELIDE, downloads_label->GetElideBehavior());
+
+  auto* content_pane = sidebar->downloads_view_for_testing();
+  ASSERT_TRUE(content_pane);
+  EXPECT_GE(content_pane->width(), 171);
 }
 
 }  // namespace

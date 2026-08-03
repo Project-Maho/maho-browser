@@ -53,11 +53,31 @@ MahoSidebarGrainOverlayView::MahoSidebarGrainOverlayView() {
 MahoSidebarGrainOverlayView::~MahoSidebarGrainOverlayView() = default;
 
 void MahoSidebarGrainOverlayView::SetTexture(float texture) {
+  if (UpdateTexture(texture)) {
+    SchedulePaint();
+  }
+}
+
+void MahoSidebarGrainOverlayView::SetTextureWithoutRepaint(float texture) {
+  UpdateTexture(texture);
+}
+
+void MahoSidebarGrainOverlayView::SetTileOrigin(
+    const gfx::Point& tile_origin) {
+  if (tile_origin_ == tile_origin) {
+    return;
+  }
+  tile_origin_ = tile_origin;
+  SchedulePaint();
+}
+
+bool MahoSidebarGrainOverlayView::UpdateTexture(float texture) {
   float clamped = std::clamp(texture, 0.0f, 1.0f);
   if (texture_ != clamped) {
     texture_ = clamped;
-    SchedulePaint();
+    return true;
   }
+  return false;
 }
 
 void MahoSidebarGrainOverlayView::OnPaint(gfx::Canvas* canvas) {
@@ -74,8 +94,14 @@ void MahoSidebarGrainOverlayView::OnPaint(gfx::Canvas* canvas) {
   flags.setAlphaf(texture_ * 0.10f);
   flags.setBlendMode(SkBlendMode::kSoftLight);
 
-  for (int y = bounds.y(); y < bounds.bottom(); y += kNoiseSize) {
-    for (int x = bounds.x(); x < bounds.right(); x += kNoiseSize) {
+  const int first_x =
+      bounds.x() - ((bounds.x() - tile_origin_.x()) % kNoiseSize + kNoiseSize) %
+                       kNoiseSize;
+  const int first_y =
+      bounds.y() - ((bounds.y() - tile_origin_.y()) % kNoiseSize + kNoiseSize) %
+                       kNoiseSize;
+  for (int y = first_y; y < bounds.bottom(); y += kNoiseSize) {
+    for (int x = first_x; x < bounds.right(); x += kNoiseSize) {
       canvas->DrawImageInt(noise, x, y, flags);
     }
   }

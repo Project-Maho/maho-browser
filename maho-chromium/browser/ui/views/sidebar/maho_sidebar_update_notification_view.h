@@ -7,6 +7,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -36,10 +37,14 @@ class MahoSidebarUpdateNotificationView : public views::View,
   ~MahoSidebarUpdateNotificationView() override;
 
   void Update(const MahoSidebarUpdateNotificationModel& model);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   size_t action_row_count_for_testing() const { return action_rows_.size(); }
   views::Button* action_row_for_testing(size_t index);
   views::Label* heading_for_testing() { return heading_; }
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
+  }
 
   // views::View:
   void OnPaintBackground(gfx::Canvas* canvas) override;
@@ -69,6 +74,7 @@ class MahoSidebarUpdateNotificationView : public views::View,
   base::RepeatingClosure on_dismiss_;
   bool last_visible_ = false;
   gfx::SlideAnimation expand_animation_{this};
+  MahoSidebarPalette palette_;
   base::WeakPtrFactory<MahoSidebarUpdateNotificationView> weak_factory_{this};
 };
 

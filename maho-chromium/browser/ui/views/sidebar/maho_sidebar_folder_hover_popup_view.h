@@ -7,9 +7,11 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
@@ -51,6 +53,7 @@ class MahoSidebarFolderHoverPopupView : public views::View,
   // views::View:
   void Init();
   void OnThemeChanged() override;
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   // TextfieldController:
   void ContentsChanged(views::Textfield* sender,
@@ -101,6 +104,8 @@ class MahoSidebarFolderHoverPopupView : public views::View,
   raw_ptr<views::View> rows_container_ = nullptr;
 
   ActivateTabCallback activate_callback_;
+  MahoSidebarPalette palette_;
+  base::CallbackListSubscription palette_subscription_;
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<MahoSidebarFolderHoverPopupView> weak_factory_{this};

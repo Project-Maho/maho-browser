@@ -18,9 +18,11 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -98,9 +100,10 @@ class ItemRow : public views::View,
  public:
   ItemRow(const ui::ImageModel& icon,
           const std::u16string& title,
-          bool is_folder,
-          int index,
-          ItemRowDragData drag_data,
+           bool is_folder,
+           int index,
+           ItemRowDragData drag_data,
+           const MahoSidebarPalette& palette,
           base::RepeatingCallback<void(int)> hover_cb,
           base::RepeatingCallback<void(int)> click_cb)
       : is_folder_(is_folder),
@@ -120,7 +123,7 @@ class ItemRow : public views::View,
     highlight_bg_ = AddChildView(std::make_unique<views::View>());
     highlight_bg_->SetVisible(false);
     highlight_bg_->SetBackground(views::CreateRoundedRectBackground(
-        ui::kColorSysStateHoverOnSubtle, kRowCornerRadius));
+        kMahoColorSidebarHover, kRowCornerRadius));
         
     auto* contents = AddChildView(std::make_unique<views::View>());
     if (CanDragTab()) {
@@ -139,7 +142,7 @@ class ItemRow : public views::View,
     
     auto* label = contents->AddChildView(std::make_unique<views::Label>(
         title, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3));
-    label->SetEnabledColor(ui::kColorSysOnSurface);
+    label->SetEnabledColor(palette.primary_text);
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     label->SetElideBehavior(gfx::ELIDE_TAIL);
     label->SetSubpixelRenderingEnabled(false);
@@ -149,9 +152,10 @@ class ItemRow : public views::View,
     row_layout->SetFlexForView(label, 1);
     
     if (is_folder) {
-      auto* chevron = contents->AddChildView(std::make_unique<views::ImageView>());
-      chevron->SetImage(ui::ImageModel::FromVectorIcon(
-          maho_lucide_icons::kChevronRightIcon, ui::kColorSysOnSurfaceSubtle, 12));
+        auto* chevron = contents->AddChildView(std::make_unique<views::ImageView>());
+        chevron->SetImage(ui::ImageModel::FromVectorIcon(
+            maho_lucide_icons::kChevronRightIcon,
+            palette.secondary_text, 12));
     }
   }
   
@@ -247,13 +251,13 @@ class ItemRow : public views::View,
   void UpdateRowBackground() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     if (selected_) {
-      highlight_bg_->SetVisible(true);
-      highlight_bg_->SetBackground(views::CreateRoundedRectBackground(
-          ui::kColorSysSurfaceVariant, kRowCornerRadius));
+        highlight_bg_->SetVisible(true);
+        highlight_bg_->SetBackground(views::CreateRoundedRectBackground(
+            kMahoColorSidebarSelected, kRowCornerRadius));
     } else if (hovered_) {
-      highlight_bg_->SetVisible(true);
-      highlight_bg_->SetBackground(views::CreateRoundedRectBackground(
-          ui::kColorSysStateHoverOnSubtle, kRowCornerRadius));
+        highlight_bg_->SetVisible(true);
+        highlight_bg_->SetBackground(views::CreateRoundedRectBackground(
+            kMahoColorSidebarHover, kRowCornerRadius));
     } else {
       highlight_bg_->SetVisible(false);
     }
@@ -347,7 +351,16 @@ views::Widget* MahoSidebarFolderHoverPopupView::Show(
   
   auto contents = std::make_unique<MahoSidebarFolderHoverPopupView>(
       browser, folder_name, folder_id, std::move(children),
-      std::move(on_activate));
+       std::move(on_activate));
+  for (views::View* current = anchor_view; current; current = current->parent()) {
+    if (auto* sidebar = views::AsViewClass<MahoSidebarView>(current)) {
+      contents->SetSidebarPalette(sidebar->sidebar_palette());
+      contents->palette_subscription_ = sidebar->AddSidebarPaletteChangedCallback(
+          base::BindRepeating(&MahoSidebarFolderHoverPopupView::SetSidebarPalette,
+                              base::Unretained(contents.get())));
+      break;
+    }
+  }
   
   delegate->SetContentsView(std::move(contents));
   
@@ -381,8 +394,10 @@ void MahoSidebarFolderHoverPopupView::Init() {
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0));
 
-  SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface2, kCornerRadius));
-  SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius, ui::kColorSysNeutralOutline));
+  SetBackground(views::CreateRoundedRectBackground(
+      kMahoColorCardBackground, kCornerRadius));
+  SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius,
+                                            kMahoColorCardBorder));
 
   // 1. Breadcrumb Row (hidden at root)
   breadcrumb_row_ = AddChildView(std::make_unique<views::View>());
@@ -400,16 +415,16 @@ void MahoSidebarFolderHoverPopupView::Init() {
           base::Unretained(this)),
       u"Back");
   back_btn->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
-      maho_lucide_icons::kChevronLeftIcon, ui::kColorSysPrimary, 14));
-  back_btn->SetTextColor(views::Button::STATE_NORMAL, ui::kColorSysPrimary);
-  back_btn->SetTextColor(views::Button::STATE_HOVERED, ui::kColorSysPrimary);
+      maho_lucide_icons::kChevronLeftIcon, kMahoColorAccentBlue, 14));
+  back_btn->SetTextColor(views::Button::STATE_NORMAL, kMahoColorAccentBlue);
+  back_btn->SetTextColor(views::Button::STATE_HOVERED, kMahoColorAccentBlue);
   back_btn->SetBorder(nullptr);
   
   breadcrumb_row_->AddChildView(std::move(back_btn));
   
   auto path_label = std::make_unique<views::Label>(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5);
-  path_label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  path_label->SetEnabledColor(kMahoColorSidebarSecondaryText);
   path_label->SetElideBehavior(gfx::ELIDE_MIDDLE);
   path_label->SetSubpixelRenderingEnabled(false);
   path_label_ = breadcrumb_row_->AddChildView(std::move(path_label));
@@ -426,7 +441,7 @@ void MahoSidebarFolderHoverPopupView::Init() {
 
   auto* search_icon = search_row->AddChildView(std::make_unique<views::ImageView>());
   search_icon->SetImage(ui::ImageModel::FromVectorIcon(
-      maho_lucide_icons::kSearchIcon, ui::kColorSysOnSurfaceSubtle, 16));
+      maho_lucide_icons::kSearchIcon, kMahoColorSidebarSecondaryText, 16));
 
   auto search_field = std::make_unique<views::Textfield>();
   search_field->SetPlaceholderText(u"Search " + nav_stack_.back().name + u"…");
@@ -438,7 +453,7 @@ void MahoSidebarFolderHoverPopupView::Init() {
 
   // 3. Separator Line
   auto* separator = AddChildView(std::make_unique<views::Separator>());
-  separator->SetColorId(ui::kColorSysNeutralOutline);
+  separator->SetColorId(kMahoColorCardBorder);
 
   // 4. Scroll View
   scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
@@ -457,10 +472,23 @@ void MahoSidebarFolderHoverPopupView::OnThemeChanged() {
   views::View::OnThemeChanged();
   if (search_field_ && GetColorProvider()) {
     search_field_->SetTextColor(
-        GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+        GetColorProvider()->GetColor(kMahoColorSidebarPrimaryText));
     search_field_->set_placeholder_text_color(
-        GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle));
+        GetColorProvider()->GetColor(kMahoColorSidebarSecondaryText));
   }
+}
+
+void MahoSidebarFolderHoverPopupView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (search_field_) {
+    search_field_->SetTextColor(palette_.primary_text);
+    search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  if (path_label_) {
+    path_label_->SetEnabledColor(palette_.secondary_text);
+  }
+  RebuildResultRows();
 }
 
 void MahoSidebarFolderHoverPopupView::ContentsChanged(
@@ -521,7 +549,7 @@ void MahoSidebarFolderHoverPopupView::RebuildResultRows() {
     auto* empty_label = rows_container_->AddChildView(std::make_unique<views::Label>(
         children.empty() ? u"No tabs in this folder" : u"No matching results",
         views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3));
-    empty_label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    empty_label->SetEnabledColor(palette_.secondary_text);
     empty_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     empty_label->SetPreferredSize(gfx::Size(kPopupWidth - 2 * kRowHorizontalInset, kRowHeight));
     empty_label->SetSubpixelRenderingEnabled(false);
@@ -536,13 +564,13 @@ void MahoSidebarFolderHoverPopupView::RebuildResultRows() {
       
       if (is_folder) {
         icon = ui::ImageModel::FromVectorIcon(
-            maho_lucide_icons::kFolderIcon, ui::kColorSysPrimary, 16);
+            maho_lucide_icons::kFolderIcon, kMahoColorFolderIcon, 16);
         display_name = child.folder_name;
       } else {
         icon = GetFaviconForTab(browser_, child);
         if (icon.IsEmpty()) {
           icon = ui::ImageModel::FromVectorIcon(
-              vector_icons::kGlobeIcon, ui::kColorSysOnSurfaceSubtle, 16);
+              vector_icons::kGlobeIcon, palette_.neutral_glyph, 16);
         }
         display_name = child.custom_title.empty() ? child.title : child.custom_title;
         if (display_name.empty()) {
@@ -562,8 +590,8 @@ void MahoSidebarFolderHoverPopupView::RebuildResultRows() {
       }
 
       auto* row = rows_container_->AddChildView(std::make_unique<ItemRow>(
-          icon, display_name, is_folder, static_cast<int>(i),
-          std::move(drag_data),
+           icon, display_name, is_folder, static_cast<int>(i),
+           std::move(drag_data), palette_,
           base::BindRepeating(&MahoSidebarFolderHoverPopupView::OnRowHovered,
                               weak_factory_.GetWeakPtr()),
           base::BindRepeating(&MahoSidebarFolderHoverPopupView::OnRowClicked,

@@ -15,6 +15,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -37,12 +38,23 @@ std::unique_ptr<ui::SimpleMenuModel>
 MahoFavoritesContextMenu::BuildMenuModel() {
   auto model = std::make_unique<ui::SimpleMenuModel>(this);
 
+  content::WebContents* contents =
+      maho::context_menu::GetWebContentsForTabId(browser_, tab_id_);
+
   model->AddItem(IDC_MAHO_FAV_OPEN_NEW_TAB, u"Open in New Tab");
   model->AddItem(IDC_MAHO_FAV_OPEN_SPLIT, u"Open in Split View");
+  model->AddItem(IDC_MAHO_FAV_BOOST, u"Boost");
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
   model->AddItem(IDC_MAHO_FAV_COPY_LINK, u"Copy Link");
+  model->AddItem(IDC_MAHO_FAV_RELOAD, u"Reload");
+  model->AddItem(IDC_MAHO_FAV_DUPLICATE, u"Duplicate Tab");
+  if (contents && contents->IsAudioMuted()) {
+    model->AddItem(IDC_MAHO_FAV_UNMUTE, u"Unmute Tab");
+  } else {
+    model->AddItem(IDC_MAHO_FAV_MUTE, u"Mute Tab");
+  }
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
@@ -128,6 +140,27 @@ void MahoFavoritesContextMenu::ExecuteCommand(int command_id,
     case IDC_MAHO_FAV_OPEN_SPLIT:
       MahoSplitViewController(browser_).AddSplitWithURL(url_);
       break;
+    case IDC_MAHO_FAV_BOOST:
+      maho::context_menu::BoostTab(
+          browser_,
+          maho::context_menu::GetWebContentsForTabId(browser_, tab_id_));
+      break;
+    case IDC_MAHO_FAV_RELOAD:
+      maho::context_menu::ReloadTab(
+          maho::context_menu::GetWebContentsForTabId(browser_, tab_id_));
+      break;
+    case IDC_MAHO_FAV_DUPLICATE:
+      maho::context_menu::DuplicateTab(
+          browser_, maho::context_menu::ResolveTabIndex(browser_, tab_id_));
+      break;
+    case IDC_MAHO_FAV_MUTE:
+      maho::context_menu::SetTabMuted(
+          maho::context_menu::GetWebContentsForTabId(browser_, tab_id_), true);
+      break;
+    case IDC_MAHO_FAV_UNMUTE:
+      maho::context_menu::SetTabMuted(
+          maho::context_menu::GetWebContentsForTabId(browser_, tab_id_), false);
+      break;
     case IDC_MAHO_FAV_REMOVE:
       if (!tab_id_.empty()) {
         // ADR 11: Decoupled Favorites Close-Protection Policy.
@@ -167,6 +200,14 @@ bool MahoFavoritesContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_FAV_COPY_LINK:
     case IDC_MAHO_FAV_OPEN_SPLIT:
       return url_.is_valid();
+    case IDC_MAHO_FAV_BOOST:
+    case IDC_MAHO_FAV_RELOAD:
+    case IDC_MAHO_FAV_DUPLICATE:
+    case IDC_MAHO_FAV_MUTE:
+    case IDC_MAHO_FAV_UNMUTE:
+      // Only actionable when the favorite is a live tab in the current strip.
+      return maho::context_menu::GetWebContentsForTabId(browser_, tab_id_) !=
+             nullptr;
     case IDC_MAHO_FAV_REMOVE:
       return !tab_id_.empty();
     case IDC_MAHO_FAV_MOVE_TO_SPACE:

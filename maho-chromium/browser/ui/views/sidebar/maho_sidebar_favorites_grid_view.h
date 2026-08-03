@@ -17,6 +17,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/favicon_base/favicon_types.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -67,6 +68,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   ~MahoSidebarFavoritesGridView() override;
 
   void Update(const MahoSidebarFavoritesModel& model);
+  void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
   bool ActivateFavoriteByIndex(size_t index);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void Layout(PassKey) override;
@@ -176,6 +178,9 @@ class MahoSidebarFavoritesGridView : public views::View {
   ui::ImageModel tile_favicon_for_testing(size_t index) const;
   ui::ImageModel cached_favicon_for_tab_id_for_testing(
       const std::string& tab_id) const;
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
+  }
   void RunFaviconLoadedForTesting(
       size_t index,
       const std::string& tab_id,
@@ -192,6 +197,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   void MarkDropAccepted(const std::string& tab_id);
 
  private:
+  MahoSidebarPalette palette_;
   enum class DragIdentityCleanup { kKeep, kClear };
 
   struct LayoutSpec {

@@ -171,6 +171,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabToPinnedSection) {
   pinned_target->OnDragExited();
 
   EXPECT_TRUE(observer_.HasEvent("pin_tab"));
+  EXPECT_TRUE(observer_.HasEvent("reorder_root_item"));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabIntoFolder) {
@@ -610,7 +611,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   pinned_target->OnDragExited();
 
   auto post_state = GetViewState();
-  EXPECT_TRUE(observer_.HasEvent("pin_tab"));
+  EXPECT_FALSE(observer_.HasEvent("pin_tab"));
+  EXPECT_TRUE(observer_.HasEvent("reorder_root_item"));
   EXPECT_EQ(post_state.tab_list.pinned_tree.size(), state.tab_list.pinned_tree.size());
   EXPECT_EQ(post_state.tab_list.pinned_tree.size(), state.tab_list.pinned_tree.size());
 }

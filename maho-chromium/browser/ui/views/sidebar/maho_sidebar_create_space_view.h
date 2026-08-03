@@ -10,6 +10,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
@@ -58,6 +59,7 @@ class MahoSidebarCreateSpaceView : public views::View,
   ~MahoSidebarCreateSpaceView() override;
 
   void OnThemeChanged() override;
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   void SetCloseCallback(base::RepeatingClosure close_callback);
   void PrepareForOpen();
@@ -130,6 +132,7 @@ class MahoSidebarCreateSpaceView : public views::View,
   bool awaiting_icon_input_ = false;
   bool restoring_name_text_ = false;
   base::RepeatingClosure close_callback_;
+  MahoSidebarPalette palette_;
   base::WeakPtrFactory<MahoSidebarCreateSpaceView> weak_factory_{this};
 };
 

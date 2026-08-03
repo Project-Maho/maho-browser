@@ -397,6 +397,25 @@ class ArchiveRowView : public views::View,
   ArchiveRowView& operator=(const ArchiveRowView&) = delete;
   ~ArchiveRowView() override = default;
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    if (tile_label_) {
+      tile_label_->SetEnabledColor(palette_.primary_text);
+    }
+    if (tile_icon_) {
+      tile_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+          maho_lucide_icons::kGlobeIcon, palette_.primary_text,
+          kRowFallbackGlyphSize));
+    }
+    if (title_label_) {
+      title_label_->SetEnabledColor(palette_.primary_text);
+    }
+    if (subtitle_label_) {
+      subtitle_label_->SetEnabledColor(palette_.secondary_text);
+    }
+    UpdateAppearance();
+  }
+
   void OnMouseEntered(const ui::MouseEvent& event) override {
     UpdateAppearance();
   }
@@ -498,14 +517,14 @@ class ArchiveRowView : public views::View,
 
     if (HasFocus()) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorLibraryRowSelected, kRowCornerRadius));
+          palette_.row_selected, kRowCornerRadius));
       SetBorder(views::CreateRoundedRectBorder(
-          1, kRowCornerRadius, kMahoColorLibraryGlyphBorder));
+          1, kRowCornerRadius, palette_.outline));
     } else if (IsMouseHovered()) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorLibraryRowHover, kRowCornerRadius));
+          palette_.row_hover, kRowCornerRadius));
       SetBorder(views::CreateRoundedRectBorder(
-          1, kRowCornerRadius, kMahoColorLibraryGlyphBorder));
+          1, kRowCornerRadius, palette_.outline));
     } else {
       SetBackground(nullptr);
       SetBorder(nullptr);
@@ -528,6 +547,7 @@ class ArchiveRowView : public views::View,
   raw_ptr<views::Label> subtitle_label_ = nullptr;
   std::unique_ptr<ui::SimpleMenuModel> context_menu_model_;
   std::unique_ptr<views::MenuRunner> context_menu_runner_;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(ArchiveRowView)
@@ -699,6 +719,17 @@ MahoSidebarArchiveView::MahoSidebarArchiveView(Browser* browser)
 }
 
 MahoSidebarArchiveView::~MahoSidebarArchiveView() = default;
+
+void MahoSidebarArchiveView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (search_field_) {
+    search_field_->SetTextColor(palette_.primary_text);
+    search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  UpdateFilterButtonAppearance();
+  ApplyFilters();
+}
 
 void MahoSidebarArchiveView::SetArchivedTabsForTesting(
     std::vector<ArchivedTabItem> tabs) {
@@ -1161,7 +1192,8 @@ void MahoSidebarArchiveView::RebuildList(
               base::BindRepeating(&MahoSidebarArchiveView::OnRestorePressed,
                                   weak_factory_.GetWeakPtr(), tab.tab_id, tab.space_id),
               base::BindRepeating(&MahoSidebarArchiveView::OnDeletePressed,
-                                  weak_factory_.GetWeakPtr(), tab.tab_id)));
+                                   weak_factory_.GetWeakPtr(), tab.tab_id)));
+      row->SetSidebarPalette(palette_);
       row->SetShowsDivider(tab_idx < section.tabs.size() - 1);
     }
   }

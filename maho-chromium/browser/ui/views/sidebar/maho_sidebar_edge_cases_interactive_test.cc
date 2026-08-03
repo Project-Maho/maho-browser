@@ -28,12 +28,25 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
+#include "maho/browser/ui/views/library_overlay/maho_library_overlay_controller.h"
+#include "maho/browser/ui/views/library_overlay/maho_library_overlay_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/test/button_test_api.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
 
 namespace maho {
 namespace {
@@ -64,6 +77,28 @@ bool HasLabelWithText(views::View* root, std::u16string_view expected) {
 MahoSidebarViewStateModel BuildViewStateForBrowser(Browser* target_browser) {
   MahoSidebarStateAdapter adapter;
   return adapter.BuildViewStateModel(target_browser);
+}
+
+void SelectLibraryCategoryViaRail(
+    MahoSidebarView* sidebar,
+    MahoSidebarLibraryRailView::Category category) {
+  ASSERT_TRUE(sidebar);
+  MahoSidebarLibraryRailView* rail = sidebar->library_rail_view();
+  ASSERT_TRUE(rail);
+  views::Button* button = rail->button_for_category_for_testing(category);
+  ASSERT_TRUE(button);
+  ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                       base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, 0);
+  views::test::ButtonTestApi(button).NotifyClick(event);
+  base::RunLoop().RunUntilIdle();
+}
+
+MahoLibraryOverlayController* GetLibraryOverlayController(
+    MahoSidebarContainerView* container) {
+  if (!container || !container->overlay_host()) {
+    return nullptr;
+  }
+  return container->overlay_host()->library_overlay_controller();
 }
 
 class MahoSidebarEdgeCasesInteractiveTest
@@ -922,6 +957,574 @@ TEST(IsSidebarIneligibleUrlTest, KnownSpecialPagesAreExcluded) {
   EXPECT_FALSE(maho::IsSidebarIneligibleUrl(GURL()));
 }
 #endif
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       DirtyStructuralRefreshDiscardsStaleBackgroundResult) {
+  ResolveViews();
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  std::vector<SidebarStateBackgroundResult> held_results;
+  base::RunLoop run_loop;
+
+  sidebar->SetOnBackgroundStateReadyCallbackForTesting(base::BindRepeating(
+      [](std::vector<SidebarStateBackgroundResult>* held, base::RunLoop* loop,
+         MahoSidebarView* view, SidebarStateBackgroundResult& res) {
+        held->push_back(std::move(res));
+        loop->Quit();
+        return false;
+      },
+      base::Unretained(&held_results), base::Unretained(&run_loop)));
+
+  sidebar->ScheduleRefreshAll();
+  run_loop.Run();
+
+  ASSERT_EQ(1u, held_results.size());
+
+  size_t count_before = GetViewState().tab_list.normal_tree.size();
+
+  // Mutate model.
+  AddTestTab(GURL("https://stale-test.example.com"), u"B Tab");
+
+  // Queue result B.
+  sidebar->ScheduleRefreshAll();
+
+  // Remove interceptor.
+  sidebar->SetOnBackgroundStateReadyCallbackForTesting(base::NullCallback());
+
+  // Release A.
+  sidebar->OnBackgroundStateReadyForTesting(std::move(held_results[0]));
+
+  // Assert A did not apply.
+  EXPECT_EQ(count_before, GetViewState().tab_list.normal_tree.size());
+
+  // Let B complete.
+  RunAllPendingTasks();
+
+  // Assert B applied.
+  EXPECT_EQ(count_before + 1, GetViewState().tab_list.normal_tree.size());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest, ArchiveTabRegistrySuppressionBehavior) {
+  ResolveViews();
+  auto* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+
+  SetTabRegistryShellEventObserverForTesting(&observer_);
+
+  AddTestTabs(5);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+
+  TabStripModel* model = browser()->tab_strip_model();
+  int initial_count = model->count();
+  ASSERT_GE(initial_count, 5);
+
+  std::vector<std::string> tab_ids;
+  for (int i = 0; i < model->count(); ++i) {
+    auto* helper = MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(i));
+    ASSERT_TRUE(helper);
+    tab_ids.push_back(helper->stable_tab_id());
+  }
+
+  // --- (a) inactive single archive ---
+  model->ActivateTabAt(0, TabStripUserGestureDetails(TabStripUserGestureDetails::GestureType::kMouse));
+  std::string inactive_id = tab_ids[1];
+
+  observer_.Clear();
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), {inactive_id});
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(initial_count - 1, model->count());
+  EXPECT_EQ(0, model->active_index());
+  EXPECT_FALSE(observer_.HasEvent("close_tab"));
+  EXPECT_TRUE(observer_.HasEvent("archive_tab_by_id"));
+
+  // --- (b) active archive and successor ---
+  model->ActivateTabAt(1, TabStripUserGestureDetails(TabStripUserGestureDetails::GestureType::kMouse));
+  std::string active_id = MahoTabIdHelper::FromWebContents(model->GetActiveWebContents())->stable_tab_id();
+  int old_active_index = model->active_index();
+
+  observer_.Clear();
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), {active_id});
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(initial_count - 2, model->count());
+  {
+    std::string new_active_id =
+        MahoTabIdHelper::FromWebContents(model->GetActiveWebContents())
+            ->stable_tab_id();
+    EXPECT_NE(active_id, new_active_id);
+  }
+  EXPECT_FALSE(observer_.HasEvent("close_tab"));
+
+  // --- (c) multi-select and Archive Below ---
+  std::vector<std::string> multi_ids;
+  multi_ids.push_back(MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(1))->stable_tab_id());
+  multi_ids.push_back(MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(2))->stable_tab_id());
+
+  observer_.Clear();
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), multi_ids);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(initial_count - 4, model->count());
+  EXPECT_FALSE(observer_.HasEvent("close_tab"));
+
+  // --- (d) pinned/favorite archived record survives ---
+  std::string pin_id = MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(0))->stable_tab_id();
+  observer_.Clear();
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), {pin_id});
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(observer_.HasEvent("close_tab"));
+  EXPECT_FALSE(observer_.HasEvent("suspend_tab"));
+
+  // --- (f) unconsumed suppression clean up and normal close on restored ---
+  std::string restored_id = "restored-tab-id";
+  {
+    ScopedMahoTabWakeId wake_scope(restored_id);
+    chrome::AddTabAt(browser(), GURL("https://example.com"), -1, true);
+  }
+  base::RunLoop().RunUntilIdle();
+
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), {restored_id});
+  base::RunLoop().RunUntilIdle();
+
+  {
+    ScopedMahoTabWakeId wake_scope(restored_id);
+    chrome::AddTabAt(browser(), GURL("https://example.com"), -1, true);
+  }
+  base::RunLoop().RunUntilIdle();
+
+  observer_.Clear();
+  int idx = -1;
+  for (int i = 0; i < model->count(); ++i) {
+    auto* helper = MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(i));
+    if (helper && helper->stable_tab_id() == restored_id) {
+      idx = i;
+      break;
+    }
+  }
+  ASSERT_GE(idx, 0);
+
+  model->CloseWebContentsAt(idx, TabCloseTypes::CLOSE_USER_GESTURE);
+  base::RunLoop().RunUntilIdle();
+
+  int close_count = 0;
+  for (const auto& ev : observer_.events()) {
+    if (ev.kind == "close_tab") {
+      close_count++;
+    }
+  }
+  EXPECT_EQ(1, close_count);
+
+  SetTabRegistryShellEventObserverForTesting(nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest, DownloadsViewPopulatedSnapshot) {
+  ResolveViews();
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kDownloads);
+  base::RunLoop().RunUntilIdle();
+
+  auto* downloads_view = sidebar->downloads_view_for_testing();
+  ASSERT_TRUE(downloads_view);
+  EXPECT_TRUE(downloads_view->GetVisible());
+
+  std::vector<DownloadItem> items;
+  DownloadItem item1;
+  item1.id = "dl-1";
+  item1.filename = u"completed_doc.pdf";
+  item1.url = "https://example.com/completed_doc.pdf";
+  item1.state = "completed";
+  item1.total_bytes = 2048;
+  item1.received_bytes = 2048;
+  item1.started_at = "Saturday, July 18, 2026 6:00:00 PM";
+  item1.completed_at = "Saturday, July 18, 2026 6:01:00 PM";
+  items.push_back(item1);
+
+  DownloadItem item2;
+  item2.id = "dl-2";
+  item2.filename = u"active_zip.zip";
+  item2.url = "https://example.com/active_zip.zip";
+  item2.state = "downloading";
+  item2.total_bytes = 1024 * 1024;
+  item2.received_bytes = 512 * 1024;
+  item2.started_at = "Saturday, July 18, 2026 6:00:00 PM";
+  items.push_back(item2);
+
+  downloads_view->SetDownloadsForTesting(items);
+  base::RunLoop().RunUntilIdle();
+
+  views::View* list_container = downloads_view->list_container_for_testing();
+  int row_count = 0;
+  for (views::View* child : list_container->children()) {
+    for (views::View* grandchild : child->children()) {
+      if (grandchild->GetClassName() == "DownloadRowView") {
+        row_count++;
+      }
+    }
+  }
+  EXPECT_EQ(2, row_count);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest, MahoSidebarRestoreArchivedTabFlow) {
+  ResolveViews();
+  auto* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+
+  SetTabRegistryShellEventObserverForTesting(&observer_);
+
+  AddTestTabs(3);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+
+  TabStripModel* model = browser()->tab_strip_model();
+  int initial_count = model->count();
+  ASSERT_GE(initial_count, 3);
+
+  auto* target_contents = model->GetWebContentsAt(1);
+  auto* helper = MahoTabIdHelper::FromWebContents(target_contents);
+  ASSERT_TRUE(helper);
+  std::string tab_id = helper->stable_tab_id();
+
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+  std::string space_id = bridge->GetActiveSpaceId(browser());
+  ASSERT_FALSE(space_id.empty());
+
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), {tab_id});
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(initial_count - 1, model->count());
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+
+  auto* archive_view = sidebar_->archive_view_for_testing();
+  ASSERT_TRUE(archive_view);
+
+  archive_view->ReloadArchivedTabs();
+
+  bool tab_in_archive = BlockAndPollUntil([&]() {
+    for (const auto& item : archive_view->all_archived_tabs_for_testing()) {
+      if (item.tab_id == tab_id) {
+        return true;
+      }
+    }
+    return false;
+  });
+  ASSERT_TRUE(tab_in_archive) << "Archived tab was not loaded into the archive view";
+
+  std::string found_space_id;
+  for (const auto& item : archive_view->all_archived_tabs_for_testing()) {
+    if (item.tab_id == tab_id) {
+      found_space_id = item.space_id;
+      break;
+    }
+  }
+  EXPECT_EQ(found_space_id, space_id);
+
+  observer_.Clear();
+  sidebar_->RestoreArchivedTabAndActivate(tab_id, space_id);
+  base::RunLoop().RunUntilIdle();
+
+  bool found_live = false;
+  for (int i = 0; i < model->count(); ++i) {
+    auto* tab_helper = MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(i));
+    if (tab_helper && tab_helper->stable_tab_id() == tab_id) {
+      found_live = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_live) << "Restored tab was not found in the tab strip model";
+
+  EXPECT_EQ(initial_count, model->count());
+
+  archive_view->ReloadArchivedTabs();
+  bool tab_still_in_archive = BlockAndPollUntil([&]() {
+    for (const auto& item : archive_view->all_archived_tabs_for_testing()) {
+      if (item.tab_id == tab_id) {
+        return true;
+      }
+    }
+    return false;
+  }, base::Milliseconds(500));
+  EXPECT_FALSE(tab_still_in_archive) << "Restored tab should no longer be in the archive view";
+
+  sidebar_->RestoreArchivedTabAndActivate(tab_id, space_id);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(initial_count, model->count());
+
+  SetTabRegistryShellEventObserverForTesting(nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayVisibleOnDownloadsSelect) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  EXPECT_TRUE(controller->IsVisible())
+      << "Selecting Downloads must open the fixed-width library overlay";
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kDownloads,
+            controller->category());
+  ASSERT_TRUE(controller->GetOverlayViewForTesting());
+  EXPECT_TRUE(
+      controller->GetOverlayViewForTesting()->downloads_view_for_testing())
+      << "Downloads overlay must host a downloads content view";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayWidthIndependentOfSidebarPref) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  PrefService* prefs = browser()->profile()->GetPrefs();
+  prefs->SetInteger(sidebar_prefs::kSidebarWidth, 280);
+  base::RunLoop().RunUntilIdle();
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+  EXPECT_EQ(sidebar_layout::kLibraryOverlayContentWidthDp,
+            controller->GetOverlayWidthForTesting())
+      << "Overlay widget width must be fixed with a 280dp sidebar pref";
+
+  prefs->SetInteger(sidebar_prefs::kSidebarWidth, 1600);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(controller->IsVisible());
+  EXPECT_EQ(sidebar_layout::kLibraryOverlayContentWidthDp,
+            controller->GetOverlayWidthForTesting())
+      << "Overlay widget width must stay fixed with a 1600dp sidebar pref";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlaySwapKeepsSingleWidget) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kDownloads,
+            controller->category());
+  views::Widget* widget_before = controller->GetOverlayWidgetForTesting();
+  ASSERT_TRUE(widget_before);
+
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kArchivedTabs);
+
+  EXPECT_TRUE(controller->IsVisible());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kArchivedTabs,
+            controller->category());
+  EXPECT_EQ(widget_before, controller->GetOverlayWidgetForTesting())
+      << "Swapping Downloads<->Archive must reuse the same overlay widget";
+  ASSERT_TRUE(controller->GetOverlayViewForTesting());
+  EXPECT_TRUE(
+      controller->GetOverlayViewForTesting()->archive_view_for_testing())
+      << "Swapped overlay must now host an archive content view";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayDismissedOnOtherCategory) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+
+  // NOTE: kMedia intentionally avoided here - MahoSidebarMediaView has a
+  // separate pre-existing construction crash (out of scope).
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kSpaces);
+  EXPECT_FALSE(controller->IsVisible())
+      << "Selecting a different library category must dismiss the library "
+         "overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayDismissedOnLeaveLibrary) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+
+  sidebar_->ExitLibraryToTabs();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(controller->IsVisible())
+      << "Leaving Library must dismiss the floating overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayDismissedOnFullAutoHide) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+
+  browser()->profile()->GetPrefs()->SetBoolean(
+      sidebar_prefs::kSidebarPanelExpanded, false);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(controller->IsVisible())
+      << "Fully auto-hiding the sidebar must dismiss the library overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayRestoreOpensLiveTab) {
+  ResolveViews();
+  auto* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  SetTabRegistryShellEventObserverForTesting(&observer_);
+
+  AddTestTabs(3);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+
+  TabStripModel* model = browser()->tab_strip_model();
+  int initial_count = model->count();
+  ASSERT_GE(initial_count, 3);
+
+  auto* target_contents = model->GetWebContentsAt(1);
+  auto* helper = MahoTabIdHelper::FromWebContents(target_contents);
+  ASSERT_TRUE(helper);
+  std::string tab_id = helper->stable_tab_id();
+
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+  std::string space_id = bridge->GetActiveSpaceId(browser());
+  ASSERT_FALSE(space_id.empty());
+
+  registry->ArchiveTabsAndRemoveFromStrip(browser(), {tab_id});
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(initial_count - 1, model->count());
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kArchivedTabs);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+  ASSERT_TRUE(controller->GetOverlayViewForTesting());
+  auto* overlay_archive =
+      controller->GetOverlayViewForTesting()->archive_view_for_testing();
+  ASSERT_TRUE(overlay_archive);
+
+  overlay_archive->ReloadArchivedTabs();
+  bool tab_in_archive = BlockAndPollUntil([&]() {
+    for (const auto& item : overlay_archive->all_archived_tabs_for_testing()) {
+      if (item.tab_id == tab_id) {
+        return true;
+      }
+    }
+    return false;
+  });
+  ASSERT_TRUE(tab_in_archive)
+      << "Archived tab was not loaded into the overlay archive view";
+
+  observer_.Clear();
+  sidebar_->RestoreArchivedTabAndActivate(tab_id, space_id);
+  base::RunLoop().RunUntilIdle();
+
+  bool found_live = false;
+  for (int i = 0; i < model->count(); ++i) {
+    auto* tab_helper =
+        MahoTabIdHelper::FromWebContents(model->GetWebContentsAt(i));
+    if (tab_helper && tab_helper->stable_tab_id() == tab_id) {
+      found_live = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_live)
+      << "Restoring from the overlay must open a live tab in the strip";
+  EXPECT_EQ(initial_count, model->count());
+  EXPECT_FALSE(controller->IsVisible())
+      << "Restoring exits Library and dismisses the overlay";
+
+  SetTabRegistryShellEventObserverForTesting(nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MahoSidebarLibraryOverlayOpensFromFooterArchiveButton) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::MdTextButton* archive_button = footer->archive_button_for_testing();
+  ASSERT_TRUE(archive_button);
+
+  ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                       base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, 0);
+  views::test::ButtonTestApi(archive_button).NotifyClick(event);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(container_->IsLibraryOverlayVisible())
+      << "Footer archive button must open the fixed-width library overlay, "
+         "identical to a rail Archive selection";
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+  EXPECT_EQ(sidebar_layout::kLibraryOverlayContentWidthDp,
+            controller->GetOverlayWidthForTesting())
+      << "Footer-opened overlay must use the fixed content width";
+}
 
 }  // namespace
 }  // namespace maho

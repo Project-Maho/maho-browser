@@ -27,11 +27,13 @@
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
+#include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/page_transition_types.h"
@@ -170,6 +172,44 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   EXPECT_TRUE(base::test::RunUntil([overlay_controller] {
     return !overlay_controller->IsVisible();
   }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       FooterPopoverNewSpaceAxPressShowsCreateSurface) {
+  SeedProfile(1);
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::Widget* popover_widget = OpenFooterActionPopover();
+  ASSERT_TRUE(popover_widget);
+
+  views::View* new_space_row =
+      FindViewWithAccessibleName(popover_widget->GetContentsView(), u"New Space");
+  ASSERT_TRUE(new_space_row);
+
+  ui::AXNodeData row_data;
+  new_space_row->GetViewAccessibility().GetAccessibleNodeData(&row_data);
+  EXPECT_TRUE(row_data.HasAction(ax::mojom::Action::kDoDefault));
+
+  ui::AXActionData action;
+  action.action = ax::mojom::Action::kDoDefault;
+  EXPECT_TRUE(new_space_row->HandleAccessibleAction(action));
+
+  EXPECT_TRUE(base::test::RunUntil([footer] {
+    return footer->action_popover_widget_for_testing() == nullptr;
+  }));
+
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  MahoSidebarCreateSpaceView* create_space_view = nullptr;
+  for (views::View* child : sidebar->children()) {
+    if (auto* candidate = views::AsViewClass<MahoSidebarCreateSpaceView>(child)) {
+      create_space_view = candidate;
+      break;
+    }
+  }
+  ASSERT_TRUE(create_space_view);
+  EXPECT_TRUE(create_space_view->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,

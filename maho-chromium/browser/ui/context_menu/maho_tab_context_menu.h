@@ -12,6 +12,40 @@
 
 class Browser;
 
+namespace content {
+class WebContents;
+}  // namespace content
+
+namespace maho::context_menu {
+
+// Shared tab-action primitives used by BOTH the tab context menu and the
+// favorites context menu, so the two menus never diverge in behavior. A
+// favorite is a live tab with a role, so favorite menu actions resolve the
+// underlying tab through these helpers instead of re-implementing them.
+
+// Resolves a stable core tab id to its live tab strip index in |browser|,
+// or -1 when |browser|/|tab_id| is unavailable or the tab is not present in
+// the current strip.
+int ResolveTabIndex(Browser* browser, const std::string& tab_id);
+
+// Live WebContents for |tab_id| in |browser|, or nullptr.
+content::WebContents* GetWebContentsForTabId(Browser* browser,
+                                             const std::string& tab_id);
+
+// Opens the Boost window for the active domain of |contents|. No-op on null.
+void BoostTab(Browser* browser, content::WebContents* contents);
+
+// Reloads |contents|. No-op on null.
+void ReloadTab(content::WebContents* contents);
+
+// Duplicates the tab at |tab_index| in |browser|. No-op when out of range.
+void DuplicateTab(Browser* browser, int tab_index);
+
+// Mutes/unmutes |contents| and notifies core. No-op on null.
+void SetTabMuted(content::WebContents* contents, bool muted);
+
+}  // namespace maho::context_menu
+
 class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
  public:
   class Delegate {

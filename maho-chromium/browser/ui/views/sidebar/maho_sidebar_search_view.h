@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/button/button.h"
@@ -53,6 +54,7 @@ class MahoSidebarSearchView : public views::View,
   ~MahoSidebarSearchView() override;
 
   void Update(const MahoSidebarSearchModel& model);
+  void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
   void FocusVisibleControl();
 
   views::Textfield* textfield_for_testing() { return textfield_; }
@@ -61,6 +63,9 @@ class MahoSidebarSearchView : public views::View,
   views::View* utility_icon_slot_for_testing() { return utility_icon_slot_; }
   MahoLocationBarUtilityIconView* utility_icon_for_testing() {
     return utility_icon_;
+  }
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
   }
 
   views::Label* translate_label_view() { return secondary_label_; }
@@ -120,6 +125,7 @@ class MahoSidebarSearchView : public views::View,
   std::unique_ptr<MahoLocationBarUtilityBubbleCoordinator> utility_bubble_coordinator_;
   base::CallbackListSubscription utility_panel_close_subscription_;
   MahoSidebarSearchModel model_;
+  MahoSidebarPalette palette_;
   bool is_editing_ = false;
   base::WeakPtrFactory<MahoSidebarSearchView> weak_factory_{this};
 };

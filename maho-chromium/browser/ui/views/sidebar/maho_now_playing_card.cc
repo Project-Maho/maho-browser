@@ -160,13 +160,13 @@ void MahoNowPlayingCard::UpdateWithMediaSessionInfo(
           static_cast<int>(media_session::mojom::MediaSessionAction::kPause),
           maho_lucide_icons::kPauseIcon,
           IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PAUSE,
-          ui::kColorSysOnSurface);
+          kMahoColorSidebarPrimaryText);
     } else {
       play_pause_button_->Update(
           static_cast<int>(media_session::mojom::MediaSessionAction::kPlay),
           maho_lucide_icons::kPlayIcon,
           IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY,
-          ui::kColorSysOnSurface);
+          kMahoColorSidebarPrimaryText);
     }
   }
 }
@@ -253,6 +253,24 @@ void MahoNowPlayingCard::UpdateWithVolume(float volume) {}
 void MahoNowPlayingCard::UpdateDeviceSelectorVisibility(bool visible) {}
 void MahoNowPlayingCard::UpdateDeviceSelectorAvailability(bool has_devices) {}
 
+void MahoNowPlayingCard::SetSidebarPalette(const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  const SkColor surface = palette_.normal_contrast_surfaces.empty()
+                              ? palette_.row_selected
+                              : palette_.normal_contrast_surfaces.front();
+  SetBackground(views::CreateRoundedRectBackground(surface, 12));
+  for (views::Label* label : {title_label_.get(), artist_label_.get(),
+                              current_timestamp_label_.get(),
+                              duration_label_.get()}) {
+    if (label) {
+      label->SetEnabledColor(label == title_label_ ? palette_.primary_text
+                                                   : palette_.secondary_text);
+    }
+  }
+  UpdateMuteButton();
+  SchedulePaint();
+}
+
 void MahoNowPlayingCard::AddObserver(
     global_media_controls::MediaItemUIObserver* observer) {
   observers_.AddObserver(observer);
@@ -285,7 +303,7 @@ void MahoNowPlayingCard::UpdateExpandedState() {
 void MahoNowPlayingCard::BuildLayout() {
   SetNotifyEnterExitOnChild(true);
   SetBackground(views::CreateRoundedRectBackground(
-      SkColorSetRGB(0x1F, 0x1F, 0x22), 12));
+      kMahoColorCardBackground, 12));
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
@@ -305,10 +323,10 @@ void MahoNowPlayingCard::BuildLayout() {
   layout1->SetFlexForView(title_label_, 1);
 
   close_button_ = title_row_->AddChildView(views::CreateVectorImageButtonWithNativeTheme(
-      base::BindRepeating(&MahoNowPlayingCard::OnClosePressed,
-                          base::Unretained(this)),
-      maho_lucide_icons::kXIcon, 12, ui::kColorSysOnSurfaceSubtle,
-      ui::kColorSysOnSurface, ui::kColorSysOnSurface));
+       base::BindRepeating(&MahoNowPlayingCard::OnClosePressed,
+                           base::Unretained(this)),
+       maho_lucide_icons::kXIcon, 12, kMahoColorSidebarSecondaryText,
+       kMahoColorSidebarPrimaryText, kMahoColorSidebarPrimaryText));
   close_button_->SetBorder(nullptr);
   close_button_->SetTooltipText(u"Dismiss");
   close_button_->SetAccessibleName(u"Dismiss Now Playing");
@@ -318,7 +336,7 @@ void MahoNowPlayingCard::BuildLayout() {
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
   artist_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   artist_label_->SetElideBehavior(gfx::ELIDE_TAIL);
-  artist_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  artist_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
   artist_label_->SetSkipSubpixelRenderingOpacityCheck(true);
 
   progress_row_ = AddChildView(std::make_unique<views::View>());
@@ -329,15 +347,15 @@ void MahoNowPlayingCard::BuildLayout() {
 
   current_timestamp_label_ = progress_row_->AddChildView(std::make_unique<views::Label>(
       u"0:00", views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
-  current_timestamp_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  current_timestamp_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
   current_timestamp_label_->SetSkipSubpixelRenderingOpacityCheck(true);
 
   progress_view_ = progress_row_->AddChildView(std::make_unique<global_media_controls::MediaProgressView>(
       /*use_squiggly_line=*/false,
-      /*playing_foreground_color_id=*/ui::kColorSysPrimary,
-      /*playing_background_color_id=*/ui::kColorSysNeutralOutline,
-      /*paused_foreground_color_id=*/ui::kColorSysPrimary,
-      /*paused_background_color_id=*/ui::kColorSysNeutralOutline,
+      /*playing_foreground_color_id=*/kMahoColorAccentBlue,
+      /*playing_background_color_id=*/kMahoColorLibraryGlyphBorder,
+      /*paused_foreground_color_id=*/kMahoColorAccentBlue,
+      /*paused_background_color_id=*/kMahoColorLibraryGlyphBorder,
       /*focus_ring_color_id=*/ui::kColorSysStateFocusRing,
       /*drag_state_change_callback=*/
       base::BindRepeating(&MahoNowPlayingCard::OnDragStateChanged,
@@ -356,7 +374,7 @@ void MahoNowPlayingCard::BuildLayout() {
 
   duration_label_ = progress_row_->AddChildView(std::make_unique<views::Label>(
       u"0:00", views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
-  duration_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  duration_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
   duration_label_->SetSkipSubpixelRenderingOpacityCheck(true);
 
   auto* row4 = AddChildView(std::make_unique<views::View>());
@@ -394,8 +412,8 @@ void MahoNowPlayingCard::BuildLayout() {
       static_cast<int>(media_session::mojom::MediaSessionAction::kPreviousTrack),
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PREVIOUS_TRACK,
       14, maho_lucide_icons::kSkipBackIcon, gfx::Size(24, 24),
-      ui::kColorSysOnSurface, ui::kColorSysOnSurfaceSubtle,
-      ui::kColorSysStateFocusRing));
+       kMahoColorSidebarPrimaryText, kMahoColorSidebarSecondaryText,
+       ui::kColorSysStateFocusRing));
 
   // Play/Pause Button
   play_pause_button_ = row4->AddChildView(std::make_unique<global_media_controls::MediaActionButton>(
@@ -404,8 +422,8 @@ void MahoNowPlayingCard::BuildLayout() {
       static_cast<int>(media_session::mojom::MediaSessionAction::kPlay),
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY,
       18, maho_lucide_icons::kPlayIcon, gfx::Size(32, 32),
-      ui::kColorSysOnSurface, ui::kColorSysOnSurfaceSubtle,
-      ui::kColorSysStateFocusRing));
+       kMahoColorSidebarPrimaryText, kMahoColorSidebarSecondaryText,
+       ui::kColorSysStateFocusRing));
 
   // Next Button
   next_button_ = row4->AddChildView(std::make_unique<global_media_controls::MediaActionButton>(
@@ -415,8 +433,8 @@ void MahoNowPlayingCard::BuildLayout() {
       static_cast<int>(media_session::mojom::MediaSessionAction::kNextTrack),
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_NEXT_TRACK,
       14, maho_lucide_icons::kSkipForwardIcon, gfx::Size(24, 24),
-      ui::kColorSysOnSurface, ui::kColorSysOnSurfaceSubtle,
-      ui::kColorSysStateFocusRing));
+       kMahoColorSidebarPrimaryText, kMahoColorSidebarSecondaryText,
+       ui::kColorSysStateFocusRing));
 
   // Spacer
   auto* spacer2 = row4->AddChildView(std::make_unique<views::View>());
@@ -447,12 +465,14 @@ void MahoNowPlayingCard::UpdateMuteButton() {
   if (is_muted_) {
     views::SetImageFromVectorIconWithColor(
         mute_button_, maho_lucide_icons::kVolumeXIcon, 14,
-        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurfaceSubtle));
+        views::IconColors(kMahoColorSidebarSecondaryText,
+                          kMahoColorSidebarSecondaryText));
     mute_button_->SetTooltipText(u"Unmute");
   } else {
     views::SetImageFromVectorIconWithColor(
         mute_button_, maho_lucide_icons::kVolume2Icon, 14,
-        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurfaceSubtle));
+        views::IconColors(kMahoColorSidebarSecondaryText,
+                          kMahoColorSidebarSecondaryText));
     mute_button_->SetTooltipText(u"Mute");
   }
 }

@@ -351,8 +351,24 @@ void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
   // Archive library, or the Spaces full-viewport overlay) is active so the
   // docked rail matches the opaque overlay content; otherwise keep the native
   // (translucent) alpha for the glass-frame vibrancy look.
+  gfx::Rect browser_bounds = bounds;
+  if (shared_browser_glass_active_ && GetWidget()) {
+    browser_bounds = views::View::ConvertRectToTarget(
+        GetWidget()->GetRootView(), this,
+        GetWidget()->GetRootView()->GetLocalBounds());
+  }
   PaintMahoSidebarThemedBackground(canvas, palette_host_.palette(), bounds,
-                                   palette_host_.opaque(), radii);
+                                   palette_host_.opaque(), radii,
+                                   /*gradient_span_dp=*/0, &browser_bounds);
+}
+
+void MahoSidebarView::SetSharedBrowserGlassActive(bool active) {
+  if (shared_browser_glass_active_ == active) {
+    return;
+  }
+  shared_browser_glass_active_ = active;
+  InvalidateLayout();
+  SchedulePaint();
 }
 
 base::CallbackListSubscription
@@ -660,6 +676,12 @@ void MahoSidebarView::Layout(PassKey pass_key) {
   LayoutSuperclass<views::View>(this);
   if (grain_overlay_) {
     grain_overlay_->SetBoundsRect(GetLocalBounds());
+    gfx::Point browser_origin;
+    if (GetWidget()) {
+      views::View::ConvertPointToTarget(GetWidget()->GetRootView(), this,
+                                        &browser_origin);
+    }
+    grain_overlay_->SetTileOrigin(browser_origin);
   }
 }
 

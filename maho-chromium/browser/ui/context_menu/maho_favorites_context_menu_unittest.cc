@@ -47,6 +47,10 @@ TEST(MahoFavoritesContextMenuTest, CommandIdValues) {
   EXPECT_EQ(IDC_MAHO_FAV_OPEN_SPLIT,   57051);
   EXPECT_EQ(IDC_MAHO_FAV_COPY_LINK,    57052);
   EXPECT_EQ(IDC_MAHO_FAV_REMOVE,       57057);
+  EXPECT_EQ(IDC_MAHO_FAV_BOOST,        57058);
+  EXPECT_EQ(IDC_MAHO_FAV_RELOAD,       57059);
+  EXPECT_EQ(IDC_MAHO_FAV_MUTE,         57060);
+  EXPECT_EQ(IDC_MAHO_FAV_UNMUTE,       57061);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,20 +89,24 @@ TEST(MahoFavoritesContextMenuTest, BuildMenuModelContainsRemove) {
 // BuildMenuModel — top-level order and separator structure
 // ---------------------------------------------------------------------------
 
-// Expected top-level structure (6 items):
+// Expected top-level structure with an empty tab_id (no Move-to-Space submenu):
 //  0  Open in New Tab       (COMMAND)
 //  1  Open in Split View    (COMMAND)
-//  2  [separator]
-//  3  Copy Link             (COMMAND)
-//  4  [separator]
-//  5  Remove from Favorites (COMMAND)
+//  2  Boost                 (COMMAND)
+//  3  [separator]
+//  4  Copy Link             (COMMAND)
+//  5  Reload                (COMMAND)
+//  6  Duplicate Tab         (COMMAND)
+//  7  Mute Tab              (COMMAND)
+//  8  [separator]
+//  9  Remove from Favorites (COMMAND)
 TEST(MahoFavoritesContextMenuTest, TopLevelOrderMatchesProduction) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", std::string());
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
 
   auto items = FlattenTopLevel(*model);
-  ASSERT_EQ(items.size(), 6u);
+  ASSERT_EQ(items.size(), 10u);
 
   EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[0].command_id, IDC_MAHO_FAV_OPEN_NEW_TAB);
@@ -106,15 +114,27 @@ TEST(MahoFavoritesContextMenuTest, TopLevelOrderMatchesProduction) {
   EXPECT_EQ(items[1].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[1].command_id, IDC_MAHO_FAV_OPEN_SPLIT);
 
-  EXPECT_EQ(items[2].type, ui::MenuModel::TYPE_SEPARATOR);
+  EXPECT_EQ(items[2].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[2].command_id, IDC_MAHO_FAV_BOOST);
 
-  EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[3].command_id, IDC_MAHO_FAV_COPY_LINK);
+  EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_SEPARATOR);
 
-  EXPECT_EQ(items[4].type, ui::MenuModel::TYPE_SEPARATOR);
+  EXPECT_EQ(items[4].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[4].command_id, IDC_MAHO_FAV_COPY_LINK);
 
   EXPECT_EQ(items[5].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[5].command_id, IDC_MAHO_FAV_REMOVE);
+  EXPECT_EQ(items[5].command_id, IDC_MAHO_FAV_RELOAD);
+
+  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[6].command_id, IDC_MAHO_FAV_DUPLICATE);
+
+  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[7].command_id, IDC_MAHO_FAV_MUTE);
+
+  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[9].command_id, IDC_MAHO_FAV_REMOVE);
 }
 
 TEST(MahoFavoritesContextMenuTest, TopLevelHasExactlyTwoSeparators) {
@@ -219,6 +239,40 @@ TEST(MahoFavoritesContextMenuTest, ExecuteRemoveWithEmptyTabIdDoesNotCrash) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"),
                                 u"Example", std::string());
   menu.ExecuteCommand(IDC_MAHO_FAV_REMOVE, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Shared tab actions — present in the menu, gated on a live tab
+// ---------------------------------------------------------------------------
+
+TEST(MahoFavoritesContextMenuTest, BuildMenuModelContainsSharedTabActions) {
+  MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "tab-1");
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_BOOST));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_RELOAD));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_DUPLICATE));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_MUTE));
+}
+
+// Without a live browser/tab strip the favorite cannot resolve to a tab, so the
+// WebContents-backed actions are disabled even though they are shown.
+TEST(MahoFavoritesContextMenuTest, SharedTabActionsDisabledWithoutLiveTab) {
+  MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "tab-1");
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_BOOST));
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_RELOAD));
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_DUPLICATE));
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_MUTE));
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_UNMUTE));
+}
+
+TEST(MahoFavoritesContextMenuTest, ExecuteSharedTabActionsWithoutLiveTabDoNotCrash) {
+  MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "tab-1");
+  menu.ExecuteCommand(IDC_MAHO_FAV_BOOST, 0);
+  menu.ExecuteCommand(IDC_MAHO_FAV_RELOAD, 0);
+  menu.ExecuteCommand(IDC_MAHO_FAV_DUPLICATE, 0);
+  menu.ExecuteCommand(IDC_MAHO_FAV_MUTE, 0);
+  menu.ExecuteCommand(IDC_MAHO_FAV_UNMUTE, 0);
 }
 
 }  // namespace

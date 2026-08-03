@@ -11,6 +11,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/linear_animation.h"
@@ -63,6 +64,7 @@ class MahoSidebarProcessingPlaceholderView : public views::View,
   void ResolveFailure();
 
   void SetButtonSurface(views::View* button_surface);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   // views::View:
   void OnPaint(gfx::Canvas* canvas) override;
@@ -86,6 +88,9 @@ class MahoSidebarProcessingPlaceholderView : public views::View,
   void TriggerAnimationEndedForTesting() { AnimationEnded(&phase_animation_); }
   void TriggerSafetyTimeoutForTesting() { ForceResolveOnTimeout(); }
   void TriggerMinimumWorkingTimerForTesting();
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
+  }
 
   // Static render model functions for geometry/state calculations at a given
   // phase/progress.
@@ -141,6 +146,7 @@ class MahoSidebarProcessingPlaceholderView : public views::View,
   bool reduced_motion_for_testing_ = false;
 
   raw_ptr<views::View> button_surface_ = nullptr;
+  MahoSidebarPalette palette_;
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<MahoSidebarProcessingPlaceholderView> weak_factory_{

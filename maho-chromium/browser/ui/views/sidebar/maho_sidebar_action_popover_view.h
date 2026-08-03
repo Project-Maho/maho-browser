@@ -5,8 +5,10 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/events/event.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -41,6 +43,7 @@ class MahoSidebarActionPopoverView : public views::View {
                              ActionCallback action_callback);
 
   bool OnKeyPressed(const ui::KeyEvent& event) override;
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
  private:
   void AddActionRow(MahoSidebarActionPopoverAction action,
@@ -56,6 +59,8 @@ class MahoSidebarActionPopoverView : public views::View {
   std::vector<raw_ptr<views::View>> action_rows_;
   std::vector<MahoSidebarActionPopoverAction> action_types_;
   int highlighted_index_ = 0;
+  MahoSidebarPalette palette_;
+  base::CallbackListSubscription palette_subscription_;
 
   base::WeakPtrFactory<MahoSidebarActionPopoverView> weak_factory_{this};
 };

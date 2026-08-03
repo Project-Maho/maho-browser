@@ -8,6 +8,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
@@ -69,6 +70,7 @@ class MahoSidebarSpaceDotView : public views::View,
 
   void SetActive(bool active);
   void SetSelected(bool selected);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
   void ConfigureProfileBadge(SkColor color, bool visible);
   void set_delegate(MahoSidebarSpaceDotDelegate* delegate) {
     delegate_ = delegate;
@@ -135,6 +137,7 @@ class MahoSidebarSpaceDotView : public views::View,
   bool is_hovered_ = false;
   bool has_icon_ = false;
   bool drag_over_ = false;
+  MahoSidebarPalette palette_;
   base::OneShotTimer spring_load_timer_;
 
   float dot_opacity_ = 1.0f;

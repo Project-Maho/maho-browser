@@ -54,11 +54,13 @@ bool IsMediaFilePath(std::string_view path) {
 
 std::vector<DownloadItem> ParseDownloads() {
   std::vector<DownloadItem> downloads;
-  // kMahoDownloadMetadata fail-closed boundary: Maho download metadata lives in
-  // the process-global regular MahoCore only. An Incognito-only process has no
-  // core (see R-7 process-startup gating), so GetCore() is null and no metadata
-  // is consulted for OTR. There is no OTR download store and no production OTR
-  // ingress, so this null-guard is the complete read-side denial.
+  // kMahoDownloadMetadata reads the process-global regular MahoCore. GetCore()
+  // is null ONLY in an incognito-only standalone process (--incognito); in a
+  // normal session MaybeInitializeForBrowser has already created the core, so
+  // this null-guard does NOT by itself deny OTR reads. The actual OTR boundary
+  // is the is_otr_ gate at the sidebar library entry (MahoSidebarView::
+  // OpenLibraryCategory/OpenLibrary), which prevents any OTR window from
+  // reaching this code path at all.
   MahoCore* core = maho::GetCore();
   if (!core) {
     return downloads;
@@ -128,8 +130,12 @@ std::vector<DownloadItem> ParseDownloads() {
 }
 
 bool HasRealFilePath(const DownloadItem& item) {
-  return item.file_path.has_value() && !item.file_path->empty() &&
-         base::PathExists(base::FilePath::FromUTF8Unsafe(*item.file_path));
+  // Must stay non-blocking: this runs on the UI thread during row render, so it
+  // cannot call base::PathExists() (blocking I/O trips AssertBlockingAllowed and
+  // aborts under DCHECK). A completed download with a path is treated as openable;
+  // platform_util::OpenItem/ShowItemInFolder handle a since-deleted file safely.
+  return item.state == "completed" && item.file_path.has_value() &&
+         !item.file_path->empty();
 }
 
 bool IsMediaLikeDownload(const DownloadItem& item) {

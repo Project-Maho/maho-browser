@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
@@ -63,18 +64,18 @@ MahoSidebarLibraryActionPaneView::MahoSidebarLibraryActionPaneView(
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface1,
-                                                   kPaneCornerRadius));
+  SetBackground(views::CreateRoundedRectBackground(kMahoColorCardBackground,
+                                                    kPaneCornerRadius));
   SetBorder(views::CreateRoundedRectBorder(1, kPaneCornerRadius,
-                                           ui::kColorSysSurfaceVariant));
+                                            kMahoColorCardBorder));
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   SetAccessibleName(title);
 
   title_label_ = AddPaneLabel(this, title, views::style::STYLE_BODY_3_MEDIUM,
-                              ui::kColorSysOnSurface);
+                               kMahoColorSidebarPrimaryText);
   description_label_ = AddPaneLabel(this, description, views::style::STYLE_BODY_5,
-                                    ui::kColorSysOnSurfaceSubtle, true);
+                                     kMahoColorSidebarSecondaryText, true);
 
   auto* actions_container = AddChildView(std::make_unique<views::View>());
   auto* actions_layout = actions_container->SetLayoutManager(
@@ -110,10 +111,23 @@ MahoSidebarLibraryActionPaneView::~MahoSidebarLibraryActionPaneView() = default;
 
 void MahoSidebarLibraryActionPaneView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface1,
-                                                   kPaneCornerRadius));
+}
+
+void MahoSidebarLibraryActionPaneView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  const SkColor surface = palette_.normal_contrast_surfaces.empty()
+                              ? palette_.row_selected
+                              : palette_.normal_contrast_surfaces.front();
+  SetBackground(views::CreateRoundedRectBackground(surface, kPaneCornerRadius));
   SetBorder(views::CreateRoundedRectBorder(1, kPaneCornerRadius,
-                                           ui::kColorSysSurfaceVariant));
+                                            palette_.outline));
+  if (title_label_) {
+    title_label_->SetEnabledColor(palette_.primary_text);
+  }
+  if (description_label_) {
+    description_label_->SetEnabledColor(palette_.secondary_text);
+  }
   UpdateAppearance();
 }
 

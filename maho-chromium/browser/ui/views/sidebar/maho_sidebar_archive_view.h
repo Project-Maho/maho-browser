@@ -11,6 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/scroll_view.h"
@@ -40,6 +41,7 @@ struct ArchivedTabItem {
   ~ArchivedTabItem();
 
   std::string tab_id;
+  std::string space_id;
   std::u16string title;
   std::string url;
   std::u16string host;
@@ -69,7 +71,7 @@ class MahoSidebarArchiveView : public views::View,
   METADATA_HEADER(MahoSidebarArchiveView, views::View)
 
  public:
-  using RestoreCallback = base::RepeatingCallback<void(const std::string& tab_id)>;
+  using RestoreCallback = base::RepeatingCallback<void(const std::string& tab_id, const std::string& space_id)>;
   using DeleteCallback = base::RepeatingCallback<void(const std::string& tab_id)>;
 
   explicit MahoSidebarArchiveView(Browser* browser);
@@ -92,6 +94,7 @@ class MahoSidebarArchiveView : public views::View,
 
   void SetRestoreCallback(RestoreCallback callback);
   void SetDeleteCallback(DeleteCallback callback);
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   views::LabelButton* filter_button_for_testing() { return filter_button_; }
   ui::SimpleMenuModel* filter_menu_model_for_testing() {
@@ -103,6 +106,9 @@ class MahoSidebarArchiveView : public views::View,
   ArchiveFilterMode filter_mode_for_testing() const { return filter_mode_; }
   std::u16string filter_accessibility_value_for_testing() const;
   int visible_result_count_for_testing() const { return visible_result_count_; }
+  const std::vector<ArchivedTabItem>& all_archived_tabs_for_testing() const {
+    return all_archived_tabs_;
+  }
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
@@ -122,7 +128,7 @@ class MahoSidebarArchiveView : public views::View,
   static std::pair<std::u16string, int> SectionMetadata(int day_offset);
   static int DayOffset(base::Time archived_at);
 
-  void OnRestorePressed(const std::string& tab_id);
+  void OnRestorePressed(const std::string& tab_id, const std::string& space_id);
   void OnDeletePressed(const std::string& tab_id);
   void OnFilterPressed();
   void UpdateFilterButtonAppearance();
@@ -137,6 +143,7 @@ class MahoSidebarArchiveView : public views::View,
   raw_ptr<views::View> body_container_ = nullptr;
   raw_ptr<views::LabelButton> filter_button_ = nullptr;
   raw_ptr<views::View> empty_state_view_ = nullptr;
+  MahoSidebarPalette palette_;
 
   ArchiveFilterMode filter_mode_ = ArchiveFilterMode::kAll;
   std::unique_ptr<ui::SimpleMenuModel> filter_menu_model_;

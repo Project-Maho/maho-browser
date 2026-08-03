@@ -26,6 +26,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/gfx/canvas.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
@@ -612,13 +613,14 @@ class SpaceIconPickerButton : public views::Button {
       cc::PaintFlags fill_flags;
       fill_flags.setAntiAlias(true);
       fill_flags.setStyle(cc::PaintFlags::kFill_Style);
-      fill_flags.setColor(GetColorProvider()->GetColor(ui::kColorSysSurface3));
+      fill_flags.setColor(
+          GetColorProvider()->GetColor(kMahoColorInteractiveChipIdleBackground));
 
       cc::PaintFlags stroke_flags;
       stroke_flags.setAntiAlias(true);
       stroke_flags.setStyle(cc::PaintFlags::kStroke_Style);
       stroke_flags.setStrokeWidth(1.0f);
-      stroke_flags.setColor(GetColorProvider()->GetColor(ui::kColorSysOutline));
+      stroke_flags.setColor(GetColorProvider()->GetColor(kMahoColorCardBorder));
 
       gfx::RectF rect(bounds);
       rect.Inset(0.5f);
@@ -631,7 +633,7 @@ class SpaceIconPickerButton : public views::Button {
     flags.setAntiAlias(true);
     flags.setStyle(cc::PaintFlags::kStroke_Style);
     flags.setStrokeWidth(1.0f);
-    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysOutline));
+    flags.setColor(GetColorProvider()->GetColor(kMahoColorCardBorder));
     const float intervals[] = {2.5f, 2.0f};
     flags.setPathEffect(cc::PathEffect::MakeDash(intervals, 2, 0));
     gfx::RectF rect(bounds);
@@ -645,8 +647,8 @@ class SpaceIconPickerButton : public views::Button {
       return;
     }
     label_->SetEnabledColor(
-        selected_icon_.empty() ? ui::kColorSysOnSurfaceSubtle
-                               : ui::kColorSysOnSurface);
+        selected_icon_.empty() ? kMahoColorSidebarSecondaryText
+                               : kMahoColorSidebarPrimaryText);
   }
 
   raw_ptr<views::Label> label_ = nullptr;
@@ -698,11 +700,12 @@ class SidebarCreateSpaceRowButton : public views::Button {
       return;
     }
 
-    const ui::ColorId fill_color_id = GetState() == STATE_PRESSED
-                                          ? ui::kColorSysSurface4
-                                          : GetState() == STATE_HOVERED || HasFocus()
-                                                ? ui::kColorSysSurface3
-                                                : background_color_id_;
+    const ui::ColorId fill_color_id =
+        GetState() == STATE_PRESSED
+            ? kMahoColorSidebarSelected
+            : GetState() == STATE_HOVERED || HasFocus()
+                  ? kMahoColorSidebarHover
+                  : background_color_id_;
     SetBackground(views::CreateRoundedRectBackground(fill_color_id,
                                                      corner_radius_));
   }
@@ -752,14 +755,14 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   hero->AddChildView(std::make_unique<CreateSpaceHeroView>());
 
   auto* title_label = AddLabel(hero, u"Create a Space",
-                               views::style::STYLE_HEADLINE_4,
-                               ui::kColorSysOnSurface, true);
+                                views::style::STYLE_HEADLINE_4,
+                                kMahoColorSidebarPrimaryText, true);
   title_label->SetMaximumWidth(360);
 
   auto* subtitle_label = AddLabel(
       hero,
       u"Separate your tabs for life, work, projects, and more.",
-      views::style::STYLE_BODY_5, ui::kColorSysOnSurfaceSubtle, true);
+      views::style::STYLE_BODY_5, kMahoColorSidebarSecondaryText, true);
   subtitle_label->SetMaximumWidth(360);
 
   auto* card_stack = content->AddChildView(std::make_unique<views::View>());
@@ -776,10 +779,10 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   name_row_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   name_row->SetPreferredSize(gfx::Size(0, 44));
-  name_row->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, 12));
-  name_row->SetBorder(views::CreateRoundedRectBorder(
-      1, 12, ui::kColorSysSurfaceVariant));
+    name_row->SetBackground(views::CreateRoundedRectBackground(
+      kMahoColorCardBackground, 12));
+    name_row->SetBorder(views::CreateRoundedRectBorder(
+      1, 12, kMahoColorCardBorder));
 
   name_leading_icon_button_ = name_row->AddChildView(
       std::make_unique<SpaceIconPickerButton>(base::BindRepeating(
@@ -802,18 +805,18 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
       views::BoxLayout::CrossAxisAlignment::kCenter);
   profile_row->SetPreferredSize(gfx::Size(0, 40));
   profile_row->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, 12));
+      kMahoColorCardBackground, 12));
 
   auto* profile_label = AddLabel(profile_row, u"Profile",
                                  views::style::STYLE_BODY_3_MEDIUM,
-                                 ui::kColorSysOnSurface);
+                                 kMahoColorSidebarPrimaryText);
   profile_row_layout->SetFlexForView(profile_label, 1);
 
   profile_button_ = profile_row->AddChildView(
       std::make_unique<SidebarCreateSpaceRowButton>(
-          base::BindRepeating(&MahoSidebarCreateSpaceView::OnProfilePressed,
-                              weak_factory_.GetWeakPtr()),
-          kProfileChipCornerRadius, ui::kColorSysSurface3));
+           base::BindRepeating(&MahoSidebarCreateSpaceView::OnProfilePressed,
+                               weak_factory_.GetWeakPtr()),
+           kProfileChipCornerRadius, kMahoColorInteractiveChipIdleBackground));
   profile_button_->SetAccessibleName(u"Choose profile");
   auto* profile_button_layout =
       profile_button_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -827,7 +830,7 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   profile_button_label_ = profile_button_->AddChildView(
       std::make_unique<views::Label>(u""));
   profile_button_label_->SetAutoColorReadabilityEnabled(false);
-  profile_button_label_->SetEnabledColor(ui::kColorSysOnSurface);
+  profile_button_label_->SetEnabledColor(kMahoColorSidebarPrimaryText);
   profile_button_label_->SetTextStyle(views::style::STYLE_BODY_5);
   profile_button_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   profile_button_label_->SetElideBehavior(gfx::ELIDE_TAIL);
@@ -837,14 +840,14 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   profile_disclosure->SetPreferredSize(
       gfx::Size(kProfileDisclosureIconSize, kProfileDisclosureIconSize));
   profile_disclosure->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kExpandMoreIcon,
-      ui::kColorSysOnSurfaceSubtle, kProfileDisclosureIconSize));
+       vector_icons::kExpandMoreIcon,
+       kMahoColorSidebarSecondaryText, kProfileDisclosureIconSize));
 
   theme_button_ = card_stack->AddChildView(
       std::make_unique<SidebarCreateSpaceRowButton>(
-          base::BindRepeating(&MahoSidebarCreateSpaceView::OnThemePressed,
-                              weak_factory_.GetWeakPtr()),
-          kThemeRowCornerRadius, ui::kColorSysSurface1));
+           base::BindRepeating(&MahoSidebarCreateSpaceView::OnThemePressed,
+                               weak_factory_.GetWeakPtr()),
+           kThemeRowCornerRadius, kMahoColorCardBackground));
   theme_button_->SetAccessibleName(u"Choose theme");
   theme_button_->SetPreferredSize(gfx::Size(0, kThemeRowHeight));
   auto* theme_button_layout =
@@ -857,12 +860,12 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   theme_preview_tile_ = theme_button_->AddChildView(std::make_unique<views::View>());
   theme_preview_tile_->SetPreferredSize(gfx::Size(kThemeTileSize, kThemeTileSize));
   theme_preview_tile_->SetBorder(views::CreateRoundedRectBorder(
-      1, kThemeTileCornerRadius, ui::kColorSysSurfaceVariant));
+      1, kThemeTileCornerRadius, kMahoColorCardBorder));
 
   auto* theme_label = theme_button_->AddChildView(
       std::make_unique<views::Label>(u"Choose a Theme"));
   theme_label->SetAutoColorReadabilityEnabled(false);
-  theme_label->SetEnabledColor(ui::kColorSysOnSurface);
+  theme_label->SetEnabledColor(kMahoColorSidebarPrimaryText);
   theme_label->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
   theme_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   theme_button_layout->SetFlexForView(theme_label, 1);
@@ -872,8 +875,8 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   theme_disclosure->SetPreferredSize(
       gfx::Size(kThemeDisclosureIconSize, kThemeDisclosureIconSize));
   theme_disclosure->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSubmenuArrowChromeRefreshIcon,
-      ui::kColorSysOnSurfaceSubtle, kThemeDisclosureIconSize));
+       vector_icons::kSubmenuArrowChromeRefreshIcon,
+       kMahoColorSidebarSecondaryText, kThemeDisclosureIconSize));
 
   auto* bottom_region = AddChildView(std::make_unique<views::View>());
   auto* bottom_layout = bottom_region->SetLayoutManager(
@@ -883,7 +886,7 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   error_label_ = AddLabel(bottom_region, u"", views::style::STYLE_BODY_5,
-                          ui::kColorSysError, true);
+                          kMahoColorDangerRed, true);
   error_label_->SetVisible(false);
 
   create_button_ = bottom_region->AddChildView(
@@ -917,22 +920,33 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
 
 MahoSidebarCreateSpaceView::~MahoSidebarCreateSpaceView() = default;
 
+void MahoSidebarCreateSpaceView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  const SkColor surface = palette_.normal_contrast_surfaces.empty()
+                              ? palette_.row_selected
+                              : palette_.normal_contrast_surfaces.front();
+  SetBackground(
+      views::CreateRoundedRectBackground(surface, kCreatePanelCornerRadius));
+  SetBorder(views::CreateRoundedRectBorder(1, kCreatePanelCornerRadius,
+                                            palette_.outline));
+  if (name_field_) {
+    name_field_->SetBackgroundColor(palette_.row_selected);
+    name_field_->SetTextColor(palette_.primary_text);
+    name_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  UpdateNameLeadingIconButton();
+  SchedulePaint();
+}
+
 void MahoSidebarCreateSpaceView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface,
-                                                   kCreatePanelCornerRadius));
-  SetBorder(views::CreateRoundedRectBorder(1, kCreatePanelCornerRadius,
-                                           ui::kColorSysSurfaceVariant));
-
-  if (!name_field_ || !GetColorProvider()) {
+  if (!name_field_) {
     return;
   }
-
-  name_field_->SetBackgroundColor(
-      GetColorProvider()->GetColor(ui::kColorSysSurface3));
-  name_field_->SetTextColor(GetColorProvider()->GetColor(ui::kColorSysOnSurface));
-  name_field_->set_placeholder_text_color(
-      GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle));
+  name_field_->SetBackgroundColor(palette_.row_selected);
+  name_field_->SetTextColor(palette_.primary_text);
+  name_field_->set_placeholder_text_color(palette_.secondary_text);
   UpdateNameLeadingIconButton();
 }
 

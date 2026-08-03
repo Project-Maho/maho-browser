@@ -81,71 +81,6 @@ const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents) {
                                               : contents->GetVisibleURL();
 }
 
-// LEGACY: replaced by FetchSidebarStateV2 in BuildViewStateModel. Kept
-// compiling for backward compat during transition; will be deleted after
-// 1-week soak (4.2.3).
-FooterSpaceState GetCoreFooterSpaceStateRaw() {
-  FooterSpaceState state;
-  ::MahoCore* core = maho::GetCore();
-  if (!core) {
-    return state;
-  }
-
-  char* json_str = maho_core_get_space_view_models(core);
-  if (!json_str) {
-    return state;
-  }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::string active_id;
-  if (char* active_id_str = maho_core_get_active_space_id(core)) {
-    std::optional<base::Value> parsed_active_id =
-        base::JSONReader::Read(active_id_str, base::JSON_PARSE_RFC);
-    active_id = parsed_active_id && parsed_active_id->is_string()
-                    ? parsed_active_id->GetString()
-                    : std::string(active_id_str);
-    maho_string_free(active_id_str);
-  }
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return state;
-  }
-
-  state.has_core_state = true;
-  int index = 0;
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      ++index;
-      continue;
-    }
-    const std::string* id = dict->FindString("id");
-    const std::string* color = dict->FindString("color");
-    const std::string* icon = dict->FindString("icon");
-    const std::string* name = dict->FindString("name");
-    const MahoSpaceDisplayThemeModel theme = BuildMahoSpaceDisplayThemeModel(*dict);
-    const std::string display_color =
-        GetMahoSpaceDisplayPrimaryColor(theme, color ? *color : std::string());
-    state.space_icons.push_back(icon ? *icon : std::string());
-    state.space_names.push_back(name ? *name : std::string());
-    state.space_colors.push_back(display_color);
-    state.space_themes.push_back(theme);
-    state.space_ids.push_back(id ? *id : std::string());
-    if (id && *id == active_id) {
-      state.active_space_index = index;
-      state.active_space_color = display_color;
-      state.active_space_theme = theme;
-    }
-    ++state.space_count;
-    ++index;
-  }
-
-  return state;
-}
-
 bool HasSafeNavigationContext(Browser* browser) {
   if (!browser) {
     return false;
@@ -552,6 +487,71 @@ bool FindAndOverlayActiveTabInTree(std::vector<SidebarTreeNode>& nodes,
 }
 
 }  // namespace
+
+// LEGACY: replaced by FetchSidebarStateV2 in BuildViewStateModel. Kept
+// compiling for backward compat during transition; will be deleted after
+// 1-week soak (4.2.3).
+FooterSpaceState GetCoreFooterSpaceStateRaw() {
+  FooterSpaceState state;
+  ::MahoCore* core = maho::GetCore();
+  if (!core) {
+    return state;
+  }
+
+  char* json_str = maho_core_get_space_view_models(core);
+  if (!json_str) {
+    return state;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::string active_id;
+  if (char* active_id_str = maho_core_get_active_space_id(core)) {
+    std::optional<base::Value> parsed_active_id =
+        base::JSONReader::Read(active_id_str, base::JSON_PARSE_RFC);
+    active_id = parsed_active_id && parsed_active_id->is_string()
+                    ? parsed_active_id->GetString()
+                    : std::string(active_id_str);
+    maho_string_free(active_id_str);
+  }
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return state;
+  }
+
+  state.has_core_state = true;
+  int index = 0;
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      ++index;
+      continue;
+    }
+    const std::string* id = dict->FindString("id");
+    const std::string* color = dict->FindString("color");
+    const std::string* icon = dict->FindString("icon");
+    const std::string* name = dict->FindString("name");
+    const MahoSpaceDisplayThemeModel theme = BuildMahoSpaceDisplayThemeModel(*dict);
+    const std::string display_color =
+        GetMahoSpaceDisplayPrimaryColor(theme, color ? *color : std::string());
+    state.space_icons.push_back(icon ? *icon : std::string());
+    state.space_names.push_back(name ? *name : std::string());
+    state.space_colors.push_back(display_color);
+    state.space_themes.push_back(theme);
+    state.space_ids.push_back(id ? *id : std::string());
+    if (id && *id == active_id) {
+      state.active_space_index = index;
+      state.active_space_color = display_color;
+      state.active_space_theme = theme;
+    }
+    ++state.space_count;
+    ++index;
+  }
+
+  return state;
+}
 
 void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
                     TabStripModel* model) {

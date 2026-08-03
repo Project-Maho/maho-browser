@@ -8,6 +8,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
@@ -41,12 +42,16 @@ class MahoSidebarLibraryActionPaneView : public views::View {
   ~MahoSidebarLibraryActionPaneView() override;
 
   void OnThemeChanged() override;
+  void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   void SetActionEnabled(size_t index, bool enabled);
 
   views::Button* button_for_action_for_testing(size_t index);
   views::Label* title_label_for_testing() { return title_label_; }
   views::Label* description_label_for_testing() { return description_label_; }
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
+  }
 
  private:
   void HandleActionPressed(size_t index);
@@ -56,6 +61,7 @@ class MahoSidebarLibraryActionPaneView : public views::View {
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> description_label_ = nullptr;
   std::vector<raw_ptr<views::Button>> action_buttons_;
+  MahoSidebarPalette palette_;
 };
 
 }  // namespace maho

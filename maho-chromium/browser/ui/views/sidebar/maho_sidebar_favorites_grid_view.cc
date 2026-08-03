@@ -241,6 +241,11 @@ class EmptyFavoritesPlaceholderView : public views::View {
     UpdateAppearance();
   }
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    UpdateAppearance();
+  }
+
  private:
   void OnClosePressed() {
     if (on_dismiss_) {
@@ -249,20 +254,38 @@ class EmptyFavoritesPlaceholderView : public views::View {
   }
 
   void UpdateAppearance() {
+    if (palette_.primary_text == SK_ColorTRANSPARENT) {
+      card_background_->SetBackground(views::CreateRoundedRectBackground(
+          ui::kColorSysSurface1, kFavoriteEmptyCardCornerRadiusDp));
+      card_background_->SetBorder(views::CreateRoundedRectBorder(
+          1, kFavoriteEmptyCardCornerRadiusDp,
+          highlighted_ ? ui::kColorSysPrimary : ui::kColorSysSurfaceVariant));
+      badge_->SetBackground(views::CreateRoundedRectBackground(
+          ui::kColorSysSurface, kFavoriteEmptyBadgeSizeDp / 2));
+      badge_->SetBorder(views::CreateRoundedRectBorder(
+          1, kFavoriteEmptyBadgeSizeDp / 2,
+          highlighted_ ? ui::kColorSysPrimary : ui::kColorSysSurfaceVariant));
+      badge_image_->SetImage(ui::ImageModel::FromVectorIcon(
+          maho_lucide_icons::kWandSparklesIcon,
+          highlighted_ ? ui::kColorSysPrimary : ui::kColorSysOnSurfaceSubtle,
+          kFavoriteEmptyBadgeIconSizeDp));
+      return;
+    }
+    const SkColor border = highlighted_ ? palette_.focus_ring : palette_.outline;
     card_background_->SetBackground(views::CreateRoundedRectBackground(
-        ui::kColorSysSurface1, kFavoriteEmptyCardCornerRadiusDp));
+        palette_.row_selected, kFavoriteEmptyCardCornerRadiusDp));
     card_background_->SetBorder(views::CreateRoundedRectBorder(
-        1, kFavoriteEmptyCardCornerRadiusDp,
-        highlighted_ ? ui::kColorSysPrimary : ui::kColorSysSurfaceVariant));
+        1, kFavoriteEmptyCardCornerRadiusDp, border));
     badge_->SetBackground(views::CreateRoundedRectBackground(
-        ui::kColorSysSurface, kFavoriteEmptyBadgeSizeDp / 2));
+        palette_.row_hover, kFavoriteEmptyBadgeSizeDp / 2));
     badge_->SetBorder(views::CreateRoundedRectBorder(
-        1, kFavoriteEmptyBadgeSizeDp / 2,
-        highlighted_ ? ui::kColorSysPrimary : ui::kColorSysSurfaceVariant));
+        1, kFavoriteEmptyBadgeSizeDp / 2, border));
     badge_image_->SetImage(ui::ImageModel::FromVectorIcon(
         maho_lucide_icons::kWandSparklesIcon,
-        highlighted_ ? ui::kColorSysPrimary : ui::kColorSysOnSurfaceSubtle,
+        highlighted_ ? palette_.focus_ring : palette_.neutral_glyph,
         kFavoriteEmptyBadgeIconSizeDp));
+    title_label_->SetEnabledColor(palette_.primary_text);
+    description_label_->SetEnabledColor(palette_.secondary_text);
   }
 
   base::RepeatingClosure on_dismiss_;
@@ -273,6 +296,7 @@ class EmptyFavoritesPlaceholderView : public views::View {
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> description_label_ = nullptr;
   bool highlighted_ = false;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(EmptyFavoritesPlaceholderView)
@@ -312,6 +336,12 @@ class FavoriteTileButton : public views::Button,
       return;
     }
     is_active_ = is_active;
+    UpdateAppearance();
+  }
+
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    visual_state_valid_ = false;
     UpdateAppearance();
   }
 
@@ -393,14 +423,18 @@ class FavoriteTileButton : public views::Button,
   }
 
   struct TileVisualState {
-    ui::ColorId bg_color_id = 0;
+    SkColor background_color = SK_ColorTRANSPARENT;
     bool is_active = false;
+    bool is_hovered = false;
+    bool is_pressed = false;
     bool has_active_border_color = false;
     SkColor active_border_color = SK_ColorTRANSPARENT;
 
     bool operator==(const TileVisualState& o) const {
-      return bg_color_id == o.bg_color_id &&
+      return background_color == o.background_color &&
              is_active == o.is_active &&
+             is_hovered == o.is_hovered &&
+             is_pressed == o.is_pressed &&
              has_active_border_color == o.has_active_border_color &&
              active_border_color == o.active_border_color;
     }
@@ -420,25 +454,32 @@ class FavoriteTileButton : public views::Button,
     const bool enabled = GetEnabled();
     const bool is_press = enabled && GetState() == STATE_PRESSED;
     const bool is_hover = enabled && GetState() == STATE_HOVERED;
-    ui::ColorId bg;
-    if (is_press) {
-      bg = kMahoColorTabRowActiveBackground;
-    } else if (is_hover) {
-      bg = is_active_ ? kMahoColorTabRowActiveHoveredBackground
-                      : kMahoColorTabRowHoverBackground;
-    } else if (is_active_) {
-      bg = kMahoColorTabRowActiveBackground;
-    } else {
-      bg = kMahoColorInteractiveChipIdleBackground;
-    }
+    const bool has_palette = palette_.primary_text != SK_ColorTRANSPARENT;
+    const SkColor palette_background =
+        is_press || is_active_ ? palette_.row_active
+                               : (is_hover ? palette_.row_hover
+                                           : palette_.row_selected);
 
-    TileVisualState current_state{bg, is_active_, has_active_border_color_, active_border_color_};
+    TileVisualState current_state{has_palette ? palette_background
+                                              : SK_ColorTRANSPARENT,
+                                  is_active_, is_hover, is_press,
+                                  has_active_border_color_, active_border_color_};
     if (!visual_state_valid_ || current_state != last_visual_state_) {
       last_visual_state_ = current_state;
       visual_state_valid_ = true;
 
-      SetBackground(views::CreateRoundedRectBackground(
-          bg, sidebar_layout::kFavoriteTileCornerRadiusDp));
+      if (has_palette) {
+        SetBackground(views::CreateRoundedRectBackground(
+            palette_background, sidebar_layout::kFavoriteTileCornerRadiusDp));
+      } else {
+        const ui::ColorId bg =
+            is_press || is_active_
+                ? kMahoColorTabRowActiveBackground
+                : (is_hover ? kMahoColorTabRowHoverBackground
+                            : kMahoColorInteractiveChipIdleBackground);
+        SetBackground(views::CreateRoundedRectBackground(
+            bg, sidebar_layout::kFavoriteTileCornerRadiusDp));
+      }
       // 1dp inset reserved unconditionally to prevent icon jitter on active toggle.
       if (is_active_) {
         ui::ColorVariant border_color =
@@ -461,6 +502,7 @@ class FavoriteTileButton : public views::Button,
   bool is_active_ = false;
   bool has_active_border_color_ = false;
   SkColor active_border_color_ = SK_ColorTRANSPARENT;
+  MahoSidebarPalette palette_;
 
   TileVisualState last_visual_state_;
   bool visual_state_valid_ = false;
@@ -734,6 +776,29 @@ void MahoSidebarFavoritesGridView::ResetDragFeedback(
     pending_external_drag_tab_id_.clear();
     drag_accepted_tab_id_.clear();
   }
+}
+
+void MahoSidebarFavoritesGridView::OnSidebarPaletteChanged(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (empty_state_card_) {
+    static_cast<EmptyFavoritesPlaceholderView*>(empty_state_card_.get())
+        ->SetSidebarPalette(palette_);
+  }
+  for (size_t index = 0; index < tile_views_.size(); ++index) {
+    if (tile_views_[index]) {
+      static_cast<FavoriteTileButton*>(tile_views_[index].get())
+          ->SetSidebarPalette(palette_);
+    }
+    if (tile_labels_[index]) {
+      tile_labels_[index]->SetEnabledColor(palette_.secondary_text);
+    }
+  }
+  if (drag_preview_tile_) {
+    drag_preview_tile_->SetBackground(views::CreateRoundedRectBackground(
+        palette_.row_selected, sidebar_layout::kFavoriteTileCornerRadiusDp));
+  }
+  SchedulePaint();
 }
 
 void MahoSidebarFavoritesGridView::OnBoundsChanged(

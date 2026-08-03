@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_THEMED_BACKGROUND_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_THEMED_BACKGROUND_H_
 
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "third_party/skia/include/core/SkPoint.h"
 
 namespace gfx {
@@ -10,20 +11,11 @@ class Canvas;
 class Rect;
 }  // namespace gfx
 
-namespace ui {
-class ColorProvider;
-}  // namespace ui
-
 namespace maho {
 
-// Paints the space-theme-tinted sidebar background (a 1-3 stop linear gradient,
-// top-left -> bottom-right, resolved from MahoSpaceThemeState) into `bounds`,
-// clipped to the per-corner `radii`. When `opaque` is true every stop color is
-// forced to full alpha (0xFF) so subpixel text composited above stays legal and
-// no web content bleeds through; when false the themed colors keep their native
-// alpha (the translucent glass-frame look). No-op if `provider` is null or
-// `bounds` is empty. Shared by the docked sidebar and the fixed-width library
-// overlay so both columns follow the same theme.
+// Paints an immutable browser-local palette snapshot as a 1-3 stop linear
+// gradient, clipped to the per-corner `radii`. `opaque` selects the palette's
+// opaque reference stops; otherwise actual-alpha surface stops are used.
 //
 // `gradient_span_dp` bounds the diagonal over which the gradient stops are laid
 // out: 0 (default) spans the full `bounds` (TL->BR) — the original behavior for
@@ -32,11 +24,12 @@ namespace maho {
 // holding the final stop color beyond it. Used by the full-viewport Spaces
 // overlay so its tint density is not washed out across a very wide surface.
 void PaintMahoSidebarThemedBackground(gfx::Canvas* canvas,
+                                      const MahoSidebarPalette& palette,
                                       const gfx::Rect& bounds,
-                                      const ui::ColorProvider* provider,
                                       bool opaque,
                                       const SkVector radii[4],
-                                      int gradient_span_dp = 0);
+                                      int gradient_span_dp = 0,
+                                      const gfx::Rect* gradient_bounds = nullptr);
 
 }  // namespace maho
 

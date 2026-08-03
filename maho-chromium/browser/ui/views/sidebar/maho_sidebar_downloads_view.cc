@@ -17,9 +17,11 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/task/thread_pool.h"
 #include "url/gurl.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -28,6 +30,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
@@ -342,13 +345,14 @@ class DownloadProgressBarView : public views::View {
   METADATA_HEADER(DownloadProgressBarView, views::View)
 
  public:
-  explicit DownloadProgressBarView(double progress) : progress_(progress) {
+  DownloadProgressBarView(double progress, const MahoSidebarPalette& palette)
+      : progress_(progress) {
     SetPreferredSize(gfx::Size(kProgressBarWidthDp, kProgressBarHeightDp));
     SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryListRowBackground, kProgressBarCornerRadiusDp));
+        palette.row_selected, kProgressBarCornerRadiusDp));
     fill_view_ = AddChildView(std::make_unique<views::View>());
     fill_view_->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryProgressFill, kProgressBarCornerRadiusDp));
+        palette.focus_ring, kProgressBarCornerRadiusDp));
     GetViewAccessibility().SetIsIgnored(true);
   }
 
@@ -484,7 +488,9 @@ std::u16string GetDownloadFileType(const DownloadItem& item) {
 
   if (!filename.empty()) {
     base::FilePath file_path = base::FilePath::FromUTF8Unsafe(filename);
-    std::string ext = file_path.Extension();
+    // FilePath::Extension() is StringType, which is wstring on Windows.
+    std::string ext =
+        base::FilePath(file_path.Extension()).AsUTF8Unsafe();
     if (!ext.empty() && ext.front() == '.') {
       ext.erase(0, 1);
     }
@@ -692,10 +698,11 @@ std::unique_ptr<views::ImageButton> CreateActionButton(
     const gfx::VectorIcon& icon,
     const std::u16string& tooltip,
     const std::u16string& accessible_name,
-    base::RepeatingClosure callback) {
+    base::RepeatingClosure callback,
+    const MahoSidebarPalette& palette) {
   auto button = views::CreateVectorImageButtonWithNativeTheme(
-      std::move(callback), icon, 14, ui::kColorSysOnSurfaceSubtle,
-      ui::kColorSysOnSurface, ui::kColorSysOnSurface);
+      std::move(callback), icon, 14, palette.neutral_glyph,
+      palette.primary_text, palette.primary_text);
   button->SetBorder(nullptr);
   button->SetPreferredSize(gfx::Size(24, 24));
   button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
@@ -715,9 +722,11 @@ class DownloadRowView : public views::View {
 
   DownloadRowView(const DownloadItem& item,
                   std::vector<DownloadActionSpec> actions,
-                  ActionCallback action_callback)
+                  ActionCallback action_callback,
+                  const MahoSidebarPalette& palette)
       : download_id_(item.id),
-        action_callback_(std::move(action_callback)) {
+        action_callback_(std::move(action_callback)),
+        palette_(palette) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal,
         gfx::Insets::TLBR(kRowVerticalPaddingDp, kRowHorizontalPaddingDp,
@@ -738,7 +747,7 @@ class DownloadRowView : public views::View {
 
     icon_view_ = badge_slot_->AddChildView(std::make_unique<views::ImageView>());
     icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        maho_lucide_icons::kFileIcon, kMahoColorSidebarPrimaryText, 16));
+        maho_lucide_icons::kFileIcon, palette_.primary_text, 16));
     icon_view_->GetViewAccessibility().SetIsIgnored(true);
 
     if (item.state == "completed" && item.file_path.has_value() && !item.file_path->empty()) {
@@ -762,7 +771,7 @@ class DownloadRowView : public views::View {
         std::make_unique<views::Label>(item.filename));
     title->SetSkipSubpixelRenderingOpacityCheck(true);
     title->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    title->SetEnabledColor(kMahoColorSidebarPrimaryText);
+    title->SetEnabledColor(palette_.primary_text);
     title->SetAutoColorReadabilityEnabled(false);
     title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title->SetMultiLine(false);
@@ -772,7 +781,7 @@ class DownloadRowView : public views::View {
         std::make_unique<views::Label>(DownloadSubtitleText(item)));
     subtitle->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle->SetTextStyle(views::style::STYLE_BODY_5);
-    subtitle->SetEnabledColor(kMahoColorSidebarSecondaryText);
+    subtitle->SetEnabledColor(palette_.secondary_text);
     subtitle->SetAutoColorReadabilityEnabled(false);
     subtitle->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     subtitle->SetMultiLine(false);
@@ -780,7 +789,8 @@ class DownloadRowView : public views::View {
 
     if (HasProgressBar(item)) {
       text_block->AddChildView(
-          std::make_unique<DownloadProgressBarView>(ProgressFraction(item)));
+        std::make_unique<DownloadProgressBarView>(ProgressFraction(item),
+                                                  palette_));
     }
 
     if (!actions.empty()) {
@@ -799,9 +809,10 @@ class DownloadRowView : public views::View {
             CreateActionButton(
                 GetIconForAction(action.kind),
                 action.label,
-                action.accessible_name.empty() ? action.label : action.accessible_name,
+                 action.accessible_name.empty() ? action.label : action.accessible_name,
                 base::BindRepeating(&DownloadRowView::HandleActionPressed,
-                                    weak_factory_.GetWeakPtr(), action.kind)));
+                                    weak_factory_.GetWeakPtr(), action.kind),
+                palette_));
         action_buttons_.push_back(button);
       }
     }
@@ -856,14 +867,14 @@ class DownloadRowView : public views::View {
     const bool active = HasFocus() || IsMouseHovered();
     if (HasFocus()) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorLibraryRowSelected, kRowCornerRadiusDp));
+          palette_.row_selected, kRowCornerRadiusDp));
       SetBorder(views::CreateRoundedRectBorder(
-          1, kRowCornerRadiusDp, kMahoColorLibraryGlyphBorder));
+          1, kRowCornerRadiusDp, palette_.outline));
     } else if (IsMouseHovered()) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorLibraryRowHover, kRowCornerRadiusDp));
+          palette_.row_hover, kRowCornerRadiusDp));
       SetBorder(views::CreateRoundedRectBorder(
-          1, kRowCornerRadiusDp, kMahoColorLibraryGlyphBorder));
+          1, kRowCornerRadiusDp, palette_.outline));
     } else {
       SetBackground(nullptr);
       SetBorder(nullptr);
@@ -890,6 +901,7 @@ class DownloadRowView : public views::View {
   raw_ptr<views::View> action_row_ = nullptr;
   std::vector<views::Button*> action_buttons_;
   std::unique_ptr<MahoSidebarDownloadVisualLoader> visual_loader_;
+  MahoSidebarPalette palette_;
   base::WeakPtrFactory<DownloadRowView> weak_factory_{this};
 };
 
@@ -919,6 +931,16 @@ MahoSidebarDownloadsView::~MahoSidebarDownloadsView() {
       service->RemoveObserver(this);
     }
   }
+}
+
+void MahoSidebarDownloadsView::SetSidebarPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (search_field_) {
+    search_field_->SetTextColor(palette_.primary_text);
+    search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  ReloadDownloads();
 }
 
 void MahoSidebarDownloadsView::OnMahoDownloadsChanged() {
@@ -1052,7 +1074,15 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
   std::vector<DownloadItem> downloads;
   if (testing_downloads_) {
     downloads = *testing_downloads_;
-  } else {
+  } else if (browser_ &&
+             MahoIsCapabilityAllowed(
+                 browser_->profile(),
+                 MahoPrivateCapability::kMahoDownloadMetadata)) {
+    // Defense-in-depth: ParseDownloads() reads the process-global regular
+    // MahoCore. The primary OTR boundary is the is_otr_ gate at the sidebar
+    // library entry; this policy check fails closed so a future refactor that
+    // reaches this view from a non-regular profile cannot leak regular
+    // download metadata.
     downloads = ParseDownloads();
   }
 
@@ -1104,7 +1134,8 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
       rows_container->AddChildView(std::make_unique<DownloadRowView>(
           item, BuildActionsForDownload(item),
           base::BindRepeating(&MahoSidebarDownloadsView::HandleDownloadAction,
-                              weak_factory_.GetWeakPtr())));
+                              weak_factory_.GetWeakPtr()),
+          palette_));
     }
   }
 
@@ -1136,6 +1167,14 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
     DownloadActionKind action) {
   if (action == DownloadActionKind::kOpen ||
       action == DownloadActionKind::kReveal) {
+    // Defense-in-depth: fail closed unless the profile may read regular
+    // download metadata (see ReloadDownloads()).
+    if (!browser_ ||
+        !MahoIsCapabilityAllowed(
+            browser_->profile(),
+            MahoPrivateCapability::kMahoDownloadMetadata)) {
+      return;
+    }
     const std::vector<DownloadItem> downloads = ParseDownloads();
     const auto it = std::find_if(downloads.begin(), downloads.end(),
                                  [&](const DownloadItem& item) {
@@ -1152,14 +1191,19 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
       return;
     }
 
-    if (action == DownloadActionKind::kOpen) {
-      platform_util::OpenItem(browser_ ? browser_->profile() : nullptr, path,
-                              platform_util::OPEN_FILE,
-                              platform_util::OpenOperationCallback());
-    } else {
-      platform_util::ShowItemInFolder(
-          browser_ ? browser_->profile() : nullptr, path);
-    }
+    // Log the resolved path, then probe existence off the UI thread (file I/O
+    // may block) and act on the reply: open/reveal only if the file still
+    // exists, so a moved/deleted file no longer produces a silent no-op.
+    DLOG(WARNING) << "[MahoDL] action="
+                  << (action == DownloadActionKind::kOpen ? "open" : "reveal")
+                  << " id=" << download_id
+                  << " path=" << path.AsUTF8Unsafe();
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock()},
+        base::BindOnce(&base::PathExists, path),
+        base::BindOnce(
+            &MahoSidebarDownloadsView::HandleResolvedDownloadFileAction,
+            weak_factory_.GetWeakPtr(), action, path));
     return;
   }
 
@@ -1213,6 +1257,26 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
           break;
       }
     }
+  }
+}
+
+void MahoSidebarDownloadsView::HandleResolvedDownloadFileAction(
+    DownloadActionKind action,
+    base::FilePath path,
+    bool exists) {
+  DLOG(WARNING) << "[MahoDL] exists=" << exists
+                << " path=" << path.AsUTF8Unsafe();
+  if (!exists) {
+    DLOG(WARNING) << "[MahoDL] file missing; skipping "
+                  << (action == DownloadActionKind::kOpen ? "open" : "reveal");
+    return;
+  }
+  auto* profile = browser_ ? browser_->profile() : nullptr;
+  if (action == DownloadActionKind::kOpen) {
+    platform_util::OpenItem(profile, path, platform_util::OPEN_FILE,
+                            platform_util::OpenOperationCallback());
+  } else {
+    platform_util::ShowItemInFolder(profile, path);
   }
 }
 

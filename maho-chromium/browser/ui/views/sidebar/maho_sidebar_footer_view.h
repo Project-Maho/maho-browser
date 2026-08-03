@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho_sidebar_action_popover_view.h"
 #include "maho_sidebar_space_dot_view.h"
 #include "maho_sidebar_state_models.h"
@@ -51,6 +52,7 @@ class MahoSidebarFooterView : public views::View,
   ~MahoSidebarFooterView() override;
 
   void Update(const MahoSidebarFooterModel& model);
+  void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
   void RefreshPreferredSize();
 
   views::MdTextButton* plus_button_for_testing() { return plus_button_; }
@@ -61,6 +63,9 @@ class MahoSidebarFooterView : public views::View,
   views::View* GetSpaceDotForTesting(int index);
   bool command_overlay_controller_visible_for_testing() const {
     return action_popover_widget_ != nullptr;
+  }
+  const MahoSidebarPalette& sidebar_palette_for_testing() const {
+    return palette_;
   }
 
   // views::View:
@@ -116,11 +121,12 @@ class MahoSidebarFooterView : public views::View,
   void HideDropIndicator();
   void PerformReorder(int from_index, int to_index);
 
+  MahoSidebarFooterModel model_;
+  MahoSidebarPalette palette_;
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> update_pill_ = nullptr;
   raw_ptr<views::View> update_pill_indicator_ = nullptr;
   raw_ptr<views::Label> update_pill_label_ = nullptr;
-  raw_ptr<views::View> footer_separator_ = nullptr;
   raw_ptr<views::View> footer_region_ = nullptr;
   raw_ptr<views::View> spaces_cluster_ = nullptr;
   raw_ptr<views::View> dot_container_ = nullptr;

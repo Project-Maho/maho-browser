@@ -160,6 +160,8 @@ class MahoSidebarStateAdapter {
   mutable bool footer_state_is_dirty_ = true;
 };
 
+FooterSpaceState GetCoreFooterSpaceStateRaw();
+
 }  // namespace maho
 
 #endif  // MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_

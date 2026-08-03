@@ -20,6 +20,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -64,22 +65,68 @@ std::string QueryTabRole(const std::string& tab_id) {
   }
   return "";
 }
+}  // namespace
+
+namespace maho::context_menu {
 
 int ResolveTabIndex(Browser* browser, const std::string& tab_id) {
-  if (!browser || !browser->tab_strip_model()) return -1;
+  if (!browser || !browser->tab_strip_model() || tab_id.empty()) {
+    return -1;
+  }
   TabStripModel* model = browser->tab_strip_model();
   for (int i = 0; i < model->count(); ++i) {
     if (content::WebContents* wc = model->GetWebContentsAt(i)) {
-      if (auto* helper = MahoTabIdHelper::FromWebContents(wc)) {
-        if (helper->stable_tab_id() == tab_id) {
-          return i;
-        }
+      if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+          helper && helper->stable_tab_id() == tab_id) {
+        return i;
       }
     }
   }
   return -1;
 }
-}  // namespace
+
+content::WebContents* GetWebContentsForTabId(Browser* browser,
+                                             const std::string& tab_id) {
+  const int index = ResolveTabIndex(browser, tab_id);
+  if (index < 0 || !browser || !browser->tab_strip_model()) {
+    return nullptr;
+  }
+  return browser->tab_strip_model()->GetWebContentsAt(index);
+}
+
+void BoostTab(Browser* browser, content::WebContents* contents) {
+  if (!browser || !contents) {
+    return;
+  }
+  MahoBoostWindowController::GetForBrowser(browser, browser->profile())
+      .ShowForActiveDomain(contents);
+}
+
+void ReloadTab(content::WebContents* contents) {
+  if (contents) {
+    contents->GetController().Reload(content::ReloadType::NORMAL, true);
+  }
+}
+
+void DuplicateTab(Browser* browser, int tab_index) {
+  if (browser && tab_index >= 0) {
+    chrome::DuplicateTabAt(browser, tab_index);
+  }
+}
+
+void SetTabMuted(content::WebContents* contents, bool muted) {
+  if (!contents) {
+    return;
+  }
+  contents->SetAudioMuted(muted);
+  if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+      helper && !helper->stable_tab_id().empty()) {
+    maho::DispatchShellEvent(muted ? "mute_tab" : "unmute_tab",
+                             {{"tab_id", helper->stable_tab_id()}});
+  }
+}
+
+}  // namespace maho::context_menu
 
 MahoTabContextMenu::MahoTabContextMenu(Browser* browser, int tab_index)
     : browser_(browser), tab_index_(tab_index), delegate_(nullptr) {}
@@ -109,7 +156,7 @@ int MahoTabContextMenu::CountEligibleSplitTabs() const {
   }
   int eligible = 0;
   for (const auto& id : selected_tab_ids_) {
-    int idx = ResolveTabIndex(browser_, id);
+    int idx = maho::context_menu::ResolveTabIndex(browser_, id);
     if (idx >= 0 && model->ContainsIndex(idx) &&
         !model->GetSplitForTab(idx).has_value()) {
       ++eligible;
@@ -155,7 +202,7 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
     TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
     if (tab_strip_model) {
       for (const auto& id : selected_tab_ids_) {
-        int idx = ResolveTabIndex(browser_, id);
+        int idx = maho::context_menu::ResolveTabIndex(browser_, id);
         if (idx >= 0) {
           content::WebContents* contents = tab_strip_model->GetWebContentsAt(idx);
           if (contents && !contents->IsAudioMuted()) {
@@ -544,24 +591,16 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       }
       break;
     }
-    case IDC_MAHO_TAB_DUPLICATE: {
-      content::WebContents* contents =
-          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
-                              : nullptr;
-      if (contents) {
-        chrome::DuplicateTabAt(browser_, tab_index_);
+    case IDC_MAHO_TAB_DUPLICATE:
+      if (has_valid_tab_index) {
+        maho::context_menu::DuplicateTab(browser_, tab_index_);
       }
       break;
-    }
     case IDC_MAHO_TAB_BOOST: {
       content::WebContents* contents =
           has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
                               : nullptr;
-      if (contents) {
-        maho::MahoBoostWindowController::GetForBrowser(browser_,
-                                                       browser_->profile())
-            .ShowForActiveDomain(contents);
-      }
+      maho::context_menu::BoostTab(browser_, contents);
       break;
     }
     case IDC_MAHO_TAB_PIN:
@@ -583,28 +622,14 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       content::WebContents* contents =
           has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
                               : nullptr;
-      if (contents) {
-        contents->SetAudioMuted(true);
-        if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
-            helper && !helper->stable_tab_id().empty()) {
-          maho::DispatchShellEvent("mute_tab",
-                                   {{"tab_id", helper->stable_tab_id()}});
-        }
-      }
+      maho::context_menu::SetTabMuted(contents, true);
       break;
     }
     case IDC_MAHO_TAB_UNMUTE: {
       content::WebContents* contents =
           has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
                               : nullptr;
-      if (contents) {
-        contents->SetAudioMuted(false);
-        if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
-            helper && !helper->stable_tab_id().empty()) {
-          maho::DispatchShellEvent("unmute_tab",
-                                   {{"tab_id", helper->stable_tab_id()}});
-        }
-      }
+      maho::context_menu::SetTabMuted(contents, false);
       break;
     }
     case IDC_MAHO_TAB_COPY_URL: {
@@ -638,9 +663,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       content::WebContents* contents =
           has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
                               : nullptr;
-      if (contents) {
-        contents->GetController().Reload(content::ReloadType::NORMAL, true);
-      }
+      maho::context_menu::ReloadTab(contents);
       break;
     }
 
@@ -658,32 +681,26 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
     case IDC_MAHO_TAB_UNFREEZE:
       break;
     case IDC_MAHO_TAB_ARCHIVE:
-      if (!has_valid_tab_index) {
-        break;
-      }
-      if (content::WebContents* wc =
-              tab_strip_model->GetWebContentsAt(tab_index_)) {
-        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
-            helper && !helper->stable_tab_id().empty()) {
-          maho::DispatchShellEvent("archive_tab_by_id",
-                                   {{"tab_id", helper->stable_tab_id()}});
-        }
+      if (!core_tab_id_.empty()) {
+        maho::MahoTabRegistry::Get()->ArchiveTabsAndRemoveFromStrip(browser_, {core_tab_id_});
       }
       break;
-    case IDC_MAHO_TAB_ARCHIVE_BELOW:
+    case IDC_MAHO_TAB_ARCHIVE_BELOW: {
       if (!has_valid_tab_index) {
         break;
       }
-      for (int i = tab_strip_model->count() - 1; i > tab_index_; --i) {
+      std::vector<std::string> ids_to_archive;
+      for (int i = tab_index_ + 1; i < tab_strip_model->count(); ++i) {
         if (content::WebContents* wc = tab_strip_model->GetWebContentsAt(i)) {
           if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
               helper && !helper->stable_tab_id().empty()) {
-            maho::DispatchShellEvent("archive_tab_by_id",
-                                     {{"tab_id", helper->stable_tab_id()}});
+            ids_to_archive.push_back(helper->stable_tab_id());
           }
         }
       }
+      maho::MahoTabRegistry::Get()->ArchiveTabsAndRemoveFromStrip(browser_, ids_to_archive);
       break;
+    }
     case IDC_MAHO_TAB_MOVE_TO_SPACE:
       break;
     default:
@@ -759,7 +776,9 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_TAB_BOOST:
     case IDC_MAHO_TAB_SHARE:
     case IDC_MAHO_TAB_CHANGE_ICON:
+      return has_valid_tab_index;
     case IDC_MAHO_TAB_ARCHIVE:
+      return !core_tab_id_.empty();
     case IDC_MAHO_TAB_ARCHIVE_BELOW:
       return has_valid_tab_index;
     case IDC_MAHO_TAB_RENAME:
