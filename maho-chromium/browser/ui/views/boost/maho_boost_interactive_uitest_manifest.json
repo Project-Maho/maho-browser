@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "owner": "Todo 12",
+  "comparison_owner": "Todo 17",
+  "scope": "Todo 12 shared interactive-test support",
+  "required_sources": [
+    "maho_boost_interactive_test_support.cc",
+    "maho_boost_test_support_interactive_uitest.cc"
+  ],
+  "required_tests": [
+    "MahoBoostTestSupportTest.SmokeEachFixtureSeam",
+    "MahoBoostTestSupportTest.MissingControlStaleWebContentsWorldAndTimeoutAreActionable"
+  ],
+  "prohibited_result_tokens": ["FAILED", "NOTRUN", "SKIPPED"],
+  "execution_contract": {
+    "C1": "Build through build_maho.py only after Todo 17 wires all required sources.",
+    "C5": "Run MahoBoostTestSupportTest.* and reject absent, duplicate, skipped, not-run, or failed expected cases."
+  }
+}

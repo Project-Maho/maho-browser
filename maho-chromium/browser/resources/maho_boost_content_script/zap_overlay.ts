@@ -7,9 +7,10 @@
 type MahoBoostNS = {
   SelectorComponent: new (
     doc: Document,
-    ids: string[],
+    ids: readonly string[],
     onSelect: (s: string) => void,
-    labels?: { selectThis: string; selectRelated: string; cancel: string }
+    labels?: { readonly selectThis: string; readonly selectRelated: string; readonly cancel: string },
+    onStatus?: (status: SelectionStatus) => void
   ) => SelectorComponentInstance;
   ZapOverlay: typeof ZapOverlay;
   __mahoBoost: MahoBoostNS;
@@ -20,10 +21,17 @@ interface SelectorComponentInstance {
   initialize(): void;
   tearDown(): void;
   handleEvent(event: Event, prevent: boolean): void;
-  setState(state: string, data?: Element | null): void;
-  showHighlight(selection: NodeListOf<Element> | Element[]): void;
+  setState(state: 'selecting' | 'selected', data?: Element | null): void;
+  showHighlight(selection: NodeListOf<Element> | readonly Element[]): void;
   removeHighlight(): void;
   safeAreaPadding: { left: number; right: number; top: number; bottom: number };
+}
+
+interface SelectionStatus {
+  readonly code: string;
+  readonly message: string;
+  readonly selector: string | null;
+  readonly matchCount: number;
 }
 
 const ns = (window as unknown as MahoBoostNS).__mahoBoost;
@@ -40,6 +48,7 @@ class ZapOverlay {
   private onZapDoneClick: (() => void) | null = null;
   private zapDoneButton: HTMLInputElement | null = null;
   private boostContext: BoostContext;
+  private unzapHoverFrameId: number | null = null;
 
   constructor(doc: Document, boostContext: BoostContext) {
     this.doc = doc;
@@ -50,7 +59,8 @@ class ZapOverlay {
       doc,
       this.zapContentIDs,
       (selector: string) => this.handleSelectComponentSelect(selector),
-      { selectThis: 'Zap this', selectRelated: 'Related', cancel: 'Cancel' }
+      { selectThis: 'Zap this', selectRelated: 'Related', cancel: 'Cancel' },
+      (status: SelectionStatus) => this.handleSelectionStatus(status)
     );
     this.selectorComponent.safeAreaPadding.bottom = 65;
   }
@@ -58,7 +68,7 @@ class ZapOverlay {
   initialize(): void {
     if (this.initialized) return;
 
-    this.selectorComponent!.initialize();
+    this.selectorComponent?.initialize();
 
     this.container = this.doc.createElement('div');
     this.container.setAttribute('data-maho-boost-zap', 'true');
@@ -89,16 +99,22 @@ class ZapOverlay {
   }
 
   private initializeElements(): void {
-    this.zapDoneButton = this.getElementById('zap-done') as HTMLInputElement;
+    const zapDoneButton = this.getElementById('zap-done');
+    this.zapDoneButton = zapDoneButton instanceof HTMLInputElement ? zapDoneButton : null;
     this.onZapDoneClick = () => this.boostContext.disableZapMode();
     this.zapDoneButton?.addEventListener('click', this.onZapDoneClick);
     this.updateZappedList();
   }
 
   private handleSelectComponentSelect(cssSelector: string): void {
-    // TODO(W3.Z): Dissolve animation deferred for v1 — simple zap via CSS reinjection.
     this.boostContext.addZapSelector(cssSelector);
     this.onZapUpdate();
+  }
+
+  private handleSelectionStatus(status: SelectionStatus): void {
+    if (status.code !== 'ready') {
+      this.boostContext.sendNotify('zap-selection-status', status.code);
+    }
   }
 
   onZapUpdate(): void {
@@ -109,7 +125,7 @@ class ZapOverlay {
   private updateZappedList(): void {
     const zapList = this.getElementById('zap-list');
     if (!zapList) return;
-    zapList.innerHTML = '';
+    zapList.replaceChildren();
 
     const zapSelectors = this.boostContext.getZapSelectors();
 
@@ -118,11 +134,22 @@ class ZapOverlay {
       unzapButton.type = 'button';
       unzapButton.id = 'maho-zap-unzap';
       const index = idx + 1;
-      const matchCount = selector === '' ? 0 : this.doc.querySelectorAll(selector).length;
+      let matchCount = 0;
+      try {
+        matchCount = selector === '' ? 0 : this.doc.querySelectorAll(selector).length;
+      } catch (error) {
+        if (!(error instanceof DOMException)) throw error;
+        unzapButton.setAttribute('data-invalid-selector', 'true');
+      }
       unzapButton.value = String(index);
-      unzapButton.title = `${matchCount} element(s) hidden`;
+      unzapButton.title = unzapButton.hasAttribute('data-invalid-selector')
+        ? 'Invalid selector; remove this Zap to continue'
+        : `${matchCount} element(s) hidden`;
       unzapButton.setAttribute('data-index', String(index));
       unzapButton.setAttribute('data-selector', selector);
+      unzapButton.addEventListener('mouseenter', () => this.unzapButtonHover(unzapButton));
+      unzapButton.addEventListener('mouseleave', () => this.unzapButtonUnhover(unzapButton));
+      unzapButton.addEventListener('click', () => this.unzapButtonClick(unzapButton));
       zapList.appendChild(unzapButton);
     });
 
@@ -138,43 +165,55 @@ class ZapOverlay {
     }
   }
 
-  private unzapButtonHover(button: HTMLElement): void {
+  private unzapButtonHover(button: HTMLInputElement): void {
     const selector = button.getAttribute('data-selector');
     if (!selector) return;
     this.boostContext.tempShowZappedElement(selector);
-    (button as HTMLInputElement).value = '×';
+    button.value = '×';
 
-    this.win.requestAnimationFrame(() => {
-      const selection = this.doc.querySelectorAll(selector);
-      if (selection.length) {
-        this.selectorComponent!.showHighlight(selection);
+    if (this.unzapHoverFrameId !== null) {
+      this.win.cancelAnimationFrame(this.unzapHoverFrameId);
+    }
+    this.unzapHoverFrameId = this.win.requestAnimationFrame(() => {
+      this.unzapHoverFrameId = null;
+      try {
+        const selection = this.doc.querySelectorAll(selector);
+        if (selection.length) this.selectorComponent?.showHighlight(selection);
+      } catch (error) {
+        if (error instanceof DOMException) {
+          this.boostContext.sendNotify('zap-selection-status', 'invalid_selector');
+          return;
+        }
+        throw error;
       }
     });
 
-    this.selectorComponent!.setState('selecting');
+    this.selectorComponent?.setState('selecting');
   }
 
-  private unzapButtonUnhover(button: HTMLElement): void {
-    (button as HTMLInputElement).value = button.getAttribute('data-index') || '';
+  private unzapButtonUnhover(button: HTMLInputElement): void {
+    button.value = button.getAttribute('data-index') || '';
     this.boostContext.tempHideZappedElement();
-    this.selectorComponent!.removeHighlight();
+    this.selectorComponent?.removeHighlight();
   }
 
-  private unzapButtonClick(button: HTMLElement): void {
+  private unzapButtonClick(button: HTMLInputElement): void {
     const selector = button.getAttribute('data-selector');
     if (!selector) return;
 
     this.boostContext.tempHideZappedElement();
-    this.selectorComponent!.removeHighlight();
-    this.selectorComponent!.setState('selecting');
-
-    this.win.requestAnimationFrame(() => {
-      this.boostContext.removeZapSelector(selector);
-      this.onZapUpdate();
-    });
+    this.selectorComponent?.removeHighlight();
+    this.selectorComponent?.setState('selecting');
+    this.boostContext.removeZapSelector(selector);
+    this.onZapUpdate();
   }
 
   tearDown(): void {
+    if (this.unzapHoverFrameId !== null) {
+      this.win.cancelAnimationFrame(this.unzapHoverFrameId);
+      this.unzapHoverFrameId = null;
+    }
+    this.boostContext.tempHideZappedElement();
     this.selectorComponent?.tearDown();
     this.selectorComponent = null;
 
@@ -204,26 +243,26 @@ class ZapOverlay {
         this.handleUnhoverDelegation(event);
         break;
     }
-    this.selectorComponent!.handleEvent(event, prevent);
+    this.selectorComponent?.handleEvent(event, prevent);
   }
 
   private handleClick(event: Event): void {
-    const target = event.target as HTMLElement;
-    if (target?.id === 'maho-zap-unzap') {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.id === 'maho-zap-unzap') {
       this.unzapButtonClick(target);
     }
   }
 
   private handleHoverDelegation(event: Event): void {
-    const target = event.target as HTMLElement;
-    if (target?.id === 'maho-zap-unzap') {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.id === 'maho-zap-unzap') {
       this.unzapButtonHover(target);
     }
   }
 
   private handleUnhoverDelegation(event: Event): void {
-    const target = event.target as HTMLElement;
-    if (target?.id === 'maho-zap-unzap') {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.id === 'maho-zap-unzap') {
       this.unzapButtonUnhover(target);
     }
   }

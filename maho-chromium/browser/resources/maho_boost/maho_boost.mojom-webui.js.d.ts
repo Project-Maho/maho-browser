@@ -96,6 +96,8 @@ export interface PageObserver {
 
 export interface PageHandler {
   getDomain(): Promise<{domain: string}>;
+  hostCloseFinished(): Promise<void>;
+  setHostCloseState(boostId: string | null, dirty: boolean): Promise<void>;
   listBoosts(): Promise<{boosts: BoostInfo[]}>;
   getBoost(boostId: string): Promise<{boost: BoostInfo | null}>;
   getActiveBoost(): Promise<{boost: BoostInfo | null}>;
@@ -153,6 +155,8 @@ export class PageHandlerRemote implements PageHandler {
   $: {
     bindNewPipeAndPassReceiver(): unknown;
   };
+  hostCloseFinished(): Promise<void>;
+  setHostCloseState(boostId: string | null, dirty: boolean): Promise<void>;
   getDomain(): Promise<{domain: string}>;
   listBoosts(): Promise<{boosts: BoostInfo[]}>;
   getBoost(boostId: string): Promise<{boost: BoostInfo | null}>;

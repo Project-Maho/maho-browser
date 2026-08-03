@@ -1,0 +1,296 @@
+@import '../../../maho_common/react/theme/tokens.css';
+
+@source '../**/*.ts';
+@source '../**/*.tsx';
+@source '../../../maho_common/react/ui/**/*.tsx';
+
+:root#zenBoostWindow {
+  --boost-window-height: 582px;
+  --boost-window-width: 184px;
+  --boost-code-window-width: 452px;
+  --boost-layer-bars: 10;
+  --boost-layer-floating: 30;
+  --boost-layer-status: 40;
+
+  appearance: none;
+  block-size: var(--boost-window-height);
+  min-block-size: var(--boost-window-height);
+  max-block-size: var(--boost-window-height);
+  inline-size: var(--boost-window-width);
+  min-inline-size: var(--boost-window-width);
+  max-inline-size: var(--boost-window-width);
+  overflow: clip;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  overscroll-behavior: none;
+}
+
+:root#zenBoostWindow[editor='code'] {
+  inline-size: var(--boost-code-window-width);
+  min-inline-size: var(--boost-code-window-width);
+  max-inline-size: var(--boost-code-window-width);
+}
+
+:root#zenBoostWindow,
+:root#zenBoostWindow body,
+#app,
+.boost-shell,
+.boost-route,
+#zen-boost-code-editor-root {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  block-size: 100%;
+  inline-size: 100%;
+  min-block-size: 0;
+  min-inline-size: 0;
+  overflow: clip;
+}
+
+:root#zenBoostWindow body {
+  display: grid;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  user-select: none;
+}
+
+#app {
+  isolation: isolate;
+}
+
+.boost-shell {
+  position: relative;
+  contain: layout paint;
+}
+
+.boost-route,
+#zen-boost-code-editor-root {
+  position: absolute;
+  inset: 0;
+}
+
+#app,
+.boost-shell,
+.boost-route-body,
+#zen-boost-head-wrapper,
+#zen-boost-code-top-bar {
+  -webkit-app-region: drag;
+}
+
+.boost-route-body > *,
+#zen-boost-code-editor,
+#zen-boost-code-bottom-bar,
+.boost-status-layer,
+.boost-toaster,
+[data-radix-popper-content-wrapper],
+/* Tailwind v4 does not emit an arbitrary utility for the -webkit- prefixed
+   app-region property, so the `[-webkit-app-region:no-drag]` classes used
+   across the editor markup produced no CSS at all. Define them explicitly. */
+.\[-webkit-app-region\:no-drag\] {
+  -webkit-app-region: no-drag;
+}
+
+.\[-webkit-app-region\:drag\] {
+  -webkit-app-region: drag;
+}
+
+/* The color wheel is a fieldset, so it is not covered by the interactive
+   allowlist below. Without this the wheel background stays a window-drag
+   region and AppKit swallows the pointer press before the renderer sees it,
+   which makes the handles impossible to drag. */
+#color-wheel,
+#color-wheel *,
+#app :where(
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  [contenteditable='true'],
+  [role='button'],
+  [role='dialog'],
+  [role='listbox'],
+  [role='menu'],
+  [role='menuitem'],
+  [role='option'],
+  [role='slider'],
+  [tabindex]
+),
+#app :where(
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  [contenteditable='true'],
+  [role='button'],
+  [role='dialog'],
+  [role='listbox'],
+  [role='menu'],
+  [role='menuitem'],
+  [role='option'],
+  [role='slider'],
+  [tabindex]
+) *,
+[data-radix-popper-content-wrapper] * {
+  -webkit-app-region: no-drag;
+}
+
+#zen-boost-head-wrapper,
+#zen-boost-code-top-bar,
+#zen-boost-code-bottom-bar {
+  z-index: var(--boost-layer-bars);
+}
+
+[data-radix-popper-content-wrapper] {
+  z-index: var(--boost-layer-floating);
+  max-block-size: calc(var(--boost-window-height) - 16px);
+  max-inline-size: calc(100vw - 16px);
+  overflow: clip;
+}
+
+#advanced-color-popup {
+  z-index: var(--boost-layer-floating);
+}
+
+.boost-status-layer,
+.boost-toaster {
+  z-index: var(--boost-layer-status);
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.boost-status-layer {
+  position: absolute;
+  inset-inline: 8px;
+  inset-block-end: 8px;
+  max-block-size: calc(100% - 16px);
+  overflow: clip;
+}
+
+.boost-status,
+.boost-toaster :where([data-sonner-toast], [data-content]) {
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.boost-status {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-inline-size: 0;
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.boost-status--loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  padding: 8px 10px;
+  background: var(--color-muted);
+  color: var(--color-muted-foreground);
+}
+
+.boost-status--alert {
+  padding: 8px 10px;
+}
+
+.boost-status--alert > svg {
+  inset-block-start: 10px;
+  inset-inline-start: 10px;
+}
+
+.boost-status--alert > svg ~ * {
+  padding-inline-start: 20px;
+}
+
+.boost-status__icon {
+  block-size: 14px;
+  inline-size: 14px;
+  flex: none;
+}
+
+#app [inert],
+[data-radix-popper-content-wrapper][inert] {
+  pointer-events: none;
+  user-select: none;
+}
+
+#app :where(
+  button,
+  input,
+  select,
+  textarea,
+  [contenteditable='true'],
+  [role='button'],
+  [role='menuitem'],
+  [role='option'],
+  [role='slider']
+):focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--color-ring);
+}
+
+#app :where(
+  [role='menuitem'][data-highlighted],
+  [role='option'][data-highlighted]
+) {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--color-ring);
+}
+
+#custom-css-editor:focus-within {
+  box-shadow: inset 0 0 0 1px var(--color-ring);
+}
+
+#app :where(
+  button,
+  input,
+  select,
+  textarea,
+  [role='button'],
+  [role='menuitem'],
+  [role='option'],
+  [role='slider']
+):is(:disabled, [aria-disabled='true'], [data-disabled]) {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app,
+  #app *,
+  #app *::before,
+  #app *::after,
+  [data-radix-popper-content-wrapper],
+  [data-radix-popper-content-wrapper] *,
+  .boost-toaster,
+  .boost-toaster * {
+    scroll-behavior: auto;
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  #app :where(
+    button,
+    input,
+    select,
+    textarea,
+    [contenteditable='true'],
+    [role='button'],
+    [role='menuitem'],
+    [role='option'],
+    [role='slider']
+  ):focus-visible {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+}

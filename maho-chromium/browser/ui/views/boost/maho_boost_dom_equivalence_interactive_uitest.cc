@@ -1,173 +1,252 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-#include "base/json/json_reader.h"
-#include "base/run_loop.h"
-#include "base/test/run_until.h"
-#include "base/values.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/web_contents.h"
+#include <string>
+#include <string_view>
+
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/views/controls/webview/webview.h"
-#include "ui/views/view.h"
-#include "ui/views/widget/widget.h"
-#include "url/gurl.h"
+#include "maho/browser/ui/views/boost/maho_boost_interactive_test_support.h"
 
 namespace {
 
-// Retrieve the WebContents hosting chrome://maho-boost from the boost widget.
-// The widget's contents view is a MahoBoostWindowView whose first child is the
-// views::WebView that loaded the Boost WebUI.
-content::WebContents* GetBoostEditorWebContents(views::Widget* widget) {
-  if (!widget) {
-    return nullptr;
-  }
-  views::View* contents = widget->GetContentsView();
-  if (!contents || contents->children().empty()) {
-    return nullptr;
-  }
-  // The first child of the contents view is the WebView hosting the WebUI.
-  auto* web_view = views::AsViewClass<views::WebView>(contents->children()[0]);
-  if (!web_view) {
-    return nullptr;
-  }
-  return web_view->web_contents();
+class MahoBoostDomEquivalenceTest : public MahoBoostInteractiveUiTest {};
+
+void ExpectNoDomContractFailures(content::WebContents* editor_web_contents,
+                                 std::string_view contract_name,
+                                 std::string_view script) {
+  const content::EvalJsResult result =
+      content::EvalJs(editor_web_contents, std::string(script));
+  ASSERT_TRUE(result.is_ok())
+      << contract_name << " DOM evaluation failed: " << result.ExtractError();
+  EXPECT_EQ("[]", result.ExtractString())
+      << contract_name << " live DOM contract failures: "
+      << result.ExtractString();
 }
 
-class MahoBoostDomEquivalenceTest : public InProcessBrowserTest {
- public:
-  MahoBoostDomEquivalenceTest() = default;
-  ~MahoBoostDomEquivalenceTest() override = default;
+constexpr char kBoostRouteContract[] = R"(
+  (() => {
+    const failures = [];
+    const selector = value => document.querySelector(value);
+    const visible = element => {
+      if (!element || !element.isConnected || element.hidden ||
+          element.getAttribute('aria-hidden') === 'true' ||
+          element.closest('[inert]')) {
+        return false;
+      }
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' &&
+          Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+    };
+    const validateLiveUnique = (id, owner) => {
+      const hookFailures = [];
+      const elements = document.querySelectorAll(`#${CSS.escape(id)}`);
+      if (elements.length !== 1) {
+        hookFailures.push(`${id}: expected one live owner, found ${elements.length}`);
+        return hookFailures;
+      }
+      const element = elements[0];
+      if (!visible(element)) {
+        hookFailures.push(`${id}: hook is hidden, inert, or has a zero rect`);
+      }
+      if (!element.closest(owner)) {
+        hookFailures.push(`${id}: hook is not owned by ${owner}`);
+      }
+      return hookFailures;
+    };
+    const validateUniqueOwned = (id, owner) => {
+      const hookFailures = [];
+      const elements = document.querySelectorAll(`#${CSS.escape(id)}`);
+      if (elements.length !== 1) {
+        hookFailures.push(`${id}: expected one live owner, found ${elements.length}`);
+        return hookFailures;
+      }
+      if (!elements[0].closest(owner)) {
+        hookFailures.push(`${id}: hook is not owned by ${owner}`);
+      }
+      return hookFailures;
+    };
+    const validateInteractiveNoDrag = element => {
+      if (getComputedStyle(element).getPropertyValue('-webkit-app-region').trim() === 'drag') {
+        return [`${element.id || element.ariaLabel}: interactive control is draggable`];
+      }
+      return [];
+    };
+    window.__mahoBoostTest ??= {};
+    window.__mahoBoostTest.validateLiveUnique = validateLiveUnique;
+    window.__mahoBoostTest.validateInteractiveNoDrag = validateInteractiveNoDrag;
+    const root = document.documentElement;
+    if (root.id !== 'zenBoostWindow' || root.getAttribute('editor') !== 'boost') {
+      failures.push('Boost root must be html#zenBoostWindow[editor="boost"]');
+    }
+    const boost = selector('#boost-editor.boost-mode');
+    if (!visible(boost) || !boost.matches('main')) {
+      failures.push('Boost main route must be visible and semantic');
+    }
+    const code = selector('#zen-boost-code-editor-root');
+    if (code && (visible(code) || [...code.querySelectorAll(
+        'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')]
+        .some(element => !element.disabled && !element.hidden))) {
+      failures.push('inactive Code route must not participate in visible focus traversal');
+    }
+    [
+      ['boost-editor', '#boost-editor'],
+      ['zen-boost-editor-root', '#boost-editor'],
+      ['color-section', '#boost-editor'],
+      ['color-wheel', '#color-section'],
+      ['zen-boost-color-picker-dot-primary', '#color-wheel'],
+      ['zen-boost-color-picker-dot-secondary', '#color-wheel'],
+      ['typography-section', '#boost-editor'],
+      ['font-grid', '#typography-section'],
+      ['size-cycle-btn', '#typography-section'],
+      ['case-cycle-btn', '#typography-section'],
+      ['zap-section', '#boost-editor'],
+      ['zen-boost-zap', '#zap-section'],
+      ['zen-boost-code', '#zap-section'],
+      ['advanced-color-toggle', '#color-section'],
+      ['zen-boost-controls', '#advanced-color-toggle'],
+      ['magic-theme-toggle', '#color-wheel'],
+      ['zen-boost-magic-theme', '#magic-theme-toggle'],
+      ['smart-invert-toggle', '#color-section'],
+      ['zen-boost-invert', '#smart-invert-toggle'],
+    ].forEach(([id, owner]) => failures.push(...validateLiveUnique(id, owner)));
+    [
+      ['dot-primary', '#zen-boost-color-picker-dot-primary'],
+      ['dot-secondary', '#zen-boost-color-picker-dot-secondary'],
+    ].forEach(([id, owner]) => failures.push(...validateUniqueOwned(id, owner)));
+    const fontButtons = [...document.querySelectorAll('#font-grid .font-button')];
+    if (fontButtons.length !== 15 || fontButtons.some(element => !visible(element))) {
+      failures.push('font grid must expose 15 visible live font buttons');
+    }
+    document.querySelectorAll('button,input,select,textarea').forEach(element =>
+        failures.push(...validateInteractiveNoDrag(element)));
+    return JSON.stringify(failures);
+  })()
+)";
 
-  void SetUpOnMainThread() override {
-    embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
-    ASSERT_TRUE(embedded_test_server()->Start());
-    InProcessBrowserTest::SetUpOnMainThread();
-  }
-};
+constexpr char kCodeRouteContract[] = R"(
+  (() => {
+    const failures = [];
+    const visible = element => {
+      if (!element || !element.isConnected || element.hidden ||
+          element.getAttribute('aria-hidden') === 'true' || element.closest('[inert]')) {
+        return false;
+      }
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' &&
+          Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+    };
+    const requireLiveUnique = (id, owner) => {
+      const elements = document.querySelectorAll(`#${CSS.escape(id)}`);
+      if (elements.length !== 1) {
+        failures.push(`${id}: expected one live owner, found ${elements.length}`);
+        return;
+      }
+      const element = elements[0];
+      if (!visible(element)) {
+        failures.push(`${id}: hook is hidden, inert, or has a zero rect`);
+      }
+      if (!element.closest(owner)) {
+        failures.push(`${id}: hook is not owned by ${owner}`);
+      }
+    };
+    const root = document.documentElement;
+    if (root.id !== 'zenBoostWindow' || root.getAttribute('editor') !== 'code') {
+      failures.push('Code root must be html#zenBoostWindow[editor="code"]');
+    }
+    const code = document.querySelector('#zen-boost-code-editor-root.code-mode');
+    if (!visible(code) || !code.matches('main')) {
+      failures.push('Code main route must be visible and semantic');
+    }
+    const boost = document.querySelector('#boost-editor');
+    if (boost && (visible(boost) || [...boost.querySelectorAll(
+        'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')]
+        .some(element => !element.disabled && !element.hidden))) {
+      failures.push('inactive Boost route must not participate in visible focus traversal');
+    }
+    [
+      ['zen-boost-code-editor-root', '#zen-boost-code-editor-root'],
+      ['code-editor-container', '#zen-boost-code-editor-root'],
+      ['zen-boost-code-editor', '#code-editor-container'],
+      ['custom-css-editor', '#zen-boost-code-editor'],
+      ['zen-boost-code-top-bar', '#code-editor-container'],
+      ['zen-boost-back', '#zen-boost-code-top-bar'],
+      ['zen-boost-code-bottom-bar', '#code-editor-container'],
+      ['zen-boost-css-picker', '#zen-boost-code-bottom-bar'],
+      ['zen-boost-css-inspector', '#zen-boost-code-bottom-bar'],
+    ].forEach(([id, owner]) => requireLiveUnique(id, owner));
+    const editor = document.querySelector('#custom-css-editor .cm-editor');
+    if (!visible(editor) || !editor.querySelector('.cm-content')) {
+      failures.push('CodeMirror must be a visible live descendant of #custom-css-editor');
+    }
+    return JSON.stringify(failures);
+  })()
+)";
+
+constexpr char kFailureFixtureContract[] = R"(
+  (() => {
+    const violations = [];
+    const validateLiveUnique = window.__mahoBoostTest?.validateLiveUnique;
+    const validateInteractiveNoDrag =
+        window.__mahoBoostTest?.validateInteractiveNoDrag;
+    if (!validateLiveUnique || !validateInteractiveNoDrag) {
+      return JSON.stringify(['live validator was not installed']);
+    }
+    const original = document.getElementById('zen-boost-zap');
+    const duplicate = original.cloneNode(false);
+    duplicate.id = original.id;
+    document.body.append(duplicate);
+    const hidden = document.createElement('button');
+    hidden.id = 'hidden-required-hook';
+    hidden.hidden = true;
+    document.body.append(hidden);
+    const draggable = document.createElement('button');
+    draggable.id = 'draggable-control-fixture';
+    draggable.style.webkitAppRegion = 'drag';
+    document.body.append(draggable);
+    violations.push(...validateLiveUnique('zen-boost-zap', '#zap-section'));
+    violations.push(...validateLiveUnique('hidden-required-hook', 'body'));
+    violations.push(...validateInteractiveNoDrag(draggable));
+    duplicate.remove();
+    hidden.remove();
+    draggable.remove();
+    return JSON.stringify(violations);
+  })()
+)";
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(MahoBoostDomEquivalenceTest, ZenMandatedIdsPresent) {
-  // 1–2. Navigate to a test page.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
-  base::RunLoop().RunUntilIdle();
+IN_PROC_BROWSER_TEST_F(MahoBoostDomEquivalenceTest,
+                       LiveUniqueVisibleStateBearingHooks) {
+  NavigateTo("/title1.html");
+  content::WebContents* editor_web_contents = OpenEditorAndWait();
+  ASSERT_TRUE(editor_web_contents);
 
-  // 3–4. Get the boost controller and show the editor.
-  auto& controller = maho::MahoBoostWindowController::GetForBrowser(
-      browser(), browser()->profile());
-  controller.ShowForActiveDomain(
-      browser()->tab_strip_model()->GetActiveWebContents());
+  ExpectNoDomContractFailures(editor_web_contents, "Boost route",
+                              kBoostRouteContract);
+  ASSERT_TRUE(SwitchToCodeMode(editor_web_contents));
+  ASSERT_TRUE(WaitForCodeMirrorMount(editor_web_contents));
+  ExpectNoDomContractFailures(editor_web_contents, "Code route",
+                              kCodeRouteContract);
+}
 
-  // 5. Wait for the boost editor's WebContents to finish loading (10s timeout).
-  views::Widget* widget = controller.GetWidgetForTesting();
-  ASSERT_TRUE(widget) << "Boost widget was not created";
+IN_PROC_BROWSER_TEST_F(MahoBoostDomEquivalenceTest,
+                       RejectsDuplicateHiddenAndDraggableFailureFixtures) {
+  NavigateTo("/title1.html");
+  content::WebContents* editor_web_contents = OpenEditorAndWait();
+  ASSERT_TRUE(editor_web_contents);
 
-  content::WebContents* editor_wc = nullptr;
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    editor_wc = GetBoostEditorWebContents(widget);
-    return editor_wc &&
-           editor_wc->IsDocumentOnLoadCompletedInPrimaryMainFrame();
-  })) << "Boost editor WebContents did not finish loading within timeout";
+  ExpectNoDomContractFailures(editor_web_contents, "Boost route",
+                              kBoostRouteContract);
 
-  // 6. Sanity-check we have the right WebContents.
-  ASSERT_TRUE(editor_wc);
-  EXPECT_TRUE(editor_wc->GetLastCommittedURL().SchemeIs("chrome"));
-  SCOPED_TRACE("Editor URL: " + editor_wc->GetLastCommittedURL().spec());
-
-  // 7. Execute JS to extract all IDs and classes from the DOM.
-  const std::string js = R"(
-    (function() {
-      const ids = [...document.querySelectorAll('[id]')].map(e => e.id);
-      const classes = [...document.querySelectorAll('[class]')]
-        .flatMap(e => [...e.classList]);
-      return JSON.stringify({
-        ids: [...new Set(ids)],
-        classes: [...new Set(classes)]
-      });
-    })()
-  )";
-
-  content::EvalJsResult eval_result = content::EvalJs(editor_wc, js);
-  ASSERT_TRUE(eval_result.is_ok())
-      << "JS evaluation failed: " << eval_result.ExtractError();
-
-  // 8. Parse the JSON result.
-  std::string json_str = eval_result.ExtractString();
-  SCOPED_TRACE("Raw DOM dump: " + json_str);
-
-  std::optional<base::Value> parsed = base::JSONReader::Read(json_str, 0);
-  ASSERT_TRUE(parsed.has_value()) << "Failed to parse JSON: " << json_str;
-  ASSERT_TRUE(parsed->is_dict()) << "JSON root is not a dict: " << json_str;
-
-  const base::DictValue& root = parsed->GetDict();
-  const base::ListValue* ids_list = root.FindList("ids");
-  const base::ListValue* classes_list = root.FindList("classes");
-  ASSERT_TRUE(ids_list) << "Missing 'ids' array in DOM dump";
-  ASSERT_TRUE(classes_list) << "Missing 'classes' array in DOM dump";
-
-  std::set<std::string> ids;
-  for (const auto& v : *ids_list) {
-    if (v.is_string()) {
-      ids.insert(v.GetString());
-    }
-  }
-  std::set<std::string> classes;
-  for (const auto& v : *classes_list) {
-    if (v.is_string()) {
-      classes.insert(v.GetString());
-    }
-  }
-
-  // 9. Assert Zen-mandated DOM IDs are present.
-  //    On failure, the SCOPED_TRACE above dumps the full DOM JSON for
-  //    diagnosing mismatches.
-  const std::vector<std::string> required_ids = {
-      "boost-editor",
-      "color-section",
-      "typography-section",
-      "zap-section",
-      "dot-primary",
-      "dot-secondary",
-      "color-wheel",
-      "font-grid",
-      "case-cycle-btn",
-      "size-cycle-btn",
-      "code-editor-container",
-      "custom-css-editor",
-      "advanced-color-toggle",
-      "advanced-color-popup",
-      "magic-theme-toggle",
-      "smart-invert-toggle",
-  };
-
-  for (const auto& id : required_ids) {
-    EXPECT_TRUE(ids.contains(id))
-        << "Zen-mandated DOM id '" << id
-        << "' not found in editor DOM. Present IDs: " << json_str;
-  }
-
-  // 10. Assert structural classes.
-  EXPECT_TRUE(classes.contains("boost-mode") || classes.contains("code-mode"))
-      << "Neither 'boost-mode' nor 'code-mode' class found. "
-      << "Present classes (see SCOPED_TRACE above for full dump)";
-
-  const std::vector<std::string> required_classes = {
-      "color-wheel-container",
-      "font-button",
-      "zap-controls",
-  };
-
-  for (const auto& cls : required_classes) {
-    EXPECT_TRUE(classes.contains(cls))
-        << "Zen-mandated class '" << cls
-        << "' not found in editor DOM. Present classes: " << json_str;
-  }
+  const content::EvalJsResult result =
+      content::EvalJs(editor_web_contents, kFailureFixtureContract);
+  ASSERT_TRUE(result.is_ok()) << result.ExtractError();
+  EXPECT_EQ("[\"zen-boost-zap: expected one live owner, found 2\","
+            "\"hidden-required-hook: hook is hidden, inert, or has a zero rect\","
+            "\"draggable-control-fixture: interactive control is draggable\"]",
+            result.ExtractString())
+      << "The live DOM validator must reject each intentional failure fixture.";
 }

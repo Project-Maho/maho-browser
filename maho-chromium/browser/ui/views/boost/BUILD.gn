@@ -26,10 +26,18 @@ group("maho_boost_bubble") {
 source_set("interactive_tests") {
   testonly = true
   sources = [
+    "maho_boost_actions_interactive_uitest.cc",
     "maho_boost_behavior_interactive_uitest.cc",
     "maho_boost_codemirror_interactive_uitest.cc",
     "maho_boost_dom_equivalence_interactive_uitest.cc",
+    "maho_boost_interactive_test_support.cc",
     "maho_boost_lifecycle_interactive_uitest.cc",
+    "maho_boost_test_support_interactive_uitest.cc",
+    "maho_boost_visual_accessibility_interactive_uitest.cc",
+    "maho_boost_visual_capture_interactive_uitest.cc",
+    "maho_boost_visual_capture_test_support.cc",
+    "maho_boost_visual_capture_validation.cc",
+    "maho_boost_zap_picker_interactive_uitest.cc",
   ]
 
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]

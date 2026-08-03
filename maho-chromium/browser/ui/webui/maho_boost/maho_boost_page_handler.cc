@@ -3,6 +3,7 @@
 #include "maho/browser/ui/webui/maho_boost/maho_boost_page_handler.h"
 
 #include <optional>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,11 @@
 #include "base/sequence_checker.h"
 #include "base/values.h"
 #include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/font_list_async.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
@@ -21,10 +27,43 @@
 #include "maho/browser/ui/views/boost/maho_boost_window_controller_bridge.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 
 namespace {
+
+constexpr size_t kMaxBoostIdBytes = 256;
+constexpr size_t kMaxBoostNameBytes = 256;
+constexpr size_t kMaxFontFamilyBytes = 256;
+constexpr size_t kMaxBoostImportBytes = 512 * 1024;
+constexpr size_t kMaxCustomCssBytes = 256 * 1024;
+constexpr size_t kMaxZapSelectors = 256;
+constexpr size_t kMaxZapSelectorBytes = 2 * 1024;
+
+bool IsOversizedBoostUpdate(const maho_boost::mojom::BoostUpdate& changes) {
+  return (changes.name.has_value() &&
+          changes.name->size() > kMaxBoostNameBytes) ||
+         (changes.custom_css.has_value() &&
+          changes.custom_css->size() > kMaxCustomCssBytes) ||
+         (changes.typography &&
+          changes.typography->set_font_family &&
+          changes.typography->font_family.size() > kMaxFontFamilyBytes) ||
+         (changes.zap_selectors.has_value() &&
+          (changes.zap_selectors->size() > kMaxZapSelectors ||
+           std::ranges::any_of(
+               *changes.zap_selectors, [](const std::string& selector) {
+                 return selector.size() > kMaxZapSelectorBytes;
+               })));
+}
+
+class ScopedFfiSerialization {
+ public:
+  ScopedFfiSerialization() : scope_(maho_ffi_serialization_scope_enter()) {}
+  ~ScopedFfiSerialization() { maho_ffi_serialization_scope_exit(scope_); }
+
+  bool acquired() const { return scope_ != nullptr; }
+
+ private:
+  void* scope_;
+};
 
 maho_boost::mojom::CaseMode ParseCaseMode(const std::string& s) {
   // Accept both lowercase (from Rust serde rename_all = "camelCase") and
@@ -183,6 +222,22 @@ maho_boost::mojom::BoostInfoPtr ParseSingleBoostJson(const std::string& json) {
   return ParseBoostFromDict(parsed->GetDict());
 }
 
+bool BoostBelongsToDomain(const std::string& domain,
+                          const std::string& boost_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  char* json_str = maho_core_boost_get(core, boost_id.c_str());
+  if (!json_str) {
+    return false;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+  auto boost = ParseSingleBoostJson(json);
+  return boost && boost->domain == domain;
+}
+
 std::string SerializeBoostUpdate(
     const maho_boost::mojom::BoostUpdatePtr& changes) {
   base::DictValue root;
@@ -305,9 +360,13 @@ std::vector<maho_boost::mojom::BoostInfoPtr> ListBoostsOnCoreSequence(
   return result;
 }
 
-maho_boost::mojom::BoostInfoPtr GetBoostOnCoreSequence(const std::string& boost_id) {
+maho_boost::mojom::BoostInfoPtr GetBoostOnCoreSequence(
+    const std::string& domain,
+    const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return nullptr;
   }
   char* json_str = maho_core_boost_get(core, boost_id.c_str());
@@ -333,9 +392,12 @@ maho_boost::mojom::BoostInfoPtr CreateTempBoostOnCoreSequence(
 }
 
 maho_boost::mojom::BoostInfoPtr CommitBoostOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return nullptr;
   }
   std::string json = maho::core::CommitBoost(core, boost_id.c_str());
@@ -345,18 +407,24 @@ maho_boost::mojom::BoostInfoPtr CommitBoostOnCoreSequence(
   return ParseSingleBoostJson(json);
 }
 
-std::string DiscardBoostOnCoreSequence(const std::string& boost_id) {
+std::string DiscardBoostOnCoreSequence(const std::string& domain,
+                                       const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return std::string();
   }
   return maho::core::DiscardBoost(core, boost_id.c_str());
 }
 
 maho_boost::mojom::BoostInfoPtr ShuffleBoostOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return nullptr;
   }
   std::string json = maho::core::ShuffleBoost(core, boost_id.c_str());
@@ -367,9 +435,12 @@ maho_boost::mojom::BoostInfoPtr ShuffleBoostOnCoreSequence(
 }
 
 maho_boost::mojom::BoostInfoPtr ResetBoostOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return nullptr;
   }
   std::string json = maho::core::ResetBoost(core, boost_id.c_str());
@@ -379,9 +450,12 @@ maho_boost::mojom::BoostInfoPtr ResetBoostOnCoreSequence(
   return ParseSingleBoostJson(json);
 }
 
-std::string ExportBoostOnCoreSequence(const std::string& boost_id) {
+std::string ExportBoostOnCoreSequence(const std::string& domain,
+                                      const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return std::string();
   }
   return maho::core::ExportBoost(core, boost_id.c_str());
@@ -402,10 +476,13 @@ maho_boost::mojom::BoostInfoPtr ImportBoostOnCoreSequence(
 }
 
 maho_boost::mojom::BoostInfoPtr AppendZapSelectorOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id,
     const std::string& selector) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return nullptr;
   }
   std::string json =
@@ -417,10 +494,13 @@ maho_boost::mojom::BoostInfoPtr AppendZapSelectorOnCoreSequence(
 }
 
 maho_boost::mojom::BoostInfoPtr RemoveZapSelectorOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id,
     const std::string& selector) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return nullptr;
   }
   std::string json =
@@ -432,10 +512,13 @@ maho_boost::mojom::BoostInfoPtr RemoveZapSelectorOnCoreSequence(
 }
 
 maho_boost::mojom::BoostInfoPtr UpdateBoostOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id,
     const std::string& changes_json) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     LOG(ERROR) << "[MahoBoost] UpdateBoostOnCoreSequence: core is null";
     return nullptr;
   }
@@ -455,9 +538,12 @@ maho_boost::mojom::BoostInfoPtr UpdateBoostOnCoreSequence(
   return ParseSingleBoostJson(json);
 }
 
-bool DeleteBoostOnCoreSequence(const std::string& boost_id) {
+bool DeleteBoostOnCoreSequence(const std::string& domain,
+                               const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return false;
   }
   return maho_core_boost_delete(core, boost_id.c_str());
@@ -478,28 +564,27 @@ maho_boost::mojom::BoostInfoPtr GetActiveBoostOnCoreSequence(
   return ParseSingleBoostJson(json);
 }
 
-std::string SetActiveBoostOnCoreSequence(const std::string& domain,
-                                 const std::optional<std::string>& boost_id) {
+std::pair<std::string, bool> SetActiveBoostOnCoreSequence(
+    const std::string& domain,
+    const std::optional<std::string>& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
-    return std::string();
+  if (!serialization.acquired() || !core ||
+      (boost_id.has_value() &&
+       !BoostBelongsToDomain(domain, *boost_id))) {
+    return {{}, false};
   }
-  base::DictValue event;
-  event.Set("kind", "set_active_boost");
-  event.Set("domain", domain);
-  if (boost_id.has_value()) {
-    event.Set("boost_id", *boost_id);
-  } else {
-    event.Set("boost_id", base::Value());
-  }
-  std::string event_json;
-  base::JSONWriter::Write(base::Value(std::move(event)), &event_json);
-  return maho::core::HandleEvent(core, event_json.c_str());
+  const bool success = maho_core_boost_set_active(
+      core, domain.c_str(), boost_id ? boost_id->c_str() : nullptr);
+  return {{}, success};
 }
 
-std::string ComposeCssOnCoreSequence(const std::string& boost_id) {
+std::string ComposeCssOnCoreSequence(const std::string& domain,
+                                     const std::string& boost_id) {
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return std::string();
   }
   char* css_str = maho_core_boost_compose_css(core, boost_id.c_str());
@@ -512,10 +597,13 @@ std::string ComposeCssOnCoreSequence(const std::string& boost_id) {
 }
 
 std::vector<std::string> GetZapSelectorsOnCoreSequence(
+    const std::string& domain,
     const std::string& boost_id) {
   std::vector<std::string> zap_selectors;
+  ScopedFfiSerialization serialization;
   MahoCore* core = maho::GetCore();
-  if (!core) {
+  if (!serialization.acquired() || !core ||
+      !BoostBelongsToDomain(domain, boost_id)) {
     return zap_selectors;
   }
   char* json_str = maho_core_boost_get(core, boost_id.c_str());
@@ -546,20 +634,55 @@ MahoBoostPageHandler::MahoBoostPageHandler(
     const std::string& domain,
     base::WeakPtr<maho::MahoBoostWindowController> controller,
     BrowserWindowInterface* browser_window,
-    content::WebContents* web_contents)
+    content::WebContents* host_web_contents,
+    content::WebContents* target_web_contents)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
       domain_(domain),
       controller_(std::move(controller)),
       context_token_(
           browser_window,
-          (browser_window && web_contents &&
-           browser_window->GetTabStripModel()->GetIndexOfWebContents(web_contents) != TabStripModel::kNoTab)
-              ? web_contents
+          (browser_window && target_web_contents &&
+           browser_window->GetTabStripModel()->GetIndexOfWebContents(target_web_contents) != TabStripModel::kNoTab)
+              ? target_web_contents
               : nullptr),
-      host_web_contents_(web_contents ? web_contents->GetWeakPtr() : nullptr) {}
+      host_web_contents_(host_web_contents ? host_web_contents->GetWeakPtr()
+                                           : nullptr),
+      target_web_contents_(target_web_contents
+                               ? target_web_contents->GetWeakPtr()
+                               : nullptr) {
+  receiver_.set_disconnect_handler(base::BindOnce(
+      &MahoBoostPageHandler::OnPipeDisconnected,
+      weak_factory_.GetWeakPtr()));
+  page_.set_disconnect_handler(base::BindOnce(
+      &MahoBoostPageHandler::OnPipeDisconnected,
+      weak_factory_.GetWeakPtr()));
+}
 
-MahoBoostPageHandler::~MahoBoostPageHandler() = default;
+MahoBoostPageHandler::~MahoBoostPageHandler() {
+  CleanupTargetEditMode();
+  maho::RequestBoostWindowClose(controller_);
+}
+
+void MahoBoostPageHandler::CleanupTargetEditMode() {
+  if (content::WebContents* target = target_web_contents_.get()) {
+    if (auto* handler = MahoBoostInjectionHandler::FromWebContents(target)) {
+      handler->ExitCurrentEditMode();
+    }
+  }
+}
+
+void MahoBoostPageHandler::OnPipeDisconnected() {
+  CleanupTargetEditMode();
+  maho::RequestBoostWindowClose(controller_);
+}
+
+// static
+bool MahoBoostPageHandler::IsBoostAuthorizedForDomainForTesting(
+    const std::string& domain,
+    const std::string& boost_id) {
+  return BoostBelongsToDomain(domain, boost_id);
+}
 
 #define WEBUI_REVALIDATE_OR_RETURN(default_val)                              \
   if (!context_token_.Revalidate(                                            \
@@ -606,9 +729,13 @@ void MahoBoostPageHandler::GetBoost(const std::string& boost_id,
                                     GetBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&GetBoostOnCoreSequence, boost_id),
+      base::BindOnce(&GetBoostOnCoreSequence, domain_, boost_id),
       std::move(callback));
 }
 
@@ -635,9 +762,13 @@ void MahoBoostPageHandler::CommitBoost(const std::string& boost_id,
                                        CommitBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&CommitBoostOnCoreSequence, boost_id),
+      base::BindOnce(&CommitBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(
           [](CommitBoostCallback cb,
              maho_boost::mojom::BoostInfoPtr) { std::move(cb).Run(); },
@@ -648,9 +779,13 @@ void MahoBoostPageHandler::DiscardBoost(const std::string& boost_id,
                                         DiscardBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
   maho::PostCoreTask<std::string>(
       FROM_HERE,
-      base::BindOnce(&DiscardBoostOnCoreSequence, boost_id),
+      base::BindOnce(&DiscardBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnDiscardBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -661,10 +796,20 @@ void MahoBoostPageHandler::UpdateBoost(
     UpdateBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (boost_id.size() > kMaxBoostIdBytes ||
+      IsOversizedBoostUpdate(*changes)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
   std::string changes_json = SerializeBoostUpdate(changes);
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&UpdateBoostOnCoreSequence, boost_id, std::move(changes_json)),
+      base::BindOnce(&UpdateBoostOnCoreSequence, domain_, boost_id,
+                     std::move(changes_json)),
       base::BindOnce(&MahoBoostPageHandler::OnUpdateBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -673,9 +818,13 @@ void MahoBoostPageHandler::DeleteBoost(const std::string& boost_id,
                                        DeleteBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(false);
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run(false);
+    return;
+  }
   maho::PostCoreTask<bool>(
       FROM_HERE,
-      base::BindOnce(&DeleteBoostOnCoreSequence, boost_id),
+      base::BindOnce(&DeleteBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnDeleteBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -685,7 +834,11 @@ void MahoBoostPageHandler::SetActiveBoost(
     SetActiveBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  maho::PostCoreTask<std::string>(
+  if (boost_id.has_value() && !BoostBelongsToDomain(domain_, *boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
+  maho::PostCoreTask<std::pair<std::string, bool>>(
       FROM_HERE,
       base::BindOnce(&SetActiveBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnSetActiveBoostDone,
@@ -697,8 +850,13 @@ void MahoBoostPageHandler::ComposeCss(const std::string& boost_id,
                                       ComposeCssCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN("");
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run("");
+    return;
+  }
   maho::PostCoreTask<std::string>(
-      FROM_HERE, base::BindOnce(&ComposeCssOnCoreSequence, boost_id),
+      FROM_HERE,
+      base::BindOnce(&ComposeCssOnCoreSequence, domain_, boost_id),
       base::BindOnce(
           [](ComposeCssCallback callback, std::string css) {
             std::move(callback).Run(std::move(css));
@@ -710,9 +868,13 @@ void MahoBoostPageHandler::ShuffleBoost(const std::string& boost_id,
                                         ShuffleBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&ShuffleBoostOnCoreSequence, boost_id),
+      base::BindOnce(&ShuffleBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnShuffleBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -721,9 +883,13 @@ void MahoBoostPageHandler::ResetBoost(const std::string& boost_id,
                                       ResetBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&ResetBoostOnCoreSequence, boost_id),
+      base::BindOnce(&ResetBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnResetBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -732,8 +898,13 @@ void MahoBoostPageHandler::ExportBoost(const std::string& boost_id,
                                        ExportBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN("");
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run("");
+    return;
+  }
   maho::PostCoreTask<std::string>(
-      FROM_HERE, base::BindOnce(&ExportBoostOnCoreSequence, boost_id),
+      FROM_HERE,
+      base::BindOnce(&ExportBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(
           [](ExportBoostCallback callback, std::string json) {
             std::move(callback).Run(std::move(json));
@@ -745,6 +916,10 @@ void MahoBoostPageHandler::ImportBoost(const std::string& json,
                                        ImportBoostCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (json.size() > kMaxBoostImportBytes) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
       base::BindOnce(&ImportBoostOnCoreSequence, domain_, json),
@@ -755,7 +930,29 @@ void MahoBoostPageHandler::ImportBoost(const std::string& json,
 void MahoBoostPageHandler::CloseDialog(CloseDialogCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  maho::HideActiveBoost();
+  maho::CloseBoostWindow(controller_);
+  std::move(callback).Run();
+}
+
+void MahoBoostPageHandler::HostCloseFinished(
+    HostCloseFinishedCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
+  maho::CompleteBoostHostClose(controller_);
+  std::move(callback).Run();
+}
+
+void MahoBoostPageHandler::SetHostCloseState(
+    const std::optional<std::string>& boost_id,
+    bool dirty,
+    SetHostCloseStateCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  WEBUI_REVALIDATE_OR_RETURN_VOID();
+  if (boost_id && !BoostBelongsToDomain(domain_, *boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
+  maho::SetBoostHostCloseState(controller_, boost_id, dirty);
   std::move(callback).Run();
 }
 
@@ -772,13 +969,18 @@ void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
                                         EnterZapModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  content::WebContents* active_wc = GetActiveTab();
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
+  content::WebContents* active_wc = GetTargetTab();
   if (!active_wc) {
     std::move(callback).Run();
     return;
   }
 
   current_zap_boost_id_ = boost_id;
+  awaiting_zap_start_notification_ = true;
 
   MahoBoostInjectionHandler::CreateForWebContents(active_wc);
   auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
@@ -789,7 +991,7 @@ void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
 
   maho::PostCoreTask<std::vector<std::string>>(
       FROM_HERE,
-      base::BindOnce(&GetZapSelectorsOnCoreSequence, boost_id),
+      base::BindOnce(&GetZapSelectorsOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnEnterZapModeDone,
                      weak_factory_.GetWeakPtr(), std::move(callback),
                      active_wc->GetWeakPtr()));
@@ -817,6 +1019,11 @@ void MahoBoostPageHandler::OnEnterZapModeDone(
       base::BindRepeating(&MahoBoostPageHandler::OnContentScriptEvent,
                           weak_factory_.GetWeakPtr()));
 
+  if (Browser* browser = chrome::FindBrowserWithTab(active_wc)) {
+    browser->window()->Activate();
+  }
+  active_wc->Focus();
+
   page_->OnZapStateUpdate(true, !zap_selectors.empty());
   std::move(callback).Run();
 }
@@ -824,7 +1031,7 @@ void MahoBoostPageHandler::OnEnterZapModeDone(
 void MahoBoostPageHandler::ExitZapMode(ExitZapModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  content::WebContents* active_wc = GetActiveTab();
+  content::WebContents* active_wc = GetTargetTab();
   if (active_wc) {
     auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
     if (handler) {
@@ -832,6 +1039,7 @@ void MahoBoostPageHandler::ExitZapMode(ExitZapModeCallback callback) {
     }
   }
   current_zap_boost_id_.clear();
+  awaiting_zap_start_notification_ = false;
   page_->OnZapStateUpdate(false, false);
   std::move(callback).Run();
 }
@@ -840,7 +1048,11 @@ void MahoBoostPageHandler::EnterPickerMode(const std::string& boost_id,
                                            EnterPickerModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  content::WebContents* active_wc = GetActiveTab();
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
+  content::WebContents* active_wc = GetTargetTab();
   if (!active_wc) {
     std::move(callback).Run();
     return;
@@ -866,7 +1078,7 @@ void MahoBoostPageHandler::EnterPickerMode(const std::string& boost_id,
 void MahoBoostPageHandler::ExitPickerMode(ExitPickerModeCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  content::WebContents* active_wc = GetActiveTab();
+  content::WebContents* active_wc = GetTargetTab();
   if (active_wc) {
     auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
     if (handler) {
@@ -884,9 +1096,19 @@ void MahoBoostPageHandler::AppendZapSelector(
     AppendZapSelectorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
+  if (boost_id.size() > kMaxBoostIdBytes ||
+      selector.size() > kMaxZapSelectorBytes) {
+    std::move(callback).Run();
+    return;
+  }
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&AppendZapSelectorOnCoreSequence, boost_id, selector),
+      base::BindOnce(&AppendZapSelectorOnCoreSequence, domain_, boost_id,
+                     selector),
       base::BindOnce(&MahoBoostPageHandler::OnAppendZapDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -897,9 +1119,14 @@ void MahoBoostPageHandler::RemoveZapSelector(
     RemoveZapSelectorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
+  if (!BoostBelongsToDomain(domain_, boost_id)) {
+    std::move(callback).Run();
+    return;
+  }
   maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      base::BindOnce(&RemoveZapSelectorOnCoreSequence, boost_id, selector),
+      base::BindOnce(&RemoveZapSelectorOnCoreSequence, domain_, boost_id,
+                     selector),
       base::BindOnce(&MahoBoostPageHandler::OnRemoveZapDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -907,7 +1134,7 @@ void MahoBoostPageHandler::RemoveZapSelector(
 void MahoBoostPageHandler::OpenInspector(OpenInspectorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  content::WebContents* active_wc = GetActiveTab();
+  content::WebContents* active_wc = GetTargetTab();
   if (active_wc) {
     DevToolsWindow::OpenDevToolsWindow(
         active_wc,
@@ -931,6 +1158,9 @@ void MahoBoostPageHandler::OnCreateTempBoostDone(
     maho_boost::mojom::BoostInfoPtr result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (result) {
+    maho::SetBoostTemporaryId(controller_, result->id);
+  }
   page_->OnBoostsChanged();
   std::move(callback).Run(std::move(result));
 }
@@ -940,6 +1170,10 @@ void MahoBoostPageHandler::OnUpdateBoostDone(
     maho_boost::mojom::BoostInfoPtr result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
+  if (!result) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
   if (result) {
     VLOG(1) << "[MahoBoost] OnUpdateBoostDone: reinject domain="
             << result->domain;
@@ -953,9 +1187,12 @@ void MahoBoostPageHandler::OnUpdateBoostDone(
 }
 
 void MahoBoostPageHandler::OnDeleteBoostDone(DeleteBoostCallback callback,
-                                              bool success) {
+                                             bool success) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN(false);
+  if (success) {
+    MahoBoostInjectionHandler::ReinjectForDomain(domain_);
+  }
   page_->OnBoostsChanged();
   std::move(callback).Run(success);
 }
@@ -963,10 +1200,18 @@ void MahoBoostPageHandler::OnDeleteBoostDone(DeleteBoostCallback callback,
 void MahoBoostPageHandler::OnSetActiveBoostDone(
     std::optional<std::string> boost_id,
     SetActiveBoostCallback callback,
-    std::string event_json) {
+    std::pair<std::string, bool> result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  MahoBoostInjectionHandler::OnCoreUpdatesJson(std::move(event_json));
+  if (!result.second) {
+    std::move(callback).Run();
+    return;
+  }
+  if (result.first.empty()) {
+    MahoBoostInjectionHandler::ReinjectForDomain(domain_);
+  } else {
+    MahoBoostInjectionHandler::OnCoreUpdatesJson(std::move(result.first));
+  }
   page_->OnActiveChanged(boost_id);
   std::move(callback).Run();
 }
@@ -975,10 +1220,7 @@ void MahoBoostPageHandler::OnDiscardBoostDone(DiscardBoostCallback callback,
                                                std::string prev_active_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   WEBUI_REVALIDATE_OR_RETURN_VOID();
-  if (!prev_active_id.empty()) {
-    SetActiveBoost(prev_active_id,
-                   base::BindOnce([](){ }));
-  }
+  MahoBoostInjectionHandler::ReinjectForDomain(domain_);
   page_->OnBoostsChanged();
   std::move(callback).Run();
 }
@@ -1002,7 +1244,10 @@ void MahoBoostPageHandler::OnResetBoostDone(
   WEBUI_REVALIDATE_OR_RETURN(nullptr);
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
+    page_->OnZapStateUpdate(!current_zap_boost_id_.empty(),
+                            !result->zap_selectors.empty());
   }
+  page_->OnZapListUpdate();
   page_->OnBoostsChanged();
   std::move(callback).Run(std::move(result));
 }
@@ -1023,7 +1268,10 @@ void MahoBoostPageHandler::OnAppendZapDone(
   WEBUI_REVALIDATE_OR_RETURN_VOID();
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
+    page_->OnZapStateUpdate(!current_zap_boost_id_.empty(),
+                            !result->zap_selectors.empty());
   }
+  page_->OnZapListUpdate();
   page_->OnBoostsChanged();
   std::move(callback).Run();
 }
@@ -1035,7 +1283,10 @@ void MahoBoostPageHandler::OnRemoveZapDone(
   WEBUI_REVALIDATE_OR_RETURN_VOID();
   if (result) {
     MahoBoostInjectionHandler::ReinjectForDomain(result->domain);
+    page_->OnZapStateUpdate(!current_zap_boost_id_.empty(),
+                            !result->zap_selectors.empty());
   }
+  page_->OnZapListUpdate();
   page_->OnBoostsChanged();
   std::move(callback).Run();
 }
@@ -1073,12 +1324,19 @@ void MahoBoostPageHandler::OnContentScriptEvent(
   } else if (type == "unzap_click" && !current_zap_boost_id_.empty()) {
     RemoveZapSelector(current_zap_boost_id_, selector,
                       base::BindOnce([](){ }));
-  } else if (type == "picker_selected") {
+  } else if (type == "picker_selected" &&
+             !current_picker_boost_id_.empty()) {
+    current_picker_boost_id_.clear();
+    page_->OnPickerStateUpdate(false);
     page_->OnPickerSelectorPicked(selector);
   } else if (type == "notify") {
     if (selector == "zap-state-update") {
-      bool is_on = !current_zap_boost_id_.empty();
-      page_->OnZapStateUpdate(is_on, false);
+      if (awaiting_zap_start_notification_) {
+        awaiting_zap_start_notification_ = false;
+      } else {
+        current_zap_boost_id_.clear();
+      }
+      page_->OnZapStateUpdate(!current_zap_boost_id_.empty(), false);
     } else if (selector == "zap-list-update") {
       page_->OnZapListUpdate();
     } else if (selector == "selector-picker-state-update") {
@@ -1087,13 +1345,10 @@ void MahoBoostPageHandler::OnContentScriptEvent(
       if (!is_on) {
         current_picker_boost_id_.clear();
       }
-    } else if (selector == "selector-picker-picked") {
-      page_->OnPickerSelectorPicked(msg);
     }
   }
 }
 
-content::WebContents* MahoBoostPageHandler::GetActiveTab() {
-  return maho::GetActiveTabForBoost(controller_);
+content::WebContents* MahoBoostPageHandler::GetTargetTab() {
+  return target_web_contents_.get();
 }
-

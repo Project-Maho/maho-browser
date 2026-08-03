@@ -3,12 +3,16 @@
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 
 #include <memory>
+#include <map>
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -16,71 +20,102 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/net/maho_boost_injection_handler.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/views/boost/maho_boost_window_controller_bridge.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
+#include "third_party/skia/include/core/SkRegion.h"
+#include "ui/base/hit_test.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/window/frame_view.h"
+#include "ui/views/window/non_client_view.h"
 #include "url/gurl.h"
 
 namespace maho {
 
 namespace {
 
-base::WeakPtr<MahoBoostWindowController>& GetPendingControllerStorage() {
-  static base::NoDestructor<base::WeakPtr<MahoBoostWindowController>> storage;
+constexpr base::TimeDelta kHostCloseWatchdogTimeout = base::Seconds(5);
+
+std::map<std::string, base::WeakPtr<MahoBoostWindowController>>&
+GetPendingControllerStorage() {
+  static base::NoDestructor<
+      std::map<std::string, base::WeakPtr<MahoBoostWindowController>>>
+      storage;
   return *storage;
 }
 
-// WidgetDelegate + View that owns the WebView for the Boost editor.
-// Inherits both bases directly (WidgetDelegateView is deprecated).
-class MahoBoostWindowView : public views::WidgetDelegate,
-                            public views::View {
+class MahoBoostWebView : public views::WebView {
+  METADATA_HEADER(MahoBoostWebView, views::WebView)
+
  public:
-  using WindowClosingCallback = base::OnceClosure;
+  explicit MahoBoostWebView(Profile* profile) : views::WebView(profile) {}
 
-  MahoBoostWindowView(Profile* profile,
-                      const GURL& url,
-                      int initial_width,
-                      int initial_height,
-                      WindowClosingCallback on_closing)
+  void SetWebContents(content::WebContents* web_contents) override {
+    views::WebView::SetWebContents(web_contents);
+    if (web_contents) {
+      web_contents->SetSupportsDraggableRegions(true);
+    }
+  }
+
+  void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions,
+      content::WebContents*) override {
+    draggable_region_.setEmpty();
+    for (const auto& region : regions) {
+      draggable_region_.op(
+          SkIRect::MakeXYWH(region->bounds.x(), region->bounds.y(),
+                            region->bounds.width(), region->bounds.height()),
+          region->draggable ? SkRegion::kUnion_Op : SkRegion::kDifference_Op);
+    }
+  }
+
+  bool ContainsDraggablePoint(const gfx::Point& point) const {
+    return draggable_region_.contains(point.x(), point.y());
+  }
+
+ private:
+  SkRegion draggable_region_;
+};
+
+BEGIN_METADATA(MahoBoostWebView)
+END_METADATA
+
+class MahoBoostWindowContentsView : public views::View {
+ public:
+  MahoBoostWindowContentsView(Profile* profile,
+                              const GURL& url,
+                              int initial_width,
+                              int initial_height)
       : preferred_width_(initial_width),
-        preferred_height_(initial_height),
-        on_closing_(std::move(on_closing)) {
-    SetTitle(u"Boost Editor");
-    SetCanResize(false);
-    SetCanMaximize(false);
-    SetCanMinimize(false);
-    SetShowCloseButton(true);
-
-    auto web_view = std::make_unique<views::WebView>(profile);
+        preferred_height_(initial_height) {
+    auto web_view = std::make_unique<MahoBoostWebView>(profile);
     web_view->SetPreferredSize(
         gfx::Size(initial_width, initial_height));
     web_view->LoadInitialURL(url);
+    web_view->GetWebContents()->SetSupportsDraggableRegions(true);
     web_view_ = AddChildView(std::move(web_view));
   }
 
-  MahoBoostWindowView(const MahoBoostWindowView&) = delete;
-  MahoBoostWindowView& operator=(const MahoBoostWindowView&) = delete;
-  ~MahoBoostWindowView() override = default;
+  MahoBoostWindowContentsView(const MahoBoostWindowContentsView&) = delete;
+  MahoBoostWindowContentsView& operator=(
+      const MahoBoostWindowContentsView&) = delete;
+  ~MahoBoostWindowContentsView() override = default;
 
-  views::Widget* GetWidget() override { return views::View::GetWidget(); }
-  const views::Widget* GetWidget() const override {
-    return views::View::GetWidget();
-  }
-  views::View* GetContentsView() override { return this; }
-
-  void WindowClosing() override {
+  void DetachWebContents() {
     if (web_view_) {
       web_view_->SetWebContents(nullptr);
       web_view_ = nullptr;
-    }
-    if (on_closing_) {
-      std::move(on_closing_).Run();
     }
   }
 
@@ -104,11 +139,67 @@ class MahoBoostWindowView : public views::WidgetDelegate,
     }
   }
 
+  content::WebContents* GetWebContentsForTesting() const {
+    return web_view_ ? web_view_->GetWebContents() : nullptr;
+  }
+
+  bool ContainsDraggablePoint(const gfx::Point& point) const {
+    return web_view_ && web_view_->ContainsDraggablePoint(point);
+  }
+
  private:
   int preferred_width_;
   int preferred_height_;
-  raw_ptr<views::WebView> web_view_ = nullptr;
-  WindowClosingCallback on_closing_;
+  raw_ptr<MahoBoostWebView> web_view_ = nullptr;
+};
+
+class MahoBoostWindowDelegate : public views::WidgetDelegate {
+ public:
+  explicit MahoBoostWindowDelegate(MahoBoostWindowContentsView* contents)
+      : contents_(contents) {
+    SetTitle(u"Boost Editor");
+    SetCanResize(false);
+    SetCanMaximize(false);
+    SetCanMinimize(false);
+    SetShowCloseButton(false);
+  }
+
+  MahoBoostWindowDelegate(const MahoBoostWindowDelegate&) = delete;
+  MahoBoostWindowDelegate& operator=(const MahoBoostWindowDelegate&) = delete;
+  ~MahoBoostWindowDelegate() override = default;
+
+  void OnWidgetInitialized() override {
+    GetWidget()->non_client_view()->frame_view()->set_non_client_hit_test_callback(
+        base::BindRepeating(&MahoBoostWindowDelegate::NonClientHitTest,
+                            base::Unretained(this)));
+  }
+
+  void WindowClosing() override {
+    if (contents_) {
+      contents_->DetachWebContents();
+      contents_ = nullptr;
+    }
+  }
+
+  void SetPreferredDimensions(int width, int height) {
+    if (contents_) {
+      contents_->SetPreferredDimensions(width, height);
+    }
+  }
+
+  content::WebContents* GetWebContentsForTesting() const {
+    return contents_ ? contents_->GetWebContentsForTesting() : nullptr;
+  }
+
+ private:
+  std::optional<int> NonClientHitTest(const gfx::Point& point) const {
+    if (contents_ && contents_->ContainsDraggablePoint(point)) {
+      return HTCAPTION;
+    }
+    return std::nullopt;
+  }
+
+  raw_ptr<MahoBoostWindowContentsView> contents_;
 };
 
 }  // namespace
@@ -122,7 +213,10 @@ MahoBoostWindowController& MahoBoostWindowController::GetForBrowser(
 
 void MahoBoostWindowController::HideActive() {
   for (auto& [browser, controller] : GetInstances()) {
-    if (controller && controller->IsShowing()) {
+    // Gate on the widget existing rather than on visibility: a hidden-but-alive
+    // editor widget still owns Views and AX platform nodes, and skipping it here
+    // left those objects behind.
+    if (controller && controller->HasWidget()) {
       controller->Hide();
     }
   }
@@ -130,15 +224,31 @@ void MahoBoostWindowController::HideActive() {
 
 base::WeakPtr<MahoBoostWindowController>
 MahoBoostWindowController::ConsumePendingControllerForUI() {
-  base::WeakPtr<MahoBoostWindowController> result =
-      std::move(GetPendingControllerStorage());
-  GetPendingControllerStorage().reset();
+  return nullptr;
+}
+
+base::WeakPtr<MahoBoostWindowController>
+MahoBoostWindowController::ConsumePendingControllerForUI(
+    const std::string& controller_token) {
+  auto& storage = GetPendingControllerStorage();
+  auto it = storage.find(controller_token);
+  if (it == storage.end()) {
+    return nullptr;
+  }
+  base::WeakPtr<MahoBoostWindowController> result = std::move(it->second);
+  storage.erase(it);
   return result;
 }
 
 base::WeakPtr<MahoBoostWindowController>
 ConsumePendingBoostControllerForUI() {
   return MahoBoostWindowController::ConsumePendingControllerForUI();
+}
+
+base::WeakPtr<MahoBoostWindowController>
+ConsumePendingBoostControllerForUI(const std::string& controller_token) {
+  return MahoBoostWindowController::ConsumePendingControllerForUI(
+      controller_token);
 }
 
 void SetBoostEditorKilledCallback(
@@ -149,8 +259,42 @@ void SetBoostEditorKilledCallback(
   }
 }
 
-void HideActiveBoost() {
-  MahoBoostWindowController::HideActive();
+void CloseBoostWindow(
+    base::WeakPtr<MahoBoostWindowController> controller) {
+  if (controller) {
+    controller->FinalizeRendererClose();
+  }
+}
+
+void CompleteBoostHostClose(
+    base::WeakPtr<MahoBoostWindowController> controller) {
+  if (controller) {
+    controller->CompleteHostClose();
+  }
+}
+
+void RequestBoostWindowClose(
+    base::WeakPtr<MahoBoostWindowController> controller) {
+  if (controller) {
+    controller->Hide();
+  }
+}
+
+void SetBoostTemporaryId(
+    base::WeakPtr<MahoBoostWindowController> controller,
+    std::optional<std::string> boost_id) {
+  if (controller) {
+    controller->SetTemporaryBoostId(std::move(boost_id));
+  }
+}
+
+void SetBoostHostCloseState(
+    base::WeakPtr<MahoBoostWindowController> controller,
+    std::optional<std::string> boost_id,
+    bool dirty) {
+  if (controller) {
+    controller->SetHostCloseState(std::move(boost_id), dirty);
+  }
 }
 
 void SetBoostWindowMode(
@@ -161,16 +305,9 @@ void SetBoostWindowMode(
   }
 }
 
-content::WebContents* GetActiveTabForBoost(
+content::WebContents* GetTargetTabForBoost(
     base::WeakPtr<MahoBoostWindowController> controller) {
-  if (!controller || !controller->browser_) {
-    return nullptr;
-  }
-  TabStripModel* model = controller->browser_->tab_strip_model();
-  if (!model) {
-    return nullptr;
-  }
-  return model->GetActiveWebContents();
+  return controller ? controller->target_web_contents_.get() : nullptr;
 }
 
 MahoBoostWindowController::MahoBoostWindowController(Browser* browser)
@@ -201,36 +338,168 @@ MahoBoostWindowController::~MahoBoostWindowController() {
 }
 
 void MahoBoostWindowController::ShowForActiveDomain(
-    content::WebContents* active_tab) {
-  if (!active_tab || !browser_) {
+    content::WebContents* target_tab) {
+  if (!target_tab || !browser_) {
     return;
   }
 
-  const GURL& url = active_tab->GetLastCommittedURL();
+  const GURL& url = target_tab->GetLastCommittedURL();
   std::string domain(url.host());
   if (domain.empty()) {
     return;
   }
 
   if (widget_) {
-    if (current_domain_ == domain) {
+    if (!host_close_pending_ && target_web_contents_.get() == target_tab &&
+        current_domain_ == domain) {
+      ActivateTarget(target_tab);
       widget_->Show();
       widget_->Activate();
       return;
     }
-    // Different domain — kill existing editor, broadcast OnEditorKilled.
-    BroadcastEditorKilledAndClose();
+    pending_show_target_ = target_tab->GetWeakPtr();
+    RequestHostClose();
+    return;
   }
 
-  StartObservingTab(active_tab);
-  CreateAndShowWidget(domain);
+  OpenForTarget(target_tab);
+}
+
+void MahoBoostWindowController::OpenForTarget(
+    content::WebContents* target_tab) {
+  if (!ActivateTarget(target_tab)) {
+    return;
+  }
+  target_web_contents_ = target_tab->GetWeakPtr();
+  StartObservingTab(target_tab);
+  CreateAndShowWidget(std::string(target_tab->GetLastCommittedURL().host()));
+}
+
+bool MahoBoostWindowController::ActivateTarget(
+    content::WebContents* target_tab) {
+  if (!browser_ || !target_tab) {
+    return false;
+  }
+  TabStripModel* model = browser_->tab_strip_model();
+  if (!model) {
+    return false;
+  }
+  const int index = model->GetIndexOfWebContents(target_tab);
+  if (index == TabStripModel::kNoTab) {
+    return false;
+  }
+  if (browser_->window()) {
+    browser_->window()->Activate();
+  }
+  if (model->active_index() != index) {
+    model->ActivateTabAt(index);
+  }
+  target_tab->Focus();
+  return true;
 }
 
 void MahoBoostWindowController::Hide() {
-  if (!widget_) {
+  RequestHostClose();
+}
+
+void MahoBoostWindowController::RequestHostClose() {
+  if (!widget_ || host_close_pending_) {
     return;
   }
+  host_close_pending_ = true;
   StopObservingTab();
+  widget_->Hide();
+  host_close_watchdog_.Start(
+      FROM_HERE, kHostCloseWatchdogTimeout,
+      base::BindOnce(&MahoBoostWindowController::ForceHostClose,
+                     weak_factory_.GetWeakPtr()));
+  if (editor_killed_callback_) {
+    editor_killed_callback_.Run();
+    return;
+  }
+  CompleteHostClose();
+}
+
+void MahoBoostWindowController::ForceHostClose() {
+  if (content::WebContents* target = target_web_contents_.get()) {
+    if (auto* handler = MahoBoostInjectionHandler::FromWebContents(target)) {
+      handler->ExitCurrentEditMode();
+    }
+  }
+  const std::optional<std::string> selected = selected_boost_id_;
+  const std::optional<std::string> temporary = temporary_boost_id_;
+  const bool renderer_dirty = renderer_dirty_;
+  maho::PostCoreTask<bool>(
+      FROM_HERE,
+      base::BindOnce(
+          [](std::optional<std::string> selected,
+             std::optional<std::string> temporary, bool renderer_dirty) {
+            MahoCore* core = maho::GetCore();
+            if (!core || !selected) {
+              return false;
+            }
+            char* json = maho_core_boost_get(core, selected->c_str());
+            if (!json) {
+              return false;
+            }
+            const std::string boost_json(json);
+            maho_string_free(json);
+            const bool core_dirty =
+                boost_json.find("\"changeWasMade\":true") !=
+                std::string::npos;
+            char* result = nullptr;
+            if (renderer_dirty || core_dirty) {
+              result = maho_core_boost_commit(core, selected->c_str());
+            } else if (temporary == selected) {
+              result = maho_core_boost_discard(core, selected->c_str());
+            }
+            if (result) {
+              maho_string_free(result);
+              return true;
+            }
+            return false;
+          },
+          selected, temporary, renderer_dirty),
+      base::BindOnce(
+          [](base::WeakPtr<MahoBoostWindowController> controller, bool) {
+            if (controller) {
+              controller->CompleteHostClose();
+            }
+          },
+          weak_factory_.GetWeakPtr()));
+}
+
+void MahoBoostWindowController::SetTemporaryBoostId(
+    std::optional<std::string> boost_id) {
+  temporary_boost_id_ = std::move(boost_id);
+}
+
+void MahoBoostWindowController::SetHostCloseState(
+    std::optional<std::string> boost_id,
+    bool dirty) {
+  selected_boost_id_ = std::move(boost_id);
+  renderer_dirty_ = dirty;
+}
+
+void MahoBoostWindowController::CompleteHostClose() {
+  if (!host_close_pending_) {
+    return;
+  }
+  host_close_pending_ = false;
+  host_close_watchdog_.Stop();
+  DestroyWidget();
+  base::WeakPtr<content::WebContents> pending =
+      std::move(pending_show_target_);
+  pending_show_target_.reset();
+  if (pending) {
+    OpenForTarget(pending.get());
+  }
+}
+
+void MahoBoostWindowController::FinalizeRendererClose() {
+  host_close_pending_ = false;
+  host_close_watchdog_.Stop();
+  pending_show_target_.reset();
   DestroyWidget();
 }
 
@@ -238,9 +507,20 @@ bool MahoBoostWindowController::IsShowing() const {
   return widget_ && widget_->IsVisible();
 }
 
+content::WebContents*
+MahoBoostWindowController::GetEditorWebContentsForTesting() const {
+  const auto* delegate =
+      static_cast<const MahoBoostWindowDelegate*>(widget_delegate_.get());
+  return delegate ? delegate->GetWebContentsForTesting() : nullptr;
+}
+
 void MahoBoostWindowController::SetMode(
     maho_boost::mojom::WindowMode mode) {
   if (!widget_ || !browser_) {
+    return;
+  }
+
+  if (mode == current_mode_) {
     return;
   }
 
@@ -261,6 +541,7 @@ void MahoBoostWindowController::SetMode(
   if (mode == maho_boost::mojom::WindowMode::kCode) {
     // Shift left by kCodeModeRightAlignOffsetPx when the widget's right edge
     // is to the right of the parent window's center (per Zen semantics).
+    code_mode_offset_applied_ = false;
     gfx::Rect parent_bounds;
     if (browser_->window()) {
       parent_bounds = browser_->window()->GetBounds();
@@ -268,26 +549,21 @@ void MahoBoostWindowController::SetMode(
     int parent_center_x = parent_bounds.x() + parent_bounds.width() / 2;
     if (bounds.right() > parent_center_x) {
       bounds.set_x(bounds.x() - kCodeModeRightAlignOffsetPx);
+      code_mode_offset_applied_ = true;
     }
   } else {
-    // Returning to boost mode: shift right to undo offset if it was applied.
-    // We approximate by shifting right if the current x would place the widget
-    // further left than needed. Use the width delta as the offset reversal.
-    gfx::Rect parent_bounds;
-    if (browser_->window()) {
-      parent_bounds = browser_->window()->GetBounds();
-    }
-    int parent_center_x = parent_bounds.x() + parent_bounds.width() / 2;
-    if ((bounds.x() + new_width) <= parent_center_x) {
-      // The widget was shifted left; restore by shifting right.
+    if (code_mode_offset_applied_) {
+      // Reverse only the Code-mode offset that was actually applied.
       bounds.set_x(bounds.x() + kCodeModeRightAlignOffsetPx);
+      code_mode_offset_applied_ = false;
     }
   }
 
   bounds.set_width(new_width);
   bounds.set_height(new_height);
 
-  auto* delegate = static_cast<MahoBoostWindowView*>(widget_->widget_delegate());
+  auto* delegate =
+      static_cast<MahoBoostWindowDelegate*>(widget_->widget_delegate());
   if (delegate) {
     delegate->SetPreferredDimensions(new_width, new_height);
   }
@@ -300,20 +576,11 @@ void MahoBoostWindowController::SetEditorKilledCallback(
   editor_killed_callback_ = std::move(callback);
 }
 
-void MahoBoostWindowController::OnWidgetDestroying(views::Widget* widget) {
-  DCHECK_EQ(widget, widget_.get());
-  current_domain_.clear();
-  current_mode_ = maho_boost::mojom::WindowMode::kBoost;
-  StopObservingTab();
-  widget_->RemoveObserver(this);
-  widget_.release();
-}
-
 void MahoBoostWindowController::OnTabStripModelChanged(
     TabStripModel* /*tab_strip_model*/,
     const TabStripModelChange& /*change*/,
     const TabStripSelectionChange& selection) {
-  if (!IsShowing()) {
+  if (!widget_ || host_close_pending_) {
     return;
   }
   if (selection.active_tab_changed()) {
@@ -323,8 +590,8 @@ void MahoBoostWindowController::OnTabStripModelChanged(
 
 void MahoBoostWindowController::OnTabStripModelDestroyed(
     TabStripModel* tab_strip_model) {
-  if (IsShowing()) {
-    Hide();
+  if (widget_) {
+    RequestHostClose();
   }
   if (tab_strip_model) {
     tab_strip_model->RemoveObserver(this);
@@ -352,16 +619,30 @@ void MahoBoostWindowController::CreateAndShowWidget(const std::string& domain) {
 
   GURL url(kMahoBoostUntrustedURL);
   url = net::AppendQueryParameter(url, "domain", domain);
+  const std::string controller_token =
+      base::UnguessableToken::Create().ToString();
+  url = net::AppendQueryParameter(url, "controller", controller_token);
+  controller_token_ = controller_token;
 
-  auto* delegate = new MahoBoostWindowView(
-      profile, url, kBoostModeWidth, kBoostModeHeight,
-      base::BindOnce(&MahoBoostWindowController::OnDelegateWindowClosing,
-                     weak_factory_.GetWeakPtr()));
+  current_domain_ = domain;
+  selected_boost_id_.reset();
+  temporary_boost_id_.reset();
+  renderer_dirty_ = false;
+  editor_killed_callback_.Reset();
+  current_mode_ = maho_boost::mojom::WindowMode::kBoost;
+  code_mode_offset_applied_ = false;
+  GetPendingControllerStorage()[controller_token] = weak_factory_.GetWeakPtr();
+
+  auto contents = std::make_unique<MahoBoostWindowContentsView>(
+      profile, url, kBoostModeWidth, kBoostModeHeight);
+  auto delegate = std::make_unique<MahoBoostWindowDelegate>(contents.get());
+  delegate->SetContentsView(std::move(contents));
+  widget_delegate_ = std::move(delegate);
 
   views::Widget::InitParams params(
-      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW);
-  params.delegate = delegate;
+  params.delegate = widget_delegate_.get();
   params.bounds = gfx::Rect(0, 0, kBoostModeWidth, kBoostModeHeight);
   params.accept_events = true;
   params.activatable = views::Widget::InitParams::Activatable::kYes;
@@ -372,7 +653,14 @@ void MahoBoostWindowController::CreateAndShowWidget(const std::string& domain) {
 
   auto widget = std::make_unique<views::Widget>();
   widget->Init(std::move(params));
-  widget->AddObserver(this);
+  widget->MakeCloseSynchronous(base::BindOnce(
+      [](base::WeakPtr<MahoBoostWindowController> controller,
+         views::Widget::ClosedReason) {
+        if (controller) {
+          controller->Hide();
+        }
+      },
+      weak_factory_.GetWeakPtr()));
 
   widget->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
   widget->CenterWindow(gfx::Size(kBoostModeWidth, kBoostModeHeight));
@@ -380,47 +668,35 @@ void MahoBoostWindowController::CreateAndShowWidget(const std::string& domain) {
   widget->Activate();
 
   widget_ = std::move(widget);
-  current_domain_ = domain;
-  current_mode_ = maho_boost::mojom::WindowMode::kBoost;
-
-  GetPendingControllerStorage() = weak_factory_.GetWeakPtr();
 }
 
 void MahoBoostWindowController::DestroyWidget() {
   if (!widget_) {
     return;
   }
-  current_domain_.clear();
-  current_mode_ = maho_boost::mojom::WindowMode::kBoost;
-  widget_->RemoveObserver(this);
-  widget_->CloseNow();
-  widget_.release();
-}
-
-void MahoBoostWindowController::OnDelegateWindowClosing() {
-  current_domain_.clear();
-  current_mode_ = maho_boost::mojom::WindowMode::kBoost;
-  StopObservingTab();
-  if (widget_) {
-    widget_->RemoveObserver(this);
-    widget_.release();
+  auto widget = std::move(widget_);
+  auto delegate = std::move(widget_delegate_);
+  host_close_watchdog_.Stop();
+  editor_killed_callback_.Reset();
+  if (!controller_token_.empty()) {
+    GetPendingControllerStorage().erase(controller_token_);
+    controller_token_.clear();
   }
-}
-
-void MahoBoostWindowController::BroadcastEditorKilledAndClose() {
-  if (editor_killed_callback_) {
-    editor_killed_callback_.Run();
-    editor_killed_callback_.Reset();
-  }
+  current_domain_.clear();
+  target_web_contents_.reset();
+  current_mode_ = maho_boost::mojom::WindowMode::kBoost;
+  code_mode_offset_applied_ = false;
   StopObservingTab();
-  DestroyWidget();
+  widget->CloseNow();
+  widget.reset();
+  delegate.reset();
 }
 
 void MahoBoostWindowController::StartObservingTab(
-    content::WebContents* active_tab) {
+    content::WebContents* target_tab) {
   StopObservingTab();
-  if (active_tab) {
-    content::WebContentsObserver::Observe(active_tab);
+  if (target_tab) {
+    content::WebContentsObserver::Observe(target_tab);
   }
 }
 

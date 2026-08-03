@@ -52,7 +52,7 @@ struct BoostInfo {
   ColorBoost color;
   TypographyBoost typography;
   array<string> zap_selectors;
-  // TRUST BOUNDARY: sanitized stylesheet rules only — no scripts.
+  // TRUST BOUNDARY: Values may remain raw; boost_css_sanitizer.rs enforces final ComposeCss injection and filters imports secondarily.
   string custom_css;
   bool change_was_made;
 };
@@ -95,7 +95,7 @@ struct BoostUpdate {
   ColorBoostUpdate? color;
   TypographyBoostUpdate? typography;
   array<string>? zap_selectors;
-  // TRUST BOUNDARY: sanitized stylesheet rules only — no scripts.
+  // TRUST BOUNDARY: Values may remain raw; boost_css_sanitizer.rs enforces final ComposeCss injection and filters imports secondarily.
   string? custom_css;
 };
 
@@ -130,6 +130,11 @@ interface PageHandler {
   ExportBoost(string boost_id) => (string json);
   ImportBoost(string json) => (BoostInfo? boost);
   CloseDialog() => ();
+  // Acknowledges that renderer-side flush/commit/discard and edit-mode cleanup
+  // requested by OnEditorKilled has completed. The native widget stays alive
+  // until this call returns to the controller.
+  HostCloseFinished() => ();
+  SetHostCloseState(string? boost_id, bool dirty) => ();
   RequestModeResize(WindowMode mode) => ();
 
   // Zap and Picker (W3.Z)

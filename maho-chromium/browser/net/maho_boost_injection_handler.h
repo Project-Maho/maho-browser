@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_NET_MAHO_BOOST_INJECTION_HANDLER_H_
 #define MAHO_BROWSER_NET_MAHO_BOOST_INJECTION_HANDLER_H_
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
+#include "base/values.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -45,10 +47,21 @@ class MahoBoostInjectionHandler
   void ExitZapMode();
   void EnterPickerMode(ContentScriptEventCallback callback);
   void ExitPickerMode();
+  void ExitCurrentEditMode();
+
+  // Runs only in the Boost isolated world so interactive tests can drive the
+  // real content-script overlay without publishing a page-world test API.
+  void ExecuteInIsolatedWorldForTesting(
+      const std::string& script,
+      base::OnceCallback<void(base::Value)> callback);
 
   ContentScriptMode content_script_mode() const {
     return content_script_mode_;
   }
+  bool poll_timer_is_running_for_testing() const {
+    return poll_timer_.IsRunning();
+  }
+  bool poll_in_flight_for_testing() const { return poll_in_flight_; }
 
  private:
   friend class content::WebContentsUserData<MahoBoostInjectionHandler>;
@@ -59,12 +72,17 @@ class MahoBoostInjectionHandler
 
   void InjectContentScript();
   void ExecuteInIsolatedWorld(const std::string& script);
+  void ExecuteInIsolatedWorldWithResult(
+      const std::string& script,
+      base::OnceCallback<void(base::Value)> callback);
   void PollContentScript();
-  void OnPollResult(base::Value result);
+  void OnPollResult(uint64_t generation, base::Value result);
   void StopPolling();
 
   ContentScriptMode content_script_mode_ = ContentScriptMode::kNone;
   bool content_script_injected_ = false;
+  bool poll_in_flight_ = false;
+  uint64_t poll_generation_ = 0;
   ContentScriptEventCallback event_callback_;
   base::RepeatingTimer poll_timer_;
 

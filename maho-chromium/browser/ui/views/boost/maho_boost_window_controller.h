@@ -9,11 +9,11 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "maho/browser/ui/browser_user_data.h"
 #include "maho/browser/ui/webui/maho_boost/maho_boost.mojom.h"
-#include "ui/views/widget/widget_observer.h"
 
 class Browser;
 class Profile;
@@ -26,6 +26,7 @@ class WebContents;
 
 namespace views {
 class Widget;
+class WidgetDelegate;
 }  // namespace views
 
 namespace maho {
@@ -52,7 +53,6 @@ inline constexpr int kCodeModeRightAlignOffsetPx = 265;
 // first).
 class MahoBoostWindowController
     : public BrowserUserData<MahoBoostWindowController>,
-      public views::WidgetObserver,
       public TabStripModelObserver,
       public content::WebContentsObserver {
  public:
@@ -69,8 +69,12 @@ class MahoBoostWindowController
   // handler so it does not need to depend on views headers.
   static void HideActive();
 
-  void ShowForActiveDomain(content::WebContents* active_tab);
+  void ShowForActiveDomain(content::WebContents* target_tab);
   void Hide();
+  void CompleteHostClose();
+  void FinalizeRendererClose();
+  void SetTemporaryBoostId(std::optional<std::string> boost_id);
+  void SetHostCloseState(std::optional<std::string> boost_id, bool dirty);
   bool IsShowing() const;
 
   // Resize the editor between boost mode (184×582) and code mode (452×582).
@@ -86,15 +90,27 @@ class MahoBoostWindowController
   // during construction.
   static base::WeakPtr<MahoBoostWindowController>
   ConsumePendingControllerForUI();
+  static base::WeakPtr<MahoBoostWindowController>
+  ConsumePendingControllerForUI(const std::string& controller_token);
 
   base::WeakPtr<MahoBoostWindowController> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
 
+  // True while an editor widget exists, whether or not it is currently visible.
+  bool HasWidget() const { return widget_ != nullptr; }
+
   views::Widget* GetWidgetForTesting() const { return widget_.get(); }
 
-  // views::WidgetObserver:
-  void OnWidgetDestroying(views::Widget* widget) override;
+  // Returns the Boost WebUI contents without exposing the native widget tree to
+  // interactive tests. The tree includes platform frame views, so positional
+  // child traversal is not a stable test contract.
+  content::WebContents* GetEditorWebContentsForTesting() const;
+  content::WebContents* GetTargetWebContentsForTesting() const {
+    return target_web_contents_.get();
+  }
+  bool IsHostClosePendingForTesting() const { return host_close_pending_; }
+  void FireHostCloseWatchdogForTesting() { ForceHostClose(); }
 
   // TabStripModelObserver:
   void OnTabStripModelChanged(
@@ -109,27 +125,42 @@ class MahoBoostWindowController
 
  private:
   friend class BrowserUserData<MahoBoostWindowController>;
-  friend content::WebContents* GetActiveTabForBoost(
+  friend content::WebContents* GetTargetTabForBoost(
       base::WeakPtr<MahoBoostWindowController> controller);
 
   explicit MahoBoostWindowController(Browser* browser);
 
   void CreateAndShowWidget(const std::string& domain);
   void DestroyWidget();
-  void OnDelegateWindowClosing();
-  void BroadcastEditorKilledAndClose();
-  void StartObservingTab(content::WebContents* active_tab);
+  void RequestHostClose();
+  void ForceHostClose();
+  void OpenForTarget(content::WebContents* target_tab);
+  bool ActivateTarget(content::WebContents* target_tab);
+  void StartObservingTab(content::WebContents* target_tab);
   void StopObservingTab();
 
   raw_ptr<Browser> browser_;
   raw_ptr<Profile> profile_;
+  std::unique_ptr<views::WidgetDelegate> widget_delegate_;
   std::unique_ptr<views::Widget> widget_;
   std::string current_domain_;
+  std::string controller_token_;
+  base::WeakPtr<content::WebContents> target_web_contents_;
+  base::WeakPtr<content::WebContents> pending_show_target_;
+  bool host_close_pending_ = false;
+  base::OneShotTimer host_close_watchdog_;
+  std::optional<std::string> selected_boost_id_;
+  std::optional<std::string> temporary_boost_id_;
+  bool renderer_dirty_ = false;
   raw_ptr<TabStripModel> observed_tab_strip_ = nullptr;
 
   // Current window mode; starts in kBoost.
   maho_boost::mojom::WindowMode current_mode_ =
       maho_boost::mojom::WindowMode::kBoost;
+
+  // True only when entering Code mode shifted the widget left. Returning to
+  // Boost consumes this state to reverse that exact shift.
+  bool code_mode_offset_applied_ = false;
 
   base::RepeatingClosure editor_killed_callback_;
 

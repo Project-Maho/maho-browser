@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "base/functional/bind.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/grit/maho_boost_resources.h"
@@ -56,15 +57,24 @@ MahoBoostUI::MahoBoostUI(content::WebUI* web_ui)
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::StyleSrc,
       "style-src 'self' 'unsafe-inline';");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      base::StrCat({webui::kDefaultTrustedTypesPolicies, " default;"}));
 
-  const GURL& url = web_ui->GetWebContents()->GetLastCommittedURL();
+  const GURL& visible_url = web_ui->GetWebContents()->GetVisibleURL();
+  const GURL& url = visible_url.is_valid()
+                        ? visible_url
+                        : web_ui->GetWebContents()->GetLastCommittedURL();
   std::string domain_param;
   if (net::GetValueForKeyInQuery(url, "domain", &domain_param)) {
     domain_ = domain_param;
   }
 
-  controller_ =
-      maho::ConsumePendingBoostControllerForUI();
+  std::string controller_token;
+  if (net::GetValueForKeyInQuery(url, "controller", &controller_token)) {
+    controller_ =
+        maho::ConsumePendingBoostControllerForUI(controller_token);
+  }
 }
 
 MahoBoostUI::~MahoBoostUI() = default;
@@ -84,12 +94,22 @@ void MahoBoostUI::CreatePageHandler(
     mojo::PendingRemote<maho_boost::mojom::PageObserver> page,
     mojo::PendingReceiver<maho_boost::mojom::PageHandler> receiver) {
   content::WebContents* host = web_ui()->GetWebContents();
+  if (!controller_) {
+    std::string controller_token;
+    if (net::GetValueForKeyInQuery(host->GetVisibleURL(), "controller",
+                                   &controller_token)) {
+      controller_ =
+          maho::ConsumePendingBoostControllerForUI(controller_token);
+    }
+  }
+  content::WebContents* target = maho::GetTargetTabForBoost(controller_);
+  if (!controller_ || !target ||
+      !target->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
   BrowserWindowInterface* browser_window = webui::GetBrowserWindowInterface(host);
   if (!browser_window) {
-    content::WebContents* active_tab = maho::GetActiveTabForBoost(controller_);
-    if (active_tab) {
-      browser_window = webui::GetBrowserWindowInterface(active_tab);
-    }
+    browser_window = webui::GetBrowserWindowInterface(target);
   }
 
   if (!browser_window || Profile::FromBrowserContext(host->GetBrowserContext()) != browser_window->GetProfile() ||
@@ -105,9 +125,11 @@ void MahoBoostUI::CreatePageHandler(
     }
   }
 
+  domain_ = target->GetLastCommittedURL().host();
+
   page_handler_ = std::make_unique<MahoBoostPageHandler>(
       std::move(receiver), std::move(page), domain_, controller_,
-      browser_window, host);
+      browser_window, host, target);
 
   if (controller_ && page_handler_) {
     maho::SetBoostEditorKilledCallback(

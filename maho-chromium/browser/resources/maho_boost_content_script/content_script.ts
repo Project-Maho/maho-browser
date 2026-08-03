@@ -8,9 +8,10 @@
 type MahoBoostNS = {
   SelectorComponent: new (
     doc: Document,
-    ids: string[],
+    ids: readonly string[],
     onSelect: (s: string) => void,
-    labels?: { selectThis: string; selectRelated: string; cancel: string }
+    labels?: { readonly selectThis: string; readonly selectRelated: string; readonly cancel: string },
+    onStatus?: (status: SelectionStatus) => void
   ) => SelectorComponentInstance;
   ZapOverlay: new (doc: Document, ctx: BoostContext) => ZapOverlayInstance;
   __mahoBoost: MahoBoostNS;
@@ -49,6 +50,13 @@ interface OutboxMessage {
   msg?: string | null;
 }
 
+interface SelectionStatus {
+  readonly code: string;
+  readonly message: string;
+  readonly selector: string | null;
+  readonly matchCount: number;
+}
+
 type Mode = 'none' | 'zap' | 'picker';
 
 const OVERLAY_EVENTS = [
@@ -73,8 +81,10 @@ const ns = ((window as unknown as MahoBoostNS).__mahoBoost ||
 let currentMode: Mode = 'none';
 let overlay: ZapOverlayInstance | SelectorComponentInstance | null = null;
 let preventableEventsAdded = false;
-let zappedElementsTempShown: string[] = [];
+let zappedElementsTempShown = new Set<string>();
 let handleZapEventBound: ((e: Event) => void) | null = null;
+
+const ZAP_UNHIDE_ATTRIBUTE = 'maho-zap-unhide';
 
 ns.outbox = ns.outbox || [];
 ns.zapSelectors = ns.zapSelectors || [];
@@ -93,9 +103,15 @@ function handleZapEvent(event: Event): void {
 }
 
 function handleKeyDown(event: Event): void {
-  if ((event as KeyboardEvent).key === 'Escape') {
+  if (!(event instanceof KeyboardEvent)) return;
+  const keyEvent = event;
+  if (keyEvent.key === 'Escape') {
+    if (keyEvent.cancelable) keyEvent.preventDefault();
+    keyEvent.stopImmediatePropagation();
     if (currentMode === 'zap') disableZapMode();
     else if (currentMode === 'picker') disablePickerMode();
+  } else if (keyEvent.key === 'Enter' && overlay) {
+    (overlay as ZapOverlayInstance).handleEvent(keyEvent, true);
   }
 }
 
@@ -130,9 +146,18 @@ function removeEventListeners(): void {
 const boostContext = {
   disableZapMode,
   addZapSelector(selector: string): void {
+    if (selector === '' || ns.zapSelectors.includes(selector)) {
+      return;
+    }
+    ns.zapSelectors.push(selector);
     ns.outbox.push({ type: 'zap_click', selector });
   },
   removeZapSelector(selector: string): void {
+    const selectorIndex = ns.zapSelectors.indexOf(selector);
+    if (selectorIndex === -1) {
+      return;
+    }
+    ns.zapSelectors.splice(selectorIndex, 1);
     ns.outbox.push({ type: 'unzap_click', selector });
   },
   sendNotify,
@@ -142,22 +167,28 @@ const boostContext = {
   tempShowZappedElement(selector: string): void {
     try {
       document.querySelectorAll(selector).forEach((el) => {
-        (el as HTMLElement).setAttribute('maho-zap-unhide', 'true');
+        el.setAttribute(ZAP_UNHIDE_ATTRIBUTE, 'true');
       });
-    } catch { /* invalid selector */ }
-    if (!zappedElementsTempShown.includes(selector)) {
-      zappedElementsTempShown.push(selector);
+    } catch (error) {
+      if (error instanceof DOMException) {
+        sendNotify('zap-selection-status', 'invalid_selector');
+        return;
+      }
+      throw error;
     }
+    zappedElementsTempShown.add(selector);
   },
   tempHideZappedElement(): void {
-    zappedElementsTempShown.forEach((selector) => {
+    for (const selector of zappedElementsTempShown) {
       try {
         document.querySelectorAll(selector).forEach((el) => {
-          (el as HTMLElement).removeAttribute('maho-zap-unhide');
+          el.removeAttribute(ZAP_UNHIDE_ATTRIBUTE);
         });
-      } catch { /* invalid selector */ }
-    });
-    zappedElementsTempShown = [];
+      } catch (error) {
+        if (!(error instanceof DOMException)) throw error;
+      }
+    }
+    zappedElementsTempShown = new Set<string>();
   },
 };
 
@@ -170,7 +201,7 @@ function startZapOverlay(): void {
   overlay.initialize();
 
   addEventListeners();
-  sendNotify('zap-state-update');
+  sendNotify('zap-state-update', 'onenable');
 }
 
 function startPickerOverlay(): void {
@@ -183,9 +214,14 @@ function startPickerOverlay(): void {
     [],
     (cssSelector: string) => {
       ns.outbox.push({ type: 'picker_selected', selector: cssSelector });
-      sendNotify('selector-picker-picked', cssSelector);
+      disablePickerMode();
     },
-    { selectThis: 'Pick this', selectRelated: 'Related', cancel: 'Cancel' }
+    { selectThis: 'Pick this', selectRelated: 'Related', cancel: 'Cancel' },
+    (status: SelectionStatus) => {
+      if (status.code !== 'ready') {
+        sendNotify('selector-picker-selection-status', status.code);
+      }
+    }
   );
   overlay.initialize();
 
@@ -193,8 +229,9 @@ function startPickerOverlay(): void {
   sendNotify('selector-picker-state-update', 'onenable');
 }
 
-function disableZapMode(): void {
+function disableZapMode(notifyHost: boolean = true): void {
   if (currentMode === 'none') return;
+  boostContext.tempHideZappedElement();
   currentMode = 'none';
   ns.currentMode = 'none';
 
@@ -204,11 +241,14 @@ function disableZapMode(): void {
   }
 
   removeEventListeners();
-  sendNotify('zap-state-update');
+  if (notifyHost) {
+    sendNotify('zap-state-update', 'ondisable');
+  }
 }
 
-function disablePickerMode(): void {
+function disablePickerMode(notifyHost: boolean = true): void {
   if (currentMode === 'none') return;
+  boostContext.tempHideZappedElement();
   currentMode = 'none';
   ns.currentMode = 'none';
 
@@ -218,26 +258,28 @@ function disablePickerMode(): void {
   }
 
   removeEventListeners();
-  sendNotify('selector-picker-state-update', 'ondisable');
+  if (notifyHost) {
+    sendNotify('selector-picker-state-update', 'ondisable');
+  }
 }
 
 ns.enterZapMode = function(zapSelectors: string[]): void {
   ns.zapSelectors = zapSelectors;
-  if (currentMode === 'picker') disablePickerMode();
+  if (currentMode === 'picker') disablePickerMode(false);
   startZapOverlay();
 };
 
 ns.exitZapMode = function(): void {
-  if (currentMode === 'zap') disableZapMode();
+  if (currentMode === 'zap') disableZapMode(false);
 };
 
 ns.enterPickerMode = function(): void {
-  if (currentMode === 'zap') disableZapMode();
+  if (currentMode === 'zap') disableZapMode(false);
   startPickerOverlay();
 };
 
 ns.exitPickerMode = function(): void {
-  if (currentMode === 'picker') disablePickerMode();
+  if (currentMode === 'picker') disablePickerMode(false);
 };
 
 ns.drain = function(): OutboxMessage[] {
@@ -253,7 +295,7 @@ ns.setZapSelectors = function(selectors: string[]): void {
 };
 
 interface BoostContext {
-  disableZapMode(): void;
+  disableZapMode(notifyHost?: boolean): void;
   addZapSelector(selector: string): void;
   removeZapSelector(selector: string): void;
   sendNotify(topic: string, msg?: string | null): void;

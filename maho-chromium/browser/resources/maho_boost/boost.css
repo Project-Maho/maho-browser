@@ -53,7 +53,7 @@
 }
 
 #zen-boost-name-container {
-  background-image: url('icons/arrow-down.svg');
+  background-image: none;
   background-repeat: no-repeat;
   background-position: calc(100% - 2px) calc(50% + 2px);
   background-size: 12px 12px;
@@ -225,10 +225,12 @@ body {
 
   flex-direction: row-reverse;
 
-  & button {
+  & > button {
     height: 24px !important;
     width: 24px !important;
     aspect-ratio: 1/1 !important;
+    border: 0;
+    padding: 0;
     background-color: transparent;
     opacity: 0.45;
 
@@ -249,6 +251,12 @@ body {
     display: flex;
     align-items: center;
   }
+}
+
+#zen-boost-head-wrapper #zen-boost-name-container {
+  min-width: 0;
+  border: 0;
+  box-sizing: border-box;
 }
 
 #zen-boost-name-text {
@@ -306,7 +314,6 @@ body {
 }
 
 #zen-boost-close,
-#zen-boost-shuffle,
 #zen-boost-magic-theme,
 #zen-boost-invert,
 #zen-boost-controls,
@@ -316,6 +323,21 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+#zen-boost-invert,
+#zen-boost-controls,
+#zen-boost-disable {
+  flex-direction: column;
+  gap: 2px;
+  color: #3a3a3b;
+}
+
+.boost-color-action-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
 }
 
 #zen-boost-zap,
@@ -340,110 +362,14 @@ body {
   margin-left: auto !important;
 }
 
-#zen-boost-close::before,
-#zen-boost-shuffle::before,
-#zen-boost-magic-theme::before,
-#zen-boost-invert::before,
-#zen-boost-controls::before,
-#zen-boost-disable::before,
-#zen-boost-zap::before,
-#zen-boost-code::before,
-#zen-boost-back::before,
-#zen-boost-css-picker::before,
-#zen-boost-css-inspector::before {
-  content: '';
+.boost-control-icon {
   display: block;
   flex: none;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  background-color: currentColor;
-}
-
-#zen-boost-close::before,
-#zen-boost-shuffle::before {
-  width: 16px;
-  height: 16px;
-}
-
-#zen-boost-close::before {
-  mask-image: url('icons/close.svg');
-  -webkit-mask-image: url('icons/close.svg');
-}
-
-#zen-boost-shuffle::before {
-  mask-image: url('icons/shuffle.svg');
-  -webkit-mask-image: url('icons/shuffle.svg');
-}
-
-#zen-boost-magic-theme::before {
-  width: 12px;
-  height: 12px;
-  mask-image: url('icons/magic.svg');
-  -webkit-mask-image: url('icons/magic.svg');
-}
-
-#zen-boost-invert::before,
-#zen-boost-controls::before,
-#zen-boost-disable::before {
-  width: 12px;
-  height: 12px;
-}
-
-#zen-boost-invert::before {
-  mask-image: url('icons/invert.svg');
-  -webkit-mask-image: url('icons/invert.svg');
-}
-
-#zen-boost-controls::before {
-  mask-image: url('icons/controls.svg');
-  -webkit-mask-image: url('icons/controls.svg');
-}
-
-#zen-boost-disable::before {
-  mask-image: url('icons/disable.svg');
-  -webkit-mask-image: url('icons/disable.svg');
-}
-
-#zen-boost-zap::before,
-#zen-boost-code::before,
-#zen-boost-back::before {
-  width: 14px;
-  height: 14px;
-}
-
-#zen-boost-zap::before {
-  mask-image: url('icons/zap.svg');
-  -webkit-mask-image: url('icons/zap.svg');
-}
-
-#zen-boost-code::before {
-  mask-image: url('icons/code.svg');
-  -webkit-mask-image: url('icons/code.svg');
-}
-
-#zen-boost-back::before {
-  mask-image: url('icons/back.svg');
-  -webkit-mask-image: url('icons/back.svg');
-}
-
-#zen-boost-css-picker::before,
-#zen-boost-css-inspector::before {
-  width: 16px;
-  height: 16px;
-}
-
-#zen-boost-css-picker::before {
-  mask-image: url('icons/picker.svg');
-  -webkit-mask-image: url('icons/picker.svg');
-}
-
-#zen-boost-css-inspector::before {
-  mask-image: url('icons/inspector.svg');
-  -webkit-mask-image: url('icons/inspector.svg');
+  color: currentColor;
+  opacity: 1;
+  stroke: currentColor;
+  visibility: visible;
+  forced-color-adjust: auto;
 }
 
 #zen-boost-back {
@@ -474,13 +400,20 @@ body {
   }
 }
 
-#zen-boost-zap[hideicon='true'] {
-  gap: 0;
-  padding-left: 6px !important;
-}
-
-#zen-boost-zap[hideicon='true']::before {
-  display: none;
+#zen-boost-close:focus-visible .boost-control-icon,
+#zen-boost-name-container:focus-visible .boost-control-icon,
+#zenBoostContextMenu [role='menuitem']:focus-visible .boost-control-icon,
+#zen-boost-magic-theme:focus-visible .boost-control-icon,
+#zen-boost-invert:focus-visible .boost-control-icon,
+#zen-boost-controls:focus-visible .boost-control-icon,
+#zen-boost-disable:focus-visible .boost-control-icon,
+#zen-boost-zap:focus-visible .boost-control-icon,
+#zen-boost-code:focus-visible .boost-control-icon,
+#zen-boost-back:focus-visible .boost-control-icon,
+#zen-boost-css-picker:focus-visible .boost-control-icon,
+#zen-boost-css-inspector:focus-visible .boost-control-icon {
+  opacity: 1;
+  visibility: visible;
 }
 
 .zen-boost-panel-disabled {
@@ -547,18 +480,13 @@ body {
   margin-right: 6px;
 }
 
-#zen-boost-shuffle {
-  margin-right: 0;
-  margin-left: 4px;
-}
-
 .zen-boost-button-active {
-  background-color: #3a3a3a;
-  color: #fcfcfe;
+  background-color: #3a3a3a !important;
+  color: #fcfcfe !important;
 }
 
 .zen-boost-button-active:hover {
-  background-color: #5b5b5c;
+  background-color: #5b5b5c !important;
 }
 
 .zen-boost-button-active-transparent {
@@ -618,8 +546,12 @@ body {
 }
 
 #zen-boost-font-select {
-  width: 120px;
+  flex: 1 1 auto;
+  width: calc(100% - 11px);
+  min-width: 0;
   height: 20px !important;
+  box-sizing: border-box;
+  border: 0;
 
   transition: 0.2s opacity ease-in-out;
 
@@ -875,16 +807,32 @@ body {
       height: 32px;
       border-width: 3px;
       transition: transform 0.2s;
-      z-index: 4;
+
+      /* The primary handle must win hit-testing. At distance 0 both handles sit
+         on the wheel center, and the smaller secondary handle (base z-index 5)
+         used to cover the primary one, so pressing the center grabbed the
+         secondary handle — which only rotates the hue offset and therefore
+         never moved anything. */
+      z-index: 6;
       &:hover {
         transform: scale(1.05) translate(-50%, -50%);
       }
     }
 
-    &[dragging='true'] {
+    &[data-dragging='true'] {
+      /* No transform transition while dragging: the handle must sit exactly
+         under the pointer, not ease toward it. */
+      transition: none;
       transform: scale(1.2) translate(-50%, -50%);
     }
   }
+}
+
+/* Wins over the generic `#zen-boost-editor-root button` rule (ID specificity)
+   so the color-wheel handles stay circular with a white ring. */
+#zen-boost-editor-root .zen-boost-color-picker-dot {
+  border-radius: 50%;
+  border: 3px solid #fff;
 }
 
 #zen-boost-editor-root:hover {
@@ -976,11 +924,6 @@ body {
   margin-right: 0;
 }
 
-:root[data-platform='macos'] #zen-boost-shuffle {
-  margin-right: 10px;
-  margin-left: 0;
-}
-
 :root[data-platform='macos'] #zen-boost-font-wrapper {
   border-radius: 8px;
 }
@@ -993,5 +936,15 @@ body {
 @media (prefers-color-scheme: dark) {
   .zen-boost-color-picker-gradient .zen-boost-color-picker-dot {
     box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  }
+}
+
+@media (forced-colors: active) {
+  .boost-control-icon {
+    color: ButtonText;
+    opacity: 1;
+    stroke: ButtonText;
+    visibility: visible;
+    forced-color-adjust: auto;
   }
 }

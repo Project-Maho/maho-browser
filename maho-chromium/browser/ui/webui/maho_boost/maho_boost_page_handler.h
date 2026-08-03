@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
@@ -34,12 +35,17 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
       const std::string& domain,
       base::WeakPtr<maho::MahoBoostWindowController> controller,
       BrowserWindowInterface* browser_window,
-      content::WebContents* web_contents);
+      content::WebContents* host_web_contents,
+      content::WebContents* target_web_contents);
   MahoBoostPageHandler(const MahoBoostPageHandler&) = delete;
   MahoBoostPageHandler& operator=(const MahoBoostPageHandler&) = delete;
   ~MahoBoostPageHandler() override;
 
   void FireEditorKilled();
+
+  static bool IsBoostAuthorizedForDomainForTesting(
+      const std::string& domain,
+      const std::string& boost_id);
 
   base::WeakPtr<MahoBoostPageHandler> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -77,6 +83,10 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
   void ImportBoost(const std::string& json,
                    ImportBoostCallback callback) override;
   void CloseDialog(CloseDialogCallback callback) override;
+  void HostCloseFinished(HostCloseFinishedCallback callback) override;
+  void SetHostCloseState(const std::optional<std::string>& boost_id,
+                         bool dirty,
+                         SetHostCloseStateCallback callback) override;
   void RequestModeResize(maho_boost::mojom::WindowMode mode,
                          RequestModeResizeCallback callback) override;
 
@@ -102,7 +112,7 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
   void OnDeleteBoostDone(DeleteBoostCallback callback, bool success);
   void OnSetActiveBoostDone(std::optional<std::string> boost_id,
                              SetActiveBoostCallback callback,
-                             std::string event_json);
+                             std::pair<std::string, bool> result);
   void OnDiscardBoostDone(DiscardBoostCallback callback,
                            std::string prev_active_id);
   void OnShuffleBoostDone(ShuffleBoostCallback callback,
@@ -126,7 +136,9 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
                              const std::string& selector,
                              const std::string& msg);
 
-  content::WebContents* GetActiveTab();
+  content::WebContents* GetTargetTab();
+  void CleanupTargetEditMode();
+  void OnPipeDisconnected();
 
   mojo::Receiver<maho_boost::mojom::PageHandler> receiver_;
   mojo::Remote<maho_boost::mojom::PageObserver> page_;
@@ -135,9 +147,11 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
 
   std::string current_zap_boost_id_;
   std::string current_picker_boost_id_;
+  bool awaiting_zap_start_notification_ = false;
 
   MahoPrivateContextToken context_token_;
   base::WeakPtr<content::WebContents> host_web_contents_;
+  base::WeakPtr<content::WebContents> target_web_contents_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

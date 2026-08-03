@@ -1,61 +1,37 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "base/run_loop.h"
-#include "base/test/run_until.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
-#include "net/dns/mock_host_resolver.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/views/boost/maho_boost_interactive_test_support.h"
+#include "maho/third_party/maho/maho_ffi.h"
+#include "ui/accessibility/platform/ax_platform_node_base.h"
 #include "ui/views/widget/widget.h"
+#include "url/gurl.h"
 
 namespace {
 
-class MahoBoostLifecycleTest : public InProcessBrowserTest {
+class FocusObserver : public content::WebContentsObserver {
  public:
-  MahoBoostLifecycleTest() = default;
-  ~MahoBoostLifecycleTest() override = default;
+  explicit FocusObserver(content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents) {}
 
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-    embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
-    ASSERT_TRUE(embedded_test_server()->Start());
-    InProcessBrowserTest::SetUpOnMainThread();
+  void OnWebContentsFocused(content::RenderWidgetHost*) override {
+    focused_ = true;
   }
 
- protected:
-  maho::MahoBoostWindowController& GetController() {
-    return maho::MahoBoostWindowController::GetForBrowser(browser(),
-                                                          browser()->profile());
-  }
+  bool focused() const { return focused_; }
 
-  content::WebContents* GetActiveTab() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
-  }
-
-  void ShowBoostEditor() {
-    GetController().ShowForActiveDomain(GetActiveTab());
-  }
-
-  void HideBoostEditor() { GetController().Hide(); }
-
-  bool WaitUntilHidden() {
-    return base::test::RunUntil(
-        [&]() { return !GetController().IsShowing(); });
-  }
-
-  bool WaitUntilShowing() {
-    return base::test::RunUntil([&]() { return GetController().IsShowing(); });
-  }
+ private:
+  bool focused_ = false;
 };
+
+class MahoBoostLifecycleTest : public MahoBoostInteractiveUiTest {};
 
 }  // namespace
 
@@ -67,24 +43,36 @@ class MahoBoostLifecycleTest : public InProcessBrowserTest {
 // ---------------------------------------------------------------------------
 IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
                        CreateTempDiscardNoPersistence) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
+  NavigateTo("/title1.html");
+
+  content::WebContents* editor_web_contents = OpenEditorAndWait();
+  ASSERT_TRUE(editor_web_contents);
+  ASSERT_TRUE(SwitchToCodeMode(editor_web_contents));
+  ASSERT_TRUE(WaitForCodeMirrorMount(editor_web_contents));
+  const std::optional<std::string> initial_css =
+      ReadCodeMirrorCss(editor_web_contents);
+  ASSERT_TRUE(initial_css);
+  EXPECT_TRUE(initial_css->empty());
+
+  base::WeakPtr<views::Widget> widget =
+      GetController().GetWidgetForTesting()->GetWeakPtr();
+  HideBoostEditor();
+  EXPECT_FALSE(GetController().IsShowing());
+  ASSERT_TRUE(WaitUntilDestroyed());
+  EXPECT_FALSE(widget);
   base::RunLoop().RunUntilIdle();
 
   ShowBoostEditor();
   ASSERT_TRUE(WaitUntilShowing());
 
-  HideBoostEditor();
-  ASSERT_TRUE(WaitUntilHidden());
-
-  ShowBoostEditor();
-  ASSERT_TRUE(WaitUntilShowing());
-
-  // TODO(maho): Assert magic-theme not active via JS once controller exposes
-  // a WebContents getter for the editor.
-  views::Widget* widget = GetController().GetWidgetForTesting();
-  ASSERT_TRUE(widget);
-  EXPECT_TRUE(GetController().IsShowing());
+  content::WebContents* reopened_editor = WaitForEditorLoad();
+  ASSERT_TRUE(reopened_editor);
+  ASSERT_TRUE(SwitchToCodeMode(reopened_editor));
+  ASSERT_TRUE(WaitForCodeMirrorMount(reopened_editor));
+  const std::optional<std::string> reopened_css =
+      ReadCodeMirrorCss(reopened_editor);
+  ASSERT_TRUE(reopened_css);
+  EXPECT_TRUE(reopened_css->empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -96,27 +84,40 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
 // ---------------------------------------------------------------------------
 IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
                        CreateTempCommitPersistence) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
+  NavigateTo("/title1.html");
+
+  content::WebContents* editor_web_contents = OpenEditorAndWait();
+  ASSERT_TRUE(editor_web_contents);
+  ASSERT_TRUE(SwitchToCodeMode(editor_web_contents));
+  ASSERT_TRUE(WaitForCodeMirrorMount(editor_web_contents));
+  constexpr char kCommittedCss[] = "body { border: 3px solid rgb(7, 8, 9); }";
+  ASSERT_TRUE(WriteCodeMirrorCss(editor_web_contents, kCommittedCss));
+  ASSERT_TRUE(FlushCodeMirror(editor_web_contents));
+  ASSERT_TRUE(WaitForCoreBoostCss("rgb(7, 8, 9)"));
+
+  // Widget::Close() mirrors clicking the window X button and synchronously
+  // routes through the controller's Hide() close path.
+  base::WeakPtr<views::Widget> widget =
+      GetController().GetWidgetForTesting()->GetWeakPtr();
+  ASSERT_TRUE(widget);
+  widget->Close();
+
+  EXPECT_FALSE(GetController().IsShowing());
+  ASSERT_TRUE(WaitUntilDestroyed());
+  EXPECT_FALSE(widget);
   base::RunLoop().RunUntilIdle();
 
   ShowBoostEditor();
   ASSERT_TRUE(WaitUntilShowing());
 
-  // Widget::Close() mirrors clicking the window X button → triggers commit
-  // via OnWidgetDestroying.
-  views::Widget* widget = GetController().GetWidgetForTesting();
-  ASSERT_TRUE(widget);
-  widget->Close();
-
-  ASSERT_TRUE(WaitUntilHidden());
-
-  ShowBoostEditor();
-  ASSERT_TRUE(WaitUntilShowing());
-
-  // TODO(maho): Assert magic-theme active state via JS once controller
-  // exposes a WebContents getter.
-  EXPECT_TRUE(GetController().IsShowing());
+  content::WebContents* reopened_editor = WaitForEditorLoad();
+  ASSERT_TRUE(reopened_editor);
+  ASSERT_TRUE(SwitchToCodeMode(reopened_editor));
+  ASSERT_TRUE(WaitForCodeMirrorMount(reopened_editor));
+  const std::optional<std::string> reopened_css =
+      ReadCodeMirrorCss(reopened_editor);
+  ASSERT_TRUE(reopened_css);
+  EXPECT_EQ(kCommittedCss, *reopened_css);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,19 +127,98 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
 // then asserts the editor auto-closed.
 // ---------------------------------------------------------------------------
 IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, TabSwitchClosesEditor) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
+  NavigateTo("/title1.html");
+
+  // Creating a tab produces browser-owned AX nodes. Add and settle it before
+  // scoping the counter to the Boost widget so this test measures only editor
+  // cleanup, rather than expecting the browser-wide tree to be unchanged.
+  const int new_tab_index = browser()->tab_strip_model()->count();
+  chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
+                   /*foreground=*/false);
+  ASSERT_EQ(new_tab_index + 1, browser()->tab_strip_model()->count());
   base::RunLoop().RunUntilIdle();
+  ui::AXPlatformNodeBase::ResetInstanceCountForTesting();
 
   ShowBoostEditor();
   ASSERT_TRUE(WaitUntilShowing());
+  ASSERT_TRUE(WaitForCondition(
+      "Boost editor to create scoped AX nodes", []() {
+        return ui::AXPlatformNodeBase::GetInstanceCount() > 0;
+      }));
 
-  chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
-                   /*foreground=*/true);
+  browser()->tab_strip_model()->ActivateTabAt(new_tab_index);
 
   ASSERT_TRUE(WaitUntilHidden())
       << "Boost editor must close when the active tab changes";
   EXPECT_FALSE(GetController().IsShowing());
+  EXPECT_EQ(nullptr, GetController().GetWidgetForTesting());
+  EXPECT_TRUE(WaitForCondition(
+      "scoped Boost editor AX nodes to be destroyed", []() {
+        return ui::AXPlatformNodeBase::GetInstanceCount() == 0;
+      }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
+                       TabSwitchDiscardsUntouchedTemporaryBoostBeforeClose) {
+  NavigateTo("/title1.html");
+  content::WebContents* editor_web_contents = OpenEditorAndWait();
+  ASSERT_TRUE(editor_web_contents);
+
+  const auto selected_id = content::EvalJs(
+      editor_web_contents,
+      "document.querySelector('.boost-shell')?.dataset.selectedBoostId ?? ''");
+  ASSERT_TRUE(selected_id.is_ok());
+  const std::string temporary_boost_id = selected_id.ExtractString();
+  ASSERT_FALSE(temporary_boost_id.empty());
+
+  const int new_tab_index = browser()->tab_strip_model()->count();
+  chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
+                   /*foreground=*/false);
+  browser()->tab_strip_model()->ActivateTabAt(new_tab_index);
+
+  ASSERT_TRUE(WaitForCondition("host cleanup and widget destruction",
+                               [this]() { return !GetController().HasWidget(); }));
+  MahoCore* core = maho::GetCore();
+  ASSERT_TRUE(core);
+  char* stale_boost = maho_core_boost_get(core, temporary_boost_id.c_str());
+  EXPECT_EQ(nullptr, stale_boost);
+  if (stale_boost) {
+    maho_string_free(stale_boost);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
+                       OpeningForBackgroundTabActivatesAndFocusesThatTab) {
+  NavigateTo("/title1.html");
+  content::WebContents* original_tab = GetTargetWebContents();
+  ASSERT_TRUE(original_tab);
+
+  const int background_index = browser()->tab_strip_model()->count();
+  chrome::AddTabAt(
+      browser(), embedded_test_server()->GetURL("b.com", "/title2.html"),
+      /*index=*/-1, /*foreground=*/false);
+  content::WebContents* background_tab =
+      browser()->tab_strip_model()->GetWebContentsAt(background_index);
+  ASSERT_TRUE(background_tab);
+  ASSERT_TRUE(content::NavigateToURL(
+      background_tab,
+      embedded_test_server()->GetURL("b.com", "/title2.html")));
+  ASSERT_EQ(original_tab,
+            browser()->tab_strip_model()->GetActiveWebContents());
+
+  FocusObserver focus_observer(background_tab);
+
+  GetController().ShowForActiveDomain(background_tab);
+
+  EXPECT_EQ(background_tab,
+            browser()->tab_strip_model()->GetActiveWebContents());
+  EXPECT_EQ(background_tab,
+            GetController().GetTargetWebContentsForTesting());
+  EXPECT_TRUE(WaitForCondition("background Boost target receives focus",
+                               [&focus_observer]() {
+                                 return focus_observer.focused();
+                               }));
+  ASSERT_TRUE(WaitUntilShowing());
 }
 
 // ---------------------------------------------------------------------------
@@ -147,11 +227,108 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, TabSwitchClosesEditor) {
 // Opens the boost editor for a.com, navigates the active tab to a different
 // domain (b.com), then asserts the editor auto-closed.
 // ---------------------------------------------------------------------------
-IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, NavigationClosesEditor) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
-  base::RunLoop().RunUntilIdle();
+IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
+                       HostCloseWatchdogDiscardsUntouchedTemporaryBoost) {
+  NavigateTo("/title1.html");
+  content::WebContents* editor = OpenEditorAndWait();
+  ASSERT_TRUE(editor);
+  const auto selected = content::EvalJs(
+      editor,
+      "document.querySelector('.boost-shell')?.dataset.selectedBoostId ?? ''");
+  ASSERT_TRUE(selected.is_ok());
+  const std::string boost_id = selected.ExtractString();
+  ASSERT_FALSE(boost_id.empty());
 
+  GetController().SetEditorKilledCallback(base::DoNothing());
+  GetController().Hide();
+  ASSERT_TRUE(GetController().IsHostClosePendingForTesting());
+  GetController().FireHostCloseWatchdogForTesting();
+  ASSERT_TRUE(WaitUntilDestroyed());
+
+  MahoCore* core = maho::GetCore();
+  ASSERT_TRUE(core);
+  char* boost = maho_core_boost_get(core, boost_id.c_str());
+  EXPECT_EQ(nullptr, boost);
+  if (boost) {
+    maho_string_free(boost);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
+                       TwoWindowsKeepControllerTargetsIsolated) {
+  NavigateTo("/title1.html");
+  content::WebContents* first_target = GetTargetWebContents();
+  ASSERT_TRUE(first_target);
+
+  Browser* second_browser = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(second_browser);
+  chrome::AddTabAt(second_browser,
+                   embedded_test_server()->GetURL("b.com", "/title2.html"),
+                   /*index=*/-1, /*foreground=*/true);
+  content::WebContents* second_target =
+      second_browser->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(second_target);
+  ASSERT_TRUE(content::NavigateToURL(
+      second_target,
+      embedded_test_server()->GetURL("b.com", "/title2.html")));
+
+  auto& first = GetController();
+  auto& second = maho::MahoBoostWindowController::GetForBrowser(
+      second_browser, second_browser->profile());
+  first.ShowForActiveDomain(first_target);
+  second.ShowForActiveDomain(second_target);
+
+  ASSERT_TRUE(WaitForCondition("both Boost editors mount", [&]() {
+    content::WebContents* first_editor = first.GetEditorWebContentsForTesting();
+    content::WebContents* second_editor = second.GetEditorWebContentsForTesting();
+    return first_editor && second_editor &&
+           content::EvalJs(first_editor,
+                           "Boolean(document.querySelector('.boost-shell'))")
+               .ExtractBool() &&
+           content::EvalJs(second_editor,
+                           "Boolean(document.querySelector('.boost-shell'))")
+               .ExtractBool();
+  }));
+  EXPECT_EQ(first_target, first.GetTargetWebContentsForTesting());
+  EXPECT_EQ(second_target, second.GetTargetWebContentsForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
+                       HostCloseWatchdogCommitsDirtyTemporaryBoost) {
+  NavigateTo("/title1.html");
+  content::WebContents* editor = OpenEditorAndWait();
+  ASSERT_TRUE(editor);
+  const auto selected = content::EvalJs(
+      editor,
+      "document.querySelector('.boost-shell')?.dataset.selectedBoostId ?? ''");
+  ASSERT_TRUE(selected.is_ok());
+  const std::string boost_id = selected.ExtractString();
+  ASSERT_FALSE(boost_id.empty());
+  ASSERT_TRUE(SwitchToCodeMode(editor));
+  ASSERT_TRUE(WaitForCodeMirrorMount(editor));
+  ASSERT_TRUE(WriteCodeMirrorCss(editor, "body { outline: 2px solid red; }"));
+  ASSERT_TRUE(FlushCodeMirror(editor));
+  ASSERT_TRUE(WaitForCoreBoostCss("outline: 2px solid red"));
+
+  GetController().SetEditorKilledCallback(base::DoNothing());
+  GetController().Hide();
+  GetController().FireHostCloseWatchdogForTesting();
+  ASSERT_TRUE(WaitUntilDestroyed());
+
+  MahoCore* core = maho::GetCore();
+  ASSERT_TRUE(core);
+  char* boost = maho_core_boost_get(core, boost_id.c_str());
+  ASSERT_NE(nullptr, boost);
+  const std::string boost_json(boost);
+  maho_string_free(boost);
+  EXPECT_NE(std::string::npos,
+            boost_json.find("outline: 2px solid red"));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, NavigationClosesEditor) {
+  NavigateTo("/title1.html");
+
+  const size_t ax_nodes_before = ui::AXPlatformNodeBase::GetInstanceCount();
   ShowBoostEditor();
   ASSERT_TRUE(WaitUntilShowing());
 
@@ -160,7 +337,10 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, NavigationClosesEditor) {
 
   ASSERT_TRUE(WaitUntilHidden())
       << "Boost editor must close when navigating to a different domain";
+  ASSERT_TRUE(WaitUntilDestroyed());
   EXPECT_FALSE(GetController().IsShowing());
+  EXPECT_EQ(nullptr, GetController().GetWidgetForTesting());
+  EXPECT_EQ(ax_nodes_before, ui::AXPlatformNodeBase::GetInstanceCount());
 }
 
 // ---------------------------------------------------------------------------
@@ -171,9 +351,7 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, NavigationClosesEditor) {
 // boost editor browser was created.
 // ---------------------------------------------------------------------------
 IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, SameDomainReshowReuses) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("a.com", "/title1.html")));
-  base::RunLoop().RunUntilIdle();
+  NavigateTo("/title1.html");
 
   ShowBoostEditor();
   ASSERT_TRUE(WaitUntilShowing());

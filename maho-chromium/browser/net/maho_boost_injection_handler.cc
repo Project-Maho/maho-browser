@@ -4,6 +4,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/json/json_reader.h"
@@ -34,7 +35,7 @@ namespace {
 constexpr int kIsolatedWorldIdForBoost =
     content::ISOLATED_WORLD_ID_CONTENT_END + 4;
 
-constexpr base::TimeDelta kPollInterval = base::Milliseconds(100);
+constexpr base::TimeDelta kPollInterval = base::Milliseconds(25);
 
 std::string BuildBoostCssScript(const std::string& css) {
   if (css.empty()) {
@@ -65,6 +66,21 @@ std::string BuildBoostCssScript(const std::string& css) {
       "`;"
       "  (document.head || document.documentElement).appendChild(s);"
       "})();"});
+}
+
+std::string LoadClassicContentScript(int resource_id) {
+  std::string script = ui::ResourceBundle::GetSharedInstance()
+                           .LoadDataResourceString(resource_id);
+  constexpr std::string_view kModuleMarker = "export {};";
+  const size_t marker_offset = script.rfind(kModuleMarker);
+  if (marker_offset != std::string::npos &&
+      base::TrimWhitespaceASCII(
+          script.substr(marker_offset + kModuleMarker.size()),
+          base::TRIM_ALL)
+          .empty()) {
+    script.erase(marker_offset);
+  }
+  return script;
 }
 
 std::string ExtractBoostDomainFromUpdate(const base::DictValue& update,
@@ -200,26 +216,27 @@ MahoBoostInjectionHandler::MahoBoostInjectionHandler(
       content::WebContentsUserData<MahoBoostInjectionHandler>(*web_contents) {}
 
 MahoBoostInjectionHandler::~MahoBoostInjectionHandler() {
-  StopPolling();
+  ExitCurrentEditMode();
 }
 
 void MahoBoostInjectionHandler::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   TRACE_EVENT0("browser", "BoostInjection.DidFinishNavigation");
   if (!navigation_handle->HasCommitted() ||
-      navigation_handle->IsErrorPage() ||
-      !navigation_handle->GetURL().SchemeIsHTTPOrHTTPS()) {
+      !navigation_handle->IsInPrimaryMainFrame()) {
     return;
   }
 
-  if (!navigation_handle->IsInPrimaryMainFrame()) {
+  content_script_injected_ = false;
+  StopPolling();
+  content_script_mode_ = ContentScriptMode::kNone;
+
+  if (!navigation_handle->GetURL().SchemeIsHTTPOrHTTPS()) {
     return;
   }
 
   DVLOG(1) << "[MAHO_PERF] BoostInjection.DidFinishNavigation url="
            << navigation_handle->GetURL().spec();
-  content_script_injected_ = false;
-  StopPolling();
 
   InjectBoostCss(navigation_handle->GetRenderFrameHost(),
                  navigation_handle->GetURL().spec());
@@ -250,6 +267,11 @@ void MahoBoostInjectionHandler::InjectBoostCss(
   VLOG(1) << "[MahoBoost] InjectBoostCss: url=" << url
           << " css_length=" << css.size();
   std::string script = BuildBoostCssScript(css);
+  if (render_frame_host->GetLastCommittedURL().SchemeIs("chrome-error")) {
+    render_frame_host->ExecuteJavaScript(base::UTF8ToUTF16(script),
+                                         base::DoNothing());
+    return;
+  }
   render_frame_host->ExecuteJavaScriptInIsolatedWorld(
       base::UTF8ToUTF16(script),
       base::DoNothing(),
@@ -283,33 +305,46 @@ void MahoBoostInjectionHandler::InjectContentScript() {
 
   // Load JS content scripts in dependency order.
   // selector_component.js must precede zap_overlay.js (reads ns.SelectorComponent).
+  ExecuteInIsolatedWorld(LoadClassicContentScript(
+      IDR_MAHO_BOOST_CONTENT_SCRIPT_SELECTOR_COMPONENT_JS));
   ExecuteInIsolatedWorld(
-      ui::ResourceBundle::GetSharedInstance()
-          .LoadDataResourceString(
-              IDR_MAHO_BOOST_CONTENT_SCRIPT_SELECTOR_COMPONENT_JS));
+      LoadClassicContentScript(IDR_MAHO_BOOST_CONTENT_SCRIPT_ZAP_OVERLAY_JS));
   ExecuteInIsolatedWorld(
-      ui::ResourceBundle::GetSharedInstance()
-          .LoadDataResourceString(
-              IDR_MAHO_BOOST_CONTENT_SCRIPT_ZAP_OVERLAY_JS));
-  ExecuteInIsolatedWorld(
-      ui::ResourceBundle::GetSharedInstance()
-          .LoadDataResourceString(
-              IDR_MAHO_BOOST_CONTENT_SCRIPT_CONTENT_SCRIPT_JS));
+      LoadClassicContentScript(IDR_MAHO_BOOST_CONTENT_SCRIPT_CONTENT_SCRIPT_JS));
 
   content_script_injected_ = true;
 }
 
 void MahoBoostInjectionHandler::ExecuteInIsolatedWorld(
     const std::string& script) {
+  ExecuteInIsolatedWorldWithResult(script, base::DoNothing());
+}
+
+void MahoBoostInjectionHandler::ExecuteInIsolatedWorldForTesting(
+    const std::string& script,
+    base::OnceCallback<void(base::Value)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ExecuteInIsolatedWorldWithResult(script, std::move(callback));
+}
+
+void MahoBoostInjectionHandler::ExecuteInIsolatedWorldWithResult(
+    const std::string& script,
+    base::OnceCallback<void(base::Value)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::WebContents* wc = web_contents();
-  if (!wc) return;
+  if (!wc) {
+    std::move(callback).Run(base::Value());
+    return;
+  }
   content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
-  if (!rfh || !rfh->IsRenderFrameLive() || !rfh->IsActive()) return;
+  if (!rfh || !rfh->IsRenderFrameLive() || !rfh->IsActive()) {
+    std::move(callback).Run(base::Value());
+    return;
+  }
 
   rfh->ExecuteJavaScriptInIsolatedWorld(
       base::UTF8ToUTF16(script),
-      base::DoNothing(),
+      std::move(callback),
       kIsolatedWorldIdForBoost);
 }
 
@@ -319,6 +354,8 @@ void MahoBoostInjectionHandler::EnterZapMode(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content_script_mode_ = ContentScriptMode::kZap;
   event_callback_ = std::move(callback);
+  ++poll_generation_;
+  poll_in_flight_ = false;
 
   InjectContentScript();
 
@@ -327,6 +364,7 @@ void MahoBoostInjectionHandler::EnterZapMode(
       "window.__mahoBoost && window.__mahoBoost.enterZapMode(" +
       selectors_json + ");");
 
+  PollContentScript();
   if (!poll_timer_.IsRunning()) {
     poll_timer_.Start(FROM_HERE, kPollInterval,
                       base::BindRepeating(
@@ -351,12 +389,15 @@ void MahoBoostInjectionHandler::EnterPickerMode(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content_script_mode_ = ContentScriptMode::kPicker;
   event_callback_ = std::move(callback);
+  ++poll_generation_;
+  poll_in_flight_ = false;
 
   InjectContentScript();
 
   ExecuteInIsolatedWorld(
       "window.__mahoBoost && window.__mahoBoost.enterPickerMode();");
 
+  PollContentScript();
   if (!poll_timer_.IsRunning()) {
     poll_timer_.Start(FROM_HERE, kPollInterval,
                       base::BindRepeating(
@@ -376,33 +417,60 @@ void MahoBoostInjectionHandler::ExitPickerMode() {
   StopPolling();
 }
 
+void MahoBoostInjectionHandler::ExitCurrentEditMode() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (content_script_mode_ == ContentScriptMode::kZap) {
+    ExecuteInIsolatedWorld(
+        "window.__mahoBoost && window.__mahoBoost.exitZapMode();");
+  } else if (content_script_mode_ == ContentScriptMode::kPicker) {
+    ExecuteInIsolatedWorld(
+        "window.__mahoBoost && window.__mahoBoost.exitPickerMode();");
+  }
+  content_script_mode_ = ContentScriptMode::kNone;
+  event_callback_.Reset();
+  StopPolling();
+}
+
 void MahoBoostInjectionHandler::PollContentScript() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (poll_in_flight_) {
+    return;
+  }
   content::WebContents* wc = web_contents();
   if (!wc) {
     StopPolling();
+    content_script_mode_ = ContentScriptMode::kNone;
     return;
   }
   content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
   if (!rfh || !rfh->IsRenderFrameLive() || !rfh->IsActive()) {
     StopPolling();
+    content_script_mode_ = ContentScriptMode::kNone;
     return;
   }
 
+  poll_in_flight_ = true;
+  const uint64_t generation = poll_generation_;
   rfh->ExecuteJavaScriptInIsolatedWorld(
       u"(function() {"
       u"  if (!window.__mahoBoost || !window.__mahoBoost.drain) return [];"
       u"  return window.__mahoBoost.drain();"
       u"})()",
       base::BindOnce(&MahoBoostInjectionHandler::OnPollResult,
-                      weak_factory_.GetWeakPtr()),
+                      weak_factory_.GetWeakPtr(), generation),
       kIsolatedWorldIdForBoost);
 }
 
-void MahoBoostInjectionHandler::OnPollResult(base::Value result) {
+void MahoBoostInjectionHandler::OnPollResult(uint64_t generation,
+                                            base::Value result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != poll_generation_) {
+    return;
+  }
+  poll_in_flight_ = false;
   if (!result.is_list() || !event_callback_) return;
 
+  bool exited_current_mode = false;
   for (const auto& item : result.GetList()) {
     const base::DictValue* msg = item.GetIfDict();
     if (!msg) continue;
@@ -417,10 +485,24 @@ void MahoBoostInjectionHandler::OnPollResult(base::Value result) {
         *type,
         selector ? *selector : std::string(),
         notify_msg ? *notify_msg : std::string());
+
+    if (*type == "notify" && selector && notify_msg &&
+        ((*selector == "zap-state-update" ||
+          *selector == "selector-picker-state-update") &&
+         *notify_msg == "ondisable")) {
+      exited_current_mode = true;
+    }
+  }
+
+  if (exited_current_mode) {
+    content_script_mode_ = ContentScriptMode::kNone;
+    StopPolling();
   }
 }
 
 void MahoBoostInjectionHandler::StopPolling() {
+  ++poll_generation_;
   poll_timer_.Stop();
+  poll_in_flight_ = false;
   event_callback_.Reset();
 }
