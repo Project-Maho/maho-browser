@@ -179,6 +179,7 @@ export interface FolderCount {
 // Attachment types
 export interface Attachment {
   id: string;
+  part_id: string;
   email_id: string;
   filename: string | null;
   mime_type: string;

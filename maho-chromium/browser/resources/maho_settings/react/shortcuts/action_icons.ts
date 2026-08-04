@@ -56,7 +56,7 @@ export const ACTION_ICONS: Record<ShortcutActionId, React.ComponentType<any>> = 
   "view_source": Code,
   "print_page": ExternalLink,
   "settings": ExternalLink,
-  "little_arc": Sparkles,
+  "maho_mini": Sparkles,
   "next_space": ExternalLink,
   "prev_space": ExternalLink,
   "select_space_1": Sparkles,

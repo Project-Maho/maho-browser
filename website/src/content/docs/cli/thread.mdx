@@ -1,5 +1,5 @@
 ---
-title: maho thread
+title: maho mail thread
 description: List all emails in a thread
 ---
 
@@ -8,31 +8,34 @@ Retrieve all emails in a conversation thread by Message-ID.
 ## Usage
 
 ```bash
-maho thread <account_id> <message_id> [flags]
+maho mail thread --account-id <account_id> --message-id <message_id> [--json]
 ```
-
-## Arguments
-
-| Argument | Type | Description |
-|----------|------|-------------|
-| `account_id` | string | Account ID |
-| `message_id` | string | Message-ID header value of any email in the thread |
 
 ## Flags
 
-| Flag | Description |
-|------|-------------|
-| `--json` | Output as JSON |
+| Flag | Type | Description |
+|------|------|-------------|
+| `--account-id` | string | Account ID containing the message |
+| `--message-id` | string | Message-ID header value of any email in the thread |
+| `--json` | — | Output as JSON |
 
 ## Examples
 
 ```bash
 # View a thread
-maho thread acc1 "<msg1@example.com>"
+maho mail thread --account-id acc1 --message-id "<msg1@example.com>"
 
 # Get thread as JSON
-maho thread acc1 "<msg1@example.com>" --json
+maho mail thread --account-id acc1 --message-id "<msg1@example.com>" --json
 
 # Summarize a thread with AI
-maho thread acc1 "<msg1@example.com>" --json | llm 'summarize this email thread'
+maho mail thread --account-id acc1 --message-id "<msg1@example.com>" --json | llm 'summarize this email thread'
+```
+
+## Standalone binary
+
+The optional standalone `maho-mail` binary exposes the same query with positional arguments instead of flags:
+
+```bash
+maho-mail thread <account_id> <message_id> [--json]
 ```

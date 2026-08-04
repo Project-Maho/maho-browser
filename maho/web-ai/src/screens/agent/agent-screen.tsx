@@ -61,6 +61,29 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
       case 'token':
         dispatch({ type: 'AGENT_TOKEN', createdAt: new Date(), messageId: createId('assistant'), token: event.token });
         break;
+      case 'thinking':
+        dispatch({ type: 'AGENT_THINKING', createdAt: new Date(), messageId: createId('assistant'), thinking: event.thinking });
+        break;
+      case 'tool_call':
+        dispatch({
+          type: 'AGENT_TOOL_CALL',
+          createdAt: new Date(),
+          id: event.id,
+          name: event.name,
+          args: event.args,
+          messageId: createId('assistant'),
+        });
+        break;
+      case 'tool_result':
+        dispatch({
+          type: 'AGENT_TOOL_RESULT',
+          createdAt: new Date(),
+          id: event.id,
+          name: event.name,
+          result: event.result,
+          messageId: createId('assistant'),
+        });
+        break;
       case 'complete':
         dispatch({
           type: 'AGENT_COMPLETE',
@@ -133,13 +156,9 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
     dispatch({ type: 'RESET' });
   }, [bridge, state.phase]);
 
-  const handleOpenSettings = useCallback(async () => {
-    try {
-      await bridge.openSettings();
-    } catch (error) {
-      dispatch({ type: 'AGENT_ERROR', message: messageFromError(error, 'Failed to open settings') });
-    }
-  }, [bridge]);
+  const handleOpenSettings = useCallback(() => {
+    window.location.hash = 'byok';
+  }, []);
 
   const showThread = state.messages.length > 0 || state.errorMessage !== null;
 

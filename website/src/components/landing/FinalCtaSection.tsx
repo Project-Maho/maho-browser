@@ -5,7 +5,11 @@ export type FinalCtaConfig = {
   headline: string;
   subheadline: string;
   primaryCta: { label: string; href: string };
-  secondaryCta?: { label: string; href: string };
+  secondaryCta?: {
+    label: string;
+    href: string;
+    variant?: "primary" | "secondary" | "ghost" | "discord";
+  };
 };
 
 type FinalCtaSectionProps = {
@@ -26,7 +30,7 @@ export function FinalCtaSection({ config }: FinalCtaSectionProps) {
                   {config.primaryCta.label}
                 </CtaButton>
                 {config.secondaryCta && (
-                  <CtaButton variant="ghost" href={config.secondaryCta.href}>
+                  <CtaButton variant={config.secondaryCta.variant ?? "ghost"} href={config.secondaryCta.href}>
                     {config.secondaryCta.label}
                   </CtaButton>
                 )}

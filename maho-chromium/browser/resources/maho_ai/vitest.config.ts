@@ -1,9 +1,15 @@
-import path from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {defineConfig} from 'vitest/config';
 
-const featureDir = path.dirname(fileURLToPath(import.meta.url));
-const sharedNodeModulesDir = path.resolve(featureDir, '../../../../website/node_modules');
+const featureUrl = new URL('./', import.meta.url);
+const sharedNodeModulesUrl = new URL('../../../../website/node_modules/', featureUrl);
+
+function featurePath(relativePath: string): string {
+  return new URL(relativePath, featureUrl).pathname;
+}
+
+function sharedNodeModulePath(relativePath: string): string {
+  return new URL(relativePath, sharedNodeModulesUrl).pathname;
+}
 
 export default defineConfig({
   test: {
@@ -14,67 +20,87 @@ export default defineConfig({
     alias: [
       {
         find: /^chrome:\/\/resources\/js\/parse_html_subset\.js$/,
-        replacement: path.join(featureDir, 'react/__tests__/parse_html_subset_mock.ts'),
+        replacement: featurePath('react/__tests__/parse_html_subset_mock.ts'),
       },
       {
         find: /^\.\/maho_ai\.mojom-webui\.js$/,
-        replacement: path.join(featureDir, 'standalone/maho_ai.mojom-webui.js'),
+        replacement: featurePath('standalone/maho_ai.mojom-webui.js'),
       },
       {
         find: /^\.\.\/maho_ai\.mojom-webui\.js$/,
-        replacement: path.join(featureDir, 'standalone/maho_ai.mojom-webui.js'),
+        replacement: featurePath('standalone/maho_ai.mojom-webui.js'),
       },
       {
         find: /^\.\.\/\.\.\/maho_ai\.mojom-webui\.js$/,
-        replacement: path.join(featureDir, 'standalone/maho_ai.mojom-webui.js'),
+        replacement: featurePath('standalone/maho_ai.mojom-webui.js'),
       },
       {
         find: /^react$/,
-        replacement: path.join(sharedNodeModulesDir, 'react'),
+        replacement: sharedNodeModulePath('react'),
       },
       {
         find: /^react\/jsx-runtime$/,
-        replacement: path.join(sharedNodeModulesDir, 'react/jsx-runtime.js'),
+        replacement: sharedNodeModulePath('react/jsx-runtime.js'),
       },
       {
         find: /^react\/jsx-dev-runtime$/,
-        replacement: path.join(sharedNodeModulesDir, 'react/jsx-dev-runtime.js'),
+        replacement: sharedNodeModulePath('react/jsx-dev-runtime.js'),
       },
       {
         find: /^react-dom\/client$/,
-        replacement: path.join(sharedNodeModulesDir, 'react-dom/client.js'),
+        replacement: sharedNodeModulePath('react-dom/client.js'),
       },
       {
         find: /^tailwind-merge$/,
-        replacement: path.join(sharedNodeModulesDir, 'tailwind-merge'),
+        replacement: sharedNodeModulePath('tailwind-merge'),
       },
       {
         find: /^clsx$/,
-        replacement: path.join(sharedNodeModulesDir, 'clsx'),
+        replacement: sharedNodeModulePath('clsx'),
       },
       {
         find: /^@lib\/utils$/,
-        replacement: path.join(featureDir, '../maho_common/react/lib/utils.ts'),
+        replacement: featurePath('../maho_common/react/lib/utils.ts'),
+      },
+      {
+        find: /^@ui\/(.+)$/,
+        replacement: featurePath('../maho_common/react/ui/$1.tsx'),
+      },
+      {
+        find: /^@icons\/lucide$/,
+        replacement: featurePath('../maho_common/react/icons/lucide.ts'),
       },
       {
         find: /^lucide-react$/,
-        replacement: path.join(sharedNodeModulesDir, 'lucide-react/dist/esm/lucide-react.js'),
+        replacement: sharedNodeModulePath('lucide-react/dist/esm/lucide-react.js'),
       },
       {
         find: /^class-variance-authority$/,
-        replacement: path.join(sharedNodeModulesDir, 'class-variance-authority'),
+        replacement: sharedNodeModulePath('class-variance-authority'),
+      },
+      {
+        find: /^marked$/,
+        replacement: sharedNodeModulePath('marked/lib/marked.esm.js'),
       },
       {
         find: /^sonner$/,
-        replacement: path.join(sharedNodeModulesDir, 'sonner/dist/index.mjs'),
+        replacement: sharedNodeModulePath('sonner/dist/index.mjs'),
       },
       {
         find: /^@radix-ui\/react-slot$/,
-        replacement: path.join(sharedNodeModulesDir, '@radix-ui/react-slot'),
+        replacement: sharedNodeModulePath('@radix-ui/react-slot'),
+      },
+      {
+        find: /^@radix-ui\/react-popover$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-popover'),
+      },
+      {
+        find: /^@radix-ui\/react-tooltip$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-tooltip'),
       },
       {
         find: /^@radix-ui\/react-dropdown-menu$/,
-        replacement: path.join(sharedNodeModulesDir, '@radix-ui/react-dropdown-menu'),
+        replacement: sharedNodeModulePath('@radix-ui/react-dropdown-menu'),
       },
     ],
   },

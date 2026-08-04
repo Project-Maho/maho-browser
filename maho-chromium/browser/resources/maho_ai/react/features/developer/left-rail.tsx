@@ -46,7 +46,7 @@ export function LeftRail(
   });
 
   return (
-    <aside className="flex min-h-0 w-[280px] shrink-0 flex-col gap-4 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85 max-[1160px]:w-full max-[1160px]:max-h-[280px]">
+    <aside className="flex min-h-0 w-[280px] shrink-0 flex-col gap-4 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)] max-[1160px]:w-full max-[1160px]:max-h-[280px]">
       <div className="grid gap-3">
         <h1 className="text-lg font-semibold tracking-tight text-foreground">Maho AI Console</h1>
         <div className="flex flex-wrap gap-1.5">

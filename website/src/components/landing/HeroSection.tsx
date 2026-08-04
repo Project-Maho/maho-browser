@@ -1,12 +1,20 @@
 import { ScrollReveal } from "../motion/ScrollReveal";
 import { CtaButton } from "../marketing/CtaButton";
+import {
+  monetWallpaperClassName,
+  monetWallpaperStyle,
+} from "./feature-showcase/monetWallpaper";
 import type { OptimizedImageData } from "../../types/images";
 
 export type HeroConfig = {
   headline: string;
   subheadline: string;
   primaryCta: { label: string; href: string };
-  secondaryCta?: { label: string; href: string };
+  secondaryCta?: {
+    label: string;
+    href: string;
+    variant?: "primary" | "secondary" | "ghost" | "discord";
+  };
   heroImage?: OptimizedImageData;
   microCta?: string;
 };
@@ -25,22 +33,22 @@ export function HeroSection({ config }: HeroSectionProps) {
   return (
     <section className="section-rhythm-tall surface-noisy relative overflow-hidden bg-background text-foreground">
       <div className="pad-x-ladder w-full">
-        <div className="container-marketing grid gap-12 pt-28 sm:pt-32 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:items-center">
-          <div className="max-w-2xl space-y-6 sm:space-y-8">
+        <div className="container-marketing flex flex-col items-center gap-12 pt-28 text-center sm:pt-32">
+          <div className="flex max-w-3xl flex-col items-center gap-6 sm:gap-8">
             <ScrollReveal variant="slide">
-              <h1 className="landing-display max-w-[13ch] whitespace-pre-line">
+              <h1 className="landing-display-hero whitespace-pre-line">
                 {lines.join("\n")}
               </h1>
             </ScrollReveal>
 
             <ScrollReveal variant="slide" delayMs={70}>
-              <p className="landing-body max-w-xl text-lg text-muted-foreground sm:text-xl">
+              <p className="landing-body max-w-2xl text-lg text-muted-foreground sm:text-xl">
                 {config.subheadline}
               </p>
             </ScrollReveal>
 
             <ScrollReveal variant="slide" delayMs={120}>
-              <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="flex flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:justify-center">
                 <CtaButton variant="primary" href={config.primaryCta.href}>
                   {config.primaryCta.label}
                 </CtaButton>
@@ -61,27 +69,30 @@ export function HeroSection({ config }: HeroSectionProps) {
 
           <ScrollReveal variant="fade" className="w-full">
             {config.heroImage ? (
-              <div className="relative mx-auto w-full max-w-4xl">
+              <div className="relative mx-auto w-full max-w-6xl">
                 <div className="absolute inset-x-[10%] top-6 h-32 rounded-full bg-foreground/6 blur-3xl" aria-hidden="true" />
-                <div className="relative overflow-hidden rounded-squircle-xl border border-border/80 bg-card/80 p-2 shadow-[0_1.5rem_4rem_rgba(0,0,0,0.28)]">
-                  <div className="overflow-hidden rounded-squircle-lg border border-border/70 bg-background">
+                <div
+                  className={`relative overflow-hidden rounded-squircle-xl border border-border/80 ${monetWallpaperClassName} p-3 shadow-[0_1.5rem_4rem_rgba(0,0,0,0.28)] sm:p-5`}
+                  style={monetWallpaperStyle}
+                >
+                  <div className="relative aspect-[1440/1118] overflow-hidden rounded-squircle-lg border border-border/70">
                     <img
                       src={config.heroImage.src}
                       srcSet={config.heroImage.srcSet || undefined}
-                      sizes="(min-width: 1024px) 52vw, 100vw"
+                      sizes="(min-width: 1280px) 1152px, 100vw"
                       alt={config.heroImage.alt || "Maho Browser desktop screenshot showing a persistent sidebar, split panes, and a command workflow."}
                       width={config.heroImage.width}
                       height={config.heroImage.height}
                       loading="eager"
                       fetchPriority="high"
                       decoding="async"
-                      className="block h-auto w-full"
+                      className="absolute left-1/2 top-1/2 block h-auto w-[calc(100%*19/18)] max-w-none -translate-x-1/2 -translate-y-1/2"
                     />
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="relative aspect-[4/3] overflow-hidden rounded-squircle-xl border border-border/60 bg-[radial-gradient(circle_at_top_right,rgba(250,250,250,0.12),transparent_50%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))]" />
+              <div className="relative aspect-[16/9] w-full max-w-6xl overflow-hidden rounded-squircle-xl border border-border/60 bg-[radial-gradient(circle_at_top_right,rgba(250,250,250,0.12),transparent_50%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))]" />
             )}
           </ScrollReveal>
         </div>

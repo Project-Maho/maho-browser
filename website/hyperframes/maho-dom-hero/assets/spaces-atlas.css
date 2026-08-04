@@ -1,0 +1,104 @@
+.spaces-content--atlas {
+  padding: 60px;
+  color: var(--spaces-paper-bright);
+  background: var(--spaces-atlas-bg);
+}
+
+.spaces-atlas-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 64px;
+}
+
+.spaces-atlas-mark {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--spaces-atlas-orange);
+  border-radius: 50%;
+  color: var(--spaces-atlas-orange);
+  font: 600 18px/1 Georgia, serif;
+}
+
+.spaces-atlas-name {
+  font: 500 20px/1.1 "Geist", sans-serif;
+}
+
+.spaces-content--atlas .spaces-kicker {
+  color: var(--spaces-water-light);
+}
+
+.spaces-atlas-search {
+  margin: 20px 0 48px;
+  padding: 20px 24px;
+  border: 2px solid var(--spaces-atlas-orange);
+  border-radius: 12px;
+  color: var(--spaces-paper-bright);
+  background: rgb(255 255 255 / 3%);
+  font: 400 28px/1.2 "Instrument Serif", Georgia, serif;
+}
+
+.spaces-atlas-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.spaces-atlas-card {
+  min-height: 320px;
+  padding: 24px;
+  border: 1px solid var(--spaces-atlas-line);
+  border-radius: 14px;
+  background: var(--spaces-atlas-panel);
+}
+
+.spaces-atlas-card[data-topic="1"] { color: var(--spaces-atlas-orange); }
+.spaces-atlas-card[data-topic="2"] { color: var(--spaces-atlas-violet); }
+.spaces-atlas-card[data-topic="3"] { color: var(--spaces-atlas-green); }
+.spaces-atlas-card[data-topic="4"] { color: var(--spaces-atlas-cyan); }
+
+.spaces-atlas-card__index {
+  font: 600 11px/1 "Geist Mono", monospace;
+  letter-spacing: 0.12em;
+}
+
+.spaces-atlas-card__title {
+  margin: 76px 0 10px;
+  font: 400 27px/1 "Instrument Serif", Georgia, serif;
+}
+
+.spaces-atlas-card__value {
+  margin: 0;
+  color: var(--spaces-paper);
+  font-size: 14px;
+}
+
+.spaces-atlas-card__bars {
+  display: grid;
+  gap: 12px;
+  margin-top: 64px;
+}
+
+.spaces-atlas-card__bars i {
+  height: 5px;
+  border-radius: 4px;
+  background: currentColor;
+  opacity: 0.68;
+}
+
+.spaces-atlas-card__bars i:nth-child(2) { width: 76%; }
+.spaces-atlas-card__bars i:nth-child(3) { width: 48%; }
+
+.spaces-content--reading {
+  height: 100%;
+}
+
+.spaces-content--reading .demo-page__hero {
+  min-height: 520px;
+}
+
+.spaces-content--reading .demo-page__body {
+  padding-top: 28px;
+}

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Maho Split View</title>
+    <link rel="stylesheet" href="../shared/frame.css" />
+    <script src="../node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="../shared/frame.js"></script>
+  </head>
+  <body>
+    <div
+      id="split-view-root"
+      class="maho-frame"
+      data-composition-id="split-view"
+      data-start="0"
+      data-duration="6.668333"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+    >
+      <img
+        id="split-view-background"
+        class="clip maho-background-layer maho-background-image"
+        data-maho-background
+        data-start="0"
+        data-duration="6.668333"
+        data-track-index="0"
+        src="../assets/originals/water-lilies.jpg"
+        alt=""
+      />
+      <div class="maho-browser-camera" data-maho-camera-wrapper="split-view">
+        <div class="maho-browser-mask">
+          <video
+            id="split-view-source"
+            class="clip maho-source-video"
+            data-start="0"
+            data-duration="6.668333"
+            data-track-index="1"
+            data-media-start="0"
+            data-playback-rate="1"
+            src="../assets/originals/split-view.mov"
+            muted
+            playsinline
+          ></video>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      MahoHeroFrame.registerCameraTimeline("split-view", (camera) => {
+        camera
+          .set({ x: 0, y: 0, scale: 1, opacity: 1 }, 0)
+          .addLabel("drag-focus", 1.15)
+          .to({ x: 120, y: 0, scale: 1.04, duration: 1.55, ease: "power2.inOut" }, "drag-focus")
+          .addLabel("split-result", 4.15)
+          .to({ x: 0, y: 0, scale: 1, duration: 1.65, ease: "power2.inOut" }, "split-result");
+      });
+    </script>
+  </body>
+</html>

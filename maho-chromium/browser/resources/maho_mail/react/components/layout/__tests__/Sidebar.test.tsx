@@ -24,32 +24,46 @@ function renderSidebar(overrides: Partial<ComponentProps<typeof Sidebar>> = {}) 
 }
 
 describe("Sidebar", () => {
+  it("groups navigation into primary mailboxes, views, folders, and more", () => {
+    renderSidebar({
+      folders: [
+        createMockFolder({ id: "inbox", name: "Inbox", folder_type: "Inbox" }),
+        createMockFolder({ id: "custom", name: "Projects", folder_type: "Custom" }),
+      ],
+    });
+
+    expect(screen.getByText("Inbox")).toBeInTheDocument();
+    expect(screen.getByText("Starred")).toBeInTheDocument();
+    expect(screen.getByText("Snoozed")).toBeInTheDocument();
+    expect(screen.getByText("Views")).toBeInTheDocument();
+    expect(screen.getAllByText("Folders").length).toBeGreaterThan(0);
+    expect(screen.getByText("More")).toBeInTheDocument();
+    expect(screen.getByText("Calendar")).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
   });
 
-  it("renders the redesigned shell with Folders and Recents sections", () => {
+  it("renders the redesigned shell with Views, Folders, and More sections", () => {
     renderSidebar({ updateAvailable: true, updateVersion: "1.2.0" });
 
     // Section headers
-    expect(screen.getByText("Folders")).toBeInTheDocument();
-    expect(screen.getByText("Recents")).toBeInTheDocument();
+    expect(screen.getByText("Views")).toBeInTheDocument();
+    expect(screen.getByText("More")).toBeInTheDocument();
 
     // Folders section items
     expect(screen.getByText("Archive")).toBeInTheDocument();
-    expect(screen.getByText("Snoozed")).toBeInTheDocument();
-    expect(screen.getByText("More")).toBeInTheDocument();
-
-    // Recents section items
-    expect(screen.getByText("Reminders")).toBeInTheDocument();
+    expect(screen.getByText("Trash")).toBeInTheDocument();
     expect(screen.getByText("Spam")).toBeInTheDocument();
 
-    // Clear action in Recents header
-    expect(screen.getByText("Clear")).toBeInTheDocument();
+    expect(screen.getByText("Pins")).toBeInTheDocument();
+    expect(screen.getByText("Reminders")).toBeInTheDocument();
+    expect(screen.getByText("Calendar")).toBeInTheDocument();
 
     // Footer items
-    expect(screen.getByText("Update available")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).not.toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
@@ -167,10 +181,10 @@ describe("Sidebar", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
-  it("keeps More as a normal list item in expanded mode", () => {
+  it("uses More as a section rather than an inert list item", () => {
     renderSidebar();
 
-    const moreLabel = screen.getByText("More");
+    const moreLabel = screen.getByRole("heading", { name: "More" });
     const moreButton = screen.queryByRole("button", { name: "More" });
 
     expect(moreLabel).toBeInTheDocument();
@@ -198,24 +212,21 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("button", { name: "Expand sidebar" })).not.toBeInTheDocument();
   });
 
-  it("renders Folders section items as clickable rows", () => {
+  it("renders More section items as clickable rows", () => {
     renderSidebar();
 
-    // Archive and Snoozed should be clickable buttons
     expect(screen.getByRole("button", { name: /archive/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /snoozed/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /trash/i })).toBeInTheDocument();
   });
 
-  it("renders Recents section with Clear action in header", () => {
+  it("renders Views section with contextual destinations", () => {
     renderSidebar();
 
-    // Recents section header with Clear
-    expect(screen.getByText("Recents")).toBeInTheDocument();
-    expect(screen.getByText("Clear")).toBeInTheDocument();
+    expect(screen.getByText("Views")).toBeInTheDocument();
 
-    // Recents items
+    expect(screen.getByText("Pins")).toBeInTheDocument();
     expect(screen.getByText("Reminders")).toBeInTheDocument();
-    expect(screen.getByText("Spam")).toBeInTheDocument();
+    expect(screen.getByText("Calendar")).toBeInTheDocument();
   });
 
   it("keeps aggregate parent selection separate from child folder selection", async () => {
@@ -263,10 +274,8 @@ describe("Sidebar", () => {
       updateVersion: "2.0.0",
     });
 
-    // Update available row visible and clickable
-    expect(screen.getByText("Update available")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Update available"));
-    expect(onUpdateClick).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Update available")).not.toBeInTheDocument();
+    expect(onUpdateClick).not.toHaveBeenCalled();
 
     // Settings row visible and clickable
     expect(screen.getByText("Settings")).toBeInTheDocument();
@@ -286,7 +295,7 @@ describe("Sidebar", () => {
 
     expect(screen.queryByText("Folders")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
-    expect(screen.getByTitle("More")).toBeInTheDocument();
+    expect(screen.getByTitle("Archive")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Expand sidebar" })).not.toBeInTheDocument();
   });
 
@@ -301,7 +310,7 @@ describe("Sidebar", () => {
 
     renderSidebar({ accounts: [gmailAcc, outlookAcc], folders });
 
-    expect(screen.getAllByText("Custom Folders")).toHaveLength(2);
+    expect(screen.getByText("Custom Folders")).toBeInTheDocument();
     expect(screen.queryByLabelText("Expand user@gmail.com folders")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Expand user@outlook.com folders")).not.toBeInTheDocument();
 
@@ -344,7 +353,7 @@ describe("Sidebar", () => {
     
     renderSidebar({ accounts: [account], folders });
 
-    expect(screen.getAllByText("Custom Folders")).toHaveLength(2);
+    expect(screen.getByText("Custom Folders")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand Custom Folders section" })).toBeInTheDocument();
   });
 
@@ -372,16 +381,15 @@ describe("Sidebar", () => {
     renderSidebar({ collapsed: true, onToggleCollapsed: vi.fn() });
 
     expect(screen.getAllByTitle("Settings")).toHaveLength(1);
-    expect(screen.getAllByTitle("More")).toHaveLength(1);
+    expect(screen.getAllByTitle("Archive")).toHaveLength(1);
     expect(screen.getByTitle("Expand sidebar")).toBeInTheDocument();
   });
 
-  it("shows online network status in expanded mode", () => {
+  it("does not show a generic online status in expanded mode", () => {
     renderSidebar({ isOnline: true });
 
-    const status = screen.getByRole("status", { name: "Network online" });
-    expect(status).toBeInTheDocument();
-    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Network online" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Online")).not.toBeInTheDocument();
   });
 
   it("shows offline network status in expanded mode", () => {
@@ -392,11 +400,10 @@ describe("Sidebar", () => {
     expect(screen.getByText("Offline")).toBeInTheDocument();
   });
 
-  it("shows network status indicator in collapsed mode", () => {
+  it("does not show a generic online indicator in collapsed mode", () => {
     renderSidebar({ collapsed: true, isOnline: true });
 
-    const status = screen.getByRole("status", { name: "Network online" });
-    expect(status).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Network online" })).not.toBeInTheDocument();
   });
 
   it("shows offline network status in collapsed mode", () => {

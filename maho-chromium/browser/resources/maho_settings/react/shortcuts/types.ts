@@ -38,7 +38,7 @@ export type ShortcutActionId =
   | 'view_source'
   | 'print_page'
   | 'settings'
-  | 'little_arc'
+  | 'maho_mini'
   | 'next_space'
   | 'prev_space'
   | 'select_space_1'

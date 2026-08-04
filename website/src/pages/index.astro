@@ -5,64 +5,21 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import SocialProofSection from '../components/landing/SocialProofSection.astro';
+import FeatureGridSection from '../components/landing/FeatureGridSection.astro';
+import ProtectionFeaturesSection from '../components/landing/ProtectionFeaturesSection.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
 import { getSiteUrl } from '../lib/site';
-import { getImage } from 'astro:assets';
 
 import { landingContent } from '../components/LandingPage';
-import { HeroSection } from '../components/landing/HeroSection';
-import { FeaturesSection } from '../components/landing/FeaturesSection';
+import BrowserHeroSection from '../components/landing/feature-showcase/BrowserHeroSection.astro';
 import { ImportSection } from '../components/landing/ImportSection';
 import { ChangelogSection } from '../components/landing/ChangelogSection';
 import { PricingSection } from '../components/landing/PricingSection';
 import { FinalCtaSection } from '../components/landing/FinalCtaSection';
 
-import spacesImageSrc from '../assets/images/sidebar-target-prototype-verified.png';
-const heroImageSrc = spacesImageSrc;
-
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 const browserContent = landingContent.browser;
-
-const heroOptimized = await getImage({
-  src: heroImageSrc,
-  format: 'webp',
-  widths: [720, 1080, 1440, 1800],
-  sizes: '(min-width: 1024px) 52vw, 100vw',
-});
-
-const spacesOptimized = await getImage({
-  src: spacesImageSrc,
-  format: 'webp',
-  widths: [720, 1080, 1440],
-  sizes: '(min-width: 1024px) 50vw, 100vw',
-});
-
-const heroImage = {
-  src: heroOptimized.src,
-  srcSet: heroOptimized.srcSet.attribute,
-  width: heroImageSrc.width,
-  height: heroImageSrc.height,
-  alt: 'Maho Browser screenshot showing the persistent sidebar, active Spaces, and browser content that feels complete rather than placeholder chrome.',
-};
-
-const browserFeatures = browserContent.features.items.map((item) => {
-  if (item.title === 'Spaces' && item.visual?.type === 'image') {
-    return {
-      ...item,
-      visual: {
-        ...item.visual,
-        image: {
-          src: spacesOptimized.src,
-          srcSet: spacesOptimized.srcSet.attribute,
-          width: spacesImageSrc.width,
-          height: spacesImageSrc.height,
-        },
-      },
-    };
-  }
-  return item;
-});
 
 const ld = {
   '@context': 'https://schema.org',
@@ -97,7 +54,7 @@ const ld = {
       name: 'Maho Browser',
       applicationCategory: 'BrowserApplication',
       operatingSystem: 'macOS, Windows, Linux',
-      description: 'Browser with Spaces, split view, a command bar, optional AI, and weekly public releases. Free forever.',
+      description: 'Browser with Spaces, split view, a command bar, optional Profiles, privacy by default, and AI only when asked.',
       offers: {
         '@type': 'Offer',
         price: '0',
@@ -108,13 +65,15 @@ const ld = {
 };
 ---
 
-<BaseLayout title="Maho Browser — Built for people who took browsers seriously" description="Maho Browser brings back the tools you liked: Spaces, split view, command bar, optional AI, and weekly releases on a stack that keeps shipping." ogImage="/og/home.png">
+<BaseLayout title="Maho Browser — The browser tools you liked, still shipping" description="Maho Browser brings back the tools you liked: Spaces, split view, command bar, optional Profiles, privacy by default, and AI only when asked." ogImage="/og/home.png">
+  <link slot="head" rel="preload" as="image" href="/demo/hero/maho-hero-capture-poster.png" type="image/png" fetchpriority="high" />
   <JSONLD data={ld} />
   <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="browser" />
-    <HeroSection config={{ ...browserContent.hero, heroImage }} />
+    <BrowserHeroSection config={browserContent.hero} />
     <SocialProofSection tickerItems={browserContent.socialProof.tickerItems} eyebrow={browserContent.socialProof.eyebrow} />
-    <FeaturesSection eyebrow={browserContent.features.eyebrow} headline={browserContent.features.headline} items={browserFeatures} />
+    <FeatureGridSection config={browserContent.featureGrid} />
+    <ProtectionFeaturesSection config={browserContent.protectionFeatures} />
     <ImportSection config={browserContent.importSection} />
     <ChangelogSection config={browserContent.changelog} />
     <PricingSection config={browserContent.pricing} />

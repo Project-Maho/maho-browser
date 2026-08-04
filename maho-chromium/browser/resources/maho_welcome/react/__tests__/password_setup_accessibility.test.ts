@@ -10,19 +10,19 @@ import {TOTAL_PAGES, WelcomePage} from '../types.js';
 const REACT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('PasswordSetup isolated frontend contract', () => {
-  it('is page 7 with six contiguous progress steps and no Completion progress', () => {
+  it('is page 7 followed by SyncKeyBackup, with six user-facing progress steps (ImportProgress excluded)', () => {
     const source = readFileSync(path.join(REACT_DIR, 'app.tsx'), 'utf8');
 
     expect(WelcomePage.PasswordSetup).toBe(7);
-    expect(WelcomePage.Completion).toBe(8);
-    expect(TOTAL_PAGES).toBe(9);
-    expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.Completion);
-    expect(WelcomePage.PasswordSetup - WelcomePage.Appearance + 1).toBe(6);
-    expect(WelcomePage.PasswordSetup - WelcomePage.Appearance).toBe(5);
-    expect(source).toContain(
-        'const WIZARD_STEPS = WelcomePage.PasswordSetup - WelcomePage.Appearance + 1;');
-    expect(source).toContain(
-        'const currentStep = pageForRender - WelcomePage.Appearance;');
+    expect(WelcomePage.SyncKeyBackup).toBe(8);
+    expect(WelcomePage.Completion).toBe(9);
+    expect(TOTAL_PAGES).toBe(10);
+    expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.SyncKeyBackup);
+    expect(WelcomePage.SyncKeyBackup + 1).toBe(WelcomePage.Completion);
+    expect(source).toContain('const WIZARD_STEP_PAGES: readonly WelcomePage[] = [');
+    expect(source).toContain('const WIZARD_STEPS = WIZARD_STEP_PAGES.length;');
+    expect(source).toContain('const currentStep = WIZARD_STEP_PAGES.indexOf(stepIndicatorPage);');
+    expect(source).not.toContain('WelcomePage.ImportProgress,\n  WelcomePage.SearchEngine');
     expect(source).toContain(
         'aria-label={`Setup progress: step ${current + 1} of ${total}`}');
     expect(source).toContain('{!hideSidebarChrome && !isCompletionPage && (');
@@ -31,12 +31,12 @@ describe('PasswordSetup isolated frontend contract', () => {
     expect(source).toContain("aria-current={i === current ? 'step' : undefined}");
   });
 
-  it('blocks PasswordSetup generic keyboard, Skip, and footer navigation', () => {
+  it('blocks PasswordSetup and SyncKeyBackup generic keyboard, Skip, and footer navigation', () => {
     const source = readFileSync(path.join(REACT_DIR, 'app.tsx'), 'utf8');
 
-    expect(source).toContain(
-        'if (state.currentPage === WelcomePage.PasswordSetup) return;');
-    expect(source).toContain('!isPasswordSetupPage && !isCompletionPage');
+    expect(source).toContain('state.currentPage === WelcomePage.PasswordSetup ||');
+    expect(source).toContain('state.currentPage === WelcomePage.SyncKeyBackup) return;');
+    expect(source).toContain('!isPasswordSetupPage && !isSyncKeyBackupPage && !isCompletionPage');
     expect(source).toContain('{!isPasswordSetupPage ? (');
   });
 
@@ -55,11 +55,7 @@ describe('PasswordSetup isolated frontend contract', () => {
         'className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 pb-4"');
     expect(pageSource).toContain(
         'className="shrink-0 border-t border-border pt-4"');
-    expect(fieldsSource.match(
-        /<CardDescription className="text-pretty text-xs leading-5">/g))
-      .toHaveLength(2);
-    expect(fieldsSource).toContain(
-        'aria-describedby={selectedOption ? PROVIDER_DESCRIPTION_ID : undefined}');
-    expect(fieldsSource.match(/<h2\b/g)).toHaveLength(2);
+    expect(fieldsSource).toContain('role="radiogroup" aria-label="Select password manager provider"');
+    expect(fieldsSource.match(/<h2\b/g)).toHaveLength(3);
   });
 });

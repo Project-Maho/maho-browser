@@ -101,7 +101,6 @@ import { CalendarEventDetail } from "./components/calendar/CalendarEventDetail";
 import { RecurringScopeDialog } from "./components/calendar/RecurringScopeDialog";
 import { CreateEventDialog } from "./components/calendar/CreateEventDialog";
 import { CalendarGrid } from "./components/calendar/CalendarGrid";
-import { AgentPanel } from "./components/agent/AgentPanel";
 import { CommandPalette } from "./components/ui/CommandPalette";
 import type { PaletteCommand } from "./hooks/useCommandRegistry";
 import { cn } from "./lib/utils";
@@ -160,7 +159,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const [pendingSend, setPendingSend] = useState<ComposeEmailRequest | null>(null);
   const [smartCategory, setSmartCategory] = useState<SmartCategory>("personal");
   const { isOnline, pendingMutationCount, connectionStatus } = useNetworkStatus();
-  const [showAgent, setShowAgent] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [recurringPrompt, setRecurringPrompt] = useState<{ event: CalendarEvent; mode: "edit" | "delete" } | null>(null);
   const [showCreateEvent, setShowCreateEvent] = useState(false);
@@ -335,11 +333,24 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   };
 
   const openSettingsPanel = (aiTab?: "agent" | "translation") => {
-    let pane = "mail-behavior";
-    if (aiTab === "agent" || aiTab === "translation") {
-      pane = "mail-ai";
+    const pane = aiTab === "agent" || aiTab === "translation"
+      ? "mail-ai"
+      : "mail-accounts";
+    window.location.href = `chrome://maho-settings?pane=${pane}`;
+  };
+
+  const reconnectSelectedAccount = () => {
+    const failedEmail = mail.emails.find(
+      (email) => email.id === mail.authRecoveryError?.emailId,
+    );
+    const accountId = failedEmail?.account_id ?? mail.selectedAccountId;
+    if (!accountId) {
+      setShowAddAccount(true);
+      return;
     }
-    window.open(`chrome://maho-settings?pane=${pane}`);
+    void api.reconnectAccount(accountId).catch(() => {
+      setShowAddAccount(true);
+    });
   };
 
   const openDraftForEditing = async (emailId: string) => {
@@ -1156,7 +1167,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
 
       <nav
         style={{ width: desktopSidebarWidth }}
-        className="hidden md:block flex-shrink-0 transition-[width] duration-200 ease-out"
+        className="mail-navigation hidden flex-shrink-0 transition-[width] duration-200 ease-out md:block"
         aria-label={t("a11y.mailNavigation")}
       >
         {sidebarContent}
@@ -1167,7 +1178,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           type="button"
           aria-label={t("a11y.resizeSidebar")}
           className={cn(
-            "hidden w-1 cursor-col-resize transition-colors md:block",
+            "mail-resize-handle hidden w-1 cursor-col-resize transition-colors md:block",
             settings.isResizing ? "bg-primary/50" : "bg-transparent hover:bg-primary/30",
           )}
           onMouseDown={settings.handleResizeMouseDown}
@@ -1180,12 +1191,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       <div className="flex min-w-0 flex-1 flex-col">
         {authBanner}
 
-        <div className="flex min-h-0 flex-1">
+        <div className="mail-workspace flex min-h-0 flex-1">
           {syntheticView === "calendar" ? null : (
             <section
               data-email-list-pane
               aria-label={t("a11y.emailList")}
-              className="hidden md:flex w-full flex-shrink-0"
+              className="mail-list-pane hidden w-full flex-shrink-0 md:flex"
               style={{ width: `min(100%, ${settings.emailListWidth}px)` }}
             >
               <EmailList
@@ -1206,11 +1217,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                 smartCategory={syntheticView === "smart_inbox" ? smartCategory : null}
                 onSmartCategoryChange={syntheticView === "smart_inbox" ? (cat) => void handleSmartCategoryChange(cat) : undefined}
                 density={density}
+                mailboxTitle={syntheticView ? syntheticView.replaceAll("_", " ") : mail.selectedFolderType ?? "Inbox"}
                 onCompose={openCompose}
-                onOpenAgent={() => setShowAgent(true)}
                 onSync={handleManualSync}
                 composeDisabled={composeOpen}
                 syncBusy={mail.loading || syncing}
+                syncError={mail.error}
                 enqueueRetry={enqueueRetry}
               />
             </section>
@@ -1221,7 +1233,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
               type="button"
               aria-label={t("a11y.resizeEmailList")}
               className={cn(
-                "hidden w-1 cursor-col-resize transition-colors md:block",
+                "mail-resize-handle hidden w-1 cursor-col-resize transition-colors md:block",
                 settings.isEmailListResizing
                   ? "bg-primary/50"
                   : "bg-transparent hover:bg-primary/30",
@@ -1233,7 +1245,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
             />
           )}
 
-          <main id="main-content" tabIndex={-1} className="flex flex-1">
+          <main id="main-content" tabIndex={-1} className="mail-reader-pane flex min-w-0 flex-1">
             {syntheticView === "calendar" ? (
               <div className="flex w-full">
                 <CalendarGrid
@@ -1252,6 +1264,16 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
               <EmailContent
                 emailDetail={mail.selectedEmail}
                 loading={mail.emailLoading}
+                authRecoveryError={mail.authRecoveryError ? {
+                  ...mail.authRecoveryError,
+                  accountEmail: mail.accounts.find((account) => {
+                    const failedEmail = mail.emails.find(
+                      (email) => email.id === mail.authRecoveryError?.emailId,
+                    );
+                    return account.id === failedEmail?.account_id;
+                  })?.email,
+                } : null}
+                onReconnectAccount={reconnectSelectedAccount}
                 onReply={(id) => void handleReply(id)}
                 onForward={(id) => void handleForward(id)}
                 onDelete={handleDeleteEmail}
@@ -1312,13 +1334,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         />
       )}
       <OnboardingTour />
-      {showAgent && (
-        <AgentPanel
-          accountId={mail.selectedAccountId ?? mail.accounts[0]?.id ?? ""}
-          onClose={() => setShowAgent(false)}
-          onOpenSettings={() => openSettingsPanel("agent")}
-        />
-      )}
       <CreateEventDialog
         isOpen={showCreateEvent}
         onClose={() => {

@@ -17,6 +17,10 @@ import {
   getEventText,
   TimelineEntry,
 } from '../types.js';
+import {
+  getCredentialErrorPresentation,
+  type CredentialErrorPresentation,
+} from './credential_error.js';
 
 type ConversationTone = 'neutral'|'accent'|'success'|'warning'|'danger';
 
@@ -39,6 +43,7 @@ export interface ConversationItem {
     toolName?: string;
   };
   chips?: ConversationChip[];
+  credentialError?: CredentialErrorPresentation;
   kind?: 'activity'|'approval'|'thinking';
   key: string;
   markdown: boolean;
@@ -318,17 +323,21 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
   };
 
   const splitAssistantState = () => {
-    if (replaceableAssistantIndex === null) {
-      return;
+    if (replaceableAssistantIndex !== null) {
+      committedAssistantLength = assistantText.length;
+      replaceableAssistantIndex = null;
+      replaceableAssistantKey = null;
     }
-    committedAssistantLength = assistantText.length;
-    replaceableAssistantIndex = null;
-    replaceableAssistantKey = null;
+    replaceableThinkingIndex = null;
+    replaceableThinkingKey = null;
+    thinkingText = '';
   };
 
   for (const [index, entry] of entries.entries()) {
     const {event} = entry;
-    const text = getEventText(event).trim();
+    const credentialError = getCredentialErrorPresentation(event);
+    const rawText = credentialError ? '' : getEventText(event);
+    const text = rawText.trim();
     const key = createEventKey(entry, index);
 
       switch (event.kind) {
@@ -378,28 +387,28 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         break;
       }
       case RuntimeEventKind.kAssistantThinking:
-        if (!text) {
+        if (!rawText.trim()) {
           break;
         }
         if (replaceableThinkingIndex === null) {
           replaceableThinkingIndex = items.length;
           replaceableThinkingKey = key;
-          thinkingText = text;
+          thinkingText = rawText;
           items.push({
             kind: 'thinking',
             key: replaceableThinkingKey,
-            markdown: false,
+            markdown: true,
             role: 'system',
             text: thinkingText,
             timestamp: event.timestamp,
           });
           break;
         }
-        thinkingText += text;
+        thinkingText += rawText;
         items[replaceableThinkingIndex] = {
           kind: 'thinking',
           key: replaceableThinkingKey!,
-          markdown: false,
+          markdown: true,
           role: 'system',
           text: thinkingText,
           timestamp: event.timestamp,
@@ -589,6 +598,18 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         break;
       case RuntimeEventKind.kError:
         splitAssistantState();
+        if (credentialError) {
+          items.push({
+            credentialError,
+            key,
+            markdown: false,
+            role: 'system',
+            text: credentialError.title,
+            timestamp: event.timestamp,
+            tone: 'danger',
+          });
+          break;
+        }
         items.push({
           kind: 'activity',
           key,

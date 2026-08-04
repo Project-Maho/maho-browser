@@ -24,11 +24,13 @@ export enum WelcomePage {
   ImportProgress = 4,
   SearchEngine = 5,
   Essentials = 6,
-  PasswordSetup = 7,
-  Completion = 8,
+  AIProvider = 7,
+  PasswordSetup = 8,
+  SyncKeyBackup = 9,
+  Completion = 10,
 }
 
-export const TOTAL_PAGES = 9;
+export const TOTAL_PAGES = 11;
 export const PASSWORD_PROVIDER_KIND = {
   MahoNative: 0,
   Bitwarden: 1,
@@ -80,6 +82,16 @@ export interface PasswordSetupState {
   readonly providerOptions: readonly PasswordProviderOption[];
   readonly providerStatus: PasswordProviderStatus | null;
   readonly vaultStatus: VaultStatus | null;
+  readonly passwordManagerSkipped: boolean;
+}
+
+export interface SyncKeyBackupState {
+  readonly status: 'idle' | 'generating' | 'ready' | 'saving' | 'saved' | 'starting' | 'error';
+  readonly errorMessage: string;
+  readonly recoveryPhrase: string | null;
+  readonly roomId: string | null;
+  readonly syncKey: string | null;
+  readonly savedToFile: boolean;
 }
 
 export function orderProviderOptions(
@@ -94,6 +106,13 @@ export function getProviderHelperText(
   return option.isAvailable
     ? option.description
     : `${option.description} ${unavailableHelperText}`;
+}
+
+export interface AiSetupState {
+  readonly provider: 'maho-managed' | 'byok' | '';
+  readonly status: 'idle' | 'submitting' | 'success' | 'error';
+  readonly errorMessage: string;
+  readonly skipped: boolean;
 }
 
 export interface WelcomeState {
@@ -115,7 +134,9 @@ export interface WelcomeState {
   readonly selectedEssentials: ReadonlySet<string>;
 
   readonly auth: AuthState;
+  readonly aiSetup: AiSetupState;
   readonly passwordSetup: PasswordSetupState;
+  readonly syncKeyBackup: SyncKeyBackupState;
 
   readonly selectedTheme: string | null;
   readonly localizedStrings: ReadonlyMap<string, string>;
@@ -147,15 +168,38 @@ export function createInitialState(): WelcomeState {
       isReauthMode: false,
       hasStoredSession: false,
     },
+    aiSetup: {
+      provider: '',
+      status: 'idle',
+      errorMessage: '',
+      skipped: false,
+    },
     passwordSetup: {
       status: 'loading',
       errorMessage: '',
       providerOptions: [],
       providerStatus: null,
       vaultStatus: null,
+      passwordManagerSkipped: false,
+    },
+    syncKeyBackup: {
+      status: 'idle',
+      errorMessage: '',
+      recoveryPhrase: null,
+      roomId: null,
+      syncKey: null,
+      savedToFile: false,
     },
     selectedTheme: null,
-    localizedStrings: new Map(),
+    localizedStrings: new Map([
+      ['IDS_MAHO_WELCOME_SYNC_BACKUP_TITLE', 'Back up your sync recovery key'],
+      ['IDS_MAHO_WELCOME_SYNC_BACKUP_BODY', 'Save your recovery phrase to a local file. You need this phrase to access your encrypted sync data on another device.'],
+      ['IDS_MAHO_WELCOME_SYNC_BACKUP_START_SYNC', 'Start syncing'],
+      ['IDS_MAHO_WELCOME_SYNC_BACKUP_SAVE_FILE', 'Save file'],
+      ['IDS_MAHO_WELCOME_SYNC_BACKUP_FAIL_RETRY', 'Download failed. Please try saving your sync key again.'],
+      ['IDS_MAHO_WELCOME_NO_PASSWORD_MANAGER', 'No password manager'],
+      ['IDS_MAHO_WELCOME_LOCAL_VAULT_EXPLANATION', 'Local Vault keeps your passwords securely encrypted on this device.'],
+    ]),
     isLocalDev: false,
   };
 }

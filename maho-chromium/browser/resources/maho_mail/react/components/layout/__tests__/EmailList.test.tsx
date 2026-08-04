@@ -196,6 +196,46 @@ describe("EmailList", () => {
     });
   });
 
+  it("does not expose a Mail-specific Agent action", async () => {
+    render(
+      <EmailList
+        emails={[]}
+        selectedEmailId={null}
+        onSelectEmail={vi.fn()}
+        onToggleStar={vi.fn()}
+        onCompose={vi.fn()}
+        onSync={vi.fn()}
+        loading={false}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /agent/i })).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/agent/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it("presents mailbox context and Compose as the primary action", async () => {
+    render(
+      <EmailList
+        emails={[]}
+        selectedEmailId={null}
+        onSelectEmail={vi.fn()}
+        onToggleStar={vi.fn()}
+        onCompose={vi.fn()}
+        onSync={vi.fn()}
+        mailboxTitle="Inbox"
+        loading={false}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /compose/i })).toHaveTextContent(/compose/i);
+    expect(screen.getByRole("button", { name: /ask about mail/i })).toBeInTheDocument();
+  });
+
   it("shows search filter button", async () => {
     render(
       <EmailList
@@ -574,6 +614,27 @@ describe("EmailList", () => {
     await waitFor(() => {
       expect(screen.getByText("All caught up")).toBeInTheDocument();
     });
+  });
+
+  it("shows a retryable sync error instead of all caught up", () => {
+    const onSync = vi.fn();
+    render(
+      <EmailList
+        emails={[]}
+        selectedEmailId={null}
+        onSelectEmail={vi.fn()}
+        onToggleStar={vi.fn()}
+        loading={false}
+        syncError="Failed to sync Gmail inbox"
+        onSync={onSync}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to sync Gmail inbox");
+    expect(screen.queryByText("All caught up")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onSync).toHaveBeenCalledTimes(1);
   });
 
   it("shows loading skeleton when loading and no emails", async () => {

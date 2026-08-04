@@ -10,6 +10,7 @@ import { Textarea } from '@ui/textarea';
 
 interface ComposerTextareaProps {
   className?: string;
+  focusRequest: number;
   onPasteFiles?: (files: File[]) => void;
   onSubmit: () => void;
   onValueChange: (value: string) => void;
@@ -22,6 +23,7 @@ interface ComposerTextareaProps {
 export function ComposerTextarea(
     {
       className,
+      focusRequest,
       onPasteFiles,
       onSubmit,
       onValueChange,
@@ -31,9 +33,19 @@ export function ComposerTextarea(
       value,
     }: ComposerTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastFocusRequestRef = useRef(focusRequest);
   const compositionActiveRef = useRef(false);
   const pendingSnapshotRef = useRef<EditableSnapshot | null>(null);
   const pendingValueRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (lastFocusRequestRef.current === focusRequest) {
+      return;
+    }
+
+    lastFocusRequestRef.current = focusRequest;
+    textareaRef.current?.focus({preventScroll: true});
+  }, [focusRequest]);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;

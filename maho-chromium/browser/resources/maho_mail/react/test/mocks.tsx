@@ -79,6 +79,7 @@ export function createMockAttachment(overrides: Partial<Attachment> = {}):
     Attachment {
   return {
     id: 'attachment-1',
+    part_id: '2',
     email_id: 'email-1',
     filename: 'document.pdf',
     mime_type: 'application/pdf',

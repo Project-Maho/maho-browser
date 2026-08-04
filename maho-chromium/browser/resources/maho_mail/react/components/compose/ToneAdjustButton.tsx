@@ -92,14 +92,14 @@ export function ToneAdjustButton({
         onClick={() => setIsOpen(!isOpen)}
         disabled={loading}
         className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-        aria-label="Adjust Tone"
+        aria-label="Rewrite message"
       >
         {loading ? (
           <Loader2 size={14} className="animate-spin text-primary" />
         ) : (
           <Sparkles size={14} className="text-primary" />
         )}
-        <span>Adjust Tone</span>
+        <span>Rewrite</span>
         <ChevronDown size={12} className="opacity-60" />
       </button>
 
@@ -123,7 +123,7 @@ export function ToneAdjustButton({
           type="button"
           onClick={handleUndo}
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card/50 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Undo Tone Adjustment"
+          title="Undo rewrite"
           aria-label="Undo Tone"
         >
           <Undo2 size={14} />

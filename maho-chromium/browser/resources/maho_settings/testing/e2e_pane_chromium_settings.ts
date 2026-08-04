@@ -5,7 +5,9 @@ import {
   step,
   getSettingsWs,
   checkRelayOrExit,
+  clickElementByText,
   reportResultsAndExit,
+  waitForPageTargetUrl,
   CDP_URL_ROOT,
 } from "./cdp_harness";
 
@@ -16,30 +18,45 @@ async function main() {
   const cdp = new CDP(ws);
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
-  await new Promise((r) => setTimeout(r, 500));
 
-  step("Chromium Settings Embed Pane Verification");
-  await cdp.navigate(`${CDP_URL_ROOT}chromium-settings`, 4500);
+  step("Chromium Settings Host Surface Verification");
+  await cdp.navigate(`${CDP_URL_ROOT}chromium-settings`);
 
   const state = await cdp.eval<{
-    iframeSrc: string | null;
     hasBackBtn: boolean;
     hasHeader: boolean;
+    hasOpenAction: boolean;
+    iframeCount: number;
+    limitation: boolean;
   }>(`(function(){
-    var iframe = document.querySelector('iframe');
-    var iframeSrc = iframe ? iframe.src : null;
     var btns = Array.from(document.querySelectorAll('button')).map(function(b){return b.textContent.trim();});
-    var hasBackBtn = btns.some(function(t){return /Back to Maho settings|Back/i.test(t);});
-    var hasHeader = /Chromium settings/i.test(document.body.textContent || '');
-    return {iframeSrc: iframeSrc, hasBackBtn: hasBackBtn, hasHeader: hasHeader};
+    return {
+      hasBackBtn: btns.some(function(t){return /Back to Maho settings|Back/i.test(t);}),
+      hasHeader: /Current browser profile settings/i.test(document.body.textContent || ''),
+      hasOpenAction: btns.includes('Open Chromium settings'),
+      iframeCount: document.querySelectorAll('iframe').length,
+      limitation: !!document.querySelector('[data-selected-profile-limitation="true"]'),
+    };
   })()`);
 
-  assert(state!.hasHeader === true, "Chromium settings pane header rendered");
-  assert(
-    typeof state!.iframeSrc === "string" && state!.iframeSrc.startsWith("chrome://settings"),
-    `iframe src points at chrome://settings (got ${state!.iframeSrc})`,
+  assert(state?.hasHeader === true, "Host-profile Chromium settings surface rendered");
+  assert(state?.hasOpenAction === true, "Typed Chromium settings action rendered");
+  assert(state?.iframeCount === 0, "Unsupported chrome://settings iframe is absent");
+  assert(state?.limitation === false, "Host profile is not shown the non-host limitation");
+  assert(state?.hasBackBtn === true, "'Back to Maho settings' button present");
+
+  const settingsTarget = await waitForPageTargetUrl(
+    "chrome://settings",
+    async () => {
+      const clicked = await clickElementByText(cdp, "button", "Open Chromium settings");
+      if (!clicked) throw new Error("Open Chromium settings action was not clickable");
+    },
+    10_000,
   );
-  assert(state!.hasBackBtn === true, "'Back to Maho settings' button present");
+  assert(
+    settingsTarget.type === "page" && settingsTarget.url.startsWith("chrome://settings"),
+    `browser-owned Chromium settings page opened (got ${settingsTarget.type} ${settingsTarget.url})`,
+  );
 
   ws.close();
   reportResultsAndExit();

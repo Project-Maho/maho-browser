@@ -11,10 +11,10 @@ import {MailSignaturesPane} from './mail_signatures.js';
 import {MailRulesPane} from './mail_rules.js';
 import {MailCalendarPane} from './mail_calendar.js';
 import {MailBehaviorPane} from './mail_behavior.js';
-import {MailAiPane} from './mail_ai.js';
 import {MailSecurityPane} from './mail_security.js';
 import {AiDevelopersPane} from './ai_developers.js';
 import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
+import {ProfilesEditor} from './profiles_editor.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {Input} from '@ui/input';
 import {
@@ -25,9 +25,12 @@ import {
   SelectValue,
 } from '@ui/select';
 import {Switch} from '@ui/switch';
-import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2} from '@icons/lucide';
+import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2, Zap, Puzzle, ShieldOff} from '@icons/lucide';
 import {cn} from '@lib/utils';
+import {SETTING_METADATA} from '../schema/setting_schema.js';
+import {PRIVACY_SETTING_KEYS} from '../schema/panes.js';
 import type {AccountStatus, BillingInfo, PageHandlerRemote} from '../maho_settings.mojom-webui.js';
+import {scopeApplicabilityLabel} from '../models.js';
 import type {
   AISettings,
   ATCRule,
@@ -35,7 +38,6 @@ import type {
   AutofillPayment,
   ContentBlockerStats,
   FilterListInfo,
-  ProfileInfo,
   SettingValue,
   SpaceBasicInfo,
   SyncDeviceInfo,
@@ -244,7 +246,14 @@ export function PaneShell({pane, children}: PaneShellProps) {
       data-pane={pane.key}
       id={`section-${pane.key}`}
     >
-      <h2 className="mb-6 text-2xl font-semibold tracking-tight">{pane.title}</h2>
+      <div className="mb-6 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="text-2xl font-semibold tracking-tight">{pane.title}</h2>
+        {scopeApplicabilityLabel(pane.scope) ? (
+          <span className="text-xs font-medium text-muted-foreground">
+            {scopeApplicabilityLabel(pane.scope)}
+          </span>
+        ) : null}
+      </div>
       {children}
     </section>
   );
@@ -270,12 +279,14 @@ export function SectionCard({title, description, action, children, className, pa
         </div>
         {action || null}
       </div>
-      <div className="overflow-hidden rounded-xl border border-border/60 glass">
-        {headerBanner || null}
-        <div className={cn(padded ? "p-6" : "[&>section:first-child]:border-t-0")}>
-          {children}
+      {(headerBanner || children) ? (
+        <div className="overflow-hidden rounded-xl border border-border/60 glass">
+          {headerBanner || null}
+          <div className={cn(padded ? "p-6" : "[&>section:first-child]:border-t-0")}>
+            {children}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -291,8 +302,6 @@ export function DomainPaneContent(
       return <AccountPane pane={pane} store={store} />;
     case 'profiles':
       return <ProfilesPane pane={pane} store={store} />;
-    case 'sync':
-      return <SyncPane pane={pane} store={store} />;
     case 'passwords':
       return <PasswordsPane pane={pane} settings={settings} store={store} />;
     case 'saved-passwords':
@@ -310,7 +319,7 @@ export function DomainPaneContent(
     case 'billing':
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
-      return <ContentBlockerPane pane={pane} store={store} />;
+      return <ContentBlockerPane pane={pane} settings={settings} store={store} />;
     case 'maho-mini':
       return <MahoMiniPane pane={pane} store={store} />;
     case 'mail-signatures':
@@ -321,8 +330,6 @@ export function DomainPaneContent(
       return <MailCalendarPane pane={pane} store={store} />;
     case 'mail-behavior':
       return <MailBehaviorPane pane={pane} store={store} />;
-    case 'mail-ai':
-      return <MailAiPane pane={pane} store={store} />;
     case 'mail-security':
       return <MailSecurityPane pane={pane} store={store} />;
     default:
@@ -348,20 +355,18 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
     void store.refreshAccountStatus();
   }, [store]);
 
+  let accountSection: React.ReactNode;
   if (loading && !submitting && account === null) {
-    return (
-      <PaneShell pane={pane}>
-        <PaneLoading message="Loading account…" />
-      </PaneShell>
-    );
-  }
-
-  if (!account?.signedIn) {
-    return (
-      <PaneShell pane={pane}>
-        <SectionCard title="Sign in to Maho" description="Access your subscription, sync, and billing." className="max-w-md" padded>
+    accountSection = <PaneLoading message="Loading account…" />;
+  } else if (!account?.signedIn) {
+    accountSection = (
+      <SectionCard title="Sign in to Maho" description="Access your subscription, sync, and billing." className="max-w-md" padded>
           <div className="mb-4 flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <Sparkles className="size-4" />
+            <svg aria-hidden="true" className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              <polyline points="10 17 15 12 10 7" />
+              <line x1="15" x2="3" y1="12" y2="12" />
+            </svg>
           </div>
           <form
             className="grid gap-4"
@@ -417,18 +422,41 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
             <Button disabled={submitting || !email.trim() || !password} type="submit">
               {submitting ? 'Signing in…' : 'Sign in'}
             </Button>
+            <div className="flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">or</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <Button
+              disabled={submitting}
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                if (submitting) {
+                  return;
+                }
+                setSubmitting(true);
+                await store.signInWithGoogle();
+                if (!mountedRef.current) {
+                  return;
+                }
+                setSubmitting(false);
+              }}>
+              <svg aria-hidden="true" className="size-5 shrink-0" viewBox="0 0 48 48">
+                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+              </svg>
+              Continue with Google
+            </Button>
           </form>
         </SectionCard>
-      </PaneShell>
     );
-  }
-
-  const tierLabel = formatPlanLabel(account.tier);
-
-  const renewDate = formatBillingDate(account.subscriptionExpiresAt);
-
-  return (
-    <PaneShell pane={pane}>
+  } else {
+    const tierLabel = formatPlanLabel(account.tier);
+    const renewDate = formatBillingDate(account.subscriptionExpiresAt);
+    accountSection = (
       <SectionCard
         title={account.email}
         description={[
@@ -443,11 +471,21 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
         }
         padded
       >
-        <div className="text-sm text-muted-foreground space-y-1">
-          {account.userId ? <p>Account ID: {account.userId}</p> : null}
-          {renewDate ? <p>Next renewal on {renewDate}</p> : null}
-        </div>
+        {renewDate ? (
+          <div className="text-sm text-muted-foreground space-y-1">
+            <p>Next renewal on {renewDate}</p>
+          </div>
+        ) : null}
       </SectionCard>
+    );
+  }
+
+  return (
+    <PaneShell pane={pane}>
+      {accountSection}
+      <div className="mt-6">
+        <SyncConnectionSection store={store} />
+      </div>
     </PaneShell>
   );
 }
@@ -648,139 +686,10 @@ export function SelectShell<T extends string>(
 }
 
 function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
-  const handler = store.getHandler();
-  const [createName, setCreateName] = useState('');
-  const [createError, setCreateError] = useState('');
-  const [state, setState] = useState<LoadState<ProfileInfo[]>>(createLoadingState());
-
-  const loadProfiles = useCallback(async () => {
-    setState(createLoadingState());
-    try {
-      const {profiles} = await handler.getProfiles();
-      setState(createLoadedState(profiles));
-    } catch {
-      setState(createErrorState('Failed to load profiles.'));
-    }
-  }, [handler]);
-
-  useEffect(() => {
-    void loadProfiles();
-  }, [loadProfiles]);
-
   return (
     <PaneShell pane={pane}>
-      {state.status === 'loading' ? <PaneLoading message="Loading profiles…" /> : null}
-      {state.status === 'error' ? (
-        <PaneRetry message={state.message} title="Profiles unavailable" onRetry={() => void loadProfiles()} />
-      ) : null}
-      {state.status === 'loaded' ? (
-        <SectionCard title="Browser profiles">
-          {state.data.length === 0 ? <EmptyDescription message="No profiles configured." /> : null}
-          {state.data.map(profile => (
-            <ProfileRow key={profile.id} profile={profile} onReload={loadProfiles} store={store} />
-          ))}
-          <ManagedSettingRow
-            controlClassName={SETTING_ACTIONS_CLASS}
-            description={
-              <div>
-                <div>Create a new browser profile.</div>
-                {createError && <ActionError message={createError} />}
-              </div>
-            }
-            title="Add profile">
-            <TextFieldShell
-              ariaLabel="New profile name"
-              placeholder="New profile name"
-              value={createName}
-              onChange={setCreateName}
-            />
-            <ActionButton
-              label="Create"
-              onClick={async () => {
-                const name = createName.trim();
-                if (!name) {
-                  return;
-                }
-                const {profile} = await handler.createProfile(name);
-                if (profile) {
-                  setCreateName('');
-                  setCreateError('');
-                } else {
-                  setCreateError('Failed to create profile. The name may be taken or invalid.');
-                }
-                await loadProfiles();
-              }}
-            />
-          </ManagedSettingRow>
-        </SectionCard>
-      ) : null}
+      <ProfilesEditor store={store} />
     </PaneShell>
-  );
-}
-
-function ProfileRow(
-    {profile, onReload, store}: {
-      onReload: () => Promise<void>;
-      profile: ProfileInfo;
-      store: MahoSettingsStore;
-    }) {
-  const handler = store.getHandler();
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const parts: string[] = [`ID: ${profile.id}`];
-  if (profile.isDefault) {
-    parts.push('Default');
-  }
-  if (profile.isActive) {
-    parts.push('Active');
-  }
-  if (profile.spaceIds.length > 0) {
-    parts.push(`Spaces: ${profile.spaceIds.join(', ')}`);
-  }
-
-  if (confirmingDelete) {
-    return (
-      <ManagedSettingRow
-        controlClassName={SETTING_ACTIONS_CLASS}
-        description="Are you sure you want to delete this profile? This action cannot be undone."
-        title={`Delete profile ${profile.name}?`}
-      >
-        <ActionButton
-          label="Confirm"
-          onClick={async () => {
-            await handler.deleteProfile(profile.id);
-            await onReload();
-          }}
-        />
-        <ActionButton
-          label="Cancel"
-          onClick={() => setConfirmingDelete(false)}
-        />
-      </ManagedSettingRow>
-    );
-  }
-
-  return (
-    <ManagedSettingRow
-      controlClassName={SETTING_ACTIONS_CLASS}
-      description={parts.join(' · ')}
-      title={profile.name}>
-      {!profile.isActive ? (
-        <ActionButton
-          label="Switch"
-          onClick={async () => {
-            await handler.switchProfile(profile.id);
-            await onReload();
-          }}
-        />
-      ) : null}
-      {!profile.isDefault && !profile.isActive ? (
-        <ActionButton
-          ariaLabel="Delete profile"
-          label={<img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/x.svg" />}
-          onClick={() => setConfirmingDelete(true)}
-        />
-      ) : null}
-    </ManagedSettingRow>
   );
 }
 
@@ -856,18 +765,6 @@ function MahoMiniPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                   label="Option+Command+N shortcut"
                   onToggle={async nextEnabled => {
                     await store.commitSettingValue('atc.maho_mini_global_shortcut_enabled', nextEnabled ? 'true' : 'false');
-                  }}
-                />
-              </ManagedSettingRow>
-              <ManagedSettingRow
-                description="Open external links in Maho Mini from other applications."
-                title="Open external links in Maho Mini"
-                className="px-6 py-4">
-                <Toggle
-                  enabled={settings.find(s => s.key === 'atc.open_external_links_in_maho_mini')?.value === 'true'}
-                  label="Open external links in Maho Mini"
-                  onToggle={async nextEnabled => {
-                    await store.commitSettingValue('atc.open_external_links_in_maho_mini', nextEnabled ? 'true' : 'false');
                   }}
                 />
               </ManagedSettingRow>
@@ -1248,31 +1145,60 @@ function ProviderModeSelector({
   onProviderChange: (mode: 'maho-managed' | 'byok') => void;
 }) {
   return (
-    <ManagedSettingRow
-      title="AI Provider Mode"
-      description="Choose between Maho Managed AI service and bringing your own API keys."
-    >
-      <div className="flex flex-col gap-2">
-        <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
-          <input
-            type="radio"
-            name="ai_provider_mode"
-            checked={provider === 'maho-managed'}
-            onChange={() => onProviderChange('maho-managed')}
-          />
-          <span>Maho Managed AI Service</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
-          <input
-            type="radio"
-            name="ai_provider_mode"
-            checked={provider !== 'maho-managed'}
-            onChange={() => onProviderChange('byok')}
-          />
-          <span>Use my own API key</span>
-        </label>
-      </div>
-    </ManagedSettingRow>
+    <>
+      <ManagedSettingRow
+        title="AI Provider"
+        description="Maho Managed AI is recommended for most users — no API keys needed, private, and always available."
+      >
+        <div className="flex flex-col gap-3">
+          <label className={cn(
+            'flex items-start gap-3 rounded-xl border p-4 transition-colors cursor-pointer',
+            provider === 'maho-managed'
+              ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+              : 'border-border bg-background/60 hover:bg-muted/40'
+          )}>
+            <input
+              type="radio"
+              name="ai_provider_mode"
+              className="mt-0.5"
+              checked={provider === 'maho-managed'}
+              onChange={() => onProviderChange('maho-managed')}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-foreground">Maho Managed AI Service</span>
+                <Badge variant="secondary" className="border-transparent bg-primary/10 text-primary py-0 px-1.5 text-[10px]">Recommended</Badge>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Simple, private, no API keys needed. Free tier with generous limits. Automatically stays up to date.
+              </p>
+            </div>
+          </label>
+          <label className={cn(
+            'flex items-start gap-3 rounded-xl border p-4 transition-colors cursor-pointer',
+            provider !== 'maho-managed' && provider !== ''
+              ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+              : 'border-border bg-background/60 hover:bg-muted/40'
+          )}>
+            <input
+              type="radio"
+              name="ai_provider_mode"
+              className="mt-0.5"
+              checked={provider !== 'maho-managed' && provider !== ''}
+              onChange={() => onProviderChange('byok')}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-foreground">Use my own API key</span>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Use your existing OpenAI, Anthropic, or Ollama key. Full control over model selection and spending.
+              </p>
+            </div>
+          </label>
+        </div>
+      </ManagedSettingRow>
+    </>
   );
 }
 
@@ -1555,8 +1481,28 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
               />
 
               {!state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
-                <div className="mx-6 my-4 p-4 text-sm text-muted-foreground bg-accent/20 rounded-xl border border-border">
-                  Maho Managed AI Service is disabled because you are not connected to Sync. Please go to Sync settings to sign in or enable Sync.
+                <div className="mx-6 my-4 rounded-xl border border-border/70 bg-card/50 p-5 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Sparkles className="size-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Maho Managed AI requires a Maho account</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Sign in to access the managed AI service with no API keys needed.
+                        Free tier includes generous monthly usage.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => { void store.refreshAccountStatus(); }}
+                      className="h-8 rounded-lg px-3.5 text-xs font-semibold"
+                    >
+                      Sign In
+                    </Button>
+                  </div>
                 </div>
               ) : null}
 
@@ -2162,7 +2108,7 @@ function RemoteDeviceRow({
   );
 }
 
-function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
+function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const [joinPhrase, setJoinPhrase] = useState('');
   const [pendingKeyInfo, setPendingKeyInfo] = useState<SyncKeyInfo | null>(null);
@@ -2244,13 +2190,13 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
   };
 
   return (
-    <PaneShell pane={pane}>
+    <>
       {state.status === 'loading' ? <PaneLoading message="Loading sync status…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Sync unavailable" onRetry={() => void loadStatus()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <SectionCard title="Connection">
+        <SectionCard title="Sync" description="Sync your data across devices with an end-to-end encrypted recovery phrase.">
           {syncOperationError && (
             <div className="text-sm text-destructive px-4 py-2 border-b bg-destructive/10">{syncOperationError}</div>
           )}
@@ -2341,7 +2287,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
           )}
         </SectionCard>
       ) : null}
-    </PaneShell>
+    </>
   );
 }
 
@@ -2568,8 +2514,99 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
   );
 }
 
-function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
+interface ContentBlockingModeOption {
+  readonly value: number;
+  readonly title: string;
+  readonly description: string;
+  readonly icon: typeof Zap;
+}
+
+const CONTENT_BLOCKING_MODE_OPTIONS: ContentBlockingModeOption[] = [
+  {value: 0, title: 'Native', description: 'High-performance built-in Rust adblock engine.', icon: Zap},
+  {value: 1, title: 'Extension', description: 'Third-party extension DNR blocking (e.g. uBlock Origin Lite).', icon: Puzzle},
+  {value: 2, title: 'Disabled', description: 'Content blocking turned off completely.', icon: ShieldOff},
+];
+
+function ContentBlockingModeOptionCard(
+    {option, selected, disabled, onSelect}: {
+      option: ContentBlockingModeOption;
+      selected: boolean;
+      disabled: boolean;
+      onSelect: () => void;
+    }) {
+  const Icon = option.icon;
+  return (
+    <label
+      data-setting-scope="process"
+      className={cn(
+        'flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors',
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+        selected
+          ? 'border-primary bg-primary/5 ring-1 ring-primary'
+          : 'border-border/60 hover:bg-surface-hover',
+      )}>
+      <input
+        type="radio"
+        name="contentBlockingMode"
+        className="sr-only"
+        checked={selected}
+        disabled={disabled}
+        onChange={onSelect}
+      />
+      <span className={cn(
+        'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md',
+        selected ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+      )}>
+        <Icon className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-medium text-foreground">{option.title}</span>
+          {selected ? <Check className="size-4 text-primary" /> : null}
+        </span>
+        <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{option.description}</span>
+      </span>
+    </label>
+  );
+}
+
+function ContentBlockerPrivacyCard(
+    {settings, store}: {settings: SettingValue[]; store: MahoSettingsStore}) {
+  const rows = PRIVACY_SETTING_KEYS.flatMap((key) => {
+    const setting = settings.find(item => item.key === key);
+    const meta = SETTING_METADATA[key] ?? null;
+    if (!setting || !meta) {
+      return [];
+    }
+    return [{key, setting, meta}];
+  });
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <SectionCard title="Privacy" description="Tracking and cookie protections." className="mb-6">
+      {rows.map(({key, setting, meta}) => (
+        <ManagedSettingRow key={key} description={meta.description} title={meta.label}>
+          <Toggle
+            enabled={setting.value === 'true'}
+            label={meta.label}
+            onToggle={async (next) => {
+              await store.commitSettingValue(key, next ? 'true' : 'false');
+            }}
+          />
+        </ManagedSettingRow>
+      ))}
+    </SectionCard>
+  );
+}
+
+function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; settings: SettingValue[]; store: MahoSettingsStore}) {
   const handler = store.getHandler();
+  const settingsState = useSettingsStoreState(store);
+  const gatedProfileTarget = !!settingsState.selectedProfileTarget &&
+      settingsState.selectedProfileContext?.isHostProfile !== true;
   const mountedRef = useMountedRef();
   const [form, setForm] = useState({name: '', url: ''});
   const [actionError, setActionError] = useState<ContentBlockerActionError | null>(null);
@@ -2660,52 +2697,23 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
                 </div>
               }
               title="Blocking Mode">
-              <div className="flex flex-col gap-2 mt-2">
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="contentBlockingMode"
-                    value="native"
-                    checked={state.data.stats.mode === 0}
+              <div className="mt-2 flex flex-col gap-2" role="radiogroup" aria-label="Content blocking mode">
+                {CONTENT_BLOCKING_MODE_OPTIONS.map(option => (
+                  <ContentBlockingModeOptionCard
+                    key={option.value}
+                    option={option}
+                    selected={state.data.stats.mode === option.value}
                     disabled={busyActions.has('mode')}
-                    onChange={() => {
+                    onSelect={() => {
+                      if (state.data.stats.mode === option.value) {
+                        return;
+                      }
                       void runMutation(
                           {action: 'mode', targetId: null, targetLabel: null},
-                          async () => (await handler.setContentBlockingMode(0)).success);
+                          async () => (await handler.setContentBlockingMode(option.value)).success);
                     }}
                   />
-                  <span className="font-medium">Native Mode</span> — High-performance built-in Rust adblock engine
-                </label>
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="contentBlockingMode"
-                    value="extension"
-                    checked={state.data.stats.mode === 1}
-                    disabled={busyActions.has('mode')}
-                    onChange={() => {
-                      void runMutation(
-                          {action: 'mode', targetId: null, targetLabel: null},
-                          async () => (await handler.setContentBlockingMode(1)).success);
-                    }}
-                  />
-                  <span className="font-medium">Extension Mode</span> — Third-party extension DNR blocking (e.g. uBlock Origin Lite)
-                </label>
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="contentBlockingMode"
-                    value="disabled"
-                    checked={state.data.stats.mode === 2}
-                    disabled={busyActions.has('mode')}
-                    onChange={() => {
-                      void runMutation(
-                          {action: 'mode', targetId: null, targetLabel: null},
-                          async () => (await handler.setContentBlockingMode(2)).success);
-                    }}
-                  />
-                  <span className="font-medium">Disabled</span> — Content blocking turned off completely
-                </label>
+                ))}
               </div>
               {state.data.stats.mode === 1 ? (
                 <div className="mt-3 p-3 bg-muted/40 rounded-md border text-xs text-muted-foreground">
@@ -2720,6 +2728,20 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
               ) : null}
             </ManagedSettingRow>
           </SectionCard>
+
+          {gatedProfileTarget ? (
+            <Alert className="mb-6" data-selected-profile-limitation="true">
+              <AlertCircle className="size-4" />
+              <AlertTitle>
+                {settingsState.selectedProfileLoading ? 'Confirming selected profile context' : 'Privacy controls are managed in Profiles'}
+              </AlertTitle>
+              <AlertDescription>
+                {settingsState.selectedProfileLoading ?
+                  'Host-bound privacy controls remain unavailable until the selected profile context is confirmed.' :
+                  'The legacy privacy rows in this pane are bound to the profile hosting this Settings window. Use the selected profile editor for Do Not Track, third-party cookies, and Safe Browsing.'}
+              </AlertDescription>
+            </Alert>
+          ) : <ContentBlockerPrivacyCard settings={settings} store={store} />}
 
           <SectionCard title="Engine Health & Status" className="mb-6">
             <ManagedSettingRow

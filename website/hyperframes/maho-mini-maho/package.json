@@ -1,0 +1,9 @@
+{
+  "name": "maho-mini-maho",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "npx --yes hyperframes@0.7.77 check",
+    "render": "npx --yes hyperframes@0.7.77 render"
+  }
+}

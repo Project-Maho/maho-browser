@@ -45,11 +45,11 @@ async function main() {
     var main = document.querySelector('main');
     var text = (main ? main.textContent : '').replace(/\\s+/g, ' ');
     return {
-      hasHeader: /Account & sync/i.test(text),
+      hasHeader: /Account/i.test(text) && /Sync/i.test(text),
       hasStatusText: /(Not connected|Connected|offline|online|Status|Syncing)/i.test(text)
     };
   })()`);
-  assert(base!.hasHeader === true, "Account & sync pane header rendered");
+  assert(base!.hasHeader === true, "Account pane with merged sync section rendered");
   assert(base!.hasStatusText === true, "Sync status text visible");
 
   // A live multi-device relay session with remote peers cannot be provisioned

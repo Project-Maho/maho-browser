@@ -24,10 +24,12 @@ import {
 } from './types.js';
 import type {
   AppearanceMode,
+  AiSetupState,
   AuthState,
   ImportStage,
   ImportState,
   PasswordSetupState,
+  SyncKeyBackupState,
   WelcomeState,
 } from './types.js';
 
@@ -46,7 +48,9 @@ interface MutableWelcomeState {
   essentialSites: EssentialSite[];
   selectedEssentials: Set<string>;
   auth: AuthState;
+  aiSetup: AiSetupState;
   passwordSetup: PasswordSetupState;
+  syncKeyBackup: SyncKeyBackupState;
   selectedTheme: string | null;
   localizedStrings: Map<string, string>;
   isLocalDev: boolean;
@@ -108,19 +112,28 @@ export class MahoWelcomeStore {
     const {signedIn, welcomeCompleted, hasStoredSession, isLocalDev} =
         await this.pageHandler.getRelayAccountStatusFromWelcome();
 
-    this.patch(draft => {
-      draft.searchEngines = engines;
-      draft.selectedEngine = engines.find(e => e.isDefault)?.keyword ?? null;
-      draft.essentialSites = sites;
-      draft.availableBrowsers = browsers;
-      draft.importItemSelections = new Map();
-      for (const browser of browsers) {
-        draft.importItemSelections.set(
-            browser.index,
-            DEFAULT_IMPORT_ITEMS & browser.servicesSupported);
-      }
-      draft.localizedStrings = new Map(Object.entries(strings));
-      draft.isLocalDev = isLocalDev;
+      this.patch(draft => {
+        draft.searchEngines = engines;
+        draft.selectedEngine = engines.find(e => e.isDefault)?.keyword ?? null;
+        draft.essentialSites = sites;
+        draft.availableBrowsers = browsers;
+        draft.importItemSelections = new Map();
+        for (const browser of browsers) {
+          draft.importItemSelections.set(
+              browser.index,
+              DEFAULT_IMPORT_ITEMS & browser.servicesSupported);
+        }
+        draft.localizedStrings = new Map([
+          ['IDS_MAHO_WELCOME_SYNC_BACKUP_TITLE', 'Back up your sync recovery key'],
+          ['IDS_MAHO_WELCOME_SYNC_BACKUP_BODY', 'Save your recovery phrase to a local file. You need this phrase to access your encrypted sync data on another device.'],
+          ['IDS_MAHO_WELCOME_SYNC_BACKUP_START_SYNC', 'Start syncing'],
+          ['IDS_MAHO_WELCOME_SYNC_BACKUP_SAVE_FILE', 'Save file'],
+          ['IDS_MAHO_WELCOME_SYNC_BACKUP_FAIL_RETRY', 'Download failed. Please try saving your sync key again.'],
+          ['IDS_MAHO_WELCOME_NO_PASSWORD_MANAGER', 'No password manager'],
+          ['IDS_MAHO_WELCOME_LOCAL_VAULT_EXPLANATION', 'Local Vault keeps your passwords securely encrypted on this device.'],
+          ...Object.entries(strings),
+        ]);
+        draft.isLocalDev = isLocalDev;
 
       draft.auth = {
         ...draft.auth,
@@ -132,6 +145,7 @@ export class MahoWelcomeStore {
         draft.currentPage = WelcomePage.Auth;
       }
     });
+    applyAppearanceMode(this.state.appearance);
   }
 
   getString(key: string): string {
@@ -155,8 +169,8 @@ export class MahoWelcomeStore {
 
   skipImport(): void {
     this.patch(draft => {
-      draft.importStage = 'A';
-      draft.currentPage = WelcomePage.SearchEngine;
+      draft.importStage = 'B';
+      draft.currentPage = WelcomePage.SourceSelect;
       draft.direction = 'forward';
     });
   }
@@ -166,6 +180,21 @@ export class MahoWelcomeStore {
       if (this.state.auth.status !== 'success') {
         return;
       }
+      this.patch(d => { d.currentPage = WelcomePage.Splash; d.direction = 'forward'; });
+      return;
+    }
+
+    if (this.state.currentPage === WelcomePage.AIProvider) {
+      this.patch(d => {
+        if (d.aiSetup.provider === 'maho-managed' && d.auth.status !== 'success') {
+          d.currentPage = WelcomePage.Auth;
+          d.auth = { ...d.auth, mode: 'signin', isReauthMode: false };
+        } else {
+          d.currentPage = WelcomePage.PasswordSetup;
+        }
+        d.direction = 'forward';
+      });
+      return;
     }
 
     if (this.state.currentPage === WelcomePage.SourceSelect &&
@@ -179,7 +208,8 @@ export class MahoWelcomeStore {
       return;
     }
 
-    if (this.state.currentPage === WelcomePage.PasswordSetup) {
+    if (this.state.currentPage === WelcomePage.PasswordSetup ||
+        this.state.currentPage === WelcomePage.SyncKeyBackup) {
       return;
     }
 
@@ -240,6 +270,59 @@ export class MahoWelcomeStore {
     });
   }
 
+  setAiProvider(provider: 'maho-managed' | 'byok' | 'skip'): void {
+    this.patch(draft => {
+      draft.aiSetup = {
+        provider: '',
+        status: 'submitting',
+        errorMessage: '',
+        skipped: false,
+      };
+    });
+
+    if (provider === 'skip') {
+      this.patch(draft => {
+        draft.aiSetup = { provider: '', status: 'success', errorMessage: '', skipped: true };
+        draft.currentPage = WelcomePage.PasswordSetup;
+        draft.direction = 'forward';
+      });
+      return;
+    }
+
+    if (provider === 'maho-managed') {
+      this.patch(draft => {
+        draft.aiSetup = { provider: 'maho-managed', status: 'success', errorMessage: '', skipped: false };
+      });
+      this.pageHandler.setTranslationProvider(provider).catch(() => {});
+      return;
+    }
+
+    if (provider === 'byok') {
+      this.patch(draft => {
+        draft.aiSetup = { provider: 'byok', status: 'success', errorMessage: '', skipped: false };
+        draft.currentPage = WelcomePage.PasswordSetup;
+        draft.direction = 'forward';
+      });
+      return;
+    }
+  }
+
+  goToAuth(): void {
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.Auth;
+      draft.auth = { ...draft.auth, mode: 'signin', isReauthMode: false };
+      draft.direction = 'forward';
+    });
+  }
+
+  goToAuthSignup(): void {
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.Auth;
+      draft.auth = { ...draft.auth, mode: 'signup', isReauthMode: false };
+      draft.direction = 'forward';
+    });
+  }
+
   async refreshPasswordSetup(): Promise<boolean> {
     this.patch(draft => {
       draft.passwordSetup = {
@@ -268,6 +351,7 @@ export class MahoWelcomeStore {
           providerOptions: [...options],
           providerStatus: status,
           vaultStatus: result.status,
+          passwordManagerSkipped: draft.passwordSetup.passwordManagerSkipped,
         };
       });
       return true;
@@ -321,12 +405,111 @@ export class MahoWelcomeStore {
     }
 
     this.patch(draft => {
-      draft.currentPage = WelcomePage.Completion;
+      draft.currentPage = WelcomePage.SyncKeyBackup;
       draft.direction = 'forward';
       draft.passwordSetup = {
         ...draft.passwordSetup,
         status: 'ready',
         errorMessage: '',
+        passwordManagerSkipped: false,
+      };
+    });
+    return true;
+  }
+
+  skipPasswordSetup(): void {
+    if (this.state.currentPage !== WelcomePage.PasswordSetup) {
+      return;
+    }
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.SyncKeyBackup;
+      draft.direction = 'forward';
+      draft.passwordSetup = {
+        ...draft.passwordSetup,
+        status: 'ready',
+        errorMessage: '',
+        passwordManagerSkipped: true,
+      };
+    });
+  }
+
+  async generateSyncKey(): Promise<{syncKey: string; roomId: string; recoveryPhrase: string} | null> {
+    this.patch(draft => {
+      draft.syncKeyBackup = {...draft.syncKeyBackup, status: 'generating', errorMessage: ''};
+    });
+    try {
+      const {syncKey, roomId, recoveryPhrase} = await this.pageHandler.generateSyncKey();
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          status: 'ready',
+          errorMessage: '',
+          syncKey,
+          roomId,
+          recoveryPhrase,
+        };
+      });
+      return {syncKey, roomId, recoveryPhrase};
+    } catch {
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          status: 'error',
+          errorMessage: 'Failed to generate sync key.',
+        };
+      });
+      return null;
+    }
+  }
+
+  async startSync(): Promise<boolean> {
+    const {roomId, recoveryPhrase} = this.state.syncKeyBackup;
+    if (!roomId || !recoveryPhrase) {
+      return false;
+    }
+    try {
+      const {ok} = await this.pageHandler.startSync(roomId, recoveryPhrase);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  setSyncKeyBackupSavedToFile(saved: boolean): void {
+    this.patch(draft => {
+      draft.syncKeyBackup = {
+        ...draft.syncKeyBackup,
+        savedToFile: saved,
+        status: saved ? 'saved' : draft.syncKeyBackup.status,
+      };
+    });
+  }
+
+  advanceFromSyncKeyBackup(): boolean {
+    if (this.state.currentPage !== WelcomePage.SyncKeyBackup) {
+      return false;
+    }
+    if (!this.state.syncKeyBackup.savedToFile) {
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          status: 'error',
+          errorMessage: 'Save your sync key backup file to continue.',
+        };
+      });
+      return false;
+    }
+
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.Completion;
+      draft.direction = 'forward';
+      draft.syncKeyBackup = {
+        status: 'idle',
+        errorMessage: '',
+        recoveryPhrase: null,
+        roomId: null,
+        syncKey: null,
+        savedToFile: true,
       };
     });
     return true;
@@ -409,6 +592,28 @@ export class MahoWelcomeStore {
     this.patch(draft => {
       draft.auth = {...draft.auth, isReauthMode};
     });
+  }
+
+  async submitGoogleSignIn(): Promise<boolean> {
+    this.patch(draft => {
+      draft.auth = {...draft.auth, status: 'submitting', errorMessage: ''};
+    });
+    const {ok, errorMessage} = await this.pageHandler.signInWithGoogleFromWelcome();
+    if (ok) {
+      this.patch(draft => {
+        draft.auth = {...draft.auth, status: 'success', errorMessage: ''};
+      });
+      await this.refreshRelayAccountStatus();
+    } else {
+      this.patch(draft => {
+        draft.auth = {
+          ...draft.auth,
+          status: 'error',
+          errorMessage: errorMessage || 'Google sign in failed.',
+        };
+      });
+    }
+    return ok;
   }
 
   async submitSignIn(): Promise<boolean> {
@@ -594,7 +799,9 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
+    syncKeyBackup: state.syncKeyBackup,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
     isLocalDev: state.isLocalDev,
@@ -617,7 +824,9 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
+    syncKeyBackup: state.syncKeyBackup,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
     isLocalDev: state.isLocalDev,
@@ -625,10 +834,16 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
 }
 
 function applyAppearanceMode(mode: AppearanceMode): void {
-  if (mode === 'system') {
-    document.documentElement.style.removeProperty('color-scheme');
+  if (typeof document === 'undefined') {
     return;
   }
-
-  document.documentElement.style.colorScheme = mode;
+  const root = document.documentElement;
+  const prefersDark = typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+      : false;
+  const resolved: 'light' | 'dark' = mode === 'system'
+      ? (prefersDark ? 'dark' : 'light')
+      : mode;
+  root.setAttribute('data-theme', resolved);
+  root.style.colorScheme = resolved;
 }

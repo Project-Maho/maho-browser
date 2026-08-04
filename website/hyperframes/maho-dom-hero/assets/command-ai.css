@@ -1,0 +1,61 @@
+#command-ai-scene {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 67% 42%, rgb(82 70 88 / 36%), transparent 38%),
+    radial-gradient(circle at 30% 72%, rgb(69 54 49 / 28%), transparent 42%),
+    #050505;
+}
+
+#command-ai-camera-wrapper,
+#command-ai-browser-mount {
+  width: 1440px;
+  height: 1033px;
+}
+
+#command-ai-camera-wrapper {
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+#command-ai-browser-mount > [data-shell="browser-shell"] {
+  width: 100%;
+  height: 100%;
+}
+
+#command-ai-browser-mount [data-shell="browser-content"] {
+  position: relative;
+}
+
+#command-ai-composition {
+  position: absolute;
+  inset: 0;
+  --demo-color-accent: #7a72cd;
+}
+
+#command-ai-composition .demo-page--article-a {
+  --demo-color-accent: #7a72cd;
+}
+
+#command-ai-composition .demo-page--article-b {
+  --demo-color-accent: #726bc0;
+}
+
+#command-ai-command-wrapper,
+#command-ai-ai-wrapper {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  visibility: hidden;
+  opacity: 0;
+  will-change: opacity;
+}
+
+#command-ai-ai-wrapper {
+  z-index: 2;
+}
+
+#command-ai-command-wrapper .command-ai__overlay,
+#command-ai-ai-wrapper .command-ai__overlay {
+  pointer-events: none;
+}

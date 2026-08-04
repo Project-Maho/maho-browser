@@ -10,17 +10,17 @@ interface StatusBannerProps {
 }
 
 const kindClasses: Record<BannerKind, string> = {
-  info: 'bg-[var(--color-info-subtle)] text-[var(--color-info)]',
-  success: 'bg-[var(--color-success-subtle)] text-[var(--color-success)]',
-  warning: 'bg-[var(--color-warning-subtle)] text-[var(--color-warning)]',
-  error: 'bg-[var(--color-error-subtle)] text-[var(--color-error)]',
+  info: 'ui-banner--info',
+  success: 'ui-banner--success',
+  warning: 'ui-banner--warning',
+  error: 'ui-banner--error',
 };
 
 export function StatusBanner({ kind, children, class: className }: StatusBannerProps) {
   return (
     <div
-      role="status"
-      class={clsx('rounded-xl px-4 py-3 text-sm', kindClasses[kind], className)}
+      role={kind === 'error' ? 'alert' : 'status'}
+      class={clsx('ui-banner', kindClasses[kind], className)}
     >
       {children}
     </div>

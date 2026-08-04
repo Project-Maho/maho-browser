@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import {useEffect, useState} from 'react';
 import {Button} from '@ui/button';
 import {
   DropdownMenu,
@@ -11,7 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@ui/tooltip';
-import {Edit, Sparkles, Settings, Grid, X} from '@icons/lucide';
+import {Edit, Settings, Grid, X} from '@icons/lucide';
 import {ViewMode} from '../../../types.js';
 import {ProfileSwitcher} from '../../components/profile-switcher.js';
 import {MahoAiStore} from '../../../store.js';
@@ -24,7 +24,6 @@ export function CompactTopbar(
       onSetViewMode,
       onGetViewMode,
       onStartSession,
-      onTidyTabs,
     }: {
       store: MahoAiStore;
       onClosePanel: () => void;
@@ -32,7 +31,6 @@ export function CompactTopbar(
       onSetViewMode: (mode: ViewMode) => void;
       onGetViewMode: () => Promise<ViewMode>;
       onStartSession: () => void;
-      onTidyTabs?: () => void;
     }) {
   const [currentMode, setCurrentMode] = useState<ViewMode>(ViewMode.kSidebar);
 
@@ -49,10 +47,10 @@ export function CompactTopbar(
     onSetViewMode(mode);
   };
 
-  const iconButtonClass = 'rounded-full';
+  const iconButtonClass = 'rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground';
 
   return (
-    <div className="flex items-center gap-2 rounded-[1.25rem] border border-border/80 bg-card/90 px-3 py-2 shadow-[0_20px_60px_-48px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+    <div className="flex items-center gap-2 px-1 py-1">
       <div className="flex items-center gap-2">
           <ProfileSwitcher store={store} />
           <Tooltip>
@@ -73,21 +71,6 @@ export function CompactTopbar(
         <div className="min-w-0 flex-1" />
 
         <div className="flex items-center gap-1">
-          {onTidyTabs && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Tidy tabs"
-                  className={iconButtonClass}
-                  size="icon"
-                  variant="ghost"
-                  onClick={onTidyTabs}>
-                  <Sparkles className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Tidy tabs</TooltipContent>
-            </Tooltip>
-          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

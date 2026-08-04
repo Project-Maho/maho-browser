@@ -161,7 +161,7 @@ describe('McpAgentGuidanceCard', () => {
     expect(developersPane).toContain('Add this to agents that support MCP servers.');
     expect(developersPane).not.toContain('github.com');
     expect(developersPane).not.toContain('open source');
-    expect(developersPane).not.toContain('curl');
+    expect(developersPane).toContain('curl -fsSL https://mahobrowser.com/install-cli.sh | sh');
   });
 });
 

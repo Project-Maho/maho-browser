@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useSettings } from "../useSettings";
+import * as api from "../../api";
+
+vi.mock("../../api", () => ({
+  getAppSetting: vi.fn(),
+  setAppSetting: vi.fn(),
+}));
 
 describe("useSettings", () => {
   const localStorageMock = (() => {
@@ -19,6 +25,8 @@ describe("useSettings", () => {
     localStorageMock.clear();
     vi.clearAllMocks();
     Object.defineProperty(window, "localStorage", { value: localStorageMock, writable: true });
+    vi.mocked(api.getAppSetting).mockResolvedValue(null);
+    vi.mocked(api.setAppSetting).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -38,15 +46,51 @@ describe("useSettings", () => {
   });
 
   it("reads saved syncInterval from localStorage", () => {
-    localStorageMock.setItem("maho-sync-interval", "300");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ sync_interval: 300 }));
 
     const { result } = renderHook(() => useSettings());
 
     expect(result.current.syncInterval).toBe(300);
   });
 
+  it("replaces a conflicting startup cache with backend settings", async () => {
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({
+      sync_interval: 300,
+      block_remote_images: true,
+    }));
+    vi.mocked(api.getAppSetting).mockResolvedValue(JSON.stringify({
+      sync_interval: 900,
+      block_remote_images: false,
+    }));
+
+    const { result } = renderHook(() => useSettings());
+
+    expect(result.current.syncInterval).toBe(300);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.syncInterval).toBe(900);
+    expect(result.current.blockRemoteImages).toBe(false);
+  });
+
+  it("persists one complete startup cache instead of legacy behavior keys", async () => {
+    vi.mocked(api.getAppSetting).mockResolvedValue(JSON.stringify({
+      sync_interval: 900,
+      block_remote_images: true,
+    }));
+
+    renderHook(() => useSettings());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1")).not.toBeNull();
+    expect(localStorageMock.getItem("maho-sync-interval")).toBeNull();
+    expect(localStorageMock.getItem("maho-block-remote-images")).toBeNull();
+  });
+
   it("reads saved sidebarWidth from localStorage when within valid range", () => {
-    localStorageMock.setItem("maho-sidebar-width", "300");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ sidebar_width: 300 }));
 
     const { result } = renderHook(() => useSettings());
 
@@ -54,7 +98,7 @@ describe("useSettings", () => {
   });
 
   it("falls back to 240 when sidebarWidth is outside 200-400 range", () => {
-    localStorageMock.setItem("maho-sidebar-width", "150");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ sidebar_width: 150 }));
 
     const { result } = renderHook(() => useSettings());
 
@@ -70,7 +114,7 @@ describe("useSettings", () => {
   });
 
   it("reads saved fontSize from localStorage when within valid range", () => {
-    localStorageMock.setItem("maho-font-size", "16");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ font_size: 16 }));
 
     const { result } = renderHook(() => useSettings());
 
@@ -78,7 +122,7 @@ describe("useSettings", () => {
   });
 
   it("falls back to 14 when fontSize is outside 12-20 range", () => {
-    localStorageMock.setItem("maho-font-size", "25");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ font_size: 25 }));
 
     const { result } = renderHook(() => useSettings());
 
@@ -102,7 +146,7 @@ describe("useSettings", () => {
   });
 
   it("reads desktopNotifications true from localStorage", () => {
-    localStorageMock.setItem("maho-desktop-notifications", "true");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ desktop_notifications: true }));
 
     const { result } = renderHook(() => useSettings());
 
@@ -116,7 +160,7 @@ describe("useSettings", () => {
   });
 
   it("reads soundEnabled false from localStorage", () => {
-    localStorageMock.setItem("maho-sound-enabled", "false");
+    localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ sound_enabled: false }));
 
     const { result } = renderHook(() => useSettings());
 
@@ -131,7 +175,7 @@ describe("useSettings", () => {
     });
 
     expect(result.current.syncInterval).toBe(600);
-    expect(localStorageMock.getItem("maho-sync-interval")).toBe("600");
+    expect(JSON.parse(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1") ?? "{}").sync_interval).toBe(600);
   });
 
   it("setSidebarWidth updates state and immediately persists to localStorage", () => {
@@ -142,7 +186,7 @@ describe("useSettings", () => {
     });
 
     expect(result.current.sidebarWidth).toBe(320);
-    expect(localStorageMock.getItem("maho-sidebar-width")).toBe("320");
+    expect(JSON.parse(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1") ?? "{}").sidebar_width).toBe(320);
   });
 
   it("setSidebarCollapsed updates state and immediately persists to localStorage", () => {
@@ -164,7 +208,7 @@ describe("useSettings", () => {
     });
 
     expect(result.current.fontSize).toBe(18);
-    expect(localStorageMock.getItem("maho-font-size")).toBe("18");
+    expect(JSON.parse(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1") ?? "{}").font_size).toBe(18);
     expect(document.documentElement.style.getPropertyValue("--maho-base-font-size")).toBe("18px");
   });
 
@@ -204,19 +248,19 @@ describe("useSettings", () => {
     });
 
     it("reads a saved emailListWidth within the 280-600 range", () => {
-      localStorageMock.setItem("maho-email-list-width", "420");
+      localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ email_list_width: 420 }));
       const { result } = renderHook(() => useSettings());
       expect(result.current.emailListWidth).toBe(420);
     });
 
     it("falls back to 350 when emailListWidth is below 280", () => {
-      localStorageMock.setItem("maho-email-list-width", "100");
+      localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ email_list_width: 100 }));
       const { result } = renderHook(() => useSettings());
       expect(result.current.emailListWidth).toBe(350);
     });
 
     it("falls back to 350 when emailListWidth is above 600", () => {
-      localStorageMock.setItem("maho-email-list-width", "900");
+      localStorageMock.setItem("maho-mail-behavior-prefs-cache-v1", JSON.stringify({ email_list_width: 900 }));
       const { result } = renderHook(() => useSettings());
       expect(result.current.emailListWidth).toBe(350);
     });
@@ -229,7 +273,7 @@ describe("useSettings", () => {
       });
 
       expect(result.current.emailListWidth).toBe(480);
-      expect(localStorageMock.getItem("maho-email-list-width")).toBe("480");
+      expect(JSON.parse(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1") ?? "{}").email_list_width).toBe(480);
     });
 
     it("exposes a handleEmailListResizeMouseDown callback and an isEmailListResizing flag", () => {

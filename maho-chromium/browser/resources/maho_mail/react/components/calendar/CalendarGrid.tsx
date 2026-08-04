@@ -1,9 +1,10 @@
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { Calendar, dateFnsLocalizer, type Event as RbcEvent } from "react-big-calendar";
-import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
+import dragAndDropModule from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, endOfWeek, getDay, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from "date-fns";
 import { enUS, ko } from "date-fns/locale";
 import { useTranslation } from "react-i18next";
+import { resolveDragAndDrop } from "./dragAndDropImport";
 import { RefreshCw, Search, ChevronLeft, ChevronRight, X, Calendar as CalendarIcon, Printer } from "lucide-react";
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/Toast";
@@ -79,7 +80,7 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
-const DragAndDropCalendar = withDragAndDrop(Calendar);
+const DragAndDropCalendar = resolveDragAndDrop(dragAndDropModule)(Calendar);
 
 interface CalendarGridProps {
   accountId: string;

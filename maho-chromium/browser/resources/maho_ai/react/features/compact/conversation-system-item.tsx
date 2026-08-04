@@ -3,6 +3,7 @@ import {formatTimestamp} from '../../lib/format-timestamp.js';
 import {cn} from '@lib/utils';
 import {Button} from '@ui/button';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
+import {CredentialErrorNotice} from '../../components/credential-error-notice.js';
 
 function chipClassName(tone: NonNullable<ConversationItem['chips']>[number]['tone']): string {
   switch (tone) {
@@ -23,10 +24,12 @@ function chipClassName(tone: NonNullable<ConversationItem['chips']>[number]['ton
 export function ConversationSystemItem(
     {
       item,
+      onOpenSettings,
       onRespondToApproval,
       readOnly,
     }: {
       item: ConversationItem;
+      onOpenSettings: (paneKey: string) => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       readOnly: boolean;
     }) {
@@ -39,6 +42,18 @@ export function ConversationSystemItem(
     item.tone === 'success' ? 'border-success/60' :
     item.tone === 'warning' ? 'border-warning/60' :
     item.tone === 'danger' ? 'border-destructive/60' : 'border-border/70';
+
+  if (item.credentialError) {
+    return (
+      <article className="w-full max-w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none">
+        <CredentialErrorNotice
+          onOpenSettings={onOpenSettings}
+          presentation={item.credentialError}
+          surface="compact"
+        />
+      </article>
+    );
+  }
 
   return (
     <article className="w-full max-w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none">

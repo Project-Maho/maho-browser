@@ -8,7 +8,14 @@ import {useAutoScroll} from '../../hooks/use-auto-scroll.js';
 import {EmptyState} from '../../components/empty-state.js';
 import {EventCard} from './event-card.js';
 
-export function Timeline({state}: {state: AppState}) {
+export function Timeline(
+    {
+      onOpenSettings,
+      state,
+    }: {
+      onOpenSettings: (paneKey: string) => void;
+      state: AppState;
+    }) {
   const events = state.currentSessionId ?
       (state.eventsBySessionId[state.currentSessionId] || []) :
       [];
@@ -16,7 +23,7 @@ export function Timeline({state}: {state: AppState}) {
   const streamRef = useAutoScroll<HTMLDivElement>(events);
 
   return (
-    <main className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+    <main className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)]">
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold tracking-tight text-foreground">Timeline</h2>
         <p className="text-sm leading-6 text-muted-foreground">
@@ -61,7 +68,11 @@ export function Timeline({state}: {state: AppState}) {
             })()
           ) : (
             events.map(entry => (
-              <EventCard key={`${entry.event.sequence}-${entry.event.timestamp}`} event={entry.event} />
+              <EventCard
+                key={`${entry.event.sequence}-${entry.event.timestamp}`}
+                event={entry.event}
+                onOpenSettings={onOpenSettings}
+              />
             ))
           )}
         </div>

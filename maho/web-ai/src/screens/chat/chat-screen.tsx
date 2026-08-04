@@ -150,7 +150,7 @@ interface ToolRequestMessageItem {
   toolName: string;
   rawArguments: string;
   argsText: string;
-  status: 'pending' | 'approved' | 'denied';
+  status: 'pending' | 'approved' | 'denied' | 'unsupported';
 }
 
 interface ToolResultMessageItem {
@@ -176,19 +176,20 @@ type MessageItem =
 
 interface ChatScreenState {
   booting: boolean;
+  conversationId: string | null;
   draft: string;
   errorMessage: string | null;
   isStreaming: boolean;
   messages: MessageItem[];
   missingApiKey: boolean;
   provider: ProviderConfig | null;
-  sessionId: string | null;
+  sessionHandle: string | null;
   toolActionId: string | null;
 }
 
 type Action =
   | { type: 'BOOT_START' }
-  | { type: 'BOOT_SUCCESS'; messages: MessageItem[]; provider: ProviderConfig; sessionId: string }
+  | { type: 'BOOT_SUCCESS'; conversationId: string; messages: MessageItem[]; provider: ProviderConfig; sessionHandle: string }
   | { type: 'BOOT_ERROR'; message: string }
   | { type: 'BYOK_MISSING' }
   | { type: 'SET_DRAFT'; value: string }
@@ -200,20 +201,21 @@ type Action =
   | { type: 'STREAM_IMAGE'; delta: ImageDelta }
   | { type: 'TOOL_DELTA'; delta: ToolCallDelta }
   | { type: 'TOOL_RESPONSE_START'; toolCallId: string }
-  | { type: 'TOOL_RESPONSE_DONE'; result: unknown; status: 'approved' | 'denied'; toolCallId: string; toolName: string }
+  | { type: 'TOOL_RESPONSE_DONE'; result: unknown; status: 'approved' | 'denied' | 'unsupported'; toolCallId: string; toolName: string }
   | { type: 'TOOL_RESPONSE_ERROR'; message: string; toolCallId: string }
   | { type: 'TURN_CANCELLED' };
 
 function initialState(): ChatScreenState {
   return {
     booting: true,
+    conversationId: null,
     draft: '',
     errorMessage: null,
     isStreaming: false,
     messages: [],
     missingApiKey: false,
     provider: null,
-    sessionId: null,
+    sessionHandle: null,
     toolActionId: null,
   };
 }
@@ -224,46 +226,50 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
       return {
         ...state,
         booting: true,
+        conversationId: null,
         errorMessage: null,
         isStreaming: false,
         messages: [],
         missingApiKey: false,
         provider: null,
-        sessionId: null,
+        sessionHandle: null,
         toolActionId: null,
       };
     case 'BOOT_SUCCESS':
       return {
         ...state,
         booting: false,
+        conversationId: action.conversationId,
         errorMessage: null,
         isStreaming: false,
         messages: action.messages,
         missingApiKey: false,
         provider: action.provider,
-        sessionId: action.sessionId,
+        sessionHandle: action.sessionHandle,
         toolActionId: null,
       };
     case 'BOOT_ERROR':
       return {
         ...state,
         booting: false,
+        conversationId: null,
         errorMessage: action.message,
         isStreaming: false,
         provider: null,
-        sessionId: null,
+        sessionHandle: null,
         toolActionId: null,
       };
     case 'BYOK_MISSING':
       return {
         ...state,
         booting: false,
+        conversationId: null,
         errorMessage: null,
         isStreaming: false,
         messages: [],
         missingApiKey: true,
         provider: null,
-        sessionId: null,
+        sessionHandle: null,
         toolActionId: null,
       };
     case 'SET_DRAFT':
@@ -397,8 +403,7 @@ export function ChatScreen({
 
       try {
         if (requestedSessionId) {
-          await bridge.chatSessionResume(requestedSessionId);
-          nextHandle = requestedSessionId;
+          nextHandle = await bridge.chatSessionResume(requestedSessionId);
         } else {
           nextHandle = await bridge.chatSessionStart({
             apiKey: provider.apiKey,
@@ -414,7 +419,8 @@ export function ChatScreen({
         }
 
         await registerDefaultTools(bridge, nextHandle);
-        const history = requestedSessionId ? await bridge.chatGetHistory(nextHandle) : [];
+        const conversationId = requestedSessionId ?? nextHandle;
+        const history = requestedSessionId ? await bridge.chatGetHistory(conversationId) : [];
 
         if (generation !== bootstrapGenerationRef.current) {
           if (nextHandle && nextHandle !== previousHandle) {
@@ -426,16 +432,17 @@ export function ChatScreen({
         activeHandleRef.current = nextHandle;
         dispatch({
           type: 'BOOT_SUCCESS',
+          conversationId,
           messages: historyToMessages(history),
           provider,
-          sessionId: nextHandle,
+          sessionHandle: nextHandle,
         });
 
         if (previousHandle && previousHandle !== nextHandle) {
           void bridge.chatSessionFree(previousHandle).catch(() => undefined);
         }
       } catch (error) {
-        if (nextHandle && nextHandle !== requestedSessionId) {
+        if (nextHandle && nextHandle !== previousHandle) {
           void bridge.chatSessionFree(nextHandle).catch(() => undefined);
         }
         activeHandleRef.current = null;
@@ -469,16 +476,19 @@ export function ChatScreen({
   }, [bridge]);
 
   useEffect(() => {
-    if (!state.sessionId) {
+    if (!state.sessionHandle) {
       return undefined;
     }
 
-    return subscribeStream(state.sessionId, {
+    return subscribeStream(state.sessionHandle, {
       onToken: (token) => {
         dispatch({ type: 'STREAM_APPEND', text: token });
       },
       onComplete: (finalMessage) => {
         dispatch({ type: 'STREAM_COMPLETE', finalMessage });
+        if (state.conversationId) {
+          void bridge.saveConversationMessage?.(state.conversationId, 'assistant', finalMessage).catch(() => undefined);
+        }
       },
       onError: (error) => {
         dispatch({ type: 'STREAM_ERROR', message: error });
@@ -490,7 +500,7 @@ export function ChatScreen({
         dispatch({ type: 'STREAM_IMAGE', delta });
       },
     });
-  }, [state.sessionId]);
+  }, [bridge, state.conversationId, state.sessionHandle]);
 
   const handleScroll = useCallback(() => {
     const node = logRef.current;
@@ -517,7 +527,7 @@ export function ChatScreen({
   );
 
   const sendTextTurn = useCallback(async () => {
-    const handle = state.sessionId;
+    const handle = state.sessionHandle;
     const text = state.draft.trim();
     if (!handle || !text || state.isStreaming || state.booting || state.missingApiKey) {
       return;
@@ -528,16 +538,19 @@ export function ChatScreen({
 
     try {
       await bridge.chatSendMessage(handle, content);
+      if (state.conversationId) {
+        void bridge.saveConversationMessage?.(state.conversationId, 'user', text).catch(() => undefined);
+      }
     } catch (error) {
       dispatch({
         type: 'SEND_TURN_FAILURE',
         message: toErrorMessage(error, 'Unable to send this message.'),
       });
     }
-  }, [bridge, state.booting, state.draft, state.isStreaming, state.missingApiKey, state.sessionId]);
+  }, [bridge, state.booting, state.conversationId, state.draft, state.isStreaming, state.missingApiKey, state.sessionHandle]);
 
   const handleCancelTurn = useCallback(async () => {
-    const handle = state.sessionId;
+    const handle = state.sessionHandle;
     if (!handle || !state.isStreaming) {
       return;
     }
@@ -547,27 +560,27 @@ export function ChatScreen({
     } finally {
       dispatch({ type: 'TURN_CANCELLED' });
     }
-  }, [bridge, state.isStreaming, state.sessionId]);
+  }, [bridge, state.isStreaming, state.sessionHandle]);
 
   const handleApproveTool = useCallback(
     async (toolCallId: string, toolName: string, approved: boolean) => {
-      const handle = state.sessionId;
+      const handle = state.sessionHandle;
       if (!handle) {
         return;
       }
 
       dispatch({ type: 'TOOL_RESPONSE_START', toolCallId });
 
-      const result = approved
-        ? toBridgeToolResult({ ok: true, data: '<not implemented>' })
-        : toBridgeToolResult({ error: 'user_denied' });
+      const result: ToolResult = approved
+        ? { error: 'tool_execution_unsupported' }
+        : { error: 'user_denied' };
 
       try {
         await bridge.chatSendToolResult(handle, toolCallId, result);
         dispatch({
           type: 'TOOL_RESPONSE_DONE',
-          result: approved ? { ok: true, data: '<not implemented>' } : { error: 'user_denied' },
-          status: approved ? 'approved' : 'denied',
+          result,
+          status: approved ? 'unsupported' : 'denied',
           toolCallId,
           toolName,
         });
@@ -579,7 +592,7 @@ export function ChatScreen({
         });
       }
     },
-    [bridge, state.sessionId],
+    [bridge, state.sessionHandle],
   );
 
   const handleNewSession = useCallback(async () => {
@@ -593,7 +606,7 @@ export function ChatScreen({
 
   const handleImageUpload = useCallback(
     async (event: Event) => {
-      const handle = state.sessionId;
+      const handle = state.sessionHandle;
       if (!handle || state.booting || state.missingApiKey || state.isStreaming) {
         return;
       }
@@ -630,7 +643,7 @@ export function ChatScreen({
         });
       }
     },
-    [bridge, state.booting, state.draft, state.isStreaming, state.missingApiKey, state.sessionId],
+    [bridge, state.booting, state.draft, state.isStreaming, state.missingApiKey, state.sessionHandle],
   );
 
   const showEmptyState =
@@ -770,7 +783,7 @@ export function ChatScreen({
           type="button"
           class="chat-attach-button"
           aria-label="Attach image"
-          disabled={state.booting || state.missingApiKey || state.isStreaming || !state.sessionId}
+          disabled={state.booting || state.missingApiKey || state.isStreaming || !state.sessionHandle}
           onClick={() => fileInputRef.current?.click()}
         >
           📎
@@ -782,7 +795,7 @@ export function ChatScreen({
             placeholder="Type a message…"
             rows={1}
             value={state.draft}
-            disabled={state.booting || state.missingApiKey || !state.sessionId}
+            disabled={state.booting || state.missingApiKey || !state.sessionHandle}
             onInput={(event) => {
               dispatch({
                 type: 'SET_DRAFT',
@@ -815,7 +828,7 @@ export function ChatScreen({
             state.booting ||
             state.missingApiKey ||
             state.isStreaming ||
-            !state.sessionId ||
+            !state.sessionHandle ||
             !state.draft.trim()
           }
         >
@@ -926,7 +939,11 @@ function ToolRequestCard(
             </>
           ) : (
             <span class={`chat-tool-state chat-tool-state--${message.status}`}>
-              {message.status === 'approved' ? 'Approved' : 'Denied'}
+              {message.status === 'approved'
+                ? 'Approved'
+                : message.status === 'unsupported'
+                  ? 'Tool execution unsupported'
+                  : 'Denied'}
             </span>
           )}
         </div>
@@ -1588,10 +1605,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
-}
-
-function toBridgeToolResult(result: Record<string, unknown>): ToolResult {
-  return result as unknown as ToolResult;
 }
 
 function toErrorMessage(error: unknown, fallback: string): string {

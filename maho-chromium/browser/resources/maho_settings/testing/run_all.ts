@@ -2,9 +2,15 @@ import { spawn } from "child_process";
 import * as path from "path";
 
 const tests = [
+  "static_scope_contract.ts",
+  "static_complex_profile_guard_contract.ts",
+  "static_partial_profile_row_guard_contract.ts",
+  "profile_target_guard.test.ts",
+  "static_search_engine_settings_contract.ts",
   "e2e_auth_billing_flow.ts",
   "e2e_pane_profiles.ts",
   "e2e_pane_passwords.ts",
+  "e2e_pane_password_provider_dropdown.ts",
   "e2e_pane_password_import.ts",
   "e2e_pane_passwords_ia_split.ts",
   "e2e_pane_shortcuts.ts",

@@ -1,11 +1,16 @@
 import {
+  ApprovalDecision,
+  ApprovalPolicy,
   ApprovalRequestInfo,
   ApprovalResultInfo,
+  ApprovalSensitivity,
+  ApprovalState,
   BookmarkItem,
   BrowserContextPayload as BrowserContextPayloadRecord,
   BrowserContextStatus,
   ContextAttachment as ContextAttachmentRecord,
   ContextSourceKind,
+  ChatIntent as MojoChatIntent,
   CreditBalanceInfo,
   HistoryItem,
   RuntimeConnectionState,
@@ -20,7 +25,7 @@ import {
 } from './maho_ai.mojom-webui.js';
 
 export type ConnectionState = RuntimeConnectionState;
-export {RuntimeEventKind, ViewMode};
+export {ApprovalDecision, ApprovalPolicy, ApprovalSensitivity, ApprovalState, RuntimeEventKind, ViewMode};
 export type {CreditBalanceInfo};
 export type SessionRecord = SessionInfo;
 export type RuntimeEventRecord = RuntimeEvent;
@@ -78,6 +83,9 @@ export interface ToastState {
 export interface AISettingsState {
   activeModelId: string|null;
   activeProviderId: string|null;
+  activeReasoningEffort: AIReasoningEffort|null;
+  providerOptions: readonly AIProviderOptionRecord[];
+  reasoningOptions: readonly AIReasoningOptionRecord[];
 }
 
 export interface AIProviderRecord {
@@ -85,6 +93,67 @@ export interface AIProviderRecord {
   id: string;
   models: string[];
 }
+
+export const AI_REASONING_EFFORT = {
+  kLow: 0,
+  kMedium: 1,
+  kHigh: 2,
+} as const;
+
+export type AIReasoningEffort =
+    typeof AI_REASONING_EFFORT[keyof typeof AI_REASONING_EFFORT];
+
+export interface AIModelOptionRecord {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface AIProviderOptionRecord {
+  readonly id: string;
+  readonly label: string;
+  readonly modelOptions: readonly AIModelOptionRecord[];
+}
+
+export interface AIReasoningOptionRecord {
+  readonly effort: AIReasoningEffort;
+  readonly label: string;
+}
+
+export interface AISelectionRequest {
+  readonly modelId: string;
+  readonly providerId: string;
+  readonly reasoningEffort: AIReasoningEffort;
+}
+
+export interface AIModelOptionPayload {
+  readonly id?: string|null;
+  readonly label?: string|null;
+}
+
+export interface AIProviderOptionPayload {
+  readonly id?: string|null;
+  readonly label?: string|null;
+  readonly modelOptions?: readonly AIModelOptionPayload[]|null;
+}
+
+export interface AIReasoningOptionPayload {
+  readonly effort?: AIReasoningEffort|null;
+  readonly label?: string|null;
+}
+
+export interface AISettingsInfoPayload {
+  readonly activeModelId?: string|null;
+  readonly activeProviderId?: string|null;
+  readonly activeReasoningEffort?: AIReasoningEffort|null;
+  readonly providerOptions?: readonly AIProviderOptionPayload[]|null;
+  readonly reasoningOptions?: readonly AIReasoningOptionPayload[]|null;
+}
+
+export const DEFAULT_AI_REASONING_OPTIONS: readonly AIReasoningOptionRecord[] = [
+  {effort: AI_REASONING_EFFORT.kLow, label: 'Low'},
+  {effort: AI_REASONING_EFFORT.kMedium, label: 'Medium'},
+  {effort: AI_REASONING_EFFORT.kHigh, label: 'High'},
+] as const;
 
 export interface OpenTabsState {
   items: OpenTabRecord[];
@@ -121,6 +190,7 @@ export interface ComposerState {
   // frontend-only until the Mojo contract is extended.
   attachments: ComposerAttachment[];
   modeLabel: string;
+  focusRequest: number;
 }
 
 export type VoiceStatus = 'idle'|'listening'|'error'|'unsupported';
@@ -167,6 +237,20 @@ export function isHistoryAttachment(attachment: ComposerAttachment): boolean {
 
 export function isFileAttachment(attachment: ComposerAttachment): boolean {
   return attachment.kind === 'file';
+}
+
+export const ChatIntent = (MojoChatIntent as typeof MojoChatIntent | undefined) ?? {
+  kFreeform: 0,
+  kSummarizeCurrentPage: 1,
+  kQuizCurrentPage: 2,
+};
+export type ChatIntent = (typeof ChatIntent)[keyof typeof ChatIntent];
+
+export interface QuickAction {
+  id: string;
+  label: string;
+  userPrompt: string;
+  intent: ChatIntent;
 }
 
 function getFileAttachmentId(file: File): string {
@@ -508,6 +592,7 @@ export const DEFAULT_COMPOSER_STATE: ComposerState = {
   prompt: '',
   attachments: [],
   modeLabel: 'Task',
+  focusRequest: 0,
 };
 
 export const DEFAULT_VOICE_STATE: VoiceState = {
@@ -547,6 +632,9 @@ export function createInitialState(): AppState {
     aiSettings: {
       activeModelId: null,
       activeProviderId: null,
+      activeReasoningEffort: null,
+      providerOptions: [],
+      reasoningOptions: DEFAULT_AI_REASONING_OPTIONS,
     },
     turnPendingBySessionId: {},
     contextsBySessionId: {},
@@ -715,6 +803,62 @@ export function getRuntimeStateLabel(state?: string|null): string {
   }
 
   return toTitleCaseRuntimeStateLabel(state);
+}
+
+export function getApprovalPolicyLabel(policy?: ApprovalPolicy|null): string {
+  switch (policy) {
+    case ApprovalPolicy.kAllowAll:
+      return 'Allow all';
+    case ApprovalPolicy.kAllowMcp:
+      return 'Allow MCP';
+    case ApprovalPolicy.kDenySensitive:
+      return 'Deny sensitive';
+    case ApprovalPolicy.kDenyAll:
+      return 'Deny all';
+    case ApprovalPolicy.kPrompt:
+    default:
+      return 'Prompt';
+  }
+}
+
+export function getApprovalSensitivityLabel(
+    sensitivity?: ApprovalSensitivity|null): string {
+  switch (sensitivity) {
+    case ApprovalSensitivity.kReadOnly:
+      return 'Read-only';
+    case ApprovalSensitivity.kSensitive:
+    default:
+      return 'Sensitive';
+  }
+}
+
+export function getApprovalStateLabel(state?: ApprovalState|null): string {
+  switch (state) {
+    case ApprovalState.kApproved:
+      return 'Approved';
+    case ApprovalState.kDenied:
+      return 'Denied';
+    case ApprovalState.kCancelled:
+      return 'Cancelled';
+    case ApprovalState.kPending:
+    default:
+      return 'Pending';
+  }
+}
+
+export function getApprovalDecisionLabel(
+    decision?: ApprovalDecision|null): string {
+  switch (decision) {
+    case ApprovalDecision.kAllow:
+      return 'Allow';
+    case ApprovalDecision.kAllowOnce:
+      return 'Allow once';
+    case ApprovalDecision.kDeny:
+      return 'Deny';
+    case ApprovalDecision.kNone:
+    default:
+      return 'None';
+  }
 }
 
 export function getEventText(event: RuntimeEventRecord): string {

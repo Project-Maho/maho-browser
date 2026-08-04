@@ -2,6 +2,50 @@ export type ControlKind = 'text'|'toggle'|'select'|'slider'|'textarea';
 
 export type PaneKind = 'live'|'hidden'|'embed';
 
+export type SettingScope =
+    | 'profile'
+    | 'device'
+    | 'process'
+    | 'account'
+    | 'core-global';
+
+export type SelectedProfileSupport =
+    | 'supported'
+    | 'partial'
+    | 'host-only'
+    | 'not-applicable';
+
+export const GLOBAL_APPLICABILITY_LABEL = 'Applies to all profiles.';
+
+export function scopeApplicabilityLabel(scope: SettingScope): string | null {
+  return scope === 'profile' ? null : GLOBAL_APPLICABILITY_LABEL;
+}
+
+export type OwnershipMetadataRecord = {
+  readonly key: string;
+  readonly scope?: SettingScope;
+  readonly selectedProfile?: boolean;
+  readonly selectedProfileSupport?: SelectedProfileSupport;
+};
+
+export function assertExhaustiveOwnershipMetadata(
+    records: readonly OwnershipMetadataRecord[],
+    eligibility: 'selectedProfile'|'selectedProfileSupport'): void {
+  const seen = new Set<string>();
+  for (const record of records) {
+    if (!record.scope) {
+      throw new Error(`Missing scope for ${record.key}`);
+    }
+    if (record[eligibility] === undefined) {
+      throw new Error(`Missing ${eligibility} eligibility for ${record.key}`);
+    }
+    if (seen.has(record.key)) {
+      throw new Error(`Duplicate ownership metadata for ${record.key}`);
+    }
+    seen.add(record.key);
+  }
+}
+
 export type DomainId =
     | 'browsing'
     | 'look-and-feel'
@@ -17,6 +61,8 @@ interface ControlOption {
 }
 
 export interface SettingMetadata {
+  scope: SettingScope;
+  selectedProfile: boolean;
   label: string;
   description: string;
   control: ControlKind;
@@ -34,8 +80,16 @@ export interface SettingDefinition {
   metadata: SettingMetadata;
 }
 
+export interface ServiceMetadata {
+  key: string;
+  scope: SettingScope;
+  selectedProfile: boolean;
+}
+
 export interface PaneDefinition {
   key: string;
+  scope: SettingScope;
+  selectedProfileSupport: SelectedProfileSupport;
   symbol: string;
   navTitle: string;
   title: string;
@@ -43,7 +97,7 @@ export interface PaneDefinition {
   domain: DomainId;
   groupKeys?: string[];
   embedUrl?: string;
-  contentKind?: 'profiles'|'atc'|'ai'|'ai-developers'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'content-blocker'|'extensions'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-ai'|'mail-security';
+  contentKind?: 'profiles'|'atc'|'ai'|'ai-developers'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'content-blocker'|'extensions'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-security';
   externalAction?: 'openExtensions';
 }
 

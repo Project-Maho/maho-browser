@@ -18,12 +18,12 @@ export function SlashEditors({store}: {store: MahoAiStore}) {
   };
 
   return (
-    <div className="mx-3 my-2 p-4 rounded-2xl border border-border/80 bg-card/90 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-md relative animate-in fade-in zoom-in-95 duration-200">
+    <div className="mx-3 my-2 p-4 rounded-2xl glass relative animate-in fade-in zoom-in-95 duration-200">
       <Button
         variant="ghost"
         size="icon"
         onClick={handleClose}
-        className="absolute top-2 right-2 rounded-full size-6 text-muted-foreground hover:text-foreground hover:bg-accent"
+        className="absolute top-2 right-2 rounded-full size-6 text-muted-foreground hover:text-foreground hover:bg-surface-hover"
       >
         <X className="size-3.5" />
       </Button>

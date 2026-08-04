@@ -1,7 +1,51 @@
-import type {LiveCardDefinition, PaneDefinition} from '../models.js';
+import type {LiveCardDefinition, PaneDefinition, SettingScope} from '../models.js';
 
 export type LivePaneSectionDefinition =
     {kind: 'live-card'; card: LiveCardDefinition};
+
+export type SelectedProfilePaneDisposition = 'pane'|'limitation';
+export type SelectedProfileLegacyRowDisposition = 'control'|'limitation';
+
+// An active target is fail-closed until its browser-issued context proves that
+// it is the host profile. This prevents loading/error/stale transitions from
+// briefly exposing host-only pane data under a selected-profile context.
+export function selectedProfilePaneDisposition(
+    support: PaneDefinition['selectedProfileSupport'],
+    hasSelectedTarget: boolean,
+    isHostProfile: boolean|null|undefined): SelectedProfilePaneDisposition {
+  return support === 'host-only' && hasSelectedTarget && isHostProfile !== true ?
+      'limitation' : 'pane';
+}
+
+export const LEGACY_PROFILE_ROW_GUARD_PANE_KEYS = [
+  'tabs',
+  'advanced',
+  'appearance',
+] as const;
+
+// Partial panes mix global rows, selected-profile-routable rows, and legacy
+// host-only rows. Keep allowlisted rows actionable because the store routes
+// them through typed target APIs. Gate unsupported profile rows for non-host or
+// unresolved targets so they can never fall through to the host-bound path.
+export function selectedProfileLegacyRowDisposition(
+    scope: SettingScope|undefined,
+    selectedProfileEligible: boolean|undefined,
+    isGuardedPane: boolean,
+    hasSelectedTarget: boolean,
+    isHostProfile: boolean|null|undefined): SelectedProfileLegacyRowDisposition {
+  if (!isGuardedPane || !hasSelectedTarget || isHostProfile === true) {
+    return 'control';
+  }
+  if (scope === 'profile') {
+    if (isHostProfile === null || isHostProfile === undefined) {
+      return 'limitation';
+    }
+    return selectedProfileEligible === true ? 'control' : 'limitation';
+  }
+  return scope === 'device' || scope === 'process' || scope === 'account' ||
+          scope === 'core-global' ?
+      'control' : 'limitation';
+}
 
 export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinition[]> = {
   general: [
@@ -9,6 +53,12 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
       title: 'Daily browsing defaults',
       description: '',
       settingKeys: ['general.prompt_for_download', 'search.suggestions'],
+      wide: true,
+    }},
+    {kind: 'live-card', card: {
+      title: 'Languages',
+      description: '',
+      settingKeys: ['general.translate_target_language'],
       wide: true,
     }},
   ],
@@ -59,6 +109,8 @@ export const PRIVACY_SETTING_KEYS = [
 const BROWSING_PANES: PaneDefinition[] = [
   {
     key: 'general',
+    scope: 'profile',
+    selectedProfileSupport: 'supported',
     symbol: 'G',
     navTitle: 'General',
     title: 'General',
@@ -68,6 +120,8 @@ const BROWSING_PANES: PaneDefinition[] = [
   },
   {
     key: 'tabs',
+    scope: 'core-global',
+    selectedProfileSupport: 'partial',
     symbol: 'T',
     navTitle: 'Tabs',
     title: 'Tabs',
@@ -77,6 +131,8 @@ const BROWSING_PANES: PaneDefinition[] = [
   },
   {
     key: 'notifications',
+    scope: 'profile',
+    selectedProfileSupport: 'supported',
     symbol: 'N',
     navTitle: 'Notifications',
     title: 'Notifications',
@@ -86,6 +142,8 @@ const BROWSING_PANES: PaneDefinition[] = [
   },
   {
     key: 'advanced',
+    scope: 'device',
+    selectedProfileSupport: 'partial',
     symbol: 'A',
     navTitle: 'Advanced',
     title: 'Advanced',
@@ -98,6 +156,8 @@ const BROWSING_PANES: PaneDefinition[] = [
 const LOOK_AND_FEEL_PANES: PaneDefinition[] = [
   {
     key: 'appearance',
+    scope: 'profile',
+    selectedProfileSupport: 'partial',
     symbol: 'A',
     navTitle: 'Appearance',
     title: 'Appearance',
@@ -110,6 +170,8 @@ const LOOK_AND_FEEL_PANES: PaneDefinition[] = [
 const IDENTITY_PANES: PaneDefinition[] = [
   {
     key: 'account',
+    scope: 'account',
+    selectedProfileSupport: 'not-applicable',
     symbol: 'AC',
     navTitle: 'Account',
     title: 'Account',
@@ -119,6 +181,8 @@ const IDENTITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'profiles',
+    scope: 'core-global',
+    selectedProfileSupport: 'partial',
     symbol: 'P',
     navTitle: 'Profiles',
     title: 'Profiles',
@@ -128,6 +192,8 @@ const IDENTITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'passwords',
+    scope: 'core-global',
+    selectedProfileSupport: 'host-only',
     symbol: 'PW',
     navTitle: 'Passwords',
     title: 'Passwords',
@@ -137,6 +203,8 @@ const IDENTITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'saved-passwords',
+    scope: 'core-global',
+    selectedProfileSupport: 'host-only',
     symbol: 'SP',
     navTitle: 'Saved Passwords',
     title: 'Saved Passwords',
@@ -147,6 +215,8 @@ const IDENTITY_PANES: PaneDefinition[] = [
 
   {
     key: 'autofill',
+    scope: 'core-global',
+    selectedProfileSupport: 'host-only',
     symbol: 'A',
     navTitle: 'Autofill',
     title: 'Autofill',
@@ -159,6 +229,8 @@ const IDENTITY_PANES: PaneDefinition[] = [
 const PRODUCTIVITY_PANES: PaneDefinition[] = [
   {
     key: 'shortcuts',
+    scope: 'process',
+    selectedProfileSupport: 'not-applicable',
     symbol: '\u2318',
     navTitle: 'Shortcuts',
     title: 'Keyboard shortcuts',
@@ -168,6 +240,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'extensions',
+    scope: 'profile',
+    selectedProfileSupport: 'host-only',
     symbol: 'EX',
     navTitle: 'Extensions',
     title: 'Extensions',
@@ -177,6 +251,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'maho-mini',
+    scope: 'process',
+    selectedProfileSupport: 'host-only',
     symbol: 'LA',
     navTitle: 'Maho Mini & routing',
     title: 'Maho Mini & routing',
@@ -186,6 +262,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'maho-ai',
+    scope: 'profile',
+    selectedProfileSupport: 'host-only',
     symbol: 'AI',
     navTitle: 'Maho AI',
     title: 'Maho AI',
@@ -195,6 +273,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'maho-ai-developers',
+    scope: 'profile',
+    selectedProfileSupport: 'host-only',
     symbol: 'DEV',
     navTitle: 'Developers',
     title: 'Developers',
@@ -204,6 +284,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
   },
   {
     key: 'billing',
+    scope: 'account',
+    selectedProfileSupport: 'not-applicable',
     symbol: '$',
     navTitle: 'Billing',
     title: 'Billing',
@@ -216,6 +298,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
 const PROTECTION_PANES: PaneDefinition[] = [
   {
     key: 'content-blocker',
+    scope: 'process',
+    selectedProfileSupport: 'partial',
     symbol: 'C',
     navTitle: 'Privacy & content blocker',
     title: 'Privacy & content blocker',
@@ -225,6 +309,8 @@ const PROTECTION_PANES: PaneDefinition[] = [
   },
   {
     key: 'chromium-settings',
+    scope: 'profile',
+    selectedProfileSupport: 'host-only',
     symbol: 'CR',
     navTitle: 'Chromium settings',
     title: 'Chromium settings',
@@ -237,6 +323,8 @@ const PROTECTION_PANES: PaneDefinition[] = [
 const MAIL_PANES: PaneDefinition[] = [
   {
     key: 'mail-accounts',
+    scope: 'account',
+    selectedProfileSupport: 'host-only',
     symbol: 'MA',
     navTitle: 'Mail accounts',
     title: 'Mail accounts',
@@ -246,6 +334,8 @@ const MAIL_PANES: PaneDefinition[] = [
   },
   {
     key: 'mail-signatures',
+    scope: 'account',
+    selectedProfileSupport: 'host-only',
     symbol: 'MS',
     navTitle: 'Signatures',
     title: 'Email signatures',
@@ -255,6 +345,8 @@ const MAIL_PANES: PaneDefinition[] = [
   },
   {
     key: 'mail-rules',
+    scope: 'account',
+    selectedProfileSupport: 'host-only',
     symbol: 'MR',
     navTitle: 'Rules & filters',
     title: 'Mail rules & filters',
@@ -264,6 +356,8 @@ const MAIL_PANES: PaneDefinition[] = [
   },
   {
     key: 'mail-calendar',
+    scope: 'account',
+    selectedProfileSupport: 'host-only',
     symbol: 'MC',
     navTitle: 'Calendar',
     title: 'Mail calendar settings',
@@ -273,6 +367,8 @@ const MAIL_PANES: PaneDefinition[] = [
   },
   {
     key: 'mail-behavior',
+    scope: 'account',
+    selectedProfileSupport: 'host-only',
     symbol: 'MB',
     navTitle: 'Mail behavior',
     title: 'Mail behavior & layout',
@@ -281,16 +377,9 @@ const MAIL_PANES: PaneDefinition[] = [
     contentKind: 'mail-behavior',
   },
   {
-    key: 'mail-ai',
-    symbol: 'MAI',
-    navTitle: 'Mail AI',
-    title: 'Mail AI behavior',
-    kind: 'live',
-    domain: 'mail',
-    contentKind: 'mail-ai',
-  },
-  {
     key: 'mail-security',
+    scope: 'account',
+    selectedProfileSupport: 'host-only',
     symbol: 'MSY',
     navTitle: 'Mail security',
     title: 'PGP & S/MIME security',
@@ -331,3 +420,15 @@ export const PANE_DEFINITIONS = CORE_PANE_DEFINITIONS;
 export const PANE_DEFINITION_MAP: Record<string, PaneDefinition> =
     Object.fromEntries(ALL_PANE_DEFINITIONS.map(d => [d.key, d])) as
         Record<string, PaneDefinition>;
+
+const PANE_ALIASES: Readonly<Record<string, string>> = {
+  'account-sync': 'account',
+  'privacy': 'content-blocker',
+};
+
+export function resolveReachablePaneKey(key: string, mailEnabled: boolean): string {
+  const canonicalKey = PANE_ALIASES[key] ?? key;
+  const pane = PANE_DEFINITION_MAP[canonicalKey];
+  const reachable = panesForSettings(mailEnabled).some(candidate => candidate.key === canonicalKey);
+  return pane && pane.kind !== 'hidden' && reachable ? canonicalKey : PANE_DEFINITIONS[0]!.key;
+}

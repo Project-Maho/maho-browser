@@ -11,6 +11,8 @@ import {
 import {formatTimestamp} from '../../lib/format-timestamp.js';
 import {Markdown} from '../../components/markdown.js';
 import {Badge} from '@ui/badge';
+import {CredentialErrorNotice} from '../../components/credential-error-notice.js';
+import {getCredentialErrorPresentation} from '../../../views/credential_error.js';
 
 function EventShell(
     {
@@ -43,7 +45,14 @@ function EventShell(
 const markdownBodyClassName =
     'text-sm leading-6 text-muted-foreground [&_p]:m-0 [&_p:not(:last-child)]:mb-3 [&_h2]:m-0 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:m-0 [&_h3]:text-sm [&_h3]:font-semibold [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/70 [&_pre]:p-3 [&_pre]:text-xs';
 
-export function EventCard({event}: {event: RuntimeEventRecord}) {
+export function EventCard(
+    {
+      event,
+      onOpenSettings,
+    }: {
+      event: RuntimeEventRecord;
+      onOpenSettings: (paneKey: string) => void;
+    }) {
   const meta = formatTimestamp(event.timestamp);
 
   if (event.kind === RuntimeEventKind.kUserPrompt) {
@@ -72,6 +81,16 @@ export function EventCard({event}: {event: RuntimeEventRecord}) {
         body={<Markdown className={markdownBodyClassName} text={getEventText(event)} />}
         meta={meta}
         title="Assistant streaming"
+      />
+    );
+  }
+
+  if (event.kind === RuntimeEventKind.kAssistantThinking) {
+    return (
+      <EventShell
+        body={<Markdown className={markdownBodyClassName} text={getEventText(event)} />}
+        meta={meta}
+        title="Assistant thinking"
       />
     );
   }
@@ -159,10 +178,21 @@ export function EventCard({event}: {event: RuntimeEventRecord}) {
   }
 
   if (event.kind === RuntimeEventKind.kError) {
+    const credentialError = getCredentialErrorPresentation(event);
     return (
       <EventShell
         badge={<Badge variant="destructive">Error</Badge>}
-        body={<div className="text-sm leading-6 text-muted-foreground break-words">{getEventText(event) || 'The runtime reported an error.'}</div>}
+        body={credentialError ? (
+          <CredentialErrorNotice
+            onOpenSettings={onOpenSettings}
+            presentation={credentialError}
+            surface="developer"
+          />
+        ) : (
+          <div className="text-sm leading-6 text-muted-foreground break-words">
+            {getEventText(event) || 'The runtime reported an error.'}
+          </div>
+        )}
         meta={meta}
         title="Runtime error"
       />

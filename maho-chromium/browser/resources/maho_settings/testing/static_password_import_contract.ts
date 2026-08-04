@@ -111,6 +111,24 @@ const checks: readonly StaticCheck[] = [
     },
   },
   {
+    name: "password provider dropdown keeps unavailable extensions selectable",
+    run: () => {
+      const settings = readRepoFile("maho-chromium/browser/resources/maho_settings/react/passwords_settings.tsx");
+      const e2e = readRepoFile("maho-chromium/browser/resources/maho_settings/testing/e2e_pane_password_provider_dropdown.ts");
+      assertIncludes(
+          settings,
+          "commitSettingValue('autofill.password_provider', nextValue)",
+          "provider selection commit contract");
+      assertIncludes(settings, "void loadPasswordSettings(false)", "provider status reload contract");
+      assertIncludes(settings, "Extension not installed or disabled.", "unavailable provider option copy");
+      assertExcludes(settings, "disabled: !opt.isAvailable", "provider options remain selectable");
+      assertIncludes(e2e, "Unavailable Bitwarden provider option remains selectable", "Bitwarden selectable E2E coverage");
+      assertIncludes(e2e, "Unavailable 1Password provider option remains selectable", "1Password selectable E2E coverage");
+      assertIncludes(e2e, "Manage Extensions action is shown for Bitwarden", "Bitwarden warning E2E coverage");
+      assertIncludes(e2e, "Manage Extensions action is shown for 1Password", "1Password warning E2E coverage");
+    },
+  },
+  {
     name: "native picker is filtered before PreviewPasswordImport path API",
     run: () => {
       const mojom = readRepoFile("maho-chromium/browser/ui/webui/maho_settings/maho_settings.mojom");

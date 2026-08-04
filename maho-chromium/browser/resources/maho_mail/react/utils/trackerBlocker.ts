@@ -184,7 +184,7 @@ export function blockExternalResources(
   function shouldBlockUrl(url: string | null | undefined): { block: boolean; isTracker: boolean; domain: string | null } {
     if (!url) return { block: false, isTracker: false, domain: null };
     const trimmed = url.trim();
-    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+    if (!/^https?:\/\//i.test(trimmed)) {
       return { block: false, isTracker: false, domain: null };
     }
     const domain = extractDomain(trimmed);

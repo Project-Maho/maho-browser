@@ -185,8 +185,8 @@ function PasswordSettingsCard(
           options={data.providerOptions.map(opt => ({
             label: opt.displayName,
             value: getPasswordProviderBackendValue(opt.provider),
-            disabled: !opt.isAvailable,
-            description: opt.description,
+            description: opt.isAvailable ? opt.description :
+                `${opt.description} Extension not installed or disabled.`,
           }))}
           value={getPasswordProviderBackendValue(data.providerStatus.provider)}
           onChange={async nextValue => {

@@ -511,7 +511,7 @@ export const listOutbox = (accountId?: string): Promise<Types.OutboxItem[]> =>
   wrapMojoCall<Types.OutboxItem[]>(() => handler.listOutbox(accountId ?? ''), 'listOutbox');
 
 export const checkForAppUpdate = (): Promise<any> =>
-  Promise.resolve({ available: false });
+  Promise.resolve(null);
 
 export const relaunchApp = (): Promise<void> =>
   Promise.resolve();
@@ -587,24 +587,6 @@ export const listAllPendingMutations = async (): Promise<Types.PendingMutation[]
   );
   return perAccount.flat();
 };
-
-export const listAgentSessions = (accountId: string): Promise<Types.AgentChatSession[]> =>
-  wrapMojoCall<Types.AgentChatSession[]>(() => handler.listAgentSessions(accountId), 'listAgentSessions');
-
-export const getAgentMessages = (accountId: string, sessionId: string): Promise<Types.AgentChatMessage[]> =>
-  wrapMojoCall<Types.AgentChatMessage[]>(() => handler.getAgentMessages(accountId, sessionId), 'getAgentMessages');
-
-export const createAgentSession = (accountId: string): Promise<Types.AgentChatSession> =>
-  wrapMojoCall<Types.AgentChatSession>(() => handler.createAgentSession(accountId), 'createAgentSession');
-
-export const deleteAgentSession = (accountId: string, sessionId: string): Promise<void> =>
-  wrapMojoCall<void>(() => handler.deleteAgentSession(accountId, sessionId), 'deleteAgentSession');
-
-export const sendAgentMessage = (accountId: string, sessionId: string, content: string): Promise<Types.AgentChatMessage> =>
-  wrapMojoCall<Types.AgentChatMessage>(() => handler.sendAgentMessage(accountId, sessionId, content), 'sendAgentMessage');
-
-export const cancelAgentMessage = (accountId: string, sessionId: string): Promise<void> =>
-  wrapMojoCall<void>(() => handler.cancelAgentMessage(accountId, sessionId), 'cancelAgentMessage');
 
 export function getAutoDraftForEmail(emailId: string): Promise<Types.AutoDraft | null>;
 export function getAutoDraftForEmail(accountId: string, emailId: string): Promise<Types.AutoDraft | null>;

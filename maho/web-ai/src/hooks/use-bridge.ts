@@ -19,9 +19,16 @@ function makeBridge(): MahoBridge {
     byokDeleteKey: (provider) => call('byokDeleteKey', { provider }),
     byokValidateKey: (provider, key) => call('byokValidateKey', { provider, key }),
 
+    // --- AI provider settings ---
+    getAiSettings: () => call('getAiSettings'),
+    setAiProvider: (provider) => call('setAiProvider', { provider }),
+    setAiBaseUrl: (url) => call('setAiBaseUrl', { url }),
+    setAiApiKey: (key) => call('setAiApiKey', { key }),
+    setAiModel: (model) => call('setAiModel', { model }),
+
     // --- Chat Session ---
     chatSessionStart: (opts) => call('chatSessionStart', opts as unknown as Record<string, unknown>),
-    chatSessionResume: (handle) => call('chatSessionResume', { handle }),
+    chatSessionResume: (conversationId) => call('chatSessionResume', { handle: conversationId }),
     chatSessionFree: (handle) => call('chatSessionFree', { handle }),
     chatSendMessage: (handle, content) => call('chatSendMessage', { handle, content }),
     chatCancelTurn: (handle) => call('chatCancelTurn', { handle }),
@@ -38,6 +45,8 @@ function makeBridge(): MahoBridge {
     conversationDelete: (id) => call('conversationDelete', { id }),
     conversationRename: (id, title) => call('conversationRename', { id, title }),
     conversationGetMessages: (id) => call('conversationGetMessages', { id }),
+    saveConversationMessage: (sessionId, role, content) =>
+      call('saveConversationMessage', { sessionId, role, content }),
 
     // --- Space AI Config ---
     getSpaceAIConfig: (spaceId) => call('getSpaceAIConfig', { spaceId }),
@@ -60,6 +69,13 @@ function makeBridge(): MahoBridge {
     captureScreenshot: () => call('captureScreenshot'),
     openSettings: () => call('openSettings'),
     hapticFeedback: (style: HapticStyle) => call('hapticFeedback', { style }),
+
+    // --- Relay auth (gated onboarding) ---
+    relaySignIn: (email, password) => call('relaySignIn', { email, password }),
+    relaySignUp: (email, password, displayName) => call('relaySignUp', { email, password, displayName }),
+    relayAccountStatus: () => call('relayAccountStatus'),
+    openDefaultBrowserSettings: () => call('openDefaultBrowserSettings'),
+    completeOnboarding: () => call('completeOnboarding'),
   };
 }
 

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "duration": 6.6,
+  "assertions": [
+    { "kind": "appearsBy", "selector": ".split-view-scene__camera", "bySec": 0 },
+    { "kind": "staysInFrame", "selector": "#split-view-scene" }
+  ]
+}

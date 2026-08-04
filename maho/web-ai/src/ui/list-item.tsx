@@ -14,31 +14,15 @@ export function ListItem({ leading, trailing, headline, supporting, onClick, cla
   const Tag = onClick ? 'button' : 'div';
   return (
     <Tag
-      class={clsx(
-        'flex w-full items-center gap-3 px-4 py-3 text-left',
-        onClick && 'hover:bg-[var(--color-surface-hover)] active:bg-[var(--color-surface-active)] transition-colors',
-        className,
-      )}
+      class={clsx('ui-list-item', onClick && 'ui-list-item--interactive', className)}
       onClick={onClick}
     >
-      {leading && (
-        <span class="shrink-0 flex items-center justify-center w-6 h-6 text-[var(--color-on-surface-secondary)]">
-          {leading}
-        </span>
-      )}
-      <span class="flex-1 min-w-0">
-        <span class="block text-sm font-medium text-[var(--color-on-surface)]">{headline}</span>
-        {supporting && (
-          <span class="block text-xs text-[var(--color-on-surface-secondary)] mt-0.5">
-            {supporting}
-          </span>
-        )}
+      {leading && <span class="ui-list-item__leading">{leading}</span>}
+      <span class="ui-list-item__body">
+        <span class="ui-list-item__headline">{headline}</span>
+        {supporting && <span class="ui-list-item__supporting">{supporting}</span>}
       </span>
-      {trailing && (
-        <span class="shrink-0 flex items-center gap-1 text-[var(--color-on-surface-secondary)]">
-          {trailing}
-        </span>
-      )}
+      {trailing && <span class="ui-list-item__trailing">{trailing}</span>}
     </Tag>
   );
 }

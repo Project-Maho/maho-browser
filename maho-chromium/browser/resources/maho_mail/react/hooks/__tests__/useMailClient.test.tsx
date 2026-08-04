@@ -384,6 +384,30 @@ describe("useMailClient", () => {
     expect(result.current.selection).toEqual({ type: "child", accountId: "acc-1", folderId: "sent-1" });
   });
 
+  it("exposes an authentication recovery state instead of only reporting a toast", async () => {
+    vi.mocked(api.listAccounts).mockResolvedValue([]);
+    vi.mocked(api.getEmail).mockRejectedValue(
+      new Error("core error: Auth error: [AUTHENTICATIONFAILED] Invalid credentials"),
+    );
+    const onError = vi.fn();
+
+    const { result } = renderHook(() => useMailClient(onError));
+
+    await waitFor(() => {
+      expect(result.current.isBootstrappingAccounts).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.selectEmail("email-1");
+    });
+
+    expect(result.current.authRecoveryError).toEqual({
+      emailId: "email-1",
+      message: "core error: Auth error: [AUTHENTICATIONFAILED] Invalid credentials",
+    });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   describe("selectEmail race conditions", () => {
     beforeEach(() => {
       vi.useFakeTimers();

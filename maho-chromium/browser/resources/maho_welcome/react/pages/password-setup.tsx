@@ -1,15 +1,21 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ShieldCheck} from 'lucide-react';
+import {ArrowLeft, ShieldCheck} from 'lucide-react';
 
-import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
+import {AlertDescription, AlertTitle} from '@ui/alert';
 import {Button} from '@ui/button';
 import type {PasswordProviderKind} from '../../../maho_settings/maho_settings.mojom-webui.js';
 import type {MahoWelcomeStore} from '../store.js';
-import {orderProviderOptions, VAULT_LOCK_STATE} from '../types.js';
+import {orderProviderOptions, PASSWORD_PROVIDER_KIND, VAULT_LOCK_STATE} from '../types.js';
 import type {WelcomeState} from '../types.js';
-import {PasswordProviderCard, VaultCard} from './password-setup-fields.js';
+import {
+  ExternalProviderGuideCard,
+  NoPasswordManagerConfirmCard,
+  ProviderChoice,
+  ProviderSelectionGrid,
+  VaultCard,
+} from './password-setup-fields.js';
 
 interface PasswordSetupProps {
   readonly snapshot: WelcomeState;
@@ -30,10 +36,10 @@ export function PasswordSetupSidebar({store}: {store: MahoWelcomeStore}) {
         <ShieldCheck className="size-5" aria-hidden="true" />
       </div>
       <h1 className="text-balance">
-        {store.getString('IDS_MAHO_WELCOME_PASSWORD_SETUP_TITLE')}
+        Password Management
       </h1>
       <p className="text-pretty">
-        {store.getString('IDS_MAHO_WELCOME_PASSWORD_SETUP_BODY')}
+        Choose how you want Maho to store and manage your passwords.
       </p>
     </>
   );
@@ -44,11 +50,18 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
   const providerOptions = useMemo(
       () => orderProviderOptions(passwordSetup.providerOptions),
       [passwordSetup.providerOptions]);
-  const [selectedProvider, setSelectedProvider] = useState<PasswordProviderKind | null>(
-      passwordSetup.providerStatus?.provider ?? null);
+
+  const [step, setStep] = useState<'select' | 'configure'>('select');
+  const [selectedChoice, setSelectedChoice] = useState<ProviderChoice | null>(
+      passwordSetup.passwordManagerSkipped
+        ? 'none'
+        : passwordSetup.providerStatus?.provider ?? PASSWORD_PROVIDER_KIND.MahoNative
+  );
+
   const [masterPassphrase, setMasterPassphrase] = useState('');
   const [recoverySecret, setRecoverySecret] = useState('');
   const [localError, setLocalError] = useState('');
+
   const masterPassphraseRef = useRef('');
   const recoverySecretRef = useRef('');
   const masterInputRef = useRef<HTMLInputElement>(null);
@@ -59,10 +72,12 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
   }, [store]);
 
   useEffect(() => {
-    if (passwordSetup.providerStatus) {
-      setSelectedProvider(passwordSetup.providerStatus.provider);
+    if (passwordSetup.passwordManagerSkipped) {
+      setSelectedChoice('none');
+    } else if (passwordSetup.providerStatus) {
+      setSelectedChoice(passwordSetup.providerStatus.provider);
     }
-  }, [passwordSetup.providerStatus]);
+  }, [passwordSetup.providerStatus, passwordSetup.passwordManagerSkipped]);
 
   useEffect(() => () => {
     scrubSecretRefs({
@@ -92,43 +107,78 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
   const isUnlocked = lockState === VAULT_LOCK_STATE.Unlocked;
   const isBusy = passwordSetup.status === 'loading' ||
       passwordSetup.status === 'submitting';
-  const canSubmit = selectedProvider !== null && !isBusy && (
+
+  const isNativeVault = selectedChoice === PASSWORD_PROVIDER_KIND.MahoNative;
+  const isNoManager = selectedChoice === 'none';
+
+  const canAdvanceStepA = selectedChoice !== null && !isBusy;
+
+  const canSubmitStepB = !isBusy && (
+    isNoManager ||
+    !isNativeVault ||
     isUnlocked ||
     (needsInitialize && masterPassphrase.trim().length > 0 &&
       recoverySecret.trim().length > 0) ||
     (needsUnlock && masterPassphrase.trim().length > 0)
   );
+
   const errorMessage = localError || passwordSetup.errorMessage;
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (selectedProvider === null || isBusy) {
+
+    if (step === 'select') {
+      if (!canAdvanceStepA) return;
+      setLocalError('');
+      if (selectedChoice === 'none') {
+        store.skipPasswordSetup();
+        return;
+      }
+      setStep('configure');
       return;
     }
-    if (needsInitialize &&
-        (masterPassphrase.trim().length === 0 ||
-          recoverySecret.trim().length === 0)) {
-      setLocalError('Master passphrase and recovery secret are required.');
-      return;
-    }
-    if (needsUnlock && masterPassphrase.trim().length === 0) {
-      setLocalError('Master passphrase is required.');
+
+    if (selectedChoice === null || isBusy) {
       return;
     }
 
     setLocalError('');
-    try {
-      let vaultReady = isUnlocked;
-      if (needsInitialize) {
-        vaultReady = await store.initializeVault(masterPassphrase, recoverySecret);
-      } else if (needsUnlock) {
-        vaultReady = await store.unlockVault(masterPassphrase);
+
+    if (isNoManager) {
+      store.skipPasswordSetup();
+      return;
+    }
+
+    const providerKind = selectedChoice as PasswordProviderKind;
+
+    if (isNativeVault) {
+      if (needsInitialize &&
+          (masterPassphrase.trim().length === 0 ||
+            recoverySecret.trim().length === 0)) {
+        setLocalError('Master passphrase and recovery secret are required.');
+        return;
       }
-      if (vaultReady) {
-        await store.advanceFromPasswordSetup(selectedProvider);
+      if (needsUnlock && masterPassphrase.trim().length === 0) {
+        setLocalError('Master passphrase is required.');
+        return;
       }
-    } finally {
-      clearSecrets();
+
+      try {
+        let vaultReady = isUnlocked;
+        if (needsInitialize) {
+          vaultReady = await store.initializeVault(masterPassphrase, recoverySecret);
+        } else if (needsUnlock) {
+          vaultReady = await store.unlockVault(masterPassphrase);
+        }
+        if (vaultReady) {
+          await store.advanceFromPasswordSetup(providerKind);
+        }
+      } finally {
+        clearSecrets();
+      }
+    } else {
+      // 1Password or Bitwarden
+      await store.advanceFromPasswordSetup(providerKind);
     }
   }
 
@@ -148,74 +198,104 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
       onSubmit={event => { void handleSubmit(event); }}
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 pb-4">
-        <PasswordProviderCard
-          store={store}
-          disabled={isBusy}
-          options={providerOptions}
-          selectedProvider={selectedProvider}
-          onSelect={provider => {
-            setSelectedProvider(provider);
-            setLocalError('');
-          }}
-        />
+        {step === 'configure' ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
+            onClick={() => {
+              setStep('select');
+              setLocalError('');
+            }}
+          >
+            <ArrowLeft className="size-3.5" />
+            <span>Change provider choice</span>
+          </button>
+        ) : null}
 
-        <VaultCard
-          store={store}
-          disabled={isBusy}
-          isUnlocked={isUnlocked}
-          masterInputRef={masterInputRef}
-          masterPassphrase={masterPassphrase}
-          needsInitialize={needsInitialize}
-          needsUnlock={needsUnlock}
-          recoveryInputRef={recoveryInputRef}
-          recoverySecret={recoverySecret}
-          onMasterPassphraseChange={value => {
-            masterPassphraseRef.current = value;
-            setMasterPassphrase(value);
-            setLocalError('');
-          }}
-          onRecoverySecretChange={value => {
-            recoverySecretRef.current = value;
-            setRecoverySecret(value);
-            setLocalError('');
-          }}
-        />
+        {step === 'select' ? (
+          <ProviderSelectionGrid
+            store={store}
+            disabled={isBusy}
+            options={providerOptions}
+            selectedProvider={selectedChoice}
+            onSelect={choice => {
+              setSelectedChoice(choice);
+              setLocalError('');
+            }}
+          />
+        ) : (
+          <>
+            {isNativeVault ? (
+              <VaultCard
+                store={store}
+                disabled={isBusy}
+                isUnlocked={isUnlocked}
+                masterInputRef={masterInputRef}
+                masterPassphrase={masterPassphrase}
+                needsInitialize={needsInitialize}
+                needsUnlock={needsUnlock}
+                recoveryInputRef={recoveryInputRef}
+                recoverySecret={recoverySecret}
+                onMasterPassphraseChange={value => {
+                  masterPassphraseRef.current = value;
+                  setMasterPassphrase(value);
+                  setLocalError('');
+                }}
+                onRecoverySecretChange={value => {
+                  recoverySecretRef.current = value;
+                  setRecoverySecret(value);
+                  setLocalError('');
+                }}
+              />
+            ) : isNoManager ? (
+              <NoPasswordManagerConfirmCard />
+            ) : (
+              <ExternalProviderGuideCard
+                store={store}
+                provider={selectedChoice as PasswordProviderKind}
+                option={providerOptions.find(o => o.provider === selectedChoice) ?? null}
+              />
+            )}
+          </>
+        )}
 
         {errorMessage ? (
-          <Alert variant="destructive" aria-live="assertive">
-            <AlertTitle>Password setup failed</AlertTitle>
-            <AlertDescription>{errorMessage}</AlertDescription>
-            {providerOptions.length === 0 ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-3"
-                disabled={isBusy}
-                onClick={() => { void store.refreshPasswordSetup(); }}
-              >
-                Retry
-              </Button>
-            ) : null}
-          </Alert>
+          <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive shrink-0" aria-live="assertive">
+            <AlertTitle className="font-semibold text-sm mb-1">Password setup notice</AlertTitle>
+            <AlertDescription className="text-pretty">{errorMessage}</AlertDescription>
+          </div>
         ) : null}
       </div>
 
       <div className="shrink-0 border-t border-border pt-4">
-        <Button
-          type="submit"
-          className="h-10 w-full rounded-lg font-semibold shadow-lg shadow-primary/10"
-          aria-busy={isBusy}
-          disabled={!canSubmit}
-        >
-          {isBusy
-            ? 'Working…'
-            : needsInitialize
-            ? 'Initialize Vault and continue'
-            : needsUnlock
-            ? 'Unlock Vault and continue'
-            : 'Continue'}
-        </Button>
+        {step === 'select' ? (
+          <Button
+            type="submit"
+            className="h-10 w-full rounded-lg font-semibold shadow-lg shadow-primary/10"
+            disabled={!canAdvanceStepA}
+          >
+            Continue
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            className="h-10 w-full rounded-lg font-semibold shadow-lg shadow-primary/10"
+            aria-busy={isBusy}
+            disabled={!canSubmitStepB}
+          >
+            {isBusy
+              ? 'Working…'
+              : isNoManager
+              ? 'Skip password manager and continue'
+              : isNativeVault
+              ? needsInitialize
+                ? 'Initialize Vault and continue'
+                : needsUnlock
+                ? 'Unlock Vault and continue'
+                : 'Continue with Maho Local Vault'
+              : 'Continue'}
+          </Button>
+        )}
       </div>
     </form>
   );

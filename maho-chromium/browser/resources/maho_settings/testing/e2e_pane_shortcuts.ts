@@ -7,8 +7,20 @@ import {
   checkRelayOrExit,
   checkBrowserOrExit,
   reportResultsAndExit,
-  CDP_URL_ROOT
+  CDP_URL_ROOT,
+  clickElementByText,
+  waitForCondition
 } from "./cdp_harness";
+
+const SHORTCUT_ROW_SELECTOR = '[id^="shortcuts-section-content-"] > div > [data-state]';
+
+async function openActionsMenu(cdp: CDP): Promise<boolean> {
+  if (!await clickElementByText(cdp, 'button', 'Actions ▾')) return false;
+  return waitForCondition(
+    cdp,
+    `(function(){ return !!document.querySelector('[role="menu"][data-state="open"]'); })()`
+  );
+}
 
 async function main() {
   await checkRelayOrExit();
@@ -22,14 +34,30 @@ async function main() {
 
   step("Shortcuts Pane Verification");
   await cdp.navigate(`${CDP_URL_ROOT}shortcuts`, 4000);
+  const shortcutsReady = await waitForCondition(cdp, `(function(){
+    return !!document.querySelector('main') &&
+      Array.from(document.querySelectorAll('button')).some(function(button){
+        return (button.textContent || '').trim() === 'Actions ▾';
+      }) &&
+      document.querySelectorAll(${JSON.stringify(SHORTCUT_ROW_SELECTOR)}).length === 67 &&
+      !!Array.from(document.querySelectorAll('.border-dashed')).find(function(panel){
+        return (panel.textContent || '').includes('Select a shortcut to view details or modify.');
+      });
+  })()`);
+  assert(shortcutsReady, "Shortcuts pane reached its fully rendered empty-detail state");
+  if (!shortcutsReady) {
+    ws.close();
+    reportResultsAndExit();
+    return;
+  }
 
   // === Existing assertions (strengthened) ===
   const shortcuts = await cdp.eval<{hasResetAllBtn: boolean; shortcutRowsCount: number; text: string}>(`(function(){
     var main = document.querySelector('main');
     var text = (main ? main.textContent : '').replace(/\\s+/g, ' ');
-    var btns = Array.from(main.querySelectorAll('button'));
-    var hasResetAllBtn = btns.some(function(b){ return b.textContent.trim().includes('Actions'); });
-    var cards = main.querySelectorAll('.border-border\\/70');
+    var btns = Array.from(document.querySelectorAll('button'));
+    var hasResetAllBtn = btns.some(function(b){ return b.textContent.trim() === 'Actions ▾'; });
+    var cards = document.querySelectorAll('[id^="shortcuts-section-content-"]');
     return {
       hasResetAllBtn: hasResetAllBtn,
       shortcutRowsCount: cards.length,
@@ -37,23 +65,15 @@ async function main() {
     };
   })()`);
 
-  assert(shortcuts!.hasResetAllBtn === true, "Shortcuts pane 'Actions' dropdown rendered");
-  assert(shortcuts!.shortcutRowsCount >= 1, `Shortcuts list populated with ${shortcuts!.shortcutRowsCount} category cards`);
-  assert(shortcuts!.text.length > 30, "Shortcuts pane successfully loaded content");
+  assert(shortcuts?.hasResetAllBtn === true, "Shortcuts pane 'Actions' dropdown rendered");
+  assert((shortcuts?.shortcutRowsCount ?? 0) >= 1, `Shortcuts list populated with ${shortcuts?.shortcutRowsCount ?? 0} category cards`);
+  assert((shortcuts?.text.length ?? 0) > 30, "Shortcuts pane successfully loaded content");
 
-  // === NEW: Assert exact row count (63 default bindings from shortcut_manager.rs) ===
-  step("Row Count Verification (63 default bindings)");
+  step("Row Count Verification (67 live bindings)");
   const totalRows = await cdp.eval<number>(`(function(){
-    var sections = document.querySelectorAll('[id^="shortcuts-section-content-"]');
-    var total = 0;
-    sections.forEach(function(s){
-      total += s.querySelectorAll('.cursor-pointer').length;
-    });
-    return total;
+    return document.querySelectorAll(${JSON.stringify(SHORTCUT_ROW_SELECTOR)}).length;
   })()`);
-  // 63 bindings from register_default_bindings: 6 nav + 19 tabs + 12 spaces + 18 window + 3 view + 3 dev + 2 custom
-  assert((totalRows ?? 0) >= 50, `Total shortcut rows: ${totalRows} (expected ~63, allow >=50 for filter tolerance)`);
-  assert((totalRows ?? 0) <= 80, `Total shortcut rows: ${totalRows} within expected range (<=80)`);
+  assert(totalRows === 67, `Total rendered shortcut bindings: ${totalRows} (expected 67)`);
 
   // === NEW: Assert categories render (7 with data: Navigation, Tabs, Spaces, Window, View, Developer, Custom) ===
   step("Category Sections Verification");
@@ -68,71 +88,95 @@ async function main() {
     return {found: found, count: found.length};
   })()`);
   // Edit category has 0 shortcuts and is filtered out by the UI
-  assert(categories!.count >= 7, `All 7 populated categories render (found: ${categories!.found.join(', ')})`);
-  assert(categories!.found.includes('navigation'), "Navigation category section present");
-  assert(categories!.found.includes('tabs'), "Tabs category section present");
-  assert(categories!.found.includes('spaces'), "Spaces category section present");
-  assert(categories!.found.includes('window'), "Window category section present");
-  assert(categories!.found.includes('view'), "View category section present");
-  assert(categories!.found.includes('developer'), "Developer category section present");
-  assert(categories!.found.includes('custom'), "Custom category section present");
+  const foundCategories = categories?.found ?? [];
+  assert((categories?.count ?? 0) >= 7, `All 7 populated categories render (found: ${foundCategories.join(', ')})`);
+  assert(foundCategories.includes('navigation'), "Navigation category section present");
+  assert(foundCategories.includes('tabs'), "Tabs category section present");
+  assert(foundCategories.includes('spaces'), "Spaces category section present");
+  assert(foundCategories.includes('window'), "Window category section present");
+  assert(foundCategories.includes('view'), "View category section present");
+  assert(foundCategories.includes('developer'), "Developer category section present");
+  assert(foundCategories.includes('custom'), "Custom category section present");
 
   // === NEW: Assert detail panel exists in DOM (empty state when nothing selected) ===
   step("Detail Panel Empty State");
-  const detailPanel = await cdp.eval<{exists: boolean; isEmptyState: boolean; text: string}>(`(function(){
-    // Detail panel shows dashed border in empty state
-    var emptyPanel = document.querySelector('.border-dashed.border-border\\/70');
+  const detailPanel = await cdp.eval<{exists: boolean; isEmptyState: boolean; text: string; selectedActionId: string}>(`(function(){
+    var emptyPanel = Array.from(document.querySelectorAll('.border-dashed')).find(function(panel){
+      return (panel.textContent || '').includes('Select a shortcut to view details or modify.');
+    });
     if (emptyPanel) {
       return {
         exists: true,
         isEmptyState: true,
-        text: emptyPanel.textContent.trim()
+        text: emptyPanel.textContent.trim(),
+        selectedActionId: ''
       };
     }
     // If something is already selected (from previous test run state), detail shows Card
     var card = document.querySelector('.sticky.top-4');
     if (card) {
-      return {exists: true, isEmptyState: false, text: card.textContent.slice(0, 100)};
+      var actionId = card.querySelector('.font-mono.text-xs');
+      return {
+        exists: true,
+        isEmptyState: false,
+        text: card.textContent.slice(0, 300),
+        selectedActionId: actionId ? actionId.textContent.trim() : ''
+      };
     }
-    return {exists: false, isEmptyState: false, text: ''};
+    return {exists: false, isEmptyState: false, text: '', selectedActionId: ''};
   })()`);
-  assert(detailPanel!.exists === true, "Detail panel exists in DOM");
-  if (detailPanel!.isEmptyState) {
+  assert(detailPanel?.exists === true, "Detail panel exists in DOM");
+  if (!detailPanel) {
+    ws.close();
+    reportResultsAndExit();
+    return;
+  }
+  if (detailPanel.isEmptyState) {
     assert(
-      detailPanel!.text.includes("Select a shortcut"),
-      `Detail panel shows empty state: "${detailPanel!.text}"`
+      detailPanel.text.includes("Select a shortcut"),
+      `Detail panel shows empty state: "${detailPanel.text}"`
     );
   } else {
-    assert(true, `Detail panel shows selected shortcut (pre-selected state from earlier test)`);
+    assert(
+      detailPanel.selectedActionId.length > 0 &&
+        detailPanel.text.includes('Current Combo') &&
+        detailPanel.text.includes('Status') &&
+        detailPanel.text.includes('Enabled'),
+      `Detail panel shows selected shortcut controls for action "${detailPanel.selectedActionId}"`
+    );
   }
 
   // === Existing: Click Actions dropdown ===
   step("Actions Dropdown Interaction");
-  const clickedActions = await cdp.eval<boolean>(`(function(){
-    var btns = Array.from(document.querySelectorAll('main button'));
-    var actionsBtn = btns.find(function(b){ return b.textContent.includes('Actions'); });
-    if (actionsBtn) { actionsBtn.click(); return true; }
-    return false;
-  })()`);
+  const clickedActions = await openActionsMenu(cdp);
   assert(clickedActions === true, "Clicked 'Actions' dropdown successfully");
-  await new Promise(r => setTimeout(r, 1000));
 
   // Click Reset All in dropdown
-  const clickedReset = await cdp.eval<boolean>(`(function(){
-    var items = Array.from(document.querySelectorAll('[role="menuitem"]'));
-    var resetItem = items.find(function(item){ return item.textContent.trim() === 'Reset All'; });
-    if (resetItem) { resetItem.click(); return true; }
-    return false;
-  })()`);
+  const clickedReset = clickedActions &&
+    await clickElementByText(cdp, '[role="menuitem"]', 'Reset All');
   assert(clickedReset === true, "Clicked 'Reset All' menu item successfully");
-  await new Promise(r => setTimeout(r, 2000));
+  const resetCompleted = clickedReset && await waitForCondition(
+    cdp,
+    `(function(){
+      var actionsButton = Array.from(document.querySelectorAll('button')).find(function(button){
+        return (button.textContent || '').trim() === 'Actions ▾';
+      });
+      return document.querySelectorAll(${JSON.stringify(SHORTCUT_ROW_SELECTOR)}).length === 67 &&
+        !!actionsButton && actionsButton.getAttribute('aria-expanded') === 'false' &&
+        !document.querySelector('[role="menu"]') &&
+        !document.querySelector('[data-radix-popper-content-wrapper]') &&
+        getComputedStyle(document.body).pointerEvents !== 'none';
+    })()`
+  );
+  assert(resetCompleted, "Reset All completed with all 67 bindings rendered");
 
   const shortcutsAfterReset = await cdp.eval<{shortcutRowsCount: number}>(`(function(){
-    var main = document.querySelector('main');
-    var cards = main.querySelectorAll('.border-border\\/70');
-    return { shortcutRowsCount: cards.length };
+    return { shortcutRowsCount: document.querySelectorAll(${JSON.stringify(SHORTCUT_ROW_SELECTOR)}).length };
   })()`);
-  assert(shortcutsAfterReset!.shortcutRowsCount >= 1, `Shortcuts list still has ${shortcutsAfterReset!.shortcutRowsCount} category cards after reset`);
+  assert(
+    shortcutsAfterReset?.shortcutRowsCount === 67,
+    `Shortcuts list still has ${shortcutsAfterReset?.shortcutRowsCount ?? 0} bindings after reset`
+  );
 
   ws.close();
   reportResultsAndExit();

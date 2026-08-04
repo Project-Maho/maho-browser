@@ -1,3 +1,4 @@
+import type { JSX } from 'preact';
 import { clsx } from '../utils/clsx';
 
 // Explicit props — avoids Signalish<...> conflicts from JSX.HTMLAttributes.
@@ -16,34 +17,28 @@ export interface InputProps {
   spellcheck?: boolean;
   disabled?: boolean;
   class?: string;
-  onInput?: (e: Event) => void;
-  onChange?: (e: Event) => void;
+  onInput?: (event: JSX.TargetedInputEvent<HTMLInputElement>) => void;
+  onChange?: (event: JSX.TargetedEvent<HTMLInputElement, Event>) => void;
+  onBlur?: (event: JSX.TargetedFocusEvent<HTMLInputElement>) => void;
 }
 
 export function Input({ label, hint, error, id, class: className, ...rest }: InputProps) {
   const inputId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
 
   return (
-    <div class="flex flex-col gap-1">
+    <div class="ui-field">
       {label && (
-        <label for={inputId} class="text-sm font-medium text-[var(--color-on-surface)]">
+        <label for={inputId} class="ui-field__label">
           {label}
         </label>
       )}
       <input
         id={inputId}
-        class={clsx(
-          'w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-raised)]',
-          'px-3 py-2 text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-tertiary)]',
-          'focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent',
-          'disabled:opacity-40',
-          error && 'border-[var(--color-error)] focus:ring-[var(--color-error)]',
-          className,
-        )}
+        class={clsx('ui-field__input', error && 'ui-field__input--error', className)}
         {...rest}
       />
-      {error && <p class="text-xs text-[var(--color-error)]">{error}</p>}
-      {!error && hint && <p class="text-xs text-[var(--color-on-surface-secondary)]">{hint}</p>}
+      {error && <p class="ui-field__error">{error}</p>}
+      {!error && hint && <p class="ui-field__hint">{hint}</p>}
     </div>
   );
 }

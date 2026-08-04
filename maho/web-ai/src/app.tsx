@@ -4,12 +4,15 @@
  * URL format:  #<screen>[?key=value&...]
  *
  * All screens are lazy-loaded to keep per-screen parse time minimal.
- * The BYOKScreen is the Phase A reference; remaining screens are stubs
+ * The AI settings screen keeps the Phase A #byok route for native navigation.
  * to be filled in during Phases B and C.
  */
 import { useHashRoute } from './hooks/use-hash-route';
 import { AgentScreen } from './screens/agent/agent-screen';
-import { BYOKScreen } from './screens/byok/byok-screen';
+import { AiSettingsScreen } from './screens/byok/byok-screen';
+import { ChatScreen } from './screens/chat/chat-screen';
+import { ConversationListScreen } from './screens/conversations/conversation-list-screen';
+import { OnboardingScreen } from './screens/onboarding/onboarding-screen';
 import { Icon } from './ui/icon';
 
 declare global {
@@ -33,14 +36,18 @@ export function App() {
   };
 
   switch (route.name) {
+    case 'onboarding':
+      return <OnboardingScreen />;
     case 'byok':
-      return <BYOKScreen onBack={handleBack} />;
+      return <AiSettingsScreen onBack={handleBack} />;
     case 'agent':
       return <AgentScreen goal={route.params.goal} onBack={handleBack} />;
-
-    // Phase B screens — stubs; native falls back to native screen until implemented.
     case 'chat':
+      return <ChatScreen onBack={handleBack} sessionId={route.params.sessionId} />;
     case 'conversations':
+      return <ConversationListScreen onBack={handleBack} onNavigateToChat={(id) => { window.location.hash = `#chat?sessionId=${id}`; }} />;
+
+    // Out-of-scope mobile screens remain ComingSoon
     case 'space-ai-config':
     case 'offline-model':
     case 'privacy':

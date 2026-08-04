@@ -65,6 +65,10 @@
   --motion-agent-enter: 200ms ease-out;
   --motion-agent-toggle: 150ms ease-out;
   --motion-agent-press: 100ms ease-out;
+
+  --font-size-control: 16px;
+  --line-height-control: 24px;
+  --settings-content-max: 48rem;
 }
 
 @media (prefers-color-scheme: dark) {

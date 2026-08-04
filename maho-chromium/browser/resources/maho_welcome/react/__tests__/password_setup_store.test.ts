@@ -120,11 +120,13 @@ describe('PasswordSetup store flow', () => {
     configurePasswordSetup(VAULT_LOCK_STATE.Unlocked);
   });
 
-  it('uses contiguous PasswordSetup and Completion page order', () => {
+  it('keeps PasswordSetup before SyncKeyBackup and Completion', () => {
     expect(WelcomePage.PasswordSetup).toBe(7);
-    expect(WelcomePage.Completion).toBe(8);
-    expect(TOTAL_PAGES).toBe(9);
-    expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.Completion);
+    expect(WelcomePage.SyncKeyBackup).toBe(8);
+    expect(WelcomePage.Completion).toBe(9);
+    expect(TOTAL_PAGES).toBe(10);
+    expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.SyncKeyBackup);
+    expect(WelcomePage.SyncKeyBackup + 1).toBe(WelcomePage.Completion);
   });
 
   it('refreshes provider and Vault state from the Welcome handler', async () => {
@@ -149,7 +151,7 @@ describe('PasswordSetup store flow', () => {
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.Essentials);
   });
 
-  it('persists the provider and advances directly to Completion only when unlocked', async () => {
+  it('persists the provider and advances to SyncKeyBackup when unlocked', async () => {
     const store = new MahoWelcomeStore();
     await moveToPasswordSetup(store);
 
@@ -158,7 +160,7 @@ describe('PasswordSetup store flow', () => {
 
     expect(mockHandler.setPasswordProvider)
       .toHaveBeenCalledWith(PASSWORD_PROVIDER_KIND.MahoNative);
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
   });
 
   it('stays on PasswordSetup when the Vault remains locked', async () => {

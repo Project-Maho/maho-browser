@@ -18,7 +18,6 @@ import {
   X,
   Bookmark,
   PenLine,
-  Bot,
   RefreshCw,
 } from "lucide-react";
 import { EmptyState } from "../common/EmptyState";
@@ -394,11 +393,12 @@ interface EmailListProps {
   smartCategory?: SmartCategory | null;
   onSmartCategoryChange?: (category: SmartCategory) => void;
   density?: 'comfortable' | 'compact';
+  mailboxTitle?: string;
   onCompose?: () => void;
-  onOpenAgent?: () => void;
   onSync?: () => void;
   composeDisabled?: boolean;
   syncBusy?: boolean;
+  syncError?: string | null;
   enqueueRetry?: EnqueueRetry;
 }
 
@@ -758,11 +758,12 @@ export function EmailList({
   smartCategory,
   onSmartCategoryChange,
   density = 'comfortable',
+  mailboxTitle = 'Inbox',
   onCompose,
-  onOpenAgent,
   onSync,
   composeDisabled,
   syncBusy,
+  syncError,
   enqueueRetry,
 }: EmailListProps) {
   const { toast } = useToast();
@@ -1233,11 +1234,48 @@ export function EmailList({
   const virtualRows = virtualizer.getVirtualItems();
 
   return (
-    <div className="flex h-full flex-col border-r border-border bg-background w-full">
-      <div className="relative border-b border-border p-3">
-        <div ref={searchContainerRef} className="flex flex-col gap-2">
+    <div className="flex h-full w-full flex-col bg-card/55">
+      <div className="relative border-b border-border/60 bg-card/75 px-4 pb-3 pt-4 backdrop-blur-xl">
+        <div ref={searchContainerRef} className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-semibold tracking-tight text-foreground">{mailboxTitle}</h1>
+              <p className="text-xs text-muted-foreground">
+                {isSearchActive && searchResults
+                  ? formatSearchCount(searchResults.total_count)
+                  : `${displayEmails.length.toLocaleString()} message${displayEmails.length === 1 ? "" : "s"}`}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5" role="toolbar" aria-label={t("a11y.globalActions")}>
+              {onSync && (
+                <button
+                  type="button"
+                  onClick={onSync}
+                  disabled={syncBusy}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
+                  aria-label={t("app.syncFolders")}
+                  title={t("app.syncFolders")}
+                >
+                  <RefreshCw size={15} className={syncBusy ? "animate-spin" : undefined} />
+                </button>
+              )}
+              {onCompose && (
+                <button
+                  type="button"
+                  onClick={onCompose}
+                  disabled={composeDisabled}
+                  className="flex h-9 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
+                  aria-label={t("app.compose")}
+                  title={t("app.compose")}
+                >
+                  <PenLine size={15} />
+                  <span>{t("app.compose")}</span>
+                </button>
+              )}
+            </div>
+          </div>
           <div className="flex items-center gap-2">
-            <div className="relative flex flex-1 items-center gap-2 rounded-lg bg-background px-3 py-2">
+            <div className="relative flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 shadow-sm transition-colors focus-within:border-primary/50 focus-within:bg-background">
               <Search size={16} className="text-muted-foreground" />
               <input
                 type="text"
@@ -1247,7 +1285,7 @@ export function EmailList({
                 onFocus={() => { setIsSearchFocused(true); setShowAutocomplete(true); }}
                 data-mail-search-input
                 aria-label={t("a11y.searchEmails")}
-                className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none"
+                className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none"
               />
               <AdvancedSearchPanel filters={searchFilters} onChange={setSearchFilters} />
               <button
@@ -1258,7 +1296,7 @@ export function EmailList({
                 }}
                 className="rounded p-1 text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 title="Natural language search"
-                aria-label="Natural language search"
+                aria-label="Ask about mail"
               >
                 <Sparkles size={14} />
               </button>
@@ -1271,45 +1309,6 @@ export function EmailList({
                  recentSearches={autocompleteRecentSearches}
                />
             </div>
-            {(onCompose || onOpenAgent || onSync) && (
-              <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-background/70 px-1 py-1" role="toolbar" aria-label={t("a11y.globalActions")}>
-                {onCompose && (
-                  <button
-                    type="button"
-                    onClick={onCompose}
-                    disabled={composeDisabled}
-                    className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
-                    aria-label={t("app.compose")}
-                    title={t("app.compose")}
-                  >
-                    <PenLine size={14} />
-                  </button>
-                )}
-                {onOpenAgent && (
-                  <button
-                    type="button"
-                    onClick={onOpenAgent}
-                    className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    aria-label="AI Agent"
-                    title="AI Agent"
-                  >
-                    <Bot size={14} />
-                  </button>
-                )}
-                {onSync && (
-                  <button
-                    type="button"
-                    onClick={onSync}
-                    disabled={syncBusy}
-                    className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
-                    aria-label={t("app.syncFolders")}
-                    title={t("app.syncFolders")}
-                  >
-                    <RefreshCw size={14} className={syncBusy ? "animate-spin" : undefined} />
-                  </button>
-                )}
-              </div>
-            )}
           </div>
           {activeOperators.length > 0 && (
             <div className="flex flex-wrap gap-1 px-1">
@@ -1323,16 +1322,14 @@ export function EmailList({
               ))}
             </div>
           )}
-          <div className="flex items-center justify-between gap-3 pl-1">
+          <div className="flex items-center justify-between gap-3 px-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                Scope
-              </span>
+              <span className="sr-only">Scope</span>
               <Select
                 value={effectiveSearchScope}
                 onChange={(value) => setSearchScope(value as SearchScope)}
                 options={scopeOptions}
-                className="min-w-[10rem]"
+                className="min-w-[8.5rem]"
               />
             </div>
             {isSearchActive && searchResults && (
@@ -1531,7 +1528,7 @@ export function EmailList({
 
       {batchMode && (
         <div className={cn(
-          "flex items-center gap-2 border-b border-border bg-background/80 px-3 py-2",
+          "flex items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2.5 shadow-sm",
           isMobile && "sticky top-0 z-10 min-h-14 flex-wrap gap-1.5 bg-background/95 px-4 py-3 backdrop-blur",
         )}>
           <button
@@ -1546,12 +1543,12 @@ export function EmailList({
             <X size={14} />
             {isMobile && <span className="ml-2 text-sm">Cancel</span>}
           </button>
-          <span className="text-xs text-muted-foreground">{selectedIds.size} selected</span>
+          <span className="text-sm font-semibold text-foreground">{selectedIds.size} selected</span>
           {!isMobile && (
             <button
               type="button"
               onClick={selectAll}
-              className="text-xs text-primary hover:text-primary"
+              className="rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
               aria-label="Select all"
             >
               Select all
@@ -1626,7 +1623,7 @@ export function EmailList({
 
       <div
         ref={parentRef}
-        className="flex-1 overflow-y-auto overscroll-y-contain"
+        className="flex-1 overflow-y-auto overscroll-y-contain bg-card/35"
         style={{
           contain: "strict",
           paddingBottom: isMobile && keyboardVisible ? keyboardHeight : undefined,
@@ -1638,6 +1635,22 @@ export function EmailList({
         ) : shouldShowIdlePanel ? (
           <div className="px-3 pb-6 pt-4 text-center text-sm text-muted-foreground">
             Pick a recent search or tip above to get started.
+          </div>
+        ) : syncError && displayEmails.length === 0 ? (
+          <div role="alert" className="flex items-center justify-center px-6 py-12">
+            <div className="max-w-sm rounded-2xl border border-destructive/30 bg-destructive/10 px-6 py-5 text-center">
+              <h3 className="font-semibold text-foreground">Mail could not sync</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{syncError}</p>
+              {onSync && (
+                <button
+                  type="button"
+                  onClick={onSync}
+                  className="mt-4 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Try again
+                </button>
+              )}
+            </div>
           </div>
         ) : displayEmails.length === 0 ? (
           <div className="flex items-center justify-center py-12">

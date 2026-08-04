@@ -58,6 +58,7 @@ export class PageHandlerRemote {
   getLocalizedStrings(): Promise<{strings: Record<string, string>}>;
   signupFromWelcome(email: string, password: string, displayName: string): Promise<{ok: boolean, errorMessage: string}>;
   loginFromWelcome(email: string, password: string): Promise<{ok: boolean, errorMessage: string}>;
+  signInWithGoogleFromWelcome(): Promise<{ok: boolean, errorMessage: string}>;
   getRelayAccountStatusFromWelcome(): Promise<{signedIn: boolean, tier: string, subscriptionStatus: string, welcomeCompleted: boolean, hasStoredSession: boolean, isLocalDev: boolean}>;
   getPasswordProviderOptions(): Promise<{options: PasswordProviderOption[]}>;
   getPasswordProviderStatus(): Promise<{status: PasswordProviderStatus}>;
@@ -67,6 +68,9 @@ export class PageHandlerRemote {
     result: VaultOperationResult;
   }>;
   unlockVault(masterPassphrase: string): Promise<{result: VaultOperationResult}>;
+  generateSyncKey(): Promise<{syncKey: string, roomId: string, recoveryPhrase: string}>;
+  startSync(roomId: string, recoveryPhrase: string): Promise<{ok: boolean, errorMessage: string}>;
+  getSubscriptionCheckoutUrl(tier: string): Promise<{checkoutUrl: string}>;
   finishOnboarding(): void;
   devSkipOnboarding(): void;
 }

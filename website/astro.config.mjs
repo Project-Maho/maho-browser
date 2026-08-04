@@ -26,11 +26,6 @@ export default defineConfig({
       description: 'Maho is a browser and email client for people who took browsers seriously — sidebar Spaces, split view, a command bar, and optional BYOK AI on maintained Chromium.',
       logo: { src: './src/assets/logo.png' },
       favicon: '/favicon.svg',
-      head: [
-        // Google tag (gtag.js)
-        { tag: 'script', attrs: { async: true, src: 'https://www.googletagmanager.com/gtag/js?id=G-VMGL28W81B' } },
-        { tag: 'script', content: "window.dataLayer = window.dataLayer || [];\nfunction gtag(){dataLayer.push(arguments);}\ngtag('js', new Date());\ngtag('config', 'G-VMGL28W81B');" },
-      ],
       components: {
         Head: './src/components/StarlightHead.astro',
         SiteTitle: './src/components/StarlightSiteTitle.astro',

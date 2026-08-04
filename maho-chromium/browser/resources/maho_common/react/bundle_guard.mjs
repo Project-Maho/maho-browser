@@ -8,13 +8,15 @@ const WEBSITE_ONLY_PACKAGES = [
   'vite',
 ];
 
-export function nodeModulesGuardPlugin(websiteNodeModules) {
-  let normalizedBase;
-  try {
-    normalizedBase = fs.realpathSync(websiteNodeModules);
-  } catch {
-    normalizedBase = path.resolve(websiteNodeModules);
-  }
+export function nodeModulesGuardPlugin(allowedBases) {
+  const bases = Array.isArray(allowedBases) ? allowedBases : [allowedBases];
+  const normalizedBases = bases.map(b => {
+    try {
+      return fs.realpathSync(b);
+    } catch {
+      return path.resolve(b);
+    }
+  });
   return {
     name: 'maho-node-modules-guard',
     setup(esbuild) {
@@ -30,12 +32,19 @@ export function nodeModulesGuardPlugin(websiteNodeModules) {
         for (const inputPath of Object.keys(result.metafile.inputs)) {
           if (!inputPath.includes('node_modules')) continue;
           const absolute = path.resolve(absWorkingDir, inputPath);
-          if (!absolute.startsWith(normalizedBase)) {
+          let allowed = false;
+          for (const normalizedBase of normalizedBases) {
+            if (absolute.startsWith(normalizedBase)) {
+              allowed = true;
+              break;
+            }
+          }
+          if (!allowed) {
             throw new Error(
                 `[H1 Guard] Resolved module from unexpected node_modules:\n` +
                 `  ${absolute}\n` +
-                `  Expected all node_modules resolutions under:\n` +
-                `  ${normalizedBase}`);
+                `  Expected all node_modules resolutions under one of:\n` +
+                `  ${normalizedBases.join('\n  ')}`);
           }
           for (const pkg of WEBSITE_ONLY_PACKAGES) {
             if (absolute.includes(`node_modules/${pkg}`)) {

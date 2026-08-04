@@ -2,6 +2,31 @@ import type { AgentHandle } from '../../bridge/types';
 
 export type AgentPhase = 'idle' | 'creating' | 'streaming' | 'complete' | 'cancelled' | 'error';
 
+export type AgentBlock =
+  | {
+      readonly kind: 'thinking';
+      readonly id: string;
+      readonly text: string;
+      readonly startedAt: number;
+      readonly durationMs: number | null;
+    }
+  | {
+      readonly kind: 'message';
+      readonly id: string;
+      readonly text: string;
+      readonly markdown: true;
+    }
+  | {
+      readonly kind: 'tool_call';
+      readonly id: string;
+      readonly name: string;
+      readonly args: string;
+      readonly result: string | null;
+      readonly status: 'running' | 'done';
+      readonly startedAt: number;
+      readonly durationMs: number | null;
+    };
+
 export type AgentMessage =
   | {
       readonly id: string;
@@ -12,9 +37,8 @@ export type AgentMessage =
   | {
       readonly id: string;
       readonly role: 'assistant';
-      readonly text: string;
+      readonly blocks: readonly AgentBlock[];
       readonly createdAt: Date;
-      readonly markdown: true;
     };
 
 export interface AgentState {
@@ -39,6 +63,9 @@ export type AgentAction =
     }
   | { readonly type: 'SESSION_READY'; readonly handle: AgentHandle }
   | { readonly type: 'AGENT_TOKEN'; readonly token: string; readonly messageId: string; readonly createdAt: Date }
+  | { readonly type: 'AGENT_THINKING'; readonly thinking: string; readonly messageId: string; readonly createdAt: Date }
+  | { readonly type: 'AGENT_TOOL_CALL'; readonly id: string; readonly name: string; readonly args: string; readonly messageId: string; readonly createdAt: Date }
+  | { readonly type: 'AGENT_TOOL_RESULT'; readonly id: string; readonly name: string; readonly result: string; readonly messageId: string; readonly createdAt: Date }
   | { readonly type: 'AGENT_COMPLETE'; readonly fullText: string; readonly messageId: string; readonly createdAt: Date }
   | { readonly type: 'AGENT_ERROR'; readonly message: string }
   | { readonly type: 'CANCEL' }

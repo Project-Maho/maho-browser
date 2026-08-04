@@ -289,6 +289,7 @@ export class ThemePickerStore {
   }
 
   async commitTheme(): Promise<void> {
+    this.clearPreviewTimer();
     await this.handler.commitTheme({themeJson: this.serializeSelection()});
   }
 

@@ -10,6 +10,8 @@ export {
   Send,
   Paperclip,
   Trash2,
+  ThumbsUp,
+  ThumbsDown,
   Edit,
   Copy,
   Check,
@@ -55,4 +57,8 @@ export {
   Globe,
   Pin,
   Code,
+  Pipette,
+  Zap,
+  Puzzle,
+  ShieldOff,
 } from "lucide-react";

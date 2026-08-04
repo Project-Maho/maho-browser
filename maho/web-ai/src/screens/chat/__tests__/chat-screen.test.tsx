@@ -6,13 +6,14 @@ import type { ChatContent } from '../../../bridge/types';
 const mockBridge = {
   byokGetKey: vi.fn<(provider: string) => Promise<string | null>>(),
   chatSessionStart: vi.fn<() => Promise<string>>(),
-  chatSessionResume: vi.fn<(handle: string) => Promise<void>>(),
+  chatSessionResume: vi.fn<(handle: string) => Promise<string>>(),
   chatSessionFree: vi.fn<(handle: string) => Promise<void>>(),
   chatSendMessage: vi.fn<(handle: string, content: ChatContent) => Promise<void>>(),
   chatCancelTurn: vi.fn<(handle: string) => Promise<void>>(),
   chatRegisterTool: vi.fn<(handle: string) => Promise<void>>(),
   chatSendToolResult: vi.fn<(handle: string, toolCallId: string, result: unknown) => Promise<void>>(),
   chatGetHistory: vi.fn<(handle: string) => Promise<Array<{ id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; toolCalls?: Array<{ id: string; tool: string; args: string; result?: string }> }>>>(),
+  saveConversationMessage: vi.fn<(sessionId: string, role: string, content: string) => Promise<boolean>>(),
 };
 
 let latestSubscriber: StreamSubscriber | null = null;
@@ -54,13 +55,14 @@ beforeEach(() => {
     provider === 'openai' ? 'sk-openai' : null,
   );
   mockBridge.chatSessionStart.mockResolvedValue('session-new');
-  mockBridge.chatSessionResume.mockResolvedValue(undefined);
+  mockBridge.chatSessionResume.mockResolvedValue('native-resumed-handle');
   mockBridge.chatSessionFree.mockResolvedValue(undefined);
   mockBridge.chatSendMessage.mockResolvedValue(undefined);
   mockBridge.chatCancelTurn.mockResolvedValue(undefined);
   mockBridge.chatRegisterTool.mockResolvedValue(undefined);
   mockBridge.chatSendToolResult.mockResolvedValue(undefined);
   mockBridge.chatGetHistory.mockResolvedValue([]);
+  mockBridge.saveConversationMessage.mockResolvedValue(true);
 });
 
 describe('ChatScreen', () => {
@@ -94,6 +96,30 @@ describe('ChatScreen', () => {
       expect(mockBridge.chatSessionResume).toHaveBeenCalledWith('saved-session');
       expect(screen.getByRole('heading', { name: 'Earlier question' })).toBeTruthy();
       expect(screen.getByText('Earlier answer')).toBeTruthy();
+    });
+  });
+
+  it('sends a resumed conversation through the returned native handle', async () => {
+    render(<ChatScreen sessionId="saved-session" />);
+
+    await waitFor(() => {
+      expect(mockBridge.chatSessionResume).toHaveBeenCalledWith('saved-session');
+    });
+
+    const input = screen.getByLabelText('Message');
+    fireEvent.input(input, { target: { value: 'Continue this conversation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => {
+      expect(mockBridge.chatSendMessage).toHaveBeenCalledWith('native-resumed-handle', {
+        kind: 'text',
+        text: 'Continue this conversation',
+      });
+      expect(mockBridge.saveConversationMessage).toHaveBeenCalledWith(
+        'saved-session',
+        'user',
+        'Continue this conversation',
+      );
     });
   });
 
@@ -197,7 +223,7 @@ describe('ChatScreen', () => {
     });
   });
 
-  it('renders the tool call card and approves the request', async () => {
+  it('renders the tool call card and reports unsupported execution when approved', async () => {
     render(<ChatScreen />);
 
     await waitFor(() => {
@@ -218,10 +244,10 @@ describe('ChatScreen', () => {
 
     await waitFor(() => {
       expect(mockBridge.chatSendToolResult).toHaveBeenCalledWith('session-new', 'tool-1', {
-        data: '<not implemented>',
-        ok: true,
+        error: 'tool_execution_unsupported',
       });
-      expect(screen.getByText('Approved')).toBeTruthy();
+      expect(screen.getByText('Tool execution unsupported')).toBeTruthy();
+      expect(screen.queryByText('Approved')).toBeNull();
     });
   });
 
@@ -301,5 +327,39 @@ describe('ChatScreen', () => {
     expect(container.querySelector('strong')?.textContent).toBe('bold');
     expect(container.querySelector('em')?.textContent).toBe('italic');
     expect(container.querySelector('code')?.textContent).toBe('code');
+  });
+
+  it('handles stream errors gracefully without corrupting previous messages', async () => {
+    mockBridge.chatGetHistory.mockResolvedValue([
+      {
+        content: 'Previous user message',
+        createdAt: new Date().toISOString(),
+        id: 'msg-1',
+        role: 'user',
+      },
+    ]);
+
+    const { container } = render(<ChatScreen sessionId="stream-err-session" />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Previous user message').length).toBeGreaterThan(0);
+    });
+
+    const textarea = screen.getByPlaceholderText('Type a message…');
+    fireEvent.input(textarea, { target: { value: 'New prompt' } });
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => {
+      expect(mockBridge.chatSendMessage).toHaveBeenCalled();
+    });
+
+    act(() => {
+      latestSubscriber?.onError?.('Stream connection reset by peer');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Stream connection reset by peer')).toBeTruthy();
+    });
+    expect(screen.getAllByText('Previous user message').length).toBeGreaterThan(0);
   });
 });

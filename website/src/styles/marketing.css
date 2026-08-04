@@ -196,6 +196,8 @@
   .cta-btn-primary   { background: var(--foreground); color: var(--background); }
   .cta-btn-secondary { background: var(--muted); color: var(--foreground); }
   .cta-btn-ghost     { background: transparent; color: var(--foreground); border: 1px solid var(--border); }
+  .cta-btn-discord   { background: #5865F2; color: #ffffff; border: 0; }
+  .cta-btn-discord:hover { background: #4752C4; }
 
   .char-reveal-item {
     display: inline-block;

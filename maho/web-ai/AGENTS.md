@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE — maho/web-ai
 
 **Created:** 2026-06-19
-**Phase:** A complete (foundation + BYOK reference screen + both native bridges)
+**Phase:** Wave 2 direction approved; screen migrations are not complete
 
 ## OVERVIEW
 Unified AI screen bundle for Maho Browser on iOS, Android, and Desktop.
@@ -113,13 +113,15 @@ cp -r dist/* ../android-shell/app/src/main/assets/web-ai/
 cp -r dist/* ../ios-shell/web-ai/
 ```
 
-## MIGRATION PHASES
-| Phase | Status | Screens |
-|-------|--------|---------|
-| A — Foundation + BYOK | ✅ Complete | BYOK Settings (reference) |
-| B — Core Chat | 🔜 Next | Chat, Conversation List, Space AI Config |
-| C — Remaining + cleanup | ⬜ Planned | Privacy, Offline Model, Agent, Visual Search Results |
-| D — Desktop alignment | ⬜ Planned | Align `chrome://maho-ai` to use shared bundle |
+## CURRENT STATE AND APPROVED WAVE 2 TARGET
+
+**Current state:** iOS and Android mount only the `agent` and `onboarding` screens from web-ai. `byok`, `conversations`, and `chat` are routed in web-ai but still use their native shell implementations; their migrations are not complete.
+
+**Approved target:**
+- Migrate `byok`, then `conversations`, then `chat` to web-ai, one screen at a time. Verify each screen on both platforms before starting the next migration.
+- Keep a per-screen rollback flag and retain each native implementation for at least one release after its mount switches to web-ai.
+- Keep Reader rendering native on iOS and Android while converging the shared input type and style rules; moving Reader to web-ai is not part of this target.
+- Keep `isIncognito` as local view state in both native shells; do not move it into core as part of this work.
 
 ## NATIVE BRIDGE FILES
 - Android: `maho/android-shell/app/src/main/java/dev/maho/browser/ui/webview/WebViewBridge.kt`

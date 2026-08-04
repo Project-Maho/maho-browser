@@ -21,9 +21,8 @@ export interface AskMahoDispatch {
 
 export enum ChatIntent {
   kFreeform,
-  kAnalyzeCurrentPage,
-  kExplainCurrentPage,
   kSummarizeCurrentPage,
+  kQuizCurrentPage,
 }
 
 export enum ContextSourceKind {
@@ -70,6 +69,7 @@ export interface CreditBalanceInfo {
   balanceUsd: number;
   lastPurchaseAt: number;
   lastConsumptionAt: number;
+  sessionExpired: boolean;
 }
 
 export interface AISettingsInfo {
@@ -308,7 +308,8 @@ export class PageHandlerRemote {
       prompt: string,
       attachBrowserContext: boolean,
       mode: InteractionMode,
-      attachments: ContextAttachment[] | null): Promise<void>;
+      attachments: ContextAttachment[] | null,
+      chatIntent: ChatIntent): Promise<void>;
   cancelTurn(sessionId: string): Promise<void>;
   respondToApproval(
       sessionId: string,

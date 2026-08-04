@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+      }
+
+      #mini-maho-root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      .workspace-fill {
+        position: absolute;
+        inset: 0;
+        background: #000;
+      }
+
+      .mini-maho-camera {
+        position: absolute;
+        inset: 0;
+        transform-origin: 1300px 363px;
+        transform: translate(-340px, 177px) scale(2.7);
+      }
+
+      .workspace-image {
+        position: absolute;
+        top: -87px;
+        left: 0;
+        width: 1920px;
+        height: 1254px;
+      }
+
+      .mini-maho-window {
+        position: absolute;
+        top: 157px;
+        left: 658px;
+        width: 602px;
+        height: 758px;
+        overflow: hidden;
+        border-radius: 20px;
+        visibility: hidden;
+        background-image: url("assets/mini-maho/mini-maho-open.png");
+        background-position: -658px -226px;
+        background-repeat: no-repeat;
+        background-size: 1920px 1218px;
+      }
+
+      .pointer {
+        position: absolute;
+        top: 474px;
+        left: 1010px;
+        width: 42px;
+        height: 52px;
+        filter: drop-shadow(0 2px 2px rgb(0 0 0 / 45%));
+        transform-origin: 7px 5px;
+        transform: translate(120px, 76px);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="mini-maho-root"
+      data-composition-id="mini-maho"
+      data-start="0"
+      data-duration="7"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="workspace-fill"></div>
+      <div id="mini-maho-camera" class="mini-maho-camera">
+        <img
+          class="workspace-image"
+          src="assets/mini-maho/rust-page.png"
+          alt=""
+        />
+        <div id="mini-maho-window" class="mini-maho-window" aria-hidden="true"></div>
+      </div>
+      <svg id="mini-maho-pointer" class="pointer" viewBox="0 0 42 52" aria-hidden="true">
+        <path
+          d="M4 2 4 42l10-10 7 16 7-3-7-16 15-1L4 2Z"
+          fill="#fff"
+          stroke="#1d1d1f"
+          stroke-linejoin="round"
+          stroke-width="3"
+        />
+      </svg>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const timeline = gsap.timeline({ paused: true });
+
+      timeline.to("#mini-maho-pointer", { x: 0, y: 0, duration: 0.58, ease: "power2.out" }, 0.08);
+      timeline.set("#mini-maho-window", { autoAlpha: 1 }, 0.74);
+      timeline.to("#mini-maho-camera", { scale: 1.1, x: 0, y: 0, duration: 1.82, ease: "power2.inOut" }, 0.74);
+      timeline.set("#mini-maho-pointer", { autoAlpha: 0 }, 0.86);
+
+      window.__timelines["mini-maho"] = timeline;
+    </script>
+  </body>
+</html>

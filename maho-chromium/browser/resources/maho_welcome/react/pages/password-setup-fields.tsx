@@ -1,33 +1,50 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React from 'react';
-import {KeyRound, LockKeyhole} from 'lucide-react';
+import {
+  Check,
+  ChevronRight,
+  ExternalLink,
+  LockKeyhole,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldOff,
+} from 'lucide-react';
 
 import {Card, CardContent, CardDescription, CardHeader} from '@ui/card';
 import {Input} from '@ui/input';
 import {Label} from '@ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@ui/select';
 import type {
   PasswordProviderKind,
   PasswordProviderOption,
 } from '../../../maho_settings/maho_settings.mojom-webui.js';
 import type {MahoWelcomeStore} from '../store.js';
-import {getProviderHelperText} from '../types.js';
+import {PASSWORD_PROVIDER_KIND} from '../types.js';
 
-const PROVIDER_DESCRIPTION_ID = 'password-provider-description';
+const ASSET_ORIGIN = 'chrome://maho-' + 'welcome';
+const PASSWORD_PROVIDER_ICONS = {
+  onePassword: `${ASSET_ORIGIN}/icons/password-providers/onepassword.png`,
+  bitwarden: `${ASSET_ORIGIN}/icons/password-providers/bitwarden.png`,
+} as const;
 
-interface PasswordProviderCardProps {
+export type ProviderChoice = PasswordProviderKind | 'none';
+
+interface ProviderSelectionGridProps {
   readonly store: MahoWelcomeStore;
   readonly disabled: boolean;
   readonly options: readonly PasswordProviderOption[];
-  readonly selectedProvider: PasswordProviderKind | null;
-  readonly onSelect: (provider: PasswordProviderKind) => void;
+  readonly selectedProvider: ProviderChoice | null;
+  readonly onSelect: (provider: ProviderChoice) => void;
+}
+
+interface ExternalProviderGuideCardProps {
+  readonly store: MahoWelcomeStore;
+  readonly provider: PasswordProviderKind;
+  readonly option: PasswordProviderOption | null;
+}
+
+interface NoPasswordManagerConfirmCardProps {
+  readonly store: MahoWelcomeStore;
 }
 
 interface VaultCardProps {
@@ -44,71 +61,177 @@ interface VaultCardProps {
   readonly onRecoverySecretChange: (value: string) => void;
 }
 
-export function PasswordProviderCard(
-    {store, disabled, onSelect, options, selectedProvider}: PasswordProviderCardProps) {
-  const selectedOption = options.find(
-      option => option.provider === selectedProvider) ?? null;
+export function ProviderSelectionGrid({
+  store,
+  disabled,
+  options,
+  selectedProvider,
+  onSelect,
+}: ProviderSelectionGridProps) {
+  const nativeOption = options.find(
+    o => o.provider === PASSWORD_PROVIDER_KIND.MahoNative,
+  );
+  const bitwardenOption = options.find(
+    o => o.provider === PASSWORD_PROVIDER_KIND.Bitwarden,
+  );
+  const onePasswordOption = options.find(
+    o => o.provider === PASSWORD_PROVIDER_KIND.OnePassword,
+  );
+
+  const choices: Array<{
+    id: ProviderChoice;
+    title: string;
+    description: string;
+    icon: React.ReactNode;
+    badge?: string;
+  }> = [
+    {
+      id: PASSWORD_PROVIDER_KIND.MahoNative,
+      title: nativeOption?.displayName || 'Maho Passwords',
+      description:
+        'Built-in encrypted Local Vault stored safely on your device.',
+      icon: <ShieldCheck className="size-5 text-primary" aria-hidden="true" />,
+      badge: 'Recommended',
+    },
+    {
+      id: PASSWORD_PROVIDER_KIND.OnePassword,
+      title: onePasswordOption?.displayName || '1Password',
+      description:
+        'Use 1Password browser extension to manage passwords.',
+      icon: <img src={PASSWORD_PROVIDER_ICONS.onePassword} alt="" width={20} height={20} className="size-5 rounded-md object-contain" />,
+    },
+    {
+      id: PASSWORD_PROVIDER_KIND.Bitwarden,
+      title: bitwardenOption?.displayName || 'Bitwarden',
+      description:
+        'Use Bitwarden open-source extension for password sync.',
+      icon: <img src={PASSWORD_PROVIDER_ICONS.bitwarden} alt="" width={20} height={20} className="size-5 rounded-md object-contain" />,
+    },
+    {
+      id: 'none',
+      title: 'No password manager',
+      description:
+        'Skip setting up password management for now. You can enable it anytime in Settings.',
+      icon: <ShieldOff className="size-5 text-muted-foreground" aria-hidden="true" />,
+    },
+  ];
 
   return (
-    <Card className="bg-background/60 shadow-sm">
-      <CardHeader className="space-y-1 p-4 pb-3">
-        <div className="flex items-center gap-2">
-          <KeyRound className="size-4 text-muted-foreground" aria-hidden="true" />
-          <h2 className="text-sm font-semibold leading-none tracking-tight">
-            {store.getString('IDS_MAHO_WELCOME_PASSWORD_PROVIDER_TITLE')}
+    <div className="space-y-3" role="radiogroup" aria-label="Select password manager provider">
+      {choices.map(choice => {
+        const isSelected = selectedProvider === choice.id;
+        return (
+          <Card
+            key={String(choice.id)}
+            className={`cursor-pointer transition-all duration-200 hover:border-primary/50 bg-background/60 shadow-sm ${
+              isSelected
+                ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                : 'border-border'
+            } ${disabled ? 'pointer-events-none opacity-60' : ''}`}
+            onClick={() => {
+              if (!disabled) {
+                onSelect(choice.id);
+              }
+            }}
+            role="radio"
+            aria-checked={isSelected}
+            tabIndex={disabled ? -1 : 0}
+            onKeyDown={e => {
+              if ((e.key === ' ' || e.key === 'Enter') && !disabled) {
+                e.preventDefault();
+                onSelect(choice.id);
+              }
+            }}
+          >
+            <CardContent className="flex items-center justify-between p-4">
+              <div className="flex items-start gap-3.5 pr-2">
+                <div className="mt-0.5 shrink-0">{choice.icon}</div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold leading-none">
+                      {choice.title}
+                    </span>
+                    {choice.badge ? (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                        {choice.badge}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-normal">
+                    {choice.description}
+                  </p>
+                </div>
+              </div>
+              <div
+                className={`flex size-5 shrink-0 items-center justify-center rounded-full border ${
+                  isSelected
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-muted-foreground/30'
+                }`}
+              >
+                {isSelected ? <Check className="size-3.5 stroke-[3]" /> : null}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+export function ExternalProviderGuideCard({
+  provider,
+  option,
+}: ExternalProviderGuideCardProps) {
+  const is1Password = provider === PASSWORD_PROVIDER_KIND.OnePassword;
+  const name = is1Password ? '1Password' : 'Bitwarden';
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-background/40 p-5 backdrop-blur-md space-y-4">
+      <div className="flex items-center gap-2.5">
+        <img src={is1Password ? PASSWORD_PROVIDER_ICONS.onePassword : PASSWORD_PROVIDER_ICONS.bitwarden} alt="" width={20} height={20} className="size-5 rounded object-contain shadow-xs" />
+        <div>
+          <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
+            Using {name} with Maho
           </h2>
-        </div>
-        <CardDescription className="text-pretty text-xs leading-5">
-          {store.getString('IDS_MAHO_WELCOME_PASSWORD_PROVIDER_BODY')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2 p-4 pt-0">
-        <Label htmlFor="password-provider">
-          {store.getString('IDS_MAHO_WELCOME_PASSWORD_PROVIDER_LABEL')}
-        </Label>
-        <Select
-          value={selectedProvider === null ? undefined : String(selectedProvider)}
-          disabled={disabled}
-          onValueChange={value => {
-            const option = options.find(candidate => String(candidate.provider) === value);
-            if (option) {
-              onSelect(option.provider);
-            }
-          }}
-        >
-          <SelectTrigger
-            id="password-provider"
-            className="h-10 bg-background"
-            aria-label={store.getString('IDS_MAHO_WELCOME_PASSWORD_PROVIDER_ARIA')}
-            aria-describedby={selectedOption ? PROVIDER_DESCRIPTION_ID : undefined}
-          >
-            <SelectValue
-              placeholder={store.getString(
-                  'IDS_MAHO_WELCOME_PASSWORD_PROVIDER_PLACEHOLDER')}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {options.map(option => (
-              <SelectItem key={option.provider} value={String(option.provider)}>
-                {option.displayName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {selectedOption ? (
-          <p
-            id={PROVIDER_DESCRIPTION_ID}
-            className="m-0 text-pretty text-xs leading-5 text-muted-foreground"
-            aria-live="polite"
-          >
-            {getProviderHelperText(
-                selectedOption,
-                store.getString(
-                    'IDS_MAHO_WELCOME_PASSWORD_PROVIDER_UNAVAILABLE_HELPER'))}
+          <p className="text-xs text-muted-foreground mt-1">
+            Extension setup is completed in the browser after onboarding.
           </p>
-        ) : null}
-      </CardContent>
-    </Card>
+        </div>
+      </div>
+      <div className="rounded-lg border border-border/40 bg-muted/20 p-3.5 text-xs text-muted-foreground leading-relaxed">
+        You can install and configure the {name} extension from Chrome Web Store or Extension Settings at any time. Maho will seamlessly integrate with your extension once installed.
+      </div>
+      {option && !option.isAvailable ? (
+        <div className="flex items-center gap-2 text-xs text-amber-500/90 bg-amber-500/10 p-2.5 rounded-md border border-amber-500/20">
+          <ShieldAlert className="size-4 shrink-0" />
+          <span>Extension not currently detected. You can proceed and configure it later.</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function NoPasswordManagerConfirmCard() {
+  return (
+    <div className="rounded-xl border border-border/50 bg-background/40 p-5 backdrop-blur-md space-y-3">
+      <div className="flex items-center gap-2.5">
+        <div className="flex size-8 items-center justify-center rounded-lg border border-border/40 bg-muted/30 text-muted-foreground">
+          <ShieldOff className="size-4" aria-hidden="true" />
+        </div>
+        <div>
+          <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
+            No Password Manager Selected
+          </h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Local Vault initialization will be skipped.
+          </p>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground leading-relaxed pl-0.5">
+        Maho will not create a Local Vault or prompt for a master passphrase during onboarding. You can set up Maho Passwords or connect external extensions anytime in Settings.
+      </p>
+    </div>
   );
 }
 
@@ -128,60 +251,84 @@ export function VaultCard(props: VaultCardProps) {
   } = props;
 
   return (
-    <Card className="bg-background/60 shadow-sm">
-      <CardHeader className="space-y-1 p-4 pb-3">
-        <div className="flex items-center gap-2">
-          <LockKeyhole className="size-4 text-muted-foreground" aria-hidden="true" />
-          <h2 className="text-sm font-semibold leading-none tracking-tight">
-            {store.getString('IDS_MAHO_WELCOME_VAULT_CARD_TITLE')}
-          </h2>
+    <div className="rounded-xl border border-border/50 bg-background/40 p-5 backdrop-blur-md space-y-4">
+      <div className="flex items-center gap-2.5">
+        <div className="flex size-8 items-center justify-center rounded-lg border border-border/40 bg-primary/10 text-primary">
+          <LockKeyhole className="size-4" aria-hidden="true" />
         </div>
-        <CardDescription className="text-pretty text-xs leading-5">
-          {needsInitialize
-            ? store.getString('IDS_MAHO_WELCOME_VAULT_INITIALIZE_BODY')
-            : needsUnlock
-            ? store.getString('IDS_MAHO_WELCOME_VAULT_UNLOCK_BODY')
-            : store.getString('IDS_MAHO_WELCOME_VAULT_READY_BODY')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3 p-4 pt-0">
-        {!isUnlocked ? (
-          <div className="space-y-3">
-            <div className="space-y-2">
-              <Label htmlFor="vault-master-passphrase">
-                {store.getString('IDS_MAHO_WELCOME_VAULT_MASTER_LABEL')}
+        <div>
+          <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
+            Maho Local Vault
+          </h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            {needsInitialize
+              ? 'Set up your local encrypted vault to store passwords securely on this device.'
+              : needsUnlock
+              ? 'Enter your master passphrase to unlock your local vault.'
+              : 'Your local vault is unlocked and ready.'}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground leading-relaxed">
+        The Local Vault keeps your passwords encrypted on your hardware. Your master passphrase never leaves this machine.
+      </div>
+
+      {!isUnlocked ? (
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="vault-master-passphrase" className="text-xs font-medium">
+                Master Passphrase
               </Label>
+              {needsInitialize && masterPassphrase ? (
+                <span className="text-[10px] text-emerald-500 font-medium">
+                  {masterPassphrase.length >= 8 ? 'Strong passphrase' : 'Entered'}
+                </span>
+              ) : null}
+            </div>
+            <Input
+              ref={masterInputRef}
+              id="vault-master-passphrase"
+              type="password"
+              autoComplete={needsInitialize ? 'new-password' : 'current-password'}
+              disabled={disabled}
+              required
+              value={masterPassphrase}
+              onChange={event => onMasterPassphraseChange(event.target.value)}
+              className="h-9 text-xs bg-background/60"
+            />
+          </div>
+          {needsInitialize ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="vault-recovery-secret" className="text-xs font-medium">
+                  Recovery Secret
+                </Label>
+                {recoverySecret ? (
+                  <span className="text-[10px] text-emerald-500 font-medium">Entered</span>
+                ) : null}
+              </div>
               <Input
-                ref={masterInputRef}
-                id="vault-master-passphrase"
+                ref={recoveryInputRef}
+                id="vault-recovery-secret"
                 type="password"
-                autoComplete={needsInitialize ? 'new-password' : 'current-password'}
+                autoComplete="new-password"
                 disabled={disabled}
                 required
-                value={masterPassphrase}
-                onChange={event => onMasterPassphraseChange(event.target.value)}
+                value={recoverySecret}
+                onChange={event => onRecoverySecretChange(event.target.value)}
+                className="h-9 text-xs bg-background/60"
               />
             </div>
-            {needsInitialize ? (
-              <div className="space-y-2">
-                <Label htmlFor="vault-recovery-secret">
-                  {store.getString('IDS_MAHO_WELCOME_VAULT_RECOVERY_LABEL')}
-                </Label>
-                <Input
-                  ref={recoveryInputRef}
-                  id="vault-recovery-secret"
-                  type="password"
-                  autoComplete="new-password"
-                  disabled={disabled}
-                  required
-                  value={recoverySecret}
-                  onChange={event => onRecoverySecretChange(event.target.value)}
-                />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          <Check className="size-4 shrink-0" />
+          <span>Vault is unlocked and ready for use.</span>
+        </div>
+      )}
+    </div>
   );
 }

@@ -1000,22 +1000,26 @@ export function ComposeForm({
       </div>
 
       {/* Footer / Controls */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between border-t border-border bg-background px-4 py-3 gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-card/65 px-4 py-3 backdrop-blur-xl">
         <div className="flex flex-wrap items-center gap-1">
           {/* Send Buttons */}
           <button
             onClick={() => void handleSend()}
             disabled={sending || !effectiveAccountId}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/95 disabled:opacity-50"
+            className="flex h-10 items-center gap-1.5 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
           >
             {sending ? <Loader2 size={14} className="animate-spin" /> : null}
             {t("compose.send")}
           </button>
 
+          <div className="ml-1 min-w-[7rem] text-xs text-muted-foreground" aria-live="polite">
+            {draft.draftSavedAt ? `Saved ${draft.draftSavedAt}` : autoSaveDrafts ? "Draft autosaves" : "Not saved"}
+          </div>
+
           <button
             onClick={() => void handleSaveDraft()}
             disabled={sending || !effectiveAccountId}
-            className="rounded-lg px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
           >
             {t("compose.saveDraft")}
           </button>
@@ -1023,11 +1027,12 @@ export function ComposeForm({
           <button
             onClick={() => setShowSchedule(!showSchedule)}
             disabled={sending || !effectiveAccountId}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-card hover:text-foreground disabled:opacity-50"
+            className="flex h-10 items-center gap-1.5 rounded-lg border border-border/60 bg-background/60 px-3 text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-50"
             aria-label={t("compose.schedule")}
             title={t("compose.schedule")}
           >
             <Clock size={16} />
+            <span className="hidden text-xs sm:inline">Schedule</span>
           </button>
 
           {/* Attach Button */}

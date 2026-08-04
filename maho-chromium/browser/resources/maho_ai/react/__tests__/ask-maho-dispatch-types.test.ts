@@ -1,4 +1,7 @@
 import {expectTypeOf, it} from 'vitest';
+import {
+  ChatIntent,
+} from '../../maho_ai.mojom-webui.js';
 import type {
   ApprovalDecision,
   ApprovalPolicy,
@@ -9,9 +12,26 @@ import type {
   AskMahoContextIntent,
   AskMahoDispatch,
   AskMahoSource,
+  ContextAttachment,
   InteractionMode,
+  PageHandlerRemote,
   RuntimeEvent,
 } from '../../maho_ai.mojom-webui.js';
+
+it('exposes exact ChatIntent enum members declared by Mojo', () => {
+  expectTypeOf<keyof typeof ChatIntent>()
+      .toEqualTypeOf<'kFreeform' | 'kSummarizeCurrentPage' | 'kQuizCurrentPage'>();
+});
+
+it('enforces six-argument submitPrompt contract on PageHandlerRemote', () => {
+  expectTypeOf<PageHandlerRemote['submitPrompt']>().toEqualTypeOf<(
+      sessionId: string,
+      prompt: string,
+      attachBrowserContext: boolean,
+      mode: InteractionMode,
+      attachments: ContextAttachment[] | null,
+      chatIntent: ChatIntent) => Promise<void>>();
+});
 
 it('exposes only the Ask Maho source declared by Mojo', () => {
   expectTypeOf<keyof typeof AskMahoSource>()

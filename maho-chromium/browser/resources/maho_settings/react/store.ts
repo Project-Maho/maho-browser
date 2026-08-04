@@ -10,8 +10,17 @@ import type {
   BrowserVersionInfo,
   SettingValue,
   Invoice,
+  ProfileTarget,
+  SelectedProfileContext,
+  ProfileMetadata,
+  ProfileSearchSettings,
+  ProfileDownloadSettings,
+  ProfileArchiveSettings,
+  ProfileMetadataUpdate,
+  ProfileTargetError,
 } from '../maho_settings.mojom-webui.js';
-import {PANE_DEFINITION_MAP, PANE_DEFINITIONS} from '../schema/panes.js';
+import {ProfileTargetErrorCode} from '../maho_settings.mojom-webui.js';
+import {PANE_DEFINITIONS, resolveReachablePaneKey} from '../schema/panes.js';
 import {SETTING_METADATA} from '../schema/setting_schema.js';
 import {notifyListeners} from '../../maho_common/react/store_utils.js';
 import type {Listener} from '../../maho_common/react/store_utils.js';
@@ -37,6 +46,18 @@ export interface SettingsState {
   readonly browserChannel: string;
   readonly updateState: number;
   readonly updateSupported: boolean;
+  readonly selectedProfileTarget: ProfileTarget | null;
+  readonly selectedProfileContext: SelectedProfileContext | null;
+  readonly selectedProfileMetadata: ProfileMetadata | null;
+  readonly selectedProfileSearch: ProfileSearchSettings | null;
+  readonly selectedProfileDownload: ProfileDownloadSettings | null;
+  readonly selectedProfileArchive: ProfileArchiveSettings | null;
+  readonly selectedProfileLoading: boolean;
+  readonly selectedProfileError: string | null;
+  readonly selectedProfileMutationError: ProfileTargetError | null;
+  readonly selectedProfileMutationErrorSettingKey: string | null;
+  readonly selectedProfileSavingKeys: ReadonlySet<string>;
+  readonly selectedProfileLoadGeneration: bigint;
 }
 
 function createSignedOutAccountStatus(): AccountStatus {
@@ -76,13 +97,20 @@ function settingsEqual(a: SettingValue[], b: SettingValue[]): boolean {
   return true;
 }
 
-function resolvePaneKey(key: string): string {
-  const pane = PANE_DEFINITION_MAP[key];
-  if (pane && pane.kind !== 'hidden') {
-    return key;
-  }
+const SELECTED_PROFILE_SETTING_ROUTES = {
+  'general.prompt_for_download': 'download-prompt',
+  'search.suggestions': 'search-suggestions',
+  'tabs.archive_timeout': 'archive',
+} as const;
 
-  return PANE_DEFINITIONS[0]!.key;
+type SelectedProfileSettingRoute =
+    typeof SELECTED_PROFILE_SETTING_ROUTES[keyof typeof SELECTED_PROFILE_SETTING_ROUTES];
+
+// Resolve aliases and enforce runtime feature gates. Before bootstrap, Mail is
+// tentatively allowed so a valid enabled-Mail deep link does not flash away;
+// bootstrap re-resolves with the authoritative mail.enabled setting.
+function resolvePaneKey(key: string, mailEnabled = true): string {
+  return resolveReachablePaneKey(key, mailEnabled);
 }
 
 function paneKeyFromCurrentUrl(): string {
@@ -122,6 +150,18 @@ function createInitialState(): SettingsState {
     browserChannel: '',
     updateState: BrowserUpdateState.kIdle,
     updateSupported: false,
+    selectedProfileTarget: null,
+    selectedProfileContext: null,
+    selectedProfileMetadata: null,
+    selectedProfileSearch: null,
+    selectedProfileDownload: null,
+    selectedProfileArchive: null,
+    selectedProfileLoading: false,
+    selectedProfileError: null,
+    selectedProfileMutationError: null,
+    selectedProfileMutationErrorSettingKey: null,
+    selectedProfileSavingKeys: new Set<string>(),
+    selectedProfileLoadGeneration: 0n,
   };
 }
 
@@ -141,6 +181,7 @@ export class MahoSettingsStore {
   private bootstrapComplete = false;
   private toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pendingValues = new Map<string, string>();
+  private readonly selectedProfileMutationOwners = new Map<string, symbol>();
   private readonly popstateListener: () => void;
 
   constructor() {
@@ -242,6 +283,13 @@ export class MahoSettingsStore {
       const {settings} = await this.pageHandler.getSettings();
       this.bootstrapComplete = true;
       this.replaceSettings(settings);
+      const mailEnabled = settings.some(
+          setting => setting.key === 'mail.enabled' && setting.value === 'true');
+      const reachablePaneKey = resolvePaneKey(this.state.currentPaneKey, mailEnabled);
+      if (reachablePaneKey !== this.state.currentPaneKey) {
+        this.patch(state => ({...state, currentPaneKey: reachablePaneKey}));
+        writePaneToUrl(reachablePaneKey, true);
+      }
       void this.refreshBrowserVersionInfo();
     } catch {
       this.bootstrapComplete = true;
@@ -320,6 +368,39 @@ export class MahoSettingsStore {
         accountError: formatActionError(error),
         accountLoading: false,
       }));
+    }
+  }
+
+  async signInWithGoogle(): Promise<{error?: string; success: boolean}> {
+    this.patch(state => ({
+      ...state,
+      accountError: '',
+      accountLoading: true,
+    }));
+
+    try {
+      const {errorMessage, success} = await this.pageHandler.signInWithGoogle();
+      if (!success) {
+        this.patch(state => ({
+          ...state,
+          accountError: errorMessage,
+          accountLoading: false,
+        }));
+        return {success: false, error: errorMessage};
+      }
+
+      await this.refreshAccountStatus();
+      await this.refreshBilling();
+      await this.refreshInvoices();
+      return {success: true};
+    } catch (error) {
+      const message = formatActionError(error);
+      this.patch(state => ({
+        ...state,
+        accountError: message,
+        accountLoading: false,
+      }));
+      return {success: false, error: message};
     }
   }
 
@@ -455,6 +536,16 @@ export class MahoSettingsStore {
   }
 
   isSaving(key: string): boolean {
+    const route = SELECTED_PROFILE_SETTING_ROUTES[
+        key as keyof typeof SELECTED_PROFILE_SETTING_ROUTES];
+    if (this.state.selectedProfileTarget && route) {
+      const selectedProfileSavingKey =
+          route === 'archive' ? 'archive' :
+          route === 'search-suggestions' ? 'search-suggestions' :
+          route === 'download-prompt' ? 'download-prompt' :
+          'preferences';
+      return this.state.selectedProfileSavingKeys.has(selectedProfileSavingKey);
+    }
     return this.state.savingKeys.has(key);
   }
 
@@ -467,6 +558,18 @@ export class MahoSettingsStore {
    * save will run).
    */
   async commitSettingValue(key: string, value: string): Promise<boolean> {
+    if (this.state.selectedProfileTarget) {
+      const route = SELECTED_PROFILE_SETTING_ROUTES[
+          key as keyof typeof SELECTED_PROFILE_SETTING_ROUTES];
+      if (route) {
+        return this.commitSelectedProfileSettingValue(key, route, value);
+      }
+      if (key === 'appearance.sidebar_width' &&
+          this.state.selectedProfileContext?.isHostProfile !== true) {
+        return false;
+      }
+    }
+
     if (this.state.savingKeys.has(key)) {
       this.pendingValues.set(key, value);
       return false;
@@ -540,9 +643,444 @@ export class MahoSettingsStore {
     }
   }
 
+  private async commitSelectedProfileSettingValue(
+      settingKey: string,
+      route: SelectedProfileSettingRoute,
+      value: string): Promise<boolean> {
+    switch (route) {
+      case 'download-prompt':
+        return this.setSelectedProfileDownloadPrompt(value === 'true', settingKey);
+      case 'search-suggestions':
+        return this.setSelectedProfileSearchSuggestionsEnabled(
+            value === 'true', settingKey);
+      case 'archive':
+        return this.setSelectedProfileArchiveTimeout(Number(value), settingKey);
+    }
+  }
+
   private patch(mutator: (state: SettingsState) => SettingsState): void {
     this.state = mutator(this.state);
     this.scheduleNotify();
+  }
+
+  async selectProfileFromCatalog(profileId: string): Promise<void> {
+    this.selectedProfileMutationOwners.clear();
+    const loadGeneration = this.state.selectedProfileLoadGeneration + 1n;
+    const requestedTarget: ProfileTarget = {profileId, targetToken: ''};
+    this.patch(state => ({
+      ...state,
+      selectedProfileTarget: requestedTarget,
+      selectedProfileContext: null,
+      selectedProfileMetadata: null,
+      selectedProfileSearch: null,
+      selectedProfileDownload: null,
+      selectedProfileArchive: null,
+      selectedProfileLoading: true,
+      selectedProfileError: null,
+      selectedProfileMutationError: null,
+      selectedProfileMutationErrorSettingKey: null,
+      selectedProfileSavingKeys: new Set<string>(),
+      selectedProfileLoadGeneration: loadGeneration,
+    }));
+    try {
+      const {result: {context, error}} =
+          await this.pageHandler.getSelectedProfileContext(requestedTarget);
+      if (this.state.selectedProfileLoadGeneration !== loadGeneration ||
+          this.state.selectedProfileTarget?.profileId !== profileId) return;
+      if (error) {
+        this.patch(state => ({...state, selectedProfileError: error.message, selectedProfileLoading: false}));
+        return;
+      }
+      if (!context || context.profileId !== profileId || !context.targetToken) {
+        this.patch(state => ({
+          ...state,
+          selectedProfileError: 'Selected profile context is unavailable or invalid.',
+          selectedProfileLoading: false,
+        }));
+        return;
+      }
+      this.patch(state => ({
+        ...state,
+        selectedProfileTarget: {profileId: context.profileId, targetToken: context.targetToken},
+        selectedProfileContext: context,
+        selectedProfileError: null,
+        selectedProfileLoading: false,
+      }));
+    } catch (error) {
+      if (this.state.selectedProfileLoadGeneration !== loadGeneration) return;
+      this.patch(state => ({
+        ...state,
+        selectedProfileError: formatActionError(error),
+        selectedProfileLoading: false,
+      }));
+    }
+  }
+
+  async selectProfileTarget(target: ProfileTarget): Promise<void> {
+    const loadGeneration = this.state.selectedProfileLoadGeneration + 1n;
+    this.selectedProfileMutationOwners.clear();
+    const targetChanged = !this.selectedProfileTargetMatches(target);
+
+    // Update state immediately so UI shows loading/selection. Profile-scoped
+    // snapshots are retained only when refreshing the exact same target.
+    this.patch(state => ({
+      ...state,
+      selectedProfileTarget: target,
+      selectedProfileContext: targetChanged ? null : state.selectedProfileContext,
+      selectedProfileMetadata: targetChanged ? null : state.selectedProfileMetadata,
+      selectedProfileSearch: targetChanged ? null : state.selectedProfileSearch,
+      selectedProfileDownload: targetChanged ? null : state.selectedProfileDownload,
+      selectedProfileArchive: targetChanged ? null : state.selectedProfileArchive,
+      selectedProfileLoading: true,
+      selectedProfileError: null,
+      selectedProfileMutationError: null,
+      selectedProfileMutationErrorSettingKey: null,
+      selectedProfileSavingKeys: new Set<string>(),
+      selectedProfileLoadGeneration: loadGeneration,
+    }));
+
+    try {
+      const {result: {context, error}} =
+          await this.pageHandler.getSelectedProfileContext(target);
+
+      // Stale guard: if a newer request was started while this was in flight, drop
+      if (this.state.selectedProfileLoadGeneration !== loadGeneration) {
+        return;
+      }
+      if (this.state.selectedProfileTarget?.profileId !== target.profileId ||
+          this.state.selectedProfileTarget?.targetToken !== target.targetToken) {
+        return;
+      }
+
+      if (error) {
+        this.patch(state => ({
+          ...state,
+          selectedProfileContext: null,
+          selectedProfileError: error.message,
+          selectedProfileLoading: false,
+        }));
+        return;
+      }
+
+      if (!context) {
+        this.patch(state => ({
+          ...state,
+          selectedProfileContext: null,
+          selectedProfileError: 'Selected profile is unavailable.',
+          selectedProfileLoading: false,
+        }));
+        return;
+      }
+
+      if (context.profileId !== target.profileId ||
+          context.targetToken !== target.targetToken) {
+        this.patch(state => ({
+          ...state,
+          selectedProfileContext: null,
+          selectedProfileError: 'Selected profile context does not match the requested target.',
+          selectedProfileLoading: false,
+        }));
+        return;
+      }
+
+      this.patch(state => ({
+        ...state,
+        selectedProfileContext: context,
+        selectedProfileError: null,
+        selectedProfileLoading: false,
+      }));
+    } catch (err) {
+      // stale guard again after async error
+      if (this.state.selectedProfileLoadGeneration !== loadGeneration) {
+        return;
+      }
+      this.patch(state => ({
+        ...state,
+        selectedProfileContext: null,
+        selectedProfileError: formatActionError(err),
+        selectedProfileLoading: false,
+      }));
+    }
+  }
+
+  private selectedProfileTargetMatches(target: ProfileTarget): boolean {
+    return this.state.selectedProfileTarget?.profileId === target.profileId &&
+        this.state.selectedProfileTarget.targetToken === target.targetToken;
+  }
+
+  private selectedProfileRequestMatches(
+      target: ProfileTarget,
+      context: SelectedProfileContext,
+      responseContext?: SelectedProfileContext | null): boolean {
+    const currentContext = this.state.selectedProfileContext;
+    if (!this.selectedProfileTargetMatches(target) || !currentContext ||
+        currentContext.profileId !== context.profileId ||
+        currentContext.targetToken !== context.targetToken ||
+        currentContext.contextRevision !== context.contextRevision ||
+        currentContext.profileRevision !== context.profileRevision) {
+      return false;
+    }
+    return responseContext === undefined || responseContext !== null &&
+        responseContext.profileId === context.profileId &&
+        responseContext.targetToken === context.targetToken &&
+        responseContext.contextRevision === context.contextRevision &&
+        responseContext.profileRevision === context.profileRevision;
+  }
+
+  private handleSelectedProfileError(code: ProfileTargetErrorCode): void {
+    if (code === ProfileTargetErrorCode.kStaleContext ||
+        code === ProfileTargetErrorCode.kStaleProfileRevision) {
+      // Auto-refresh context; the new context will have fresh revisions.
+      if (this.state.selectedProfileTarget) {
+        void this.selectProfileTarget(this.state.selectedProfileTarget);
+      }
+    }
+  }
+
+  private selectedProfileMutationRequestMatches(
+      target: ProfileTarget, context: SelectedProfileContext): boolean {
+    return this.selectedProfileRequestMatches(target, context);
+  }
+
+  private applySelectedProfileMutation<T>(
+      target: ProfileTarget,
+      requestContext: SelectedProfileContext,
+      responseContext: SelectedProfileContext | null,
+      snapshot: T | null,
+      error: ProfileTargetError | null,
+      snapshotKey: 'selectedProfileMetadata' |
+          'selectedProfileSearch' | 'selectedProfileDownload' |
+          'selectedProfileArchive',
+      errorSettingKey: string | null): boolean {
+    if (!this.selectedProfileMutationRequestMatches(target, requestContext)) {
+      return false;
+    }
+    if (error) {
+      this.handleSelectedProfileError(error.code);
+      this.patch(state => ({
+        ...state,
+        selectedProfileMutationError: error,
+        selectedProfileMutationErrorSettingKey: errorSettingKey,
+      }));
+      return false;
+    }
+    if (!responseContext || !snapshot ||
+        responseContext.profileId !== requestContext.profileId ||
+        responseContext.targetToken !== requestContext.targetToken ||
+        responseContext.contextRevision < requestContext.contextRevision ||
+        responseContext.profileRevision < requestContext.profileRevision) {
+      return false;
+    }
+    this.patch(state => ({
+      ...state,
+      selectedProfileContext: responseContext,
+      selectedProfileMutationError: null,
+      selectedProfileMutationErrorSettingKey: null,
+      [snapshotKey]: snapshot,
+    }));
+    return true;
+  }
+
+  private async runSelectedProfileMutation<T>(
+      savingKey: string,
+      invoke: (target: ProfileTarget, context: SelectedProfileContext) =>
+          Promise<{context: SelectedProfileContext | null; snapshot: T | null; error: ProfileTargetError | null}>,
+      snapshotKey: 'selectedProfileMetadata' |
+          'selectedProfileSearch' | 'selectedProfileDownload' |
+          'selectedProfileArchive',
+      errorSettingKey: string | null = null): Promise<boolean> {
+    const {selectedProfileTarget: target, selectedProfileContext: context} = this.state;
+    if (!target || !context || this.state.selectedProfileSavingKeys.has(savingKey)) {
+      return false;
+    }
+    const owner = Symbol(savingKey);
+    this.selectedProfileMutationOwners.set(savingKey, owner);
+    this.patch(state => ({
+      ...state,
+      selectedProfileMutationError: null,
+      selectedProfileMutationErrorSettingKey: null,
+      selectedProfileSavingKeys: new Set([...state.selectedProfileSavingKeys, savingKey]),
+    }));
+    let requestMayClearSaving = false;
+    try {
+      const result = await invoke(target, context);
+      const applied = this.applySelectedProfileMutation(
+          target, context, result.context, result.snapshot, result.error,
+          snapshotKey, errorSettingKey);
+      requestMayClearSaving = applied ||
+          this.selectedProfileMutationRequestMatches(target, context);
+      return applied;
+    } catch (error) {
+      requestMayClearSaving =
+          this.selectedProfileMutationRequestMatches(target, context);
+      if (requestMayClearSaving) {
+        this.patch(state => ({
+          ...state,
+          selectedProfileMutationError: {
+            code: ProfileTargetErrorCode.kInternal,
+            message: formatActionError(error),
+            currentContextRevision: context.contextRevision,
+            currentProfileRevision: context.profileRevision,
+          },
+          selectedProfileMutationErrorSettingKey: errorSettingKey,
+        }));
+      }
+      return false;
+    } finally {
+      const stillOwnsSavingKey =
+          this.selectedProfileMutationOwners.get(savingKey) === owner;
+      if (stillOwnsSavingKey && requestMayClearSaving) {
+        this.selectedProfileMutationOwners.delete(savingKey);
+        this.patch(state => {
+          const saving = new Set(state.selectedProfileSavingKeys);
+          saving.delete(savingKey);
+          return {...state, selectedProfileSavingKeys: saving};
+        });
+      }
+    }
+  }
+
+  async updateSelectedProfileMetadata(
+      update: Omit<ProfileMetadataUpdate, 'expectedProfileRevision'>): Promise<boolean> {
+    return this.runSelectedProfileMutation(
+        'metadata',
+        async (target, context) => {
+          const {result} = await this.pageHandler.updateSelectedProfileMetadata(
+              target, context.contextRevision,
+              {...update, expectedProfileRevision: context.profileRevision});
+          return {context: result.context, snapshot: result.metadata, error: result.error};
+        },
+        'selectedProfileMetadata');
+  }
+
+  async setSelectedProfileDefaultSearchEngine(keyword: string): Promise<boolean> {
+    return this.runSelectedProfileMutation(
+        'search-engine',
+        async (target, context) => {
+          const {result} = await this.pageHandler.setSelectedProfileDefaultSearchEngine(
+              target, context.contextRevision, keyword, context.profileRevision);
+          return {context: result.context, snapshot: result.search, error: result.error};
+        },
+        'selectedProfileSearch');
+  }
+
+  async setSelectedProfileSearchSuggestionsEnabled(
+      enabled: boolean, errorSettingKey: string | null = null): Promise<boolean> {
+    return this.runSelectedProfileMutation(
+        'search-suggestions',
+        async (target, context) => {
+          const {result} = await this.pageHandler.setSelectedProfileSearchSuggestionsEnabled(
+              target, context.contextRevision, enabled, context.profileRevision);
+          return {context: result.context, snapshot: result.search, error: result.error};
+        },
+        'selectedProfileSearch',
+        errorSettingKey);
+  }
+
+  async setSelectedProfileDownloadPrompt(
+      promptForDownload: boolean, errorSettingKey: string | null = null): Promise<boolean> {
+    return this.runSelectedProfileMutation(
+        'download-prompt',
+        async (target, context) => {
+          const {result} = await this.pageHandler.setSelectedProfileDownloadPrompt(
+              target, context.contextRevision, promptForDownload,
+              context.profileRevision);
+          return {context: result.context, snapshot: result.download, error: result.error};
+        },
+        'selectedProfileDownload',
+        errorSettingKey);
+  }
+
+  async selectSelectedProfileDownloadDirectory(): Promise<boolean> {
+    return this.runSelectedProfileMutation(
+        'download-directory',
+        async (target, context) => {
+          const {result} = await this.pageHandler.selectSelectedProfileDownloadDirectory(
+              target, context.contextRevision, context.profileRevision);
+          return {context: result.context, snapshot: result.download, error: result.error};
+        },
+        'selectedProfileDownload');
+  }
+
+  async setSelectedProfileArchiveTimeout(
+      timeoutHours: number, errorSettingKey: string | null = null): Promise<boolean> {
+    return this.runSelectedProfileMutation(
+        'archive',
+        async (target, context) => {
+          const {result} = await this.pageHandler.setSelectedProfileArchiveTimeout(
+              target, context.contextRevision, timeoutHours, context.profileRevision);
+          return {context: result.context, snapshot: result.archive, error: result.error};
+        },
+        'selectedProfileArchive',
+        errorSettingKey);
+  }
+
+  async refreshSelectedProfileMetadata(): Promise<void> {
+    const {selectedProfileTarget, selectedProfileContext} = this.state;
+    if (!selectedProfileTarget || !selectedProfileContext) return;
+    try {
+      const {result: {context, metadata, error}} =
+          await this.pageHandler.getSelectedProfileMetadata(selectedProfileTarget);
+      if (!this.selectedProfileRequestMatches(
+              selectedProfileTarget, selectedProfileContext,
+              error ? undefined : context)) return;
+      if (error) {
+        this.handleSelectedProfileError(error.code);
+      } else if (metadata) {
+        this.patch(state => ({...state, selectedProfileMetadata: metadata}));
+      }
+    } catch (_) { /* silently ignore refresh failures */ }
+  }
+
+  async refreshSelectedProfileSearch(): Promise<void> {
+    const {selectedProfileTarget, selectedProfileContext} = this.state;
+    if (!selectedProfileTarget || !selectedProfileContext) return;
+    try {
+      const {result: {context, search, error}} =
+          await this.pageHandler.getSelectedProfileSearchSettings(selectedProfileTarget);
+      if (!this.selectedProfileRequestMatches(
+              selectedProfileTarget, selectedProfileContext,
+              error ? undefined : context)) return;
+      if (error) {
+        this.handleSelectedProfileError(error.code);
+      } else if (search) {
+        this.patch(state => ({...state, selectedProfileSearch: search}));
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  async refreshSelectedProfileDownload(): Promise<void> {
+    const {selectedProfileTarget, selectedProfileContext} = this.state;
+    if (!selectedProfileTarget || !selectedProfileContext) return;
+    try {
+      const {result: {context, download, error}} =
+          await this.pageHandler.getSelectedProfileDownloadSettings(selectedProfileTarget);
+      if (!this.selectedProfileRequestMatches(
+              selectedProfileTarget, selectedProfileContext,
+              error ? undefined : context)) return;
+      if (error) {
+        this.handleSelectedProfileError(error.code);
+      } else if (download) {
+        this.patch(state => ({...state, selectedProfileDownload: download}));
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  async refreshSelectedProfileArchive(): Promise<void> {
+    const {selectedProfileTarget, selectedProfileContext} = this.state;
+    if (!selectedProfileTarget || !selectedProfileContext) return;
+    try {
+      const {result: {context, archive, error}} =
+          await this.pageHandler.getSelectedProfileArchiveSettings(selectedProfileTarget);
+      if (!this.selectedProfileRequestMatches(
+              selectedProfileTarget, selectedProfileContext,
+              error ? undefined : context)) return;
+      if (error) {
+        this.handleSelectedProfileError(error.code);
+      } else if (archive) {
+        this.patch(state => ({...state, selectedProfileArchive: archive}));
+      }
+    } catch (_) { /* ignore */ }
   }
 
   private scheduleNotify(): void {

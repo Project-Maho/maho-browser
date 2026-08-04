@@ -8,6 +8,50 @@
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 
+.mail-navigation {
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  box-shadow: inset -1px 0 color-mix(in srgb, var(--border) 58%, transparent);
+}
+
+.mail-list-pane {
+  background: color-mix(in srgb, var(--card) 66%, var(--background));
+  box-shadow: inset -1px 0 color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.mail-reader-pane {
+  background: var(--background);
+}
+
+.mail-resize-handle {
+  opacity: 0;
+}
+
+.mail-resize-handle:hover,
+.mail-resize-handle:focus-visible {
+  opacity: 1;
+}
+
+@media (max-width: 1100px) {
+  .mail-navigation {
+    width: 56px !important;
+  }
+
+  .mail-list-pane {
+    width: min(360px, 42vw) !important;
+  }
+}
+
+@media (max-width: 850px) {
+  .mail-navigation,
+  .mail-resize-handle {
+    display: none !important;
+  }
+
+  .mail-list-pane {
+    width: min(380px, 46vw) !important;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

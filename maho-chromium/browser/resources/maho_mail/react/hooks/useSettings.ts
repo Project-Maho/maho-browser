@@ -65,6 +65,7 @@ export interface UseSettingsReturn {
 }
 
 const BEHAVIOR_PREFS_KEY = "mail_behavior_prefs";
+const BEHAVIOR_PREFS_CACHE_KEY = "maho-mail-behavior-prefs-cache-v1";
 const EMAIL_LIST_WIDTH_MIN = 280;
 const EMAIL_LIST_WIDTH_MAX = 600;
 const DEFAULT_PREFS: MailBehaviorPrefs = {
@@ -145,70 +146,22 @@ export function parseMailBehaviorPrefs(raw: string | null): MailBehaviorPrefs {
 }
 
 export function getSynchronousPrefs(): MailBehaviorPrefs {
-  const savedSync = localStorage.getItem("maho-sync-interval");
-  const savedSidebar = localStorage.getItem("maho-sidebar-width");
-  const savedEmailList = localStorage.getItem("maho-email-list-width");
-  const savedFontSize = localStorage.getItem("maho-font-size");
-  const savedDesktopNotif = localStorage.getItem("maho-desktop-notifications");
-  const savedSound = localStorage.getItem("maho-sound-enabled");
-  const savedAutoSave = localStorage.getItem("maho-auto-save-drafts");
-  const savedRemoteImages = localStorage.getItem("maho-block-remote-images");
-  const savedTrackers = localStorage.getItem("maho-block-trackers");
-  const savedUndoSend = localStorage.getItem("maho-undo-send-delay");
-
-  let sidebar_width = savedSidebar ? Number(savedSidebar) : DEFAULT_PREFS.sidebar_width;
-  if (sidebar_width < 200 || sidebar_width > 400) sidebar_width = DEFAULT_PREFS.sidebar_width;
-
-  let email_list_width = savedEmailList ? Number(savedEmailList) : DEFAULT_PREFS.email_list_width;
-  if (email_list_width < EMAIL_LIST_WIDTH_MIN || email_list_width > EMAIL_LIST_WIDTH_MAX) email_list_width = DEFAULT_PREFS.email_list_width;
-
-  let font_size = savedFontSize ? Number(savedFontSize) : DEFAULT_PREFS.font_size;
-  if (font_size < 12 || font_size > 20) font_size = DEFAULT_PREFS.font_size;
-
-  let undo_send_delay = savedUndoSend ? Number(savedUndoSend) : DEFAULT_PREFS.undo_send_delay;
-
-  const docAnalytics = document.documentElement.getAttribute("data-analytics") === "true" ||
-                       document.documentElement.getAttribute("data-telemetry") === "true";
-
-  return {
-    sidebar_width,
-    email_list_width,
-    block_remote_images: savedRemoteImages === null ? DEFAULT_PREFS.block_remote_images : savedRemoteImages === "true",
-    block_trackers: savedTrackers === null ? DEFAULT_PREFS.block_trackers : savedTrackers === "true",
-    desktop_notifications: savedDesktopNotif === "true",
-    sound_enabled: savedSound === null ? DEFAULT_PREFS.sound_enabled : savedSound === "true",
-    undo_send_delay,
-    auto_save_drafts: savedAutoSave === null ? DEFAULT_PREFS.auto_save_drafts : savedAutoSave === "true",
-    sync_interval: savedSync ? Number(savedSync) : DEFAULT_PREFS.sync_interval,
-    font_size,
-    language: "en",
-    analytics_enabled: docAnalytics,
-    email_body_font_family: "system-ui",
-    email_body_font_size: 14,
-  };
+  return parseMailBehaviorPrefs(localStorage.getItem(BEHAVIOR_PREFS_CACHE_KEY));
 }
 
 export async function loadMailBehaviorPrefs(): Promise<MailBehaviorPrefs> {
-  const localDefaults = getSynchronousPrefs();
   try {
     const raw = await api.getAppSetting(BEHAVIOR_PREFS_KEY);
     if (raw) {
-      const mojoPrefs = parseMailBehaviorPrefs(raw);
-      // Merge Mojo settings on top of local settings (so that we preserve correct sidebar/emailList widths)
-      return {
-        ...localDefaults,
-        ...mojoPrefs,
-        // Make sure widths and font sizes are validated
-        sidebar_width: mojoPrefs.sidebar_width >= 200 && mojoPrefs.sidebar_width <= 400 ? mojoPrefs.sidebar_width : localDefaults.sidebar_width,
-        email_list_width: mojoPrefs.email_list_width >= EMAIL_LIST_WIDTH_MIN && mojoPrefs.email_list_width <= EMAIL_LIST_WIDTH_MAX ? mojoPrefs.email_list_width : localDefaults.email_list_width,
-        font_size: mojoPrefs.font_size >= 12 && mojoPrefs.font_size <= 20 ? mojoPrefs.font_size : localDefaults.font_size,
-      };
+      const prefs = parseMailBehaviorPrefs(raw);
+      localStorage.setItem(BEHAVIOR_PREFS_CACHE_KEY, JSON.stringify(prefs));
+      return prefs;
     }
   } catch (e) {
     // Normal in unit tests where Mojo client is not available or stubbed
   }
 
-  return localDefaults;
+  return getSynchronousPrefs();
 }
 
 export function useSettings(): UseSettingsReturn {
@@ -279,23 +232,7 @@ export function useSettings(): UseSettingsReturn {
     prefsRef.current = next;
     setPrefs(next);
     
-    // Also mirror to localStorage so that Tauri compatibility and tests stay completely intact
-    const mapping: Record<string, string> = {
-      sidebar_width: "maho-sidebar-width",
-      email_list_width: "maho-email-list-width",
-      sync_interval: "maho-sync-interval",
-      font_size: "maho-font-size",
-      desktop_notifications: "maho-desktop-notifications",
-      sound_enabled: "maho-sound-enabled",
-      auto_save_drafts: "maho-auto-save-drafts",
-      block_remote_images: "maho-block-remote-images",
-      block_trackers: "maho-block-trackers",
-      undo_send_delay: "maho-undo-send-delay",
-    };
-    const lsKey = mapping[key];
-    if (lsKey) {
-      localStorage.setItem(lsKey, String(value));
-    }
+    localStorage.setItem(BEHAVIOR_PREFS_CACHE_KEY, JSON.stringify(next));
 
     // Persist to Mojo
     void api.setAppSetting(BEHAVIOR_PREFS_KEY, JSON.stringify(next)).catch(() => {});

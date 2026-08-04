@@ -51,14 +51,19 @@ function findCategoryForIcon(icon: string): string {
 
 function resolveProfileValue(
     profiles: ProfileInfo[], currentProfileId: string | null): string {
-  if (currentProfileId) {
-    return profiles.some((profile) => profile.id === currentProfileId) ?
-        currentProfileId :
-        DEFAULT_PROFILE_VALUE;
+  const normalizedProfileId = currentProfileId?.trim() ?? '';
+  const defaultProfileId =
+      profiles.find((profile) => profile.isDefault)?.id ?? '';
+  if (!normalizedProfileId ||
+      normalizedProfileId.toLowerCase() === 'default' ||
+      normalizedProfileId === defaultProfileId) {
+    return DEFAULT_PROFILE_VALUE;
   }
 
-  const defaultProfile = profiles.find((profile) => profile.isDefault);
-  return defaultProfile ? defaultProfile.id : DEFAULT_PROFILE_VALUE;
+  return profiles.some(
+      (profile) => !profile.isDefault && profile.id === normalizedProfileId) ?
+      normalizedProfileId :
+      DEFAULT_PROFILE_VALUE;
 }
 
 function SpaceConfigApp(
@@ -157,8 +162,8 @@ function SpaceConfigApp(
         profileValue === DEFAULT_PROFILE_VALUE ? '' : profileValue;
     const nameChanged = spaceName !== initialInfo.name;
     const iconChanged = spaceIcon !== initialInfo.icon;
-    const profileChanged =
-        (selectedProfileId || null) !== (initialInfo.profileId || null);
+    const profileChanged = profileValue !==
+        resolveProfileValue(profiles, initialInfo.profileId || null);
 
     const promises: Array<Promise<{success: boolean}>> = [];
 
@@ -309,7 +314,7 @@ function SpaceConfigApp(
                 </SelectTrigger>
                 <SelectContent className="border-border/80 bg-popover/95">
                   <SelectItem value={DEFAULT_PROFILE_VALUE}>Default</SelectItem>
-                  {profiles.map((profile) => (
+                  {profiles.filter((profile) => !profile.isDefault).map((profile) => (
                     <SelectItem key={profile.id} value={profile.id}>
                       {profile.name}
                     </SelectItem>

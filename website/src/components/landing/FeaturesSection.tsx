@@ -216,9 +216,37 @@ function FeatureVisualPanel({ visual }: { visual: FeatureVisual }) {
 }
 
 export function FeaturesSection({ eyebrow, headline, items, textOnly = false }: FeaturesSectionProps) {
+  if (textOnly) {
+    return (
+      <section className="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
+        <div className="container-marketing space-y-10 sm:space-y-14">
+          <ScrollReveal variant="slide">
+            <div className="max-w-3xl space-y-4">
+              <p className="landing-eyebrow text-muted-foreground">{eyebrow}</p>
+              <h2 className="landing-section-title">{headline}</h2>
+            </div>
+          </ScrollReveal>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map((item, index) => (
+              <ScrollReveal key={item.title} variant="fade" delayMs={index * 70} className="h-full">
+                <article className="rounded-squircle-xl squircle-enhanced flex h-full flex-col overflow-hidden border border-border bg-card/70">
+                  <div className="flex flex-1 flex-col gap-4 p-6 sm:p-7">
+                    {item.eyebrow && <p className="landing-eyebrow text-muted-foreground">{item.eyebrow}</p>}
+                    <h3 className="landing-subsection-title text-foreground">{item.title}</h3>
+                    <p className="landing-body text-muted-foreground">{item.body}</p>
+                  </div>
+                </article>
+              </ScrollReveal>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
-      <div className="container-marketing space-y-10 sm:space-y-14">
+      <div className="container-marketing space-y-16 sm:space-y-24">
         <ScrollReveal variant="slide">
           <div className="max-w-3xl space-y-4">
             <p className="landing-eyebrow text-muted-foreground">{eyebrow}</p>
@@ -226,25 +254,24 @@ export function FeaturesSection({ eyebrow, headline, items, textOnly = false }: 
           </div>
         </ScrollReveal>
 
-        <div className={`grid gap-6 ${textOnly ? "sm:grid-cols-2 lg:grid-cols-3" : "lg:grid-cols-2"}`}>
-          {items.map((item, index) => (
-            <ScrollReveal key={item.title} variant="fade" delayMs={index * 70} className="h-full">
-              <article className="rounded-squircle-xl squircle-enhanced flex h-full flex-col overflow-hidden border border-border bg-card/70">
-                {!textOnly && item.visual && (
-                  <div className="border-b border-border bg-background/60 p-4 sm:p-5">
-                    <FeatureVisualPanel visual={item.visual} />
+        <div className="space-y-16 sm:space-y-24">
+          {items.map((item, index) => {
+            const reversed = index % 2 === 1;
+            return (
+              <ScrollReveal key={item.title} variant="fade" className="w-full">
+                <article className="grid items-center gap-8 lg:grid-cols-2 lg:gap-14">
+                  <div className={reversed ? "lg:order-2" : "lg:order-1"}>
+                    {item.visual && <FeatureVisualPanel visual={item.visual} />}
                   </div>
-                )}
-                <div className="flex flex-1 flex-col gap-4 p-6 sm:p-7">
-                  {item.eyebrow && (
-                    <p className="landing-eyebrow text-muted-foreground">{item.eyebrow}</p>
-                  )}
-                  <h3 className="landing-subsection-title text-foreground">{item.title}</h3>
-                  <p className="landing-body text-muted-foreground">{item.body}</p>
-                </div>
-              </article>
-            </ScrollReveal>
-          ))}
+                  <div className={`flex flex-col gap-4 ${reversed ? "lg:order-1" : "lg:order-2"}`}>
+                    {item.eyebrow && <p className="landing-eyebrow text-muted-foreground">{item.eyebrow}</p>}
+                    <h3 className="landing-section-title text-foreground">{item.title}</h3>
+                    <p className="landing-body max-w-xl text-muted-foreground sm:text-lg">{item.body}</p>
+                  </div>
+                </article>
+              </ScrollReveal>
+            );
+          })}
         </div>
       </div>
     </section>

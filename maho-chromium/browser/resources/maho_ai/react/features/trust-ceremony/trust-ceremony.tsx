@@ -60,7 +60,7 @@ export function TrustCeremony({store}: {store: MahoAiStore}) {
   };
 
   return (
-    <div className="m-3 p-4 rounded-2xl border border-warning/30 bg-warning/5 backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-top-4 duration-300">
+    <div className="m-3 p-4 rounded-2xl border border-warning/30 bg-warning/5 shadow-[var(--shadow-raised)] animate-in fade-in slide-in-from-top-4 duration-300">
       <div className="flex items-start gap-3">
         <div className="p-2 rounded-xl bg-warning/20 text-warning">
           <ShieldAlert className="size-5" />

@@ -40,9 +40,8 @@ const FOLDER_ENTRIES: Array<{
   target: { type: "aggregate"; folderType: FolderType } | { type: "synthetic"; syntheticId: string } | null;
 }> = [
   { id: "archive", label: "Archive", icon: Archive, target: { type: "aggregate", folderType: "Archive" } },
-  { id: "snoozed", label: "Snoozed", icon: Clock3, target: { type: "synthetic", syntheticId: "snoozed" } },
-  { id: "calendar", label: "Calendar", icon: Calendar, target: { type: "synthetic", syntheticId: "calendar" } },
-  { id: "more", label: "More", icon: MoreHorizontal, target: null },
+  { id: "trash", label: "Trash", icon: Trash2, target: { type: "aggregate", folderType: "Trash" } },
+  { id: "spam", label: "Spam", icon: AlertCircle, target: { type: "aggregate", folderType: "Spam" } },
 ];
 
 const SYNTHETIC_PINS = { id: "pins", label: "Pins", icon: Pin };
@@ -280,16 +279,6 @@ function buildSections(
     },
     {
       type: "synthetic",
-      id: "synthetic-pins",
-      syntheticId: "pins",
-      label: SYNTHETIC_PINS.label,
-      icon: SYNTHETIC_PINS.icon,
-      isExpanded: expandedParents.has("synthetic-pins"),
-      variant: "top",
-      children: buildSyntheticChildren("pins"),
-    },
-    {
-      type: "synthetic",
       id: "synthetic-starred",
       syntheticId: "starred",
       label: SYNTHETIC_STARRED.label,
@@ -297,6 +286,13 @@ function buildSections(
       isExpanded: expandedParents.has("synthetic-starred"),
       variant: "top",
       children: buildSyntheticChildren("starred"),
+    },
+    {
+      type: "folder-entry",
+      id: "snoozed",
+      label: "Snoozed",
+      icon: Clock3,
+      target: { type: "synthetic", syntheticId: "snoozed" },
     },
     {
       type: "parent",
@@ -310,16 +306,6 @@ function buildSections(
     },
     {
       type: "parent",
-      id: "parent-Trash",
-      folderType: "Trash",
-      name: "Trash",
-      isExpanded: expandedParents.has("parent-Trash"),
-      totalUnread: (foldersByType.get("Trash") ?? []).reduce((sum, folder) => sum + folder.unread_count, 0),
-      variant: "top",
-      children: buildFolderChildren("Trash"),
-    },
-    {
-      type: "parent",
       id: "parent-Drafts",
       folderType: "Drafts",
       name: "Drafts",
@@ -330,15 +316,17 @@ function buildSections(
     },
   ];
 
-  const folderRows: SidebarRowNode[] = FOLDER_ENTRIES.map((entry) => ({
-    type: "folder-entry",
-    id: entry.id,
-    label: entry.label,
-    icon: entry.icon,
-    target: entry.target,
-  }));
-
-  const recentsRows: SidebarRowNode[] = [
+  const viewsRows: SidebarRowNode[] = [
+    {
+      type: "synthetic",
+      id: "synthetic-pins",
+      syntheticId: "pins",
+      label: SYNTHETIC_PINS.label,
+      icon: SYNTHETIC_PINS.icon,
+      isExpanded: expandedParents.has("synthetic-pins"),
+      variant: "recents",
+      children: buildSyntheticChildren("pins"),
+    },
     {
       type: "synthetic",
       id: "synthetic-reminders",
@@ -350,27 +338,23 @@ function buildSections(
       children: buildSyntheticChildren("reminders"),
     },
     {
-      type: "parent",
-      id: "parent-Spam",
-      folderType: "Spam",
-      name: "Spam",
-      isExpanded: expandedParents.has("parent-Spam"),
-      totalUnread: (foldersByType.get("Spam") ?? []).reduce((sum, folder) => sum + folder.unread_count, 0),
-      variant: "recents",
-      children: buildFolderChildren("Spam"),
+      type: "folder-entry",
+      id: "calendar",
+      label: "Calendar",
+      icon: Calendar,
+      target: { type: "synthetic", syntheticId: "calendar" },
     },
   ];
 
-  const footerRows: SidebarRowNode[] = [];
+  const folderRows: SidebarRowNode[] = FOLDER_ENTRIES.map((entry) => ({
+    type: "folder-entry",
+    id: entry.id,
+    label: entry.label,
+    icon: entry.icon,
+    target: entry.target,
+  }));
 
-  if (updateAvailable) {
-    footerRows.push({
-      type: "footer-status",
-      id: "footer-update",
-      title: "Update available",
-      icon: RefreshCw,
-    });
-  }
+  const footerRows: SidebarRowNode[] = [];
 
   footerRows.push({
     type: "footer-action",
@@ -389,14 +373,14 @@ function buildSections(
 
   const sections: SidebarSection[] = [
     { id: "top-mailboxes", kind: "top", rows: topRows },
-    { id: "folders", kind: "folders", title: "Folders", rows: folderRows },
+    { id: "views", kind: "recents", title: "Views", rows: viewsRows },
   ];
 
   if (customFolderTree.length > 0) {
     sections.push({
       id: "custom-folders",
       kind: "folders",
-      title: "Custom Folders",
+      title: "Folders",
       rows: [
         {
           type: "custom-folders-section",
@@ -410,7 +394,7 @@ function buildSections(
   }
 
   sections.push(
-    { id: "recents", kind: "recents", title: "Recents", action: { label: "Clear" }, rows: recentsRows },
+    { id: "more", kind: "folders", title: "More", rows: folderRows },
     { id: "footer", kind: "footer", rows: footerRows },
   );
 
@@ -1121,6 +1105,7 @@ export function Sidebar({
     }
 
     if (node.type === "footer-network") {
+      if (isOnline) return null;
       return (
         <div
           key={node.id}
@@ -1317,6 +1302,7 @@ export function Sidebar({
     }
 
     if (node.type === "footer-network") {
+      if (isOnline) return null;
       return (
         <div
           key={node.id}

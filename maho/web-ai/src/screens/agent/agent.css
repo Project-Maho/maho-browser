@@ -216,8 +216,6 @@
 
 .agent-message-meta span {
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .agent-message-bubble {
@@ -233,12 +231,6 @@
   border-top-right-radius: var(--radius-md);
   background: var(--agent-msg-user-bg);
   color: var(--agent-msg-user-fg);
-}
-
-.agent-message-assistant .agent-message-bubble {
-  border-top-left-radius: var(--radius-md);
-  background: var(--agent-msg-assistant-bg);
-  color: var(--agent-msg-assistant-fg);
 }
 
 .agent-pending {
@@ -265,56 +257,61 @@
 
 .agent-thinking {
   width: 100%;
+  margin-top: var(--space-1);
+  margin-bottom: var(--space-1);
   animation: agent-enter var(--motion-agent-enter) both;
 }
 
-.agent-thinking-button {
-  width: 100%;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  border: 1px solid var(--agent-chrome-border);
-  border-radius: var(--radius-md);
-  background: var(--agent-thinking-bg);
+.agent-thinking-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
   color: var(--color-on-surface-secondary);
-  padding: var(--space-2) var(--space-3);
-  text-align: left;
-}
-
-.agent-thinking-button:disabled {
-  pointer-events: none;
-}
-
-.agent-thinking-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.agent-thinking-eyebrow {
-  display: block;
-  margin-bottom: 2px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  line-height: 14px;
-  text-transform: uppercase;
-}
-
-.agent-thinking-text {
-  display: block;
-  white-space: pre-wrap;
   font-size: 12px;
-  font-style: italic;
-  line-height: 20px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--motion-agent-toggle), color var(--motion-agent-toggle);
+}
+
+@media (hover: hover) {
+  .agent-thinking-header-btn:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
 }
 
 .agent-thinking-chevron {
-  margin-top: 2px;
   transition: transform var(--motion-agent-toggle);
+  color: var(--color-on-surface-secondary);
 }
 
 .agent-thinking-chevron-expanded {
   transform: rotate(180deg);
+}
+
+.agent-thinking-header-title {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-thinking-content {
+  padding-left: var(--space-6);
+  margin-top: var(--space-1);
+}
+
+.agent-thinking-text {
+  white-space: pre-wrap;
+  font-size: 12px;
+  font-style: italic;
+  line-height: 20px;
+  color: var(--color-on-surface-secondary);
+  border-left: 2px solid var(--color-border);
+  padding-left: var(--space-3);
 }
 
 .agent-composer-wrap {
@@ -335,8 +332,8 @@
 }
 
 .agent-composer-input {
-  width: 100%;
   flex: 1 1 auto;
+  min-width: 0;
   max-height: 40vh;
   overflow-y: auto;
   border: 0;
@@ -345,8 +342,9 @@
   color: var(--color-on-surface);
   padding: var(--space-2);
   font: inherit;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 24px;
+  overflow-wrap: anywhere;
 }
 
 .agent-composer .agent-send-button,
@@ -391,8 +389,6 @@
 .agent-md h4 {
   font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .agent-md ul,
@@ -465,4 +461,125 @@
   .agent-stop-button:active {
     transform: none;
   }
+}
+
+/* Tool call styling */
+.agent-tool-call {
+  width: 100%;
+  margin-top: var(--space-1);
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  animation: agent-enter var(--motion-agent-enter) both;
+}
+
+.agent-tool-call-header-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-on-surface-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-agent-toggle), color var(--motion-agent-toggle);
+}
+
+@media (hover: hover) {
+  .agent-tool-call-header-btn:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.agent-tool-call-icon {
+  color: var(--color-on-surface-secondary);
+}
+
+.agent-tool-call-icon-spin {
+  animation: agent-spin 1.5s linear infinite;
+}
+
+@keyframes agent-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.agent-tool-call-completed .agent-tool-call-icon {
+  color: var(--color-success);
+}
+
+.agent-tool-call-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-on-surface-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.agent-tool-call-header-btn:hover .agent-tool-call-title {
+  color: var(--color-on-surface);
+}
+
+.agent-tool-call-chevron {
+  color: var(--color-on-surface-secondary);
+  transition: transform var(--motion-agent-toggle);
+}
+
+.agent-tool-call-chevron-expanded {
+  transform: rotate(180deg);
+}
+
+.agent-tool-call-details {
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-left: var(--space-6);
+  margin-top: var(--space-1);
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--color-border);
+}
+
+.agent-tool-call-args,
+.agent-tool-call-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.agent-tool-call-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-on-surface-secondary);
+}
+
+.agent-tool-call-code {
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 16px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.agent-assistant-blocks {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-1);
 }

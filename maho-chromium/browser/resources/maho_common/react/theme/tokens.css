@@ -2,6 +2,8 @@
 @import "tw-animate-css";
 
 @source "../ui/**/*.tsx";
+/* GN sources/inputs are rebuild triggers; Tailwind only scans files listed by @source. */
+@source "../mail/**/*.tsx";
 @source "../../../maho_ai/react/**/*.tsx";
 @source "../../../maho_space_config/react/**/*.tsx";
 @source "../../../maho_settings/react/**/*.tsx";
@@ -119,7 +121,7 @@
   --secondary:           #f0f0f0;
   --secondary-foreground: #4a4a4a;
   --muted:               #f0f0f0;
-  --muted-foreground:    #7a7a7a;
+  --muted-foreground:    #737373;
   --accent:              #2b2b2b;
   --accent-foreground:   #ffffff;
   --destructive:         #dc2626;

@@ -162,6 +162,17 @@ describe('ThemePickerStore — commit', () => {
     expect(parsed.gradientColors[0].isPrimary).toBe(true);
   });
 
+  it('clears pending preview timer before committing', async () => {
+    const {store, handler} = createStore();
+    store.setGrain(70);
+
+    await store.commitTheme();
+    vi.advanceTimersByTime(200);
+
+    expect(handler.commitTheme).toHaveBeenCalledTimes(1);
+    expect(handler.previewTheme).not.toHaveBeenCalled();
+  });
+
   it('commitTheme adds scheme=light when mode is sun', async () => {
     const {store, handler} = createStore();
     store.setPreset(5);

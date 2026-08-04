@@ -107,5 +107,30 @@ describe("processLinksForSafety (IDN homograph protection)", () => {
       });
       expect(getMarkedLinks(result.html).length).toBeGreaterThan(0);
     });
+
+    it("allows ordinary HTTPS images when remote images are enabled", () => {
+      const result = prepareIframeHtml(
+        '<img src="https://images.example.com/newsletter.png" alt="Newsletter">',
+        {
+          blockImages: false,
+          blockTrackers: true,
+          isDark: false,
+        },
+      );
+
+      expect(result.html).toContain('src="https://images.example.com/newsletter.png"');
+      expect(result.html).toContain("img-src https: data: blob: cid:");
+      expect(result.blockedCount).toBe(0);
+    });
+
+    it("blocks uppercase HTTP image schemes when remote images are disabled", () => {
+      const result = prepareIframeHtml(
+        '<img src="HTTPS://images.example.com/newsletter.png">',
+        { blockImages: true, blockTrackers: false, isDark: false },
+      );
+
+      expect(result.html).not.toContain("HTTPS://images.example.com/newsletter.png");
+      expect(result.blockedCount).toBe(1);
+    });
   });
 });

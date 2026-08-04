@@ -17,6 +17,7 @@
     "typeRoots": [
       "../../../../../website/node_modules/@types"
     ],
+    "types": [],
     "paths": {
       "react": [
         "../../../../../website/node_modules/@types/react/index.d.ts"
@@ -26,6 +27,9 @@
       ],
       "react-dom/client": [
         "../../../../../website/node_modules/@types/react-dom/client.d.ts"
+      ],
+      "react-dom/server": [
+        "../../../../../website/node_modules/@types/react-dom/server.d.ts"
       ],
       "class-variance-authority": [
         "../../../../../website/node_modules/class-variance-authority/dist/index.d.ts"
@@ -79,5 +83,10 @@
     "./**/*.ts",
     "./**/*.tsx",
     "../../maho_common/chrome_resources.d.ts"
+  ],
+  "exclude": [
+    "./pages/mail-setup.tsx",
+    "./navigation.ts",
+    "./__tests__/mail_onboarding_lifecycle.test.ts"
   ]
 }

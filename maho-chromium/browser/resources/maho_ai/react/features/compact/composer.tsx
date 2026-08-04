@@ -1,12 +1,19 @@
-import React, {FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState} from 'react';
+import {FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState} from 'react';
+import type {ReactNode} from 'react';
 
 import type {
+  AIModelOptionRecord,
+  AIProviderOptionRecord,
+  AIReasoningOptionRecord,
+  AISelectionRequest,
+
   AppState,
   ComposerAttachment,
   HistoryItemRecord,
   OpenTabRecord,
 } from '../../../types.js';
 import {
+  AI_REASONING_EFFORT,
   createHistoryAttachment,
   createTabAttachment,
   getHistoryItemTitle,
@@ -24,20 +31,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@ui/popover';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@ui/dropdown-menu';
+
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@ui/tooltip';
-import {Globe, Plus, Square, Send, Search, AlertCircle, Mic} from '@icons/lucide';
+import {Check, ChevronDown, Globe, Plus, Square, Send, Search, AlertCircle, Mic} from '@icons/lucide';
 import {Alert, AlertDescription} from '@ui/alert';
 import {ComposerTextarea} from '../../components/composer-textarea.js';
 
@@ -56,18 +56,331 @@ export interface ComposerHandlers {
   onAttachFiles: (files: FileList | File[]) => void;
   onRequestFileChooser: () => void;
   onRemoveAttachment: (attachment: ComposerAttachment) => void;
-  onSetActiveAI: (providerId: string, modelId: string) => Promise<void>;
+  onSetAISelection: (selection: AISelectionRequest) => Promise<boolean>;
   onOpenSettings: () => void;
   onOpenVoice: () => void;
 }
 
 const pickerRowClassName =
-    'group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors outline-none hover:bg-accent/60 focus-visible:bg-accent/70 focus-visible:ring-1 focus-visible:ring-ring data-[focused=true]:bg-accent/70 disabled:cursor-default disabled:opacity-40';
+    'group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors outline-none hover:bg-surface-hover focus-visible:bg-surface-selected focus-visible:ring-1 focus-visible:ring-ring data-[focused=true]:bg-surface-selected disabled:cursor-default disabled:opacity-40';
 const pickerStatusClassName =
     'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground';
 const pickerSectionClassName = 'grid gap-1.5';
 const pickerSectionLabelClassName =
     'px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground';
+const aiSelectionRowClassName =
+    'group flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors outline-none hover:bg-surface-hover focus-visible:bg-surface-selected focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45';
+const aiSelectionLabelClassName =
+    'px-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground';
+
+function getCompactModelLabel(modelId: string): string {
+  return modelId.split('/').pop() || modelId;
+}
+
+function getModelLabel(model: AIModelOptionRecord): string {
+  return model.label.trim() || getCompactModelLabel(model.id);
+}
+
+function getActiveProvider(state: AppState): AIProviderOptionRecord|null {
+  return state.aiSettings.providerOptions.find(
+      provider => provider.id === state.aiSettings.activeProviderId) || null;
+}
+
+function getSelectedProvider(state: AppState): AIProviderOptionRecord|null {
+  return getActiveProvider(state) || state.aiSettings.providerOptions[0] || null;
+}
+
+function getSelectedModel(
+    state: AppState, provider: AIProviderOptionRecord|null): AIModelOptionRecord|null {
+  if (!provider) {
+    return null;
+  }
+  return provider.modelOptions.find(model => model.id === state.aiSettings.activeModelId) ||
+      provider.modelOptions[0] || null;
+}
+
+function getSelectedReasoning(state: AppState): AIReasoningOptionRecord|null {
+  return state.aiSettings.reasoningOptions.find(
+      option => option.effort === state.aiSettings.activeReasoningEffort) ||
+      state.aiSettings.reasoningOptions[0] || null;
+}
+
+function buildSelection(
+    request: {
+      readonly model: AIModelOptionRecord;
+      readonly provider: AIProviderOptionRecord;
+      readonly reasoning: AIReasoningOptionRecord;
+    }): AISelectionRequest {
+  return {
+    modelId: request.model.id,
+    providerId: request.provider.id,
+    reasoningEffort: request.reasoning.effort,
+  };
+}
+
+function AISelectionStatus({title}: {readonly title: string}) {
+  return (
+    <div className="rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground">
+      {title}
+    </div>
+  );
+}
+
+function AISelectionCheck({active}: {readonly active: boolean}) {
+  if (!active) {
+    return <span aria-hidden="true" className="size-3.5" />;
+  }
+  return <Check aria-hidden="true" className="size-3.5 text-primary" />;
+}
+
+function AISelectionLevel({children, label, value}: {
+  readonly children: ReactNode;
+  readonly label: 'provider'|'model'|'thinking';
+  readonly value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative min-w-0 flex-1">
+      <button
+        aria-expanded={open}
+        className="flex h-8 w-full min-w-0 items-center justify-between gap-1 rounded-lg px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        data-ai-selection-level={label}
+        type="button"
+        onClick={() => setOpen(!open)}>
+        <span className="truncate">{value}</span>
+        <ChevronDown aria-hidden="true" className="size-3 shrink-0" />
+      </button>
+      {open ? (
+        <div
+          className={cn(
+              'absolute bottom-[calc(100%+6px)] z-50 grid max-h-72 min-w-48 gap-1 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-[var(--shadow-overlay)]',
+              label === 'thinking' ? 'right-0' : 'left-0')}
+          onClick={() => setOpen(false)}>
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function AISelectionLevels({handlers, state}: {
+  readonly handlers: ComposerHandlers;
+  readonly state: AppState;
+}) {
+  const provider = getSelectedProvider(state);
+  const model = getSelectedModel(state, provider);
+  const reasoning = getSelectedReasoning(state);
+  const itemClassName =
+      'flex h-8 w-full items-center justify-between gap-3 rounded-lg px-2.5 text-left text-xs text-foreground hover:bg-surface-hover disabled:opacity-45';
+  const commit = (selection: Partial<AISelectionRequest>) => commitAISelection({
+    handlers,
+    selection: {
+      providerId: provider?.id || '',
+      modelId: model?.id || '',
+      reasoningEffort: reasoning?.effort || AI_REASONING_EFFORT.kMedium,
+      ...selection,
+    },
+  });
+  return (
+    <section aria-label="AI selection" className="flex min-w-0 items-center gap-0.5">
+      <AISelectionLevel label="provider" value={provider?.label || 'Provider'}>
+        {state.aiSettings.providerOptions.map(option => (
+          <button key={option.id} className={itemClassName}
+            data-ai-selection-provider={option.id}
+            disabled={option.modelOptions.length === 0} type="button"
+            onClick={() => commit({providerId: option.id, modelId: option.modelOptions[0]?.id || ''})}>
+            <span className="truncate">{option.label}</span>
+            <AISelectionCheck active={option.id === provider?.id} />
+          </button>
+        ))}
+      </AISelectionLevel>
+      <div className="h-4 w-px shrink-0 bg-border/70" />
+      <AISelectionLevel label="model" value={model ? getModelLabel(model) : 'Model'}>
+        {provider?.modelOptions.map(option => (
+          <button key={option.id} className={itemClassName}
+            data-ai-selection-model={option.id} type="button"
+            onClick={() => commit({modelId: option.id})}>
+            <span className="truncate">{getModelLabel(option)}</span>
+            <AISelectionCheck active={option.id === model?.id} />
+          </button>
+        ))}
+      </AISelectionLevel>
+      <div className="h-4 w-px shrink-0 bg-border/70" />
+      <AISelectionLevel label="thinking" value={reasoning?.label || 'Thinking'}>
+        {state.aiSettings.reasoningOptions.map(option => (
+          <button key={option.effort} className={itemClassName}
+            data-ai-selection-reasoning={String(option.effort)} type="button"
+            onClick={() => commit({reasoningEffort: option.effort})}>
+            <span className="truncate">{option.label}</span>
+            <AISelectionCheck active={option.effort === reasoning?.effort} />
+          </button>
+        ))}
+      </AISelectionLevel>
+    </section>
+  );
+}
+
+function commitAISelection(
+    request: {
+      readonly handlers: ComposerHandlers;
+      readonly onSelectionCommitted?: () => void;
+      readonly selection: AISelectionRequest;
+    }): void {
+  void request.handlers.onSetAISelection(request.selection).then(accepted => {
+    if (accepted) {
+      request.onSelectionCommitted?.();
+    }
+  });
+}
+
+export function AISelectionDropdownContent(
+    {
+      handlers,
+      onSelectionCommitted,
+      state,
+    }: {
+      readonly handlers: ComposerHandlers;
+      readonly onSelectionCommitted?: () => void;
+      readonly state: AppState;
+    }) {
+  const providerOptions = state.aiSettings.providerOptions;
+  const activeProvider = getActiveProvider(state);
+  const selectedProvider = getSelectedProvider(state);
+  const selectedModel = getSelectedModel(state, selectedProvider);
+  const selectedReasoning = getSelectedReasoning(state);
+
+  if (providerOptions.length === 0) {
+    return (
+      <section aria-label="AI selection" className="grid gap-1.5 p-1">
+        <div className={aiSelectionLabelClassName}>AI model</div>
+        <AISelectionStatus title="No AI providers available" />
+      </section>
+    );
+  }
+
+  return (
+    <section aria-label="AI selection" className="grid gap-2 p-1">
+      <div className="grid gap-1">
+        <div className={aiSelectionLabelClassName}>Provider</div>
+        {providerOptions.map(provider => {
+          const firstModel = provider.modelOptions[0] || null;
+          const active = activeProvider?.id === provider.id;
+          const disabled = active || firstModel === null;
+          return (
+            <button
+              key={provider.id}
+              aria-disabled={disabled}
+              aria-pressed={active}
+              className={cn(aiSelectionRowClassName, active && 'bg-surface-selected')}
+              data-ai-selection-provider={provider.id}
+              disabled={disabled}
+              type="button"
+              onClick={() => {
+                if (!firstModel || !selectedReasoning) {
+                  return;
+                }
+                commitAISelection({
+                  handlers,
+                  onSelectionCommitted,
+                  selection: buildSelection({
+                    model: firstModel,
+                    provider,
+                    reasoning: selectedReasoning,
+                  }),
+                });
+              }}>
+              <span className="min-w-0 truncate font-medium">{provider.label}</span>
+              {firstModel ? <AISelectionCheck active={active} /> : (
+                <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                  No models
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="h-px bg-muted" />
+
+      <div className="grid gap-1">
+        <div className={aiSelectionLabelClassName}>Model</div>
+        {selectedProvider && selectedProvider.modelOptions.length > 0 ? (
+          selectedProvider.modelOptions.map(model => {
+            const active = activeProvider?.id === selectedProvider.id &&
+                state.aiSettings.activeModelId === model.id;
+            return (
+              <button
+                key={model.id}
+                aria-pressed={active}
+                className={cn(aiSelectionRowClassName, active && 'bg-surface-selected')}
+                data-ai-selection-model={model.id}
+                disabled={active || !selectedReasoning}
+                type="button"
+                onClick={() => {
+                  if (!selectedReasoning) {
+                    return;
+                  }
+                  commitAISelection({
+                    handlers,
+                    onSelectionCommitted,
+                    selection: buildSelection({
+                      model,
+                      provider: selectedProvider,
+                      reasoning: selectedReasoning,
+                    }),
+                  });
+                }}>
+                <span className="min-w-0 truncate font-medium">{getModelLabel(model)}</span>
+                <AISelectionCheck active={active} />
+              </button>
+            );
+          })
+        ) : (
+          <AISelectionStatus title="Select a provider with models" />
+        )}
+      </div>
+
+      <div className="h-px bg-muted" />
+
+      <div className="grid gap-1">
+        <div className={aiSelectionLabelClassName}>Reasoning</div>
+        {state.aiSettings.reasoningOptions.length > 0 ? (
+          state.aiSettings.reasoningOptions.map(reasoning => {
+            const active = reasoning.effort === state.aiSettings.activeReasoningEffort;
+            return (
+              <button
+                key={reasoning.effort}
+                aria-pressed={active}
+                className={cn(aiSelectionRowClassName, active && 'bg-surface-selected')}
+                data-ai-selection-reasoning={String(reasoning.effort)}
+                disabled={active || !selectedProvider || !selectedModel}
+                type="button"
+                onClick={() => {
+                  if (!selectedProvider || !selectedModel) {
+                    return;
+                  }
+                  commitAISelection({
+                    handlers,
+                    onSelectionCommitted,
+                    selection: buildSelection({
+                      model: selectedModel,
+                      provider: selectedProvider,
+                      reasoning,
+                    }),
+                  });
+                }}>
+                <span className="min-w-0 truncate font-medium">{reasoning.label}</span>
+                <AISelectionCheck active={active} />
+              </button>
+            );
+          })
+        ) : (
+          <AISelectionStatus title="No reasoning options available" />
+        )}
+      </div>
+    </section>
+  );
+}
 
 function Favicon({pageUrl}: {pageUrl: string}) {
   if (!pageUrl) return null;
@@ -134,7 +447,7 @@ function PickerOptionRow(
       data-picker-row="true"
       className={cn(
           pickerRowClassName,
-          active && 'bg-accent/40 text-foreground',
+          active && 'bg-surface-selected text-foreground',
           disabled && 'opacity-40')}
       disabled={disabled}
       type="button"
@@ -355,6 +668,7 @@ function PinnedTabsSection(
 
 export function Composer({handlers, state}: {handlers: ComposerHandlers; state: AppState}) {
   const [pickerOpen, setPickerOpen] = useState(false);
+
   const [draftSearchQuery, setDraftSearchQuery] = useState(state.historySearch.query);
   const [focusedRowIndex, setFocusedRowIndex] = useState(0);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -441,7 +755,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
 
   return (
     <section className={cn(
-        'grid gap-2 rounded-[1.35rem] border border-border bg-card/95 p-2 shadow-[0_24px_80px_-48px_var(--color-accent-glow)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/90',
+        'grid gap-2 rounded-[1.35rem] glass p-2 shadow-[var(--shadow-overlay)]',
         readOnly && 'opacity-90')}>
       {quotaExhausted && (
         <Alert variant="warning" className="mb-0 rounded-xl border-warning/40 bg-warning/10 py-2">
@@ -461,17 +775,19 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
       <div className="min-h-0">
         <ComposerTextarea
           className="min-h-[72px] max-h-80 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 shadow-none focus-visible:ring-0"
+          focusRequest={state.composer.focusRequest}
           onPasteFiles={files => handlers.onAttachFiles(files)}
           onSubmit={handlers.onSubmit}
           onValueChange={handlers.onPromptChange}
           placeholder={readOnly ?
             'This archived session is view-only. Start a new live session to continue.' :
-            'Ask anything about this page…'}
+            'Ask a question about this page...'}
           readOnly={readOnly}
           rows={1}
           value={state.composer.prompt}
         />
       </div>
+      <AISelectionLevels handlers={handlers} state={state} />
       <div className="flex min-w-0 items-center gap-2">
         <Popover
           open={pickerOpen}
@@ -497,7 +813,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
           </Tooltip>
           <PopoverContent
               align="start"
-              className="w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border-border bg-popover/95 p-2 shadow-2xl backdrop-blur-xl"
+              className="w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border-border bg-popover p-2 shadow-[var(--shadow-overlay)]"
               side="top">
             <section
                 ref={pickerRef}
@@ -649,100 +965,47 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
             })}
           </section>
         ) : null}
-        {(() => {
-          const aiSettings = state.aiSettings;
-          const allProviders = state.aiProviders || [];
-          const activeProvider = allProviders.find(p => p.id === aiSettings?.activeProviderId);
-          const providers = activeProvider ? [activeProvider] : [];
-          const activeModel = aiSettings?.activeModelId;
-          return (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {!voiceHidden ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <Button
-                  type="button"
-                  aria-label="Select model"
-                  className="ml-auto h-8 max-w-40 shrink-0 rounded-full border-border bg-secondary/70 px-3 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent/60 hover:text-foreground"
-                  size="sm"
-                  variant="outline">
-                  <span className="truncate">
-                    {activeModel ? activeModel.split('/').pop() : 'Model'}
-                  </span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">▾</span>
+                  aria-label="Start voice input"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 rounded-full"
+                  disabled={canCancel || state.voice.active}
+                  onClick={handlers.onOpenVoice}>
+                  <Mic className="size-4" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="top">
-                {providers.length === 0 ? (
-                  <>
-                    {activeModel ? (
-                      <DropdownMenuLabel>
-                        <span className="text-muted-foreground">Current: </span>
-                        {activeModel.split('/').pop() || activeModel}
-                      </DropdownMenuLabel>
-                    ) : null}
-                    <DropdownMenuItem
-                      onSelect={() => handlers.onOpenSettings()}>
-                      Configure in Settings →
-                    </DropdownMenuItem>
-                  </>
-                ) : (
-                  providers.map((provider, providerIdx) => (
-                    <React.Fragment key={provider.id}>
-                      {providerIdx > 0 && <DropdownMenuSeparator />}
-                      <DropdownMenuLabel>{provider.displayName}</DropdownMenuLabel>
-                      {provider.models.map(model => (
-                        <DropdownMenuItem
-                          key={model}
-                          disabled={aiSettings?.activeProviderId === provider.id && aiSettings?.activeModelId === model}
-                          onSelect={() => handlers.onSetActiveAI(provider.id, model)}>
-                          {model.split('/').pop() || model}
-                          {aiSettings?.activeProviderId === provider.id && aiSettings?.activeModelId === model && ' ✓'}
-                        </DropdownMenuItem>
-                      ))}
-                    </React.Fragment>
-                  ))
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          );
-        })()}
-        {!voiceHidden ? (
+              </TooltipTrigger>
+              <TooltipContent>Voice input</TooltipContent>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                aria-label="Start voice input"
-                variant="ghost"
+                aria-label={canCancel ?
+                   'Stop current turn' :
+                   (state.currentSessionId ? 'Send prompt' : 'Start session')}
+                className={cn(
+                    'size-9 shrink-0 rounded-full shadow-sm transition-transform active:scale-95',
+                    canCancel && 'border border-warning/40 bg-warning/15 text-warning hover:bg-warning/25 hover:text-warning')}
+                disabled={canCancel ? false : submitDisabled}
+                variant="default"
                 size="icon"
-                className="h-8 w-8 shrink-0 rounded-full"
-                disabled={canCancel || state.voice.active}
-                onClick={handlers.onOpenVoice}>
-                <Mic className="size-4" />
+                onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
+                <span className="inline-flex items-center justify-center">
+                  {canCancel ? <Square className="size-3 fill-current" /> : <Send className="size-4" />}
+                </span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Voice input</TooltipContent>
+            <TooltipContent>
+              {canCancel ? 'Stop' : (state.currentSessionId ? 'Send' : 'Start session')}
+            </TooltipContent>
           </Tooltip>
-        ) : null}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label={canCancel ?
-                 'Stop current turn' :
-                 (state.currentSessionId ? 'Send prompt' : 'Start session')}
-              className={cn(
-                  'size-9 shrink-0 rounded-full shadow-sm transition-transform active:scale-95',
-                  canCancel && 'border border-warning/40 bg-warning/15 text-warning hover:bg-warning/25 hover:text-warning')}
-              disabled={canCancel ? false : submitDisabled}
-              variant="default"
-              size="icon"
-              onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
-              <span className="inline-flex items-center justify-center">
-                {canCancel ? <Square className="size-3 fill-current" /> : <Send className="size-4" />}
-              </span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {canCancel ? 'Stop' : (state.currentSessionId ? 'Send' : 'Start session')}
-          </TooltipContent>
-        </Tooltip>
+        </div>
       </div>
     </section>
   );

@@ -20,15 +20,6 @@ const ogImageUrl = new URL(ogImage ?? '/og-image.png', Astro.site).href;
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <!-- Google tag (gtag.js) -->
-    <script async is:inline src="https://www.googletagmanager.com/gtag/js?id=G-VMGL28W81B"></script>
-    <script is:inline>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-
-      gtag('config', 'G-VMGL28W81B');
-    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{title}</title>

@@ -4,8 +4,7 @@ import { App } from '../../../app';
 import type { MahoBridge } from '../../../bridge/types';
 import { AgentScreen } from '../agent-screen';
 
-type CompletePayload = { readonly full_text: string; readonly tool_calls_json: string };
-type EventType = 'token' | 'complete' | 'error';
+type EventType = 'token' | 'thinking' | 'tool_call' | 'tool_result' | 'complete' | 'error';
 
 function makeMockBridge() {
   let eventQueue: string[] = [];
@@ -21,8 +20,20 @@ function makeMockBridge() {
     byokSetKey: vi.fn<MahoBridge['byokSetKey']>().mockResolvedValue(true),
     byokDeleteKey: vi.fn<MahoBridge['byokDeleteKey']>().mockResolvedValue(true),
     byokValidateKey: vi.fn<MahoBridge['byokValidateKey']>().mockResolvedValue(true),
+    getAiSettings: vi.fn<MahoBridge['getAiSettings']>().mockResolvedValue({
+      provider: 'maho-managed',
+      baseUrl: '',
+      model: '',
+      hasApiKey: false,
+      hasByokOpenai: false,
+      hasByokAnthropic: false,
+    }),
+    setAiProvider: vi.fn<MahoBridge['setAiProvider']>().mockResolvedValue(undefined),
+    setAiBaseUrl: vi.fn<MahoBridge['setAiBaseUrl']>().mockResolvedValue(undefined),
+    setAiApiKey: vi.fn<MahoBridge['setAiApiKey']>().mockResolvedValue(undefined),
+    setAiModel: vi.fn<MahoBridge['setAiModel']>().mockResolvedValue(undefined),
     chatSessionStart: vi.fn<MahoBridge['chatSessionStart']>().mockResolvedValue('chat-handle'),
-    chatSessionResume: vi.fn<MahoBridge['chatSessionResume']>().mockResolvedValue(undefined),
+    chatSessionResume: vi.fn<MahoBridge['chatSessionResume']>().mockResolvedValue('chat-resumed-handle'),
     chatSessionFree: vi.fn<MahoBridge['chatSessionFree']>().mockResolvedValue(undefined),
     chatSendMessage: vi.fn<MahoBridge['chatSendMessage']>().mockResolvedValue(undefined),
     chatCancelTurn: vi.fn<MahoBridge['chatCancelTurn']>().mockResolvedValue(undefined),
@@ -55,6 +66,11 @@ function makeMockBridge() {
     captureScreenshot: vi.fn<MahoBridge['captureScreenshot']>().mockResolvedValue(null),
     openSettings: vi.fn<MahoBridge['openSettings']>().mockResolvedValue(undefined),
     hapticFeedback: vi.fn<MahoBridge['hapticFeedback']>().mockResolvedValue(undefined),
+    relaySignIn: vi.fn<MahoBridge['relaySignIn']>().mockResolvedValue({ ok: true }),
+    relaySignUp: vi.fn<MahoBridge['relaySignUp']>().mockResolvedValue({ ok: true }),
+    relayAccountStatus: vi.fn<MahoBridge['relayAccountStatus']>().mockResolvedValue({ hasValidSession: true, isReauth: false }),
+    openDefaultBrowserSettings: vi.fn<MahoBridge['openDefaultBrowserSettings']>().mockResolvedValue(undefined),
+    completeOnboarding: vi.fn<MahoBridge['completeOnboarding']>().mockResolvedValue(undefined),
   };
 
   return {
@@ -66,7 +82,7 @@ function makeMockBridge() {
     clearQueue: () => {
       eventQueue = [];
     },
-    enqueueEvent: (type: EventType, data: string | CompletePayload) => {
+    enqueueEvent: (type: EventType, data: any) => {
       eventQueue.push(JSON.stringify({ type, data }));
     },
   };
@@ -203,5 +219,42 @@ describe('AgentScreen CompactShell contract', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId('agent-screen')).toBeInTheDocument());
+  });
+
+  it('renders thinking, tool calls, tool results, and interleaving in arrival order', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Go');
+
+    // 1. Send non-empty thinking bubble
+    act(() => mockCtx.enqueueEvent('thinking', 'Analyzing requirements'));
+    await waitFor(() => expect(screen.getByTestId('agent-thinking-bubble')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('agent-thinking-bubble').querySelector('button')!);
+    await waitFor(() => expect(screen.getByTestId('agent-thinking-bubble')).toHaveTextContent('Analyzing requirements'));
+
+    // 2. Send empty/whitespace thinking (should be suppressed at reducer level)
+    act(() => mockCtx.enqueueEvent('thinking', '   '));
+    expect(screen.queryAllByTestId('agent-thinking-bubble')).toHaveLength(1);
+
+    // 3. Send text message token
+    act(() => mockCtx.enqueueEvent('token', 'Found 1 file.'));
+    await waitFor(() => expect(screen.getByTestId('agent-message-assistant')).toHaveTextContent(/Found 1 file\./));
+
+    // 4. Send tool call
+    act(() => mockCtx.enqueueEvent('tool_call', { id: 'call-1', name: 'search', args: '{"query": "antigravity"}' }));
+    await waitFor(() => expect(screen.getByTestId('agent-tool-call-block')).toBeInTheDocument());
+    expect(screen.getByTestId('agent-tool-call-block')).toHaveTextContent('Using search');
+
+    // 5. Send tool result
+    act(() => mockCtx.enqueueEvent('tool_result', { id: 'call-1', name: 'search', result: '### Found details\nSuccess!' }));
+    await waitFor(() => expect(screen.getByTestId('agent-tool-call-block')).toHaveTextContent('Used search'));
+
+    // Click to expand tool execution details
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tool details' }));
+    // Verify tool details render result using markdown
+    expect(screen.getByTestId('agent-tool-call-block')).toHaveTextContent('Found detailsSuccess!');
+
+    // 6. Send subsequent text token (interleaving)
+    act(() => mockCtx.enqueueEvent('token', ' Done summarising.'));
+    await waitFor(() => expect(screen.getByTestId('agent-message-assistant')).toHaveTextContent(/Found 1 file\..*Done summarising\./));
   });
 });

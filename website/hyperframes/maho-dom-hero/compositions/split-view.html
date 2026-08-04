@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Maho DOM Split View</title>
+    <link rel="stylesheet" href="/compositions/split-view.scene.css" />
+    <script src="/node_modules/gsap/dist/gsap.min.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="split-view"
+      data-start="0"
+      data-duration="6.6"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+    >
+      <section
+        id="split-view-scene"
+        class="clip split-view-scene"
+        data-start="0"
+        data-duration="6.6"
+        data-track-index="0"
+        data-scene-state="initial"
+        aria-label="Maho Split View with two local documents"
+      >
+        <div
+          class="split-view-scene__camera"
+          data-camera-wrapper="split-view"
+          data-layout-allow-overlap="true"
+          data-layout-allow-overflow="true"
+          data-layout-allow-occlusion="true"
+        >
+          <div class="split-view-scene__shell-host" data-scene-shell-host></div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module">
+      const { mountSplitViewComposition } = await import(new URL("/compositions/split-view.scene.js", document.baseURI).href);
+
+      const sceneRoot = document.querySelector(".split-view-scene");
+      if (!sceneRoot) throw new Error("Split View scene root is missing");
+      const { scene, camera, dragOrigin, signup, cookie } = mountSplitViewComposition(sceneRoot);
+      window.__timelines = window.__timelines || {};
+      const timeline = gsap.timeline({ paused: true });
+      window.__timelines["split-view"] = timeline;
+
+      timeline
+        .set(scene, { attr: { "data-scene-state": "initial" } }, 0)
+        .set(camera, { x: 0, y: 0, scale: 1, transformOrigin: "59% 50%" }, 0)
+        .set([dragOrigin, signup, cookie], { opacity: 0 }, 0)
+        .addLabel("initial", 0)
+        .addLabel("push", 1.1)
+        .to(camera, { x: -36, y: 0, scale: 1.06, duration: 1.4, ease: "power2.inOut" }, "push")
+        .to(dragOrigin, { opacity: 1, duration: 0.25, ease: "power2.out" }, "push+=0.2")
+        .to(signup, { opacity: 1, duration: 0.35, ease: "power2.out" }, "push+=0.65")
+        .set(scene, { attr: { "data-scene-state": "action" } }, 3.3)
+        .addLabel("action", 3.3)
+        .to(dragOrigin, { opacity: 0, duration: 0.35, ease: "power2.in" }, "action+=0.35")
+        .to(cookie, { opacity: 1, duration: 0.35, ease: "power2.out" }, "action+=0.75")
+        .to(camera, { x: 0, y: 0, scale: 1, duration: 1.4, ease: "power2.inOut" }, "action+=1.9")
+        .set(scene, { attr: { "data-scene-state": "final" } }, 6.6)
+        .addLabel("final", 6.6);
+    </script>
+  </body>
+</html>

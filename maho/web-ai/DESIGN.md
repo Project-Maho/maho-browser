@@ -435,3 +435,16 @@ Sign-off is the `/visual-qa` dual-oracle gate on fresh evidence, not a single gl
 - No emojis anywhere. Remove the `🤖` prefix in `agent-screen.tsx`; use the `bot` SVG.
 - Every color from a `--color-*` token or a Section 2.2 alias. No hex literals, no inline color styles.
 - Closed source: no OSS/source-repo language in copy or comments.
+
+---
+
+## 12. AI Settings (`#byok`) extension
+
+The `#byok` route is the mobile adaptation of the desktop Chromium AI settings pane. It reuses the existing neutral surface hierarchy, 4px spacing scale, radii, focus ring, shared `Input`, `Button`, `ListItem`, `StatusBanner`, and inline `Icon` primitives.
+
+- Provider selection is a native labeled select with Maho Managed, OpenAI, Anthropic, and OpenAI-compatible options.
+- Settings content is capped by `--settings-content-max: 48rem` to match the desktop pane's readable width while remaining full-width on mobile.
+- All text inputs use `--font-size-control: 16px` and `--line-height-control: 24px` to avoid iOS focus zoom.
+- Credential fields appear only for BYOK/custom providers. Stored secrets are represented by status copy and an empty replacement field, never by returning the secret to the UI.
+- Base URL and model persist on blur; credentials persist through explicit Save/Clear actions. Base URL is sent exactly as typed.
+- The managed and unset provider states show a quiet managed-relay status row with no credential fields.

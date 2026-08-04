@@ -1,0 +1,73 @@
+---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
+import ScrollReveal from '../../motion/ScrollReveal.astro';
+import { CtaButton } from '../../marketing/CtaButton';
+import type { HeroConfig } from '../HeroSection';
+
+export interface Props {
+  config: HeroConfig;
+}
+
+const { config } = Astro.props;
+const lines = config.headline.split('\n');
+---
+
+<section class="section-rhythm-tall surface-noisy relative overflow-hidden bg-background text-foreground" data-hero-browser-stage="true">
+  <div class="pad-x-ladder w-full">
+    <div class="container-marketing flex flex-col items-center gap-12 pt-28 text-center sm:pt-32">
+      <div class="flex max-w-3xl flex-col items-center gap-6 sm:gap-8">
+        <ScrollReveal variant="slide">
+          <h1 class="landing-display-hero whitespace-pre-line">
+            {lines.join('\n')}
+          </h1>
+        </ScrollReveal>
+
+        <ScrollReveal variant="slide" delayMs={70}>
+          <p class="landing-body max-w-2xl text-lg text-muted-foreground sm:text-xl">
+            {config.subheadline}
+          </p>
+        </ScrollReveal>
+
+        <ScrollReveal variant="slide" delayMs={120}>
+          <div class="flex flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:justify-center">
+            <CtaButton variant="primary" href={config.primaryCta.href}>
+              {config.primaryCta.label}
+            </CtaButton>
+            {config.secondaryCta && (
+              <CtaButton variant={config.secondaryCta.variant ?? "ghost"} href={config.secondaryCta.href}>
+                {config.secondaryCta.label}
+              </CtaButton>
+            )}
+          </div>
+        </ScrollReveal>
+
+        {config.microCta && (
+          <ScrollReveal variant="slide" delayMs={160}>
+            <p class="landing-body text-sm text-muted-foreground sm:text-base">{config.microCta}</p>
+          </ScrollReveal>
+        )}
+      </div>
+
+      <ScrollReveal variant="fade" class="w-full">
+        <div class="relative mx-auto w-full max-w-[1180px]" data-motion-surface="hero">
+          <div class="overflow-hidden rounded-xl border border-border bg-card shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
+            <video
+              class="block h-auto w-full"
+              autoplay
+              muted
+              loop
+              playsinline
+              preload="metadata"
+              poster="/demo/hero/maho-hero-capture-poster.png"
+              aria-label="Maho Browser demo showing the sidebar, Spaces, split view, command bar, and Agent workflow."
+            >
+              <source src="/demo/hero/maho-hero-capture.mp4" type="video/mp4" />
+            </video>
+          </div>
+        </div>
+      </ScrollReveal>
+    </div>
+  </div>
+</section>

@@ -20,20 +20,16 @@ export interface ButtonProps {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary:
-    'bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 active:opacity-80',
-  secondary:
-    'bg-[var(--color-surface-raised)] text-[var(--color-on-surface)] border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]',
-  ghost:
-    'bg-transparent text-[var(--color-on-surface-secondary)] hover:bg-[var(--color-surface-hover)]',
-  destructive:
-    'bg-transparent text-[var(--color-error)] hover:bg-[var(--color-error-subtle)] border border-[var(--color-error)]',
+  primary: 'ui-btn--primary',
+  secondary: 'ui-btn--secondary',
+  ghost: 'ui-btn--ghost',
+  destructive: 'ui-btn--destructive',
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'px-3 py-1.5 text-sm rounded-lg',
-  md: 'px-4 py-2 text-sm rounded-xl',
-  lg: 'px-5 py-2.5 text-base rounded-xl',
+  sm: 'ui-btn--sm',
+  md: 'ui-btn--md',
+  lg: 'ui-btn--lg',
 };
 
 export function Button({
@@ -51,8 +47,7 @@ export function Button({
     <button
       type={type}
       class={clsx(
-        'inline-flex items-center justify-center gap-2 font-medium transition-all',
-        'disabled:opacity-40 disabled:pointer-events-none',
+        'ui-btn',
         variantClasses[variant],
         sizeClasses[size],
         className,
@@ -76,7 +71,7 @@ function Spinner({ size }: { size: number }) {
       fill="none"
       stroke="currentColor"
       stroke-width="2"
-      class="animate-spin"
+      class="animate-spin ui-btn__spinner"
       aria-hidden="true"
     >
       <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />

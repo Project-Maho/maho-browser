@@ -168,7 +168,7 @@ describe('MahoWelcomeStore', () => {
       WelcomePage.ImportProgress,
       WelcomePage.SearchEngine,
       WelcomePage.Essentials,
-      WelcomePage.Completion,
+      WelcomePage.PasswordSetup,
     ];
 
     // Cannot advance without sign in
@@ -424,5 +424,19 @@ describe('MahoWelcomeStore', () => {
     expect(failed).toBe(false);
     expect(store.getSnapshot().auth.status).toBe('error');
     expect(store.getSnapshot().auth.errorMessage).toBe('Invalid password');
+  });
+
+  it('records explicit password manager skip and advances to SyncKeyBackup', () => {
+    const store = new MahoWelcomeStore();
+
+    (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
+      draft.currentPage = WelcomePage.PasswordSetup;
+    });
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+
+    store.skipPasswordSetup();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+    expect(store.getSnapshot().passwordSetup.passwordManagerSkipped).toBe(true);
   });
 });

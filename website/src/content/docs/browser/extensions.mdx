@@ -5,13 +5,16 @@ sidebar:
   order: 4
 ---
 
-Maho Browser supports Chrome-compatible extensions that use the Manifest V3 standard. In most cases, extensions built for Chrome can run in Maho with minimal or no modification, as long as they depend only on the APIs Maho exposes.
+Maho Browser supports desktop Chrome-compatible extensions using the Manifest V3 standard (loaded via unpacked directories or CRX files). Manifest V2 is deprecated and not supported. Mobile shells (iOS and Android) do not support extensions.
+
+> [!NOTE]
+> Extension compatibility depends on standard Chromium extension APIs. Third-party ad-blocking extensions (such as uBlock Origin Lite) operate using Declarative Net Request (DNR) in **Extension Mode**. Content Blocking Mode in Settings controls Maho's native engine independently of installed extensions.
 
 ## Overview
 
-Extensions are loaded from unpacked directories. Maho does not use Chrome Web Store integration. Instead, you point the browser at a local extension directory that contains a valid `manifest.json` file.
+On desktop, extensions can be loaded from unpacked local directories containing a valid Manifest V3 `manifest.json` or imported from local CRX files.
 
-When Maho loads an extension, it validates the manifest and reports errors if the manifest does not meet the supported schema.
+When Maho loads an extension, it validates the manifest and activates supported background service workers and content scripts.
 
 ## Manifest V3 reference
 
@@ -124,20 +127,21 @@ Use these fields to provide settings pages.
 
 Registers a DevTools page for the extension.
 
-## Installation
+## Installation & Intent
 
-Extensions are installed from unpacked directories only.
+Desktop Maho supports Manifest V3 extensions via unpacked local directories, CRX package imports, and desktop Chrome Web Store navigation intent. Manifest V2 and mobile platforms (iOS / Android) are explicitly unsupported.
 
-### Install process
+### Installation Methods
 
-1. Locate the extension directory
-2. Ensure the directory contains `manifest.json`
-3. Load the directory in Maho
-4. Review validation results if Maho reports manifest errors
+1. **Unpacked Directories**: Point Maho to any local directory containing a valid `manifest.json`.
+2. **CRX Files**: Import packaged `.crx` extension archives directly into desktop Maho.
+3. **Chrome Web Store**: Desktop Maho supplies Chrome Web Store User-Agent compatibility headers for store browsing and package downloads.
 
-### Important constraint
+### Intent & Limitations
 
-Maho does not support installing extensions from the Chrome Web Store.
+- **Desktop Only**: Extension support is exclusive to desktop builds (macOS / Linux / Windows). Mobile shells do not support extension execution.
+- **Manifest V3 Only**: Manifest V2 extensions are deprecated and not supported.
+- **API Availability**: Extension capabilities depend on standard Chromium extension APIs exposed on desktop.
 
 ## Lifecycle
 

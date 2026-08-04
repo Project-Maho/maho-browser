@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "compositionIds": [
+    "spaces",
+    "split-view",
+    "command-ai"
+  ],
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "source": {
+    "width": 2818,
+    "height": 2060
+  },
+  "crop": {
+    "x": 68,
+    "y": 52,
+    "width": 2682,
+    "height": 1924
+  },
+  "browser": {
+    "width": 1440,
+    "height": 1033,
+    "left": 240,
+    "top": 23.5,
+    "right": 1680,
+    "bottom": 1056.5,
+    "centerX": 960,
+    "centerY": 540
+  },
+  "renderedVideo": {
+    "width": 1513.020134228188,
+    "height": 1106.018711018711,
+    "left": -36.51006711409396,
+    "top": -27.91891891891892
+  },
+  "surface": {
+    "radius": 17,
+    "cornerShape": "superellipse(1)",
+    "underlay": "#0a0a0a",
+    "edge": "1px solid rgba(250, 250, 250, 0.12)",
+    "shadow": "0 0 0 1px rgba(250, 250, 250, 0.08) inset, 0 24px 48px rgba(10, 10, 10, 0.28)"
+  },
+  "assets": {
+    "gsap": "../node_modules/gsap/dist/gsap.min.js",
+    "background": "../assets/originals/water-lilies.jpg",
+    "videos": {
+      "spaces": "../assets/originals/spaces.mov",
+      "split-view": "../assets/originals/split-view.mov",
+      "command-ai": "../assets/originals/command-ai.mov"
+    }
+  },
+  "camera": {
+    "wrapperAttribute": "data-maho-camera-wrapper",
+    "animatedProperties": [
+      "x",
+      "y",
+      "scale",
+      "opacity"
+    ]
+  }
+}

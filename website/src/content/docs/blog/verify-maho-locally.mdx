@@ -73,7 +73,7 @@ What you should find:
 
 **Update check**: a single GET to `updates.mahobrowser.com/manifest.json` with no body. Response is a small JSON with the latest version and minimum supported version. No identifiers, no user data, no telemetry beacons.
 
-**Sync**: WebSocket frames to `sync.mahobrowser.com`. The frame bodies are AES-GCM ciphertext. You will not be able to read them even with the SSL keys, because the encryption key is derived from your sync passphrase on-device, not from the TLS session. This is by design and described in [the sync architecture post](/blog/sync-architecture-end-to-end/).
+**Sync**: WebSocket frames to `relay.mahobrowser.com`. The frame bodies are AES-GCM ciphertext. You will not be able to read them even with the SSL keys, because the encryption key is derived from your sync passphrase on-device, not from the TLS session. This is by design and described in [the sync architecture post](/blog/sync-architecture-end-to-end/).
 
 **Maho-managed AI proxy**: POST to `proxy.mahobrowser.com/v1/chat/completions` with your prompt body in plaintext (TLS-decrypted). The response comes back streamed. Our proxy forwards to OpenRouter, charges your account, and returns the result. We do not store the prompt or the response. We do log: model, token counts, timestamp, user ID. That is the minimum for billing and abuse prevention.
 

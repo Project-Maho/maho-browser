@@ -13,12 +13,14 @@ import {
 import {Tabs, TabsList, TabsTrigger} from '@ui/tabs';
 import {cn} from '@lib/utils';
 
+import {AiSetupContent, AiSetupSidebar} from './pages/ai-setup.js';
 import {AppearanceContent, AppearanceSidebar} from './pages/appearance.js';
 import {CompletionContent, CompletionSidebar} from './pages/completion.js';
 import {EssentialsContent, EssentialsSidebar} from './pages/essentials.js';
 import {ImportDataContent, ImportDataSidebar} from './pages/import-data.js';
 import {PasswordSetupContent, PasswordSetupSidebar} from './pages/password-setup.js';
 import {SearchEngineContent, SearchEngineSidebar} from './pages/search-engine.js';
+import {SyncKeyBackupContent, SyncKeyBackupSidebar} from './pages/sync-key-backup.js';
 import {WelcomeSplash} from './pages/welcome-splash.js';
 import {
   PAGE_TRANSITION_ENTER,
@@ -33,8 +35,18 @@ import {MahoWelcomeStore} from './store.js';
 import {WelcomePage} from './types.js';
 import type {AuthState, WelcomeState} from './types.js';
 
-const WIZARD_STEPS = WelcomePage.PasswordSetup - WelcomePage.Appearance + 1;
+const WIZARD_STEP_PAGES: readonly WelcomePage[] = [
+  WelcomePage.Appearance,
+  WelcomePage.SourceSelect,
+  WelcomePage.SearchEngine,
+  WelcomePage.Essentials,
+  WelcomePage.AIProvider,
+  WelcomePage.PasswordSetup,
+  WelcomePage.SyncKeyBackup,
+];
+const WIZARD_STEPS = WIZARD_STEP_PAGES.length;
 const MAHO_LOGO_SRC = 'chrome://maho-welcome/icons/onboarding/maho-logo.png';
+const GOOGLE_LOGO_SRC = 'chrome://maho-welcome/icons/search-engines/google.svg';
 
 type AuthMode = AuthState['mode'];
 
@@ -54,13 +66,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   const [selectedBrowserIndex, setSelectedBrowserIndex] = useState<number | null>(null);
   const [selectedBrowserName, setSelectedBrowserName] = useState<string>('');
 
-  const availableBrowsers = snapshot.availableBrowsers.length > 0
-      ? snapshot.availableBrowsers
-      : [
-          {index: 0, name: 'Google Chrome', servicesSupported: 0},
-          {index: 1, name: 'Safari', servicesSupported: 0},
-          {index: 2, name: 'Mozilla Firefox', servicesSupported: 0},
-        ];
+  const availableBrowsers = snapshot.availableBrowsers;
 
   // Parse availableBrowsers into browserName and profileName
   const parsedBrowsers = availableBrowsers.map(b => {
@@ -114,6 +120,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   const contentRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const pageTransitionRef = useRef<HTMLDivElement>(null);
+  const syncSaveHandlerRef = useRef<(() => Promise<void>) | null>(null);
   const activeAnimationsRef = useRef<AnimationPlaybackControls[]>([]);
   const transitionRunIdRef = useRef(0);
   const hasAnimatedShellRef = useRef(false);
@@ -139,7 +146,8 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
         }
         return;
       }
-      if (state.currentPage === WelcomePage.PasswordSetup) return;
+      if (state.currentPage === WelcomePage.PasswordSetup ||
+          state.currentPage === WelcomePage.SyncKeyBackup) return;
       if (event.key === 'Enter') {
         if (isStandalonePage(state.currentPage)) store.nextPage();
         else if (state.currentPage === WelcomePage.Completion) store.complete();
@@ -148,7 +156,8 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
       } else if (event.key === 'Escape') {
         if (state.currentPage !== WelcomePage.Completion &&
             !isStandalonePage(state.currentPage)) {
-          if (state.currentPage === WelcomePage.SourceSelect) {
+          if (state.currentPage === WelcomePage.SourceSelect &&
+              state.importStage === 'A') {
             store.skipImport();
           } else {
             store.nextPage();
@@ -161,9 +170,15 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   }, [store]);
 
   useEffect(() => {
+    if (snapshot.currentPage === renderedPage) {
+      return;
+    }
+
     if (isStandalonePage(snapshot.currentPage) ||
-        isStandalonePage(renderedPage) ||
-        snapshot.currentPage === renderedPage) {
+        isStandalonePage(renderedPage)) {
+      // Entering/leaving the standalone Splash: swap immediately so the prior
+      // page (e.g. Auth) is never exit-animated back into view mid-transition.
+      setRenderedPage(snapshot.currentPage);
       return;
     }
 
@@ -215,14 +230,19 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
   const onSkipClick = useCallback(() => {
     if (snapshot.currentPage === WelcomePage.PasswordSetup) {
+      store.skipPasswordSetup();
       return;
     }
     if (snapshot.currentPage === WelcomePage.SourceSelect) {
-      store.skipImport();
+      if (snapshot.importStage === 'B') {
+        store.nextPage();
+      } else {
+        store.skipImport();
+      }
     } else {
       store.nextPage();
     }
-  }, [snapshot.currentPage, store]);
+  }, [snapshot.currentPage, snapshot.importStage, store]);
 
   useEffect(() => () => stopAnimations(activeAnimationsRef.current), []);
 
@@ -238,10 +258,14 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   const isAuthPage = pageForRender === WelcomePage.Auth;
   const isCompletionPage = pageForRender === WelcomePage.Completion;
   const isPasswordSetupPage = pageForRender === WelcomePage.PasswordSetup;
+  const isSyncKeyBackupPage = pageForRender === WelcomePage.SyncKeyBackup;
   const isSourceSelectPage = pageForRender === WelcomePage.SourceSelect;
   const canGoBack = !isAuthPage && !snapshot.auth.isReauthMode && (pageForRender > WelcomePage.Appearance ||
       (isSourceSelectPage && snapshot.importStage === 'B'));
-  const currentStep = pageForRender - WelcomePage.Appearance;
+  const stepIndicatorPage = pageForRender === WelcomePage.ImportProgress
+      ? WelcomePage.SourceSelect
+      : pageForRender;
+  const currentStep = WIZARD_STEP_PAGES.indexOf(stepIndicatorPage);
 
   async function onPrimaryClick() {
     if (isPasswordSetupPage) {
@@ -275,6 +299,15 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   function onMaybeLaterClick() {
     store.setSetAsDefault(false);
     store.nextPage();
+  }
+
+  async function onStartSync() {
+    if (!snapshot.syncKeyBackup.savedToFile) {
+      store.advanceFromSyncKeyBackup();
+      return;
+    }
+    await store.startSync();
+    store.advanceFromSyncKeyBackup();
   }
 
   const primaryLabel = isSourceSelectPage && snapshot.importStage === 'A'
@@ -311,7 +344,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
               ? 'h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] md:h-[min(720px,86vh)] md:grid-rows-1'
               : 'h-[min(720px,86vh)]')}
       >
-      <section className="flex min-h-0 flex-col border-b border-border bg-muted/30 md:border-b-0 md:border-r">
+      <section className="flex min-h-0 min-w-0 flex-col border-b border-border bg-muted/30 md:border-b-0 md:border-r">
         <div
           ref={sidebarContentRef}
           className={cn(
@@ -323,7 +356,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
         <div
           ref={sidebarNavRef}
           className={cn(
-              'flex shrink-0 flex-col items-start gap-2 border-t border-border/80 p-8 pt-6 transition-opacity lg:p-10 lg:pt-6',
+              'flex min-h-24 shrink-0 flex-col items-start justify-center gap-2 border-t border-border/80 px-8 py-5 transition-opacity lg:px-10',
               isPasswordSetupPage && 'max-md:flex-row max-md:items-center max-md:justify-between max-md:px-5 max-md:py-3',
               buttonsInteractive ? 'opacity-100' : 'opacity-70')}
           style={{pointerEvents: buttonsInteractive ? 'auto' : 'none'}}
@@ -335,7 +368,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
               compact={isPasswordSetupPage}
             />
           )}
-          {!isPasswordSetupPage && !isCompletionPage && !hideSidebarChrome ? (
+          {!isPasswordSetupPage && !isSyncKeyBackupPage && !isCompletionPage && !hideSidebarChrome ? (
             <Button
               type="button"
               variant="ghost"
@@ -360,7 +393,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
         </div>
       </section>
 
-      <section ref={contentRef} className="flex min-h-0 flex-col bg-card">
+      <section ref={contentRef} className="flex min-h-0 min-w-0 flex-col bg-card">
         <div className={cn(
             'flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8 lg:p-10',
             isPasswordSetupPage && 'max-md:p-4')}>
@@ -371,17 +404,38 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
                 'flex h-full w-full items-center justify-center',
                 snapshot.direction === 'forward' ? 'origin-right' : 'origin-left')}
           >
-            {renderContent(pageForRender, snapshot, store)}
+            {renderContent(pageForRender, snapshot, store, syncSaveHandlerRef)}
           </div>
         </div>
         {!isPasswordSetupPage ? (
           <div
             ref={contentActionsRef}
             className={cn(
-                'flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-border bg-background/30 px-8 py-5 transition-opacity lg:px-10',
+                'flex min-h-24 shrink-0 flex-wrap items-center justify-end gap-3 border-t border-border bg-background/30 px-8 py-5 transition-opacity lg:px-10',
                 buttonsInteractive ? 'opacity-100' : 'opacity-70')}
             style={{pointerEvents: buttonsInteractive ? 'auto' : 'none'}}
           >
+          {isSyncKeyBackupPage ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-lg border-border bg-background/70"
+                onClick={() => { void syncSaveHandlerRef.current?.(); }}
+              >
+                {store.getString('IDS_MAHO_WELCOME_SYNC_BACKUP_SAVE_FILE')}
+              </Button>
+              <Button
+                type="button"
+                className="h-10 min-w-36 rounded-lg font-semibold shadow-lg shadow-primary/10"
+                disabled={!snapshot.syncKeyBackup.savedToFile}
+                onClick={() => { void onStartSync(); }}
+              >
+                {store.getString('IDS_MAHO_WELCOME_SYNC_BACKUP_START_SYNC')}
+              </Button>
+            </>
+          ) : (
+            <>
           {isSourceSelectPage && snapshot.importStage === 'A' && availableBrowsers.length > 0 && (
             <>
               <Select value={selectedBrowserName || undefined} onValueChange={handleBrowserChange}>
@@ -434,11 +488,13 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
             type="button"
             className="h-10 min-w-36 rounded-lg font-semibold shadow-lg shadow-primary/10"
             aria-busy={isAuthPage && snapshot.auth.status === 'submitting'}
-            disabled={isAuthPage && snapshot.auth.status === 'submitting'}
+            disabled={(isAuthPage && snapshot.auth.status === 'submitting')}
             onClick={() => { void onPrimaryClick(); }}
           >
             {primaryLabel}
           </Button>
+            </>
+          )}
           </div>
         ) : null}
       </section>
@@ -461,7 +517,9 @@ function renderSidebar(currentPage: WelcomePage, store: MahoWelcomeStore, snapsh
       );
     case WelcomePage.SearchEngine:  return <SearchEngineSidebar store={store} />;
     case WelcomePage.Essentials:    return <EssentialsSidebar />;
+    case WelcomePage.AIProvider:    return <AiSetupSidebar store={store} />;
     case WelcomePage.PasswordSetup: return <PasswordSetupSidebar store={store} />;
+    case WelcomePage.SyncKeyBackup: return <SyncKeyBackupSidebar store={store} />;
     case WelcomePage.Completion:    return <CompletionSidebar />;
     case WelcomePage.Splash:        return null;
   }
@@ -469,10 +527,11 @@ function renderSidebar(currentPage: WelcomePage, store: MahoWelcomeStore, snapsh
 
 function renderContent(
     currentPage: WelcomePage, snapshot: WelcomeState,
-    store: MahoWelcomeStore): React.ReactNode {
+    store: MahoWelcomeStore,
+    syncSaveHandlerRef: React.MutableRefObject<(() => Promise<void>) | null>): React.ReactNode {
   switch (currentPage) {
     case WelcomePage.Auth:
-      return <AuthContent auth={snapshot.auth} store={store} onSubmit={() => { void submitAuth(store); }} />;
+      return <AuthContent auth={snapshot.auth} store={store} onSubmit={() => { void submitAuth(store); }} onGoogleSignIn={() => submitGoogleAuth(store)} />;
     case WelcomePage.Appearance:
       return <AppearanceContent store={store} appearance={snapshot.appearance} />;
     case WelcomePage.SourceSelect:
@@ -480,13 +539,11 @@ function renderContent(
         <ImportDataContent
           store={store}
           importStage={snapshot.importStage}
-          setAsDefaultRequested={snapshot.setAsDefaultRequested}
-          onSetAsDefaultChange={v => store.setSetAsDefault(v)}
         />
       );
     case WelcomePage.ImportProgress:
       return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-4 rounded-xl border border-border bg-background/50 p-8 text-center">
+        <div className="flex h-full w-full flex-col items-center justify-center gap-4 text-center">
           <div className="size-12 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">Importing in progress...</p>
         </div>
@@ -507,8 +564,27 @@ function renderContent(
           onToggle={url => store.toggleEssential(url)}
         />
       );
+    case WelcomePage.AIProvider:
+      return (
+        <AiSetupContent
+          store={store}
+          provider={snapshot.aiSetup.provider}
+          status={snapshot.aiSetup.status}
+          errorMessage={snapshot.aiSetup.errorMessage}
+          isSignedIn={snapshot.auth.status === 'success'}
+        />
+      );
     case WelcomePage.PasswordSetup:
       return <PasswordSetupContent store={store} snapshot={snapshot} />;
+    case WelcomePage.SyncKeyBackup:
+      return (
+        <SyncKeyBackupContent
+          snapshot={snapshot}
+          store={store}
+          onGenerateSyncKey={() => store.generateSyncKey()}
+          onRegisterSaveHandler={handler => { syncSaveHandlerRef.current = handler; }}
+        />
+      );
     case WelcomePage.Completion:
       return <CompletionContent store={store} />;
     case WelcomePage.Splash:
@@ -534,10 +610,11 @@ function AuthSidebar({auth}: {auth: AuthState}) {
   );
 }
 
-function AuthContent({auth, store, onSubmit}: {
+function AuthContent({auth, store, onSubmit, onGoogleSignIn}: {
   auth: AuthState;
   store: MahoWelcomeStore;
   onSubmit: () => void;
+  onGoogleSignIn: () => Promise<void>;
 }) {
   const effectiveMode = getEffectiveAuthMode(auth);
   const isSignup = effectiveMode === 'signup';
@@ -591,6 +668,28 @@ function AuthContent({auth, store, onSubmit}: {
         />
       </div>
 
+      <div className="flex items-center gap-3">
+        <span className="h-px flex-1 bg-border" />
+        <span className="text-xs text-muted-foreground">or</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+
+      <Button
+        className="h-11 w-full"
+        disabled={isSubmitting}
+        type="button"
+        variant="outline"
+        onClick={() => void onGoogleSignIn()}
+      >
+        <img
+          alt=""
+          aria-hidden="true"
+          className="size-5 shrink-0"
+          src={GOOGLE_LOGO_SRC}
+        />
+        Continue with Google
+      </Button>
+
       {auth.status === 'error' ? (
         <p className="m-0 text-sm leading-5 text-destructive" role="alert">
           {auth.errorMessage}
@@ -598,6 +697,16 @@ function AuthContent({auth, store, onSubmit}: {
       ) : null}
     </form>
   );
+}
+
+async function submitGoogleAuth(store: MahoWelcomeStore): Promise<void> {
+  if (store.getSnapshot().auth.status === 'submitting') {
+    return;
+  }
+  if (!await store.submitGoogleSignIn()) {
+    return;
+  }
+  finishAuthenticated(store, store.getSnapshot().auth.isReauthMode);
 }
 
 async function submitAuth(store: MahoWelcomeStore): Promise<void> {

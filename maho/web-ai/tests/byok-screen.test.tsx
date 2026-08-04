@@ -1,185 +1,166 @@
-/**
- * Unit tests for the BYOK Settings screen.
- *
- * The bridge is fully mocked so tests run in jsdom without a WebView.
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AiSettings } from '../src/bridge/types';
 
-// ── Mock bridge ──────────────────────────────────────────────────────────────
 const mockBridge = {
-  byokGetProviders: vi.fn<() => Promise<string[]>>(),
-  byokGetKey: vi.fn<(provider: string) => Promise<string | null>>(),
+  getAiSettings: vi.fn<() => Promise<AiSettings>>(),
+  setAiProvider: vi.fn<(provider: string) => Promise<void>>(),
+  setAiBaseUrl: vi.fn<(url: string) => Promise<void>>(),
+  setAiApiKey: vi.fn<(key: string) => Promise<void>>(),
+  setAiModel: vi.fn<(model: string) => Promise<void>>(),
   byokSetKey: vi.fn<(provider: string, key: string) => Promise<boolean>>(),
   byokDeleteKey: vi.fn<(provider: string) => Promise<boolean>>(),
-  byokValidateKey: vi.fn<(provider: string, key: string) => Promise<boolean>>(),
 };
 
 vi.mock('../src/hooks/use-bridge', () => ({
   useBridge: () => mockBridge,
 }));
 
-import { BYOKScreen } from '../src/screens/byok/byok-screen';
+import { AiSettingsScreen } from '../src/screens/byok/byok-screen';
+
+const OPENAI_SETTINGS: AiSettings = {
+  provider: 'openai',
+  baseUrl: '',
+  model: 'gpt-4.1-mini',
+  hasApiKey: false,
+  hasByokOpenai: true,
+  hasByokAnthropic: false,
+};
+
+beforeEach(() => {
+  mockBridge.getAiSettings.mockResolvedValue(OPENAI_SETTINGS);
+  mockBridge.setAiProvider.mockResolvedValue();
+  mockBridge.setAiBaseUrl.mockResolvedValue();
+  mockBridge.setAiApiKey.mockResolvedValue();
+  mockBridge.setAiModel.mockResolvedValue();
+  mockBridge.byokSetKey.mockResolvedValue(true);
+  mockBridge.byokDeleteKey.mockResolvedValue(true);
+});
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
-// Helper: click the "Add Key" button (not the section header of the same text)
-function clickAddKeyButton() {
-  fireEvent.click(screen.getByRole('button', { name: /Add Key/i }));
-}
+describe('AiSettingsScreen', () => {
+  it('loads the current provider settings into accessible fields', async () => {
+    render(<AiSettingsScreen />);
 
-describe('BYOKScreen', () => {
-  describe('initial load', () => {
-    it('shows the loading state while fetching keys', () => {
-      mockBridge.byokGetProviders.mockReturnValue(new Promise(() => {}));
-      render(<BYOKScreen />);
-      expect(screen.getByText('Loading saved keys')).toBeTruthy();
+    expect(screen.getByText('Loading AI settings')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'AI Settings' })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'AI provider' })).toHaveValue('openai');
+    expect(screen.getByLabelText('Model')).toHaveValue('gpt-4.1-mini');
+    expect(screen.getByText('OpenAI API key is saved.')).toBeTruthy();
+    expect(screen.queryByLabelText('Base URL')).toBeNull();
+  });
+
+  it('changes provider immediately and reveals custom endpoint fields', async () => {
+    render(<AiSettingsScreen />);
+    const provider = await screen.findByRole('combobox', { name: 'AI provider' });
+
+    fireEvent.change(provider, { target: { value: 'openai-compatible' } });
+
+    await waitFor(() => {
+      expect(mockBridge.setAiProvider).toHaveBeenCalledWith('openai-compatible');
     });
+    expect(screen.getByLabelText('Base URL')).toBeTruthy();
+    expect(screen.getByLabelText('API Key')).toBeTruthy();
+    expect(screen.getByText(/custom OpenAI-compatible endpoints/i)).toBeTruthy();
+  });
 
-    it('shows "No API keys saved" when no providers have keys', async () => {
-      mockBridge.byokGetProviders.mockResolvedValue(['openai', 'anthropic']);
-      mockBridge.byokGetKey.mockResolvedValue(null);
-
-      render(<BYOKScreen />);
-
-      await waitFor(() => {
-        expect(screen.getByText('No API keys saved')).toBeTruthy();
-      });
+  it('persists a custom base URL exactly as typed on blur', async () => {
+    mockBridge.getAiSettings.mockResolvedValue({
+      ...OPENAI_SETTINGS,
+      provider: 'openai-compatible',
+      baseUrl: '',
     });
+    render(<AiSettingsScreen />);
+    const baseUrl = await screen.findByLabelText('Base URL');
+    const value = 'http://127.0.0.1:8317/v1';
 
-    it('renders saved keys after load', async () => {
-      mockBridge.byokGetProviders.mockResolvedValue(['openai', 'anthropic']);
-      mockBridge.byokGetKey.mockImplementation(async (provider: string) => {
-        if (provider === 'openai') return 'sk-test1234';
-        return null;
-      });
+    fireEvent.input(baseUrl, { target: { value } });
+    fireEvent.blur(baseUrl);
 
-      render(<BYOKScreen />);
-
-      await waitFor(() => {
-        expect(screen.getByText('OpenAI')).toBeTruthy();
-      });
-
-      // Masked key should end with the last 4 chars
-      expect(screen.getByText(/1234$/)).toBeTruthy();
+    await waitFor(() => {
+      expect(mockBridge.setAiBaseUrl).toHaveBeenCalledWith(value);
     });
   });
 
-  describe('Add Key sheet', () => {
-    beforeEach(() => {
-      mockBridge.byokGetProviders.mockResolvedValue(['openai', 'anthropic']);
-      mockBridge.byokGetKey.mockResolvedValue(null);
+  it('saves the OpenAI-compatible API key without exposing a stored secret', async () => {
+    mockBridge.getAiSettings.mockResolvedValue({
+      ...OPENAI_SETTINGS,
+      provider: 'openai-compatible',
+      hasApiKey: true,
     });
+    render(<AiSettingsScreen />);
+    const apiKey = await screen.findByLabelText('API Key');
 
-    it('opens the Add Key sheet on button click', async () => {
-      render(<BYOKScreen />);
+    expect(apiKey).toHaveValue('');
+    expect(apiKey).toHaveAttribute('placeholder', 'Saved key — enter a new key to replace it');
+    fireEvent.input(apiKey, { target: { value: 'custom-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save API key' }));
 
-      await waitFor(() => screen.getByRole('button', { name: /Add Key/i }));
-      clickAddKeyButton();
-
-      expect(screen.getByText('Add API Key')).toBeTruthy();
-    });
-
-    it('dismisses the sheet on Cancel', async () => {
-      render(<BYOKScreen />);
-      await waitFor(() => screen.getByRole('button', { name: /Add Key/i }));
-      clickAddKeyButton();
-
-      fireEvent.click(screen.getByText('Cancel'));
-
-      await waitFor(() => {
-        expect(screen.queryByText('Add API Key')).toBeNull();
-      });
+    await waitFor(() => {
+      expect(mockBridge.setAiApiKey).toHaveBeenCalledWith('custom-secret');
+      expect(screen.getByText('OpenAI-compatible API key is saved.')).toBeTruthy();
     });
   });
 
-  describe('validate flow', () => {
-    beforeEach(() => {
-      mockBridge.byokGetProviders.mockResolvedValue(['openai', 'anthropic']);
-      mockBridge.byokGetKey.mockResolvedValue(null);
+  it('saves and clears a provider BYOK key', async () => {
+    mockBridge.getAiSettings.mockResolvedValue({
+      ...OPENAI_SETTINGS,
+      provider: 'anthropic',
+      hasByokOpenai: false,
+      hasByokAnthropic: false,
     });
+    render(<AiSettingsScreen />);
+    const apiKey = await screen.findByLabelText('API Key');
 
-    it('shows "Validated" message on successful validation', async () => {
-      mockBridge.byokValidateKey.mockResolvedValue(true);
+    fireEvent.input(apiKey, { target: { value: 'sk-ant-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save API key' }));
 
-      render(<BYOKScreen />);
-      await waitFor(() => screen.getByRole('button', { name: /Add Key/i }));
-      clickAddKeyButton();
-
-      const input = screen.getByPlaceholderText('sk-...');
-      fireEvent.input(input, { target: { value: 'sk-good-key' } });
-
-      fireEvent.click(screen.getByRole('button', { name: /^Validate$/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/Validated/)).toBeTruthy();
-      });
+    await waitFor(() => {
+      expect(mockBridge.byokSetKey).toHaveBeenCalledWith('anthropic', 'sk-ant-secret');
     });
-
-    it('shows failure message on invalid key', async () => {
-      mockBridge.byokValidateKey.mockResolvedValue(false);
-
-      render(<BYOKScreen />);
-      await waitFor(() => screen.getByRole('button', { name: /Add Key/i }));
-      clickAddKeyButton();
-
-      const input = screen.getByPlaceholderText('sk-...');
-      fireEvent.input(input, { target: { value: 'sk-bad-key' } });
-
-      fireEvent.click(screen.getByRole('button', { name: /^Validate$/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/Validation failed/)).toBeTruthy();
-      });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear API key' }));
+    await waitFor(() => {
+      expect(mockBridge.byokDeleteKey).toHaveBeenCalledWith('anthropic');
+      expect(screen.getByText('Anthropic API key is not saved.')).toBeTruthy();
     });
   });
 
-  describe('save flow', () => {
-    it('saves a key and shows it in the list', async () => {
-      mockBridge.byokGetProviders.mockResolvedValue(['openai', 'anthropic']);
-      mockBridge.byokGetKey.mockResolvedValue(null);
-      mockBridge.byokValidateKey.mockResolvedValue(true);
-      mockBridge.byokSetKey.mockResolvedValue(true);
+  it('persists the optional model on blur', async () => {
+    render(<AiSettingsScreen />);
+    const model = await screen.findByLabelText('Model');
 
-      render(<BYOKScreen />);
-      await waitFor(() => screen.getByRole('button', { name: /Add Key/i }));
-      clickAddKeyButton();
+    fireEvent.input(model, { target: { value: 'gpt-4.1' } });
+    fireEvent.blur(model);
 
-      const input = screen.getByPlaceholderText('sk-...');
-      fireEvent.input(input, { target: { value: 'sk-saved5678' } });
-
-      fireEvent.click(screen.getByRole('button', { name: /^Validate$/i }));
-      await waitFor(() => screen.getByText(/Validated/));
-
-      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
-
-      await waitFor(() => {
-        expect(screen.queryByText('Add API Key')).toBeNull();
-        expect(screen.getByText('OpenAI')).toBeTruthy();
-      });
+    await waitFor(() => {
+      expect(mockBridge.setAiModel).toHaveBeenCalledWith('gpt-4.1');
     });
   });
 
-  describe('delete flow', () => {
-    it('removes a provider after deletion', async () => {
-      mockBridge.byokGetProviders.mockResolvedValue(['openai', 'anthropic']);
-      mockBridge.byokGetKey.mockImplementation(async (provider: string) => {
-        if (provider === 'openai') return 'sk-del1234';
-        return null;
-      });
-      mockBridge.byokDeleteKey.mockResolvedValue(true);
-
-      render(<BYOKScreen />);
-      await waitFor(() => screen.getByText('OpenAI'));
-
-      fireEvent.click(screen.getByLabelText('Delete OpenAI key'));
-
-      await waitFor(() => {
-        expect(screen.getByText('No API keys saved')).toBeTruthy();
-      });
+  it('shows no credential fields for the managed provider', async () => {
+    mockBridge.getAiSettings.mockResolvedValue({
+      ...OPENAI_SETTINGS,
+      provider: 'maho-managed',
+      model: '',
     });
+    render(<AiSettingsScreen />);
+
+    expect(await screen.findByText('Maho manages the secure relay connection.')).toBeTruthy();
+    expect(screen.queryByLabelText('API Key')).toBeNull();
+    expect(screen.queryByLabelText('Model')).toBeNull();
+  });
+
+  it('calls the passed back handler', async () => {
+    const onBack = vi.fn<() => void>();
+    render(<AiSettingsScreen onBack={onBack} />);
+    await screen.findByRole('heading', { name: 'AI Settings' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+    expect(onBack).toHaveBeenCalledOnce();
   });
 });

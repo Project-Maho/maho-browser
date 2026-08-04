@@ -98,9 +98,9 @@ const faqs = [
       'Maho prompts you to buy credits for an immediate fallback, or you can wait for your next billing period reset.',
   },
   {
-    question: 'Do credits really never expire?',
+    question: 'Do credits expire?',
     answer:
-      'Yes. Credit balance stays on your account indefinitely. Refunds are available within 14 days and capped at the unconsumed balance.',
+      'Credits have no routine expiry while your account and the PAYG service remain active. They are removed with account deletion and may be subject to a discontinuation, refund, or migration process described in the Terms.',
   },
   {
     question: 'Is BYOK better than Max?',
@@ -251,10 +251,12 @@ const ldFaq = {
               Pay-as-you-go credits
             </h2>
             <p class="text-muted-foreground leading-relaxed">
-              No monthly commit. Buy credits, use them anytime - they never expire.
+              No monthly commit. Credits have no routine expiry while your account and PAYG service remain active.
             </p>
             <p class="mt-3 text-sm text-muted-foreground leading-relaxed">
-              Choose $10/$50/$100 packs and keep them as a fallback for heavier weeks.
+              Choose $10/$50/$100 packs as a fallback for heavier weeks. Managed usage is charged at
+              the model cost calculated by Maho plus a 30% service charge, with the applicable model
+              rates and request caps shown by the product before use.
             </p>
           </div>
 
@@ -289,7 +291,7 @@ const ldFaq = {
                     </li>
                     <li class="flex items-start gap-3">
                       <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
-                      <span>Balance never expires</span>
+                      <span>No routine expiry while the account and PAYG service remain active</span>
                     </li>
                   </ul>
                 </div>

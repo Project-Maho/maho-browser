@@ -20,12 +20,6 @@ export function SearchEngineSidebar({store}: {store: MahoWelcomeStore}) {
 }
 
 export function SearchEngineContent({engines, selectedEngine, onSelect}: Props) {
-  const filteredEngines = engines.filter(engine => {
-    const name = engine.name?.toLowerCase() ?? '';
-    return !name.includes('wikipedia') &&
-        !name.includes('ebay');
-  });
-
   if (engines.length === 0) {
     return (
       <div className="flex h-full w-full items-center justify-center rounded-xl border border-border bg-background/50 p-8 text-center">
@@ -34,7 +28,7 @@ export function SearchEngineContent({engines, selectedEngine, onSelect}: Props) 
     );
   }
 
-  if (filteredEngines.length === 0) {
+  if (engines.length === 0) {
     return (
       <div className="flex h-full w-full items-center justify-center rounded-xl border border-border bg-background/50 p-8 text-center">
         <p className="text-sm text-muted-foreground">No search engines available.</p>
@@ -44,7 +38,7 @@ export function SearchEngineContent({engines, selectedEngine, onSelect}: Props) 
 
   return (
     <div className="grid w-full grid-cols-2 gap-4 py-4 lg:grid-cols-6">
-      {filteredEngines.map((engine, index) => {
+      {engines.map((engine, index) => {
         let engineName = engine.name ?? '';
         const keyword = engine.keyword?.toLowerCase() ?? '';
         const isSelected = engine.keyword === selectedEngine;

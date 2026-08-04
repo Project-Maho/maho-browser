@@ -1,0 +1,14 @@
+{
+  "name": "maho-dom-hero",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint:entries": "node scripts/lint-canonical-entries.mjs",
+    "verify:contract": "node scripts/verify-dom-contract.mjs",
+    "verify:entry": "node scripts/verify-render-entry.mjs --project .",
+    "test:contract": "node scripts/test-dom-contract.mjs"
+  },
+  "dependencies": {
+    "gsap": "3.14.2"
+  }
+}

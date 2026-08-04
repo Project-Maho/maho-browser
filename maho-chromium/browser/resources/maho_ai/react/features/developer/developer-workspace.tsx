@@ -13,6 +13,7 @@ export function DeveloperWorkspace(
     {
       onNewSession,
       onConnect,
+      onOpenSettings,
       onRespondToApproval,
       onResumeSession,
       onSearch,
@@ -22,6 +23,7 @@ export function DeveloperWorkspace(
     }: {
       onNewSession: () => void;
       onConnect?: () => void;
+      onOpenSettings: (paneKey: string) => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       onResumeSession: (sessionId: string) => void;
       onSearch: (query: string) => void;
@@ -67,7 +69,7 @@ export function DeveloperWorkspace(
           onSearch={onSearch}
           state={state}
         />
-        <Timeline state={state} />
+        <Timeline onOpenSettings={onOpenSettings} state={state} />
         <Inspector
           onRespondToApproval={onRespondToApproval}
           onSelectInspector={onSelectInspector}

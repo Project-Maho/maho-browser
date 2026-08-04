@@ -5,7 +5,11 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -129,24 +133,24 @@ var require_react_development = __commonJS({
               return type;
             case REACT_MEMO_TYPE:
               return innerType = type.displayName || null, null !== innerType ? innerType : getComponentNameFromType(type.type) || "Memo";
-            case REACT_LAZY_TYPE:
+            case REACT_LAZY_TYPE2:
               innerType = type._payload;
               type = type._init;
               try {
                 return getComponentNameFromType(type(innerType));
-              } catch (x) {
+              } catch (x2) {
               }
           }
         return null;
       }
       function getTaskName(type) {
         if (type === REACT_FRAGMENT_TYPE) return "<>";
-        if ("object" === typeof type && null !== type && type.$$typeof === REACT_LAZY_TYPE)
+        if ("object" === typeof type && null !== type && type.$$typeof === REACT_LAZY_TYPE2)
           return "<...>";
         try {
           var name = getComponentNameFromType(type);
           return name ? "<" + name + ">" : "<...>";
-        } catch (x) {
+        } catch (x2) {
           return "<...>";
         }
       }
@@ -239,7 +243,7 @@ var require_react_development = __commonJS({
         return newKey;
       }
       function validateChildKeys(node) {
-        isValidElement2(node) ? node._store && (node._store.validated = 1) : "object" === typeof node && null !== node && node.$$typeof === REACT_LAZY_TYPE && ("fulfilled" === node._payload.status ? isValidElement2(node._payload.value) && node._payload.value._store && (node._payload.value._store.validated = 1) : node._store && (node._store.validated = 1));
+        isValidElement2(node) ? node._store && (node._store.validated = 1) : "object" === typeof node && null !== node && node.$$typeof === REACT_LAZY_TYPE2 && ("fulfilled" === node._payload.status ? isValidElement2(node._payload.value) && node._payload.value._store && (node._payload.value._store.validated = 1) : node._store && (node._store.validated = 1));
       }
       function isValidElement2(object) {
         return "object" === typeof object && null !== object && object.$$typeof === REACT_ELEMENT_TYPE;
@@ -294,7 +298,7 @@ var require_react_development = __commonJS({
                 case REACT_PORTAL_TYPE:
                   invokeCallback = true;
                   break;
-                case REACT_LAZY_TYPE:
+                case REACT_LAZY_TYPE2:
                   return invokeCallback = children._init, mapIntoArray(
                     invokeCallback(children._payload),
                     array,
@@ -493,7 +497,7 @@ var require_react_development = __commonJS({
         }
       }
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-      var REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy"), REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity"), MAYBE_ITERATOR_SYMBOL = Symbol.iterator, didWarnStateUpdateForUnmountedComponent = {}, ReactNoopUpdateQueue = {
+      var REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE2 = /* @__PURE__ */ Symbol.for("react.lazy"), REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity"), MAYBE_ITERATOR_SYMBOL = Symbol.iterator, didWarnStateUpdateForUnmountedComponent = {}, ReactNoopUpdateQueue = {
         isMounted: function() {
           return false;
         },
@@ -851,7 +855,7 @@ var require_react_development = __commonJS({
       exports.lazy = function(ctor) {
         ctor = { _status: -1, _result: ctor };
         var lazyType = {
-          $$typeof: REACT_LAZY_TYPE,
+          $$typeof: REACT_LAZY_TYPE2,
           _payload: ctor,
           _init: lazyInitializer
         }, ioInfo = {
@@ -990,7 +994,7 @@ var require_react_development = __commonJS({
       exports.useTransition = function() {
         return resolveDispatcher().useTransition();
       };
-      exports.version = "19.2.5";
+      exports.version = "19.2.7";
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop(Error());
     })();
   }
@@ -1098,9 +1102,9 @@ var require_scheduler_development = __commonJS({
         }
         return first;
       }
-      function compare(a, b) {
-        var diff = a.sortIndex - b.sortIndex;
-        return 0 !== diff ? diff : a.id - b.id;
+      function compare(a, b2) {
+        var diff = a.sortIndex - b2.sortIndex;
+        return 0 !== diff ? diff : a.id - b2.id;
       }
       function advanceTimers(currentTime) {
         for (var timer = peek(timerQueue); null !== timer; ) {
@@ -1218,9 +1222,9 @@ var require_scheduler_development = __commonJS({
           currentPriorityLevel = previousPriorityLevel;
         }
       };
-      exports.unstable_scheduleCallback = function(priorityLevel, callback, options) {
+      exports.unstable_scheduleCallback = function(priorityLevel, callback, options2) {
         var currentTime = exports.unstable_now();
-        "object" === typeof options && null !== options ? (options = options.delay, options = "number" === typeof options && 0 < options ? currentTime + options : currentTime) : options = currentTime;
+        "object" === typeof options2 && null !== options2 ? (options2 = options2.delay, options2 = "number" === typeof options2 && 0 < options2 ? currentTime + options2 : currentTime) : options2 = currentTime;
         switch (priorityLevel) {
           case 1:
             var timeout = -1;
@@ -1237,16 +1241,16 @@ var require_scheduler_development = __commonJS({
           default:
             timeout = 5e3;
         }
-        timeout = options + timeout;
+        timeout = options2 + timeout;
         priorityLevel = {
           id: taskIdCounter++,
           callback,
           priorityLevel,
-          startTime: options,
+          startTime: options2,
           expirationTime: timeout,
           sortIndex: -1
         };
-        options > currentTime ? (priorityLevel.sortIndex = options, push(timerQueue, priorityLevel), null === peek(taskQueue) && priorityLevel === peek(timerQueue) && (isHostTimeoutScheduled ? (localClearTimeout(taskTimeoutID), taskTimeoutID = -1) : isHostTimeoutScheduled = true, requestHostTimeout(handleTimeout, options - currentTime))) : (priorityLevel.sortIndex = timeout, push(taskQueue, priorityLevel), isHostCallbackScheduled || isPerformingWork || (isHostCallbackScheduled = true, isMessageLoopRunning || (isMessageLoopRunning = true, schedulePerformWorkUntilDeadline())));
+        options2 > currentTime ? (priorityLevel.sortIndex = options2, push(timerQueue, priorityLevel), null === peek(taskQueue) && priorityLevel === peek(timerQueue) && (isHostTimeoutScheduled ? (localClearTimeout(taskTimeoutID), taskTimeoutID = -1) : isHostTimeoutScheduled = true, requestHostTimeout(handleTimeout, options2 - currentTime))) : (priorityLevel.sortIndex = timeout, push(taskQueue, priorityLevel), isHostCallbackScheduled || isPerformingWork || (isHostCallbackScheduled = true, isMessageLoopRunning || (isMessageLoopRunning = true, schedulePerformWorkUntilDeadline())));
         return priorityLevel;
       };
       exports.unstable_shouldYield = shouldYieldToHost;
@@ -1328,7 +1332,7 @@ var require_react_dom_development = __commonJS({
         return dispatcher;
       }
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-      var React38 = require_react(), Internals = {
+      var React60 = require_react(), Internals = {
         d: {
           f: noop3,
           r: function() {
@@ -1346,7 +1350,7 @@ var require_react_dom_development = __commonJS({
         },
         p: 0,
         findDOMNode: null
-      }, REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), ReactSharedInternals = React38.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+      }, REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), ReactSharedInternals = React60.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
       "function" === typeof Map && null != Map.prototype && "function" === typeof Map.prototype.forEach && "function" === typeof Set && null != Set.prototype && "function" === typeof Set.prototype.clear && "function" === typeof Set.prototype.forEach || console.error(
         "React depends on Map and Set built-in types. Make sure that you load a polyfill in older browsers. https://reactjs.org/link/react-polyfills"
       );
@@ -1368,18 +1372,18 @@ var require_react_dom_development = __commonJS({
           );
         }
       };
-      exports.preconnect = function(href, options) {
-        "string" === typeof href && href ? null != options && "object" !== typeof options ? console.error(
+      exports.preconnect = function(href, options2) {
+        "string" === typeof href && href ? null != options2 && "object" !== typeof options2 ? console.error(
           "ReactDOM.preconnect(): Expected the `options` argument (second) to be an object but encountered %s instead. The only supported option at this time is `crossOrigin` which accepts a string.",
-          getValueDescriptorExpectingEnumForWarning(options)
-        ) : null != options && "string" !== typeof options.crossOrigin && console.error(
+          getValueDescriptorExpectingEnumForWarning(options2)
+        ) : null != options2 && "string" !== typeof options2.crossOrigin && console.error(
           "ReactDOM.preconnect(): Expected the `crossOrigin` option (second argument) to be a string but encountered %s instead. Try removing this option or passing a string value instead.",
-          getValueDescriptorExpectingObjectForWarning(options.crossOrigin)
+          getValueDescriptorExpectingObjectForWarning(options2.crossOrigin)
         ) : console.error(
           "ReactDOM.preconnect(): Expected the `href` argument (first) to be a non-empty string but encountered %s instead.",
           getValueDescriptorExpectingObjectForWarning(href)
         );
-        "string" === typeof href && (options ? (options = options.crossOrigin, options = "string" === typeof options ? "use-credentials" === options ? options : "" : void 0) : options = null, Internals.d.C(href, options));
+        "string" === typeof href && (options2 ? (options2 = options2.crossOrigin, options2 = "string" === typeof options2 ? "use-credentials" === options2 ? options2 : "" : void 0) : options2 = null, Internals.d.C(href, options2));
       };
       exports.prefetchDNS = function(href) {
         if ("string" !== typeof href || !href)
@@ -1388,33 +1392,33 @@ var require_react_dom_development = __commonJS({
             getValueDescriptorExpectingObjectForWarning(href)
           );
         else if (1 < arguments.length) {
-          var options = arguments[1];
-          "object" === typeof options && options.hasOwnProperty("crossOrigin") ? console.error(
+          var options2 = arguments[1];
+          "object" === typeof options2 && options2.hasOwnProperty("crossOrigin") ? console.error(
             "ReactDOM.prefetchDNS(): Expected only one argument, `href`, but encountered %s as a second argument instead. This argument is reserved for future options and is currently disallowed. It looks like the you are attempting to set a crossOrigin property for this DNS lookup hint. Browsers do not perform DNS queries using CORS and setting this attribute on the resource hint has no effect. Try calling ReactDOM.prefetchDNS() with just a single string argument, `href`.",
-            getValueDescriptorExpectingEnumForWarning(options)
+            getValueDescriptorExpectingEnumForWarning(options2)
           ) : console.error(
             "ReactDOM.prefetchDNS(): Expected only one argument, `href`, but encountered %s as a second argument instead. This argument is reserved for future options and is currently disallowed. Try calling ReactDOM.prefetchDNS() with just a single string argument, `href`.",
-            getValueDescriptorExpectingEnumForWarning(options)
+            getValueDescriptorExpectingEnumForWarning(options2)
           );
         }
         "string" === typeof href && Internals.d.D(href);
       };
-      exports.preinit = function(href, options) {
-        "string" === typeof href && href ? null == options || "object" !== typeof options ? console.error(
+      exports.preinit = function(href, options2) {
+        "string" === typeof href && href ? null == options2 || "object" !== typeof options2 ? console.error(
           "ReactDOM.preinit(): Expected the `options` argument (second) to be an object with an `as` property describing the type of resource to be preinitialized but encountered %s instead.",
-          getValueDescriptorExpectingEnumForWarning(options)
-        ) : "style" !== options.as && "script" !== options.as && console.error(
+          getValueDescriptorExpectingEnumForWarning(options2)
+        ) : "style" !== options2.as && "script" !== options2.as && console.error(
           'ReactDOM.preinit(): Expected the `as` property in the `options` argument (second) to contain a valid value describing the type of resource to be preinitialized but encountered %s instead. Valid values for `as` are "style" and "script".',
-          getValueDescriptorExpectingEnumForWarning(options.as)
+          getValueDescriptorExpectingEnumForWarning(options2.as)
         ) : console.error(
           "ReactDOM.preinit(): Expected the `href` argument (first) to be a non-empty string but encountered %s instead.",
           getValueDescriptorExpectingObjectForWarning(href)
         );
-        if ("string" === typeof href && options && "string" === typeof options.as) {
-          var as = options.as, crossOrigin = getCrossOriginStringAs(as, options.crossOrigin), integrity = "string" === typeof options.integrity ? options.integrity : void 0, fetchPriority = "string" === typeof options.fetchPriority ? options.fetchPriority : void 0;
+        if ("string" === typeof href && options2 && "string" === typeof options2.as) {
+          var as = options2.as, crossOrigin = getCrossOriginStringAs(as, options2.crossOrigin), integrity = "string" === typeof options2.integrity ? options2.integrity : void 0, fetchPriority = "string" === typeof options2.fetchPriority ? options2.fetchPriority : void 0;
           "style" === as ? Internals.d.S(
             href,
-            "string" === typeof options.precedence ? options.precedence : void 0,
+            "string" === typeof options2.precedence ? options2.precedence : void 0,
             {
               crossOrigin,
               integrity,
@@ -1424,21 +1428,21 @@ var require_react_dom_development = __commonJS({
             crossOrigin,
             integrity,
             fetchPriority,
-            nonce: "string" === typeof options.nonce ? options.nonce : void 0
+            nonce: "string" === typeof options2.nonce ? options2.nonce : void 0
           });
         }
       };
-      exports.preinitModule = function(href, options) {
+      exports.preinitModule = function(href, options2) {
         var encountered = "";
         "string" === typeof href && href || (encountered += " The `href` argument encountered was " + getValueDescriptorExpectingObjectForWarning(href) + ".");
-        void 0 !== options && "object" !== typeof options ? encountered += " The `options` argument encountered was " + getValueDescriptorExpectingObjectForWarning(options) + "." : options && "as" in options && "script" !== options.as && (encountered += " The `as` option encountered was " + getValueDescriptorExpectingEnumForWarning(options.as) + ".");
+        void 0 !== options2 && "object" !== typeof options2 ? encountered += " The `options` argument encountered was " + getValueDescriptorExpectingObjectForWarning(options2) + "." : options2 && "as" in options2 && "script" !== options2.as && (encountered += " The `as` option encountered was " + getValueDescriptorExpectingEnumForWarning(options2.as) + ".");
         if (encountered)
           console.error(
             "ReactDOM.preinitModule(): Expected up to two arguments, a non-empty `href` string and, optionally, an `options` object with a valid `as` property.%s",
             encountered
           );
         else
-          switch (encountered = options && "string" === typeof options.as ? options.as : "script", encountered) {
+          switch (encountered = options2 && "string" === typeof options2.as ? options2.as : "script", encountered) {
             case "script":
               break;
             default:
@@ -1449,60 +1453,60 @@ var require_react_dom_development = __commonJS({
               );
           }
         if ("string" === typeof href)
-          if ("object" === typeof options && null !== options) {
-            if (null == options.as || "script" === options.as)
+          if ("object" === typeof options2 && null !== options2) {
+            if (null == options2.as || "script" === options2.as)
               encountered = getCrossOriginStringAs(
-                options.as,
-                options.crossOrigin
+                options2.as,
+                options2.crossOrigin
               ), Internals.d.M(href, {
                 crossOrigin: encountered,
-                integrity: "string" === typeof options.integrity ? options.integrity : void 0,
-                nonce: "string" === typeof options.nonce ? options.nonce : void 0
+                integrity: "string" === typeof options2.integrity ? options2.integrity : void 0,
+                nonce: "string" === typeof options2.nonce ? options2.nonce : void 0
               });
-          } else null == options && Internals.d.M(href);
+          } else null == options2 && Internals.d.M(href);
       };
-      exports.preload = function(href, options) {
+      exports.preload = function(href, options2) {
         var encountered = "";
         "string" === typeof href && href || (encountered += " The `href` argument encountered was " + getValueDescriptorExpectingObjectForWarning(href) + ".");
-        null == options || "object" !== typeof options ? encountered += " The `options` argument encountered was " + getValueDescriptorExpectingObjectForWarning(options) + "." : "string" === typeof options.as && options.as || (encountered += " The `as` option encountered was " + getValueDescriptorExpectingObjectForWarning(options.as) + ".");
+        null == options2 || "object" !== typeof options2 ? encountered += " The `options` argument encountered was " + getValueDescriptorExpectingObjectForWarning(options2) + "." : "string" === typeof options2.as && options2.as || (encountered += " The `as` option encountered was " + getValueDescriptorExpectingObjectForWarning(options2.as) + ".");
         encountered && console.error(
           'ReactDOM.preload(): Expected two arguments, a non-empty `href` string and an `options` object with an `as` property valid for a `<link rel="preload" as="..." />` tag.%s',
           encountered
         );
-        if ("string" === typeof href && "object" === typeof options && null !== options && "string" === typeof options.as) {
-          encountered = options.as;
+        if ("string" === typeof href && "object" === typeof options2 && null !== options2 && "string" === typeof options2.as) {
+          encountered = options2.as;
           var crossOrigin = getCrossOriginStringAs(
             encountered,
-            options.crossOrigin
+            options2.crossOrigin
           );
           Internals.d.L(href, encountered, {
             crossOrigin,
-            integrity: "string" === typeof options.integrity ? options.integrity : void 0,
-            nonce: "string" === typeof options.nonce ? options.nonce : void 0,
-            type: "string" === typeof options.type ? options.type : void 0,
-            fetchPriority: "string" === typeof options.fetchPriority ? options.fetchPriority : void 0,
-            referrerPolicy: "string" === typeof options.referrerPolicy ? options.referrerPolicy : void 0,
-            imageSrcSet: "string" === typeof options.imageSrcSet ? options.imageSrcSet : void 0,
-            imageSizes: "string" === typeof options.imageSizes ? options.imageSizes : void 0,
-            media: "string" === typeof options.media ? options.media : void 0
+            integrity: "string" === typeof options2.integrity ? options2.integrity : void 0,
+            nonce: "string" === typeof options2.nonce ? options2.nonce : void 0,
+            type: "string" === typeof options2.type ? options2.type : void 0,
+            fetchPriority: "string" === typeof options2.fetchPriority ? options2.fetchPriority : void 0,
+            referrerPolicy: "string" === typeof options2.referrerPolicy ? options2.referrerPolicy : void 0,
+            imageSrcSet: "string" === typeof options2.imageSrcSet ? options2.imageSrcSet : void 0,
+            imageSizes: "string" === typeof options2.imageSizes ? options2.imageSizes : void 0,
+            media: "string" === typeof options2.media ? options2.media : void 0
           });
         }
       };
-      exports.preloadModule = function(href, options) {
+      exports.preloadModule = function(href, options2) {
         var encountered = "";
         "string" === typeof href && href || (encountered += " The `href` argument encountered was " + getValueDescriptorExpectingObjectForWarning(href) + ".");
-        void 0 !== options && "object" !== typeof options ? encountered += " The `options` argument encountered was " + getValueDescriptorExpectingObjectForWarning(options) + "." : options && "as" in options && "string" !== typeof options.as && (encountered += " The `as` option encountered was " + getValueDescriptorExpectingObjectForWarning(options.as) + ".");
+        void 0 !== options2 && "object" !== typeof options2 ? encountered += " The `options` argument encountered was " + getValueDescriptorExpectingObjectForWarning(options2) + "." : options2 && "as" in options2 && "string" !== typeof options2.as && (encountered += " The `as` option encountered was " + getValueDescriptorExpectingObjectForWarning(options2.as) + ".");
         encountered && console.error(
           'ReactDOM.preloadModule(): Expected two arguments, a non-empty `href` string and, optionally, an `options` object with an `as` property valid for a `<link rel="modulepreload" as="..." />` tag.%s',
           encountered
         );
-        "string" === typeof href && (options ? (encountered = getCrossOriginStringAs(
-          options.as,
-          options.crossOrigin
+        "string" === typeof href && (options2 ? (encountered = getCrossOriginStringAs(
+          options2.as,
+          options2.crossOrigin
         ), Internals.d.m(href, {
-          as: "string" === typeof options.as && "script" !== options.as ? options.as : void 0,
+          as: "string" === typeof options2.as && "script" !== options2.as ? options2.as : void 0,
           crossOrigin: encountered,
-          integrity: "string" === typeof options.integrity ? options.integrity : void 0
+          integrity: "string" === typeof options2.integrity ? options2.integrity : void 0
         })) : Internals.d.m(href));
       };
       exports.requestFormReset = function(form) {
@@ -1517,7 +1521,7 @@ var require_react_dom_development = __commonJS({
       exports.useFormStatus = function() {
         return resolveDispatcher().useHostTransitionStatus();
       };
-      exports.version = "19.2.5";
+      exports.version = "19.2.7";
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop(Error());
     })();
   }
@@ -1674,14 +1678,14 @@ var require_react_dom_client_development = __commonJS({
             throw Error("Unable to find node on an unmounted component.");
           return alternate !== fiber ? null : fiber;
         }
-        for (var a = fiber, b = alternate; ; ) {
+        for (var a = fiber, b2 = alternate; ; ) {
           var parentA = a.return;
           if (null === parentA) break;
           var parentB = parentA.alternate;
           if (null === parentB) {
-            b = parentA.return;
-            if (null !== b) {
-              a = b;
+            b2 = parentA.return;
+            if (null !== b2) {
+              a = b2;
               continue;
             }
             break;
@@ -1689,23 +1693,23 @@ var require_react_dom_client_development = __commonJS({
           if (parentA.child === parentB.child) {
             for (parentB = parentA.child; parentB; ) {
               if (parentB === a) return assertIsMounted(parentA), fiber;
-              if (parentB === b) return assertIsMounted(parentA), alternate;
+              if (parentB === b2) return assertIsMounted(parentA), alternate;
               parentB = parentB.sibling;
             }
             throw Error("Unable to find node on an unmounted component.");
           }
-          if (a.return !== b.return) a = parentA, b = parentB;
+          if (a.return !== b2.return) a = parentA, b2 = parentB;
           else {
             for (var didFindChild = false, _child = parentA.child; _child; ) {
               if (_child === a) {
                 didFindChild = true;
                 a = parentA;
-                b = parentB;
+                b2 = parentB;
                 break;
               }
-              if (_child === b) {
+              if (_child === b2) {
                 didFindChild = true;
-                b = parentA;
+                b2 = parentA;
                 a = parentB;
                 break;
               }
@@ -1716,12 +1720,12 @@ var require_react_dom_client_development = __commonJS({
                 if (_child === a) {
                   didFindChild = true;
                   a = parentB;
-                  b = parentA;
+                  b2 = parentA;
                   break;
                 }
-                if (_child === b) {
+                if (_child === b2) {
                   didFindChild = true;
-                  b = parentB;
+                  b2 = parentB;
                   a = parentA;
                   break;
                 }
@@ -1733,7 +1737,7 @@ var require_react_dom_client_development = __commonJS({
                 );
             }
           }
-          if (a.alternate !== b)
+          if (a.alternate !== b2)
             throw Error(
               "Return fibers should always be each others' alternates. This error is likely caused by a bug in React. Please file an issue."
             );
@@ -1794,12 +1798,12 @@ var require_react_dom_client_development = __commonJS({
               return type;
             case REACT_MEMO_TYPE:
               return innerType = type.displayName || null, null !== innerType ? innerType : getComponentNameFromType(type.type) || "Memo";
-            case REACT_LAZY_TYPE:
+            case REACT_LAZY_TYPE2:
               innerType = type._payload;
               type = type._init;
               try {
                 return getComponentNameFromType(type(innerType));
-              } catch (x) {
+              } catch (x2) {
               }
           }
         return null;
@@ -2015,10 +2019,10 @@ var require_react_dom_client_development = __commonJS({
         if (void 0 === prefix)
           try {
             throw Error();
-          } catch (x) {
-            var match = x.stack.trim().match(/\n( *(at )?)/);
+          } catch (x2) {
+            var match = x2.stack.trim().match(/\n( *(at )?)/);
             prefix = match && match[1] || "";
-            suffix = -1 < x.stack.indexOf("\n    at") ? " (<anonymous>)" : -1 < x.stack.indexOf("@") ? "@unknown:0:0" : "";
+            suffix = -1 < x2.stack.indexOf("\n    at") ? " (<anonymous>)" : -1 < x2.stack.indexOf("@") ? "@unknown:0:0" : "";
           }
         return "\n" + prefix + name + suffix;
       }
@@ -2049,8 +2053,8 @@ var require_react_dom_client_development = __commonJS({
                   if ("object" === typeof Reflect && Reflect.construct) {
                     try {
                       Reflect.construct(Fake, []);
-                    } catch (x) {
-                      var control = x;
+                    } catch (x2) {
+                      var control = x2;
                     }
                     Reflect.construct(fn, [], Fake);
                   } else {
@@ -2182,8 +2186,8 @@ var require_react_dom_client_development = __commonJS({
             workInProgress2 = workInProgress2.return;
           } while (workInProgress2);
           return info;
-        } catch (x) {
-          return "\nError generating stack: " + x.message + "\n" + x.stack;
+        } catch (x2) {
+          return "\nError generating stack: " + x2.message + "\n" + x2.stack;
         }
       }
       function describeFunctionComponentFrameWithoutLineNumber(fn) {
@@ -2242,8 +2246,8 @@ var require_react_dom_client_development = __commonJS({
               (workInProgress2 = workInProgress2.owner) && ownerStack && (info += "\n" + formatOwnerStack(ownerStack));
             } else break;
           var JSCompiler_inline_result = info;
-        } catch (x) {
-          JSCompiler_inline_result = "\nError generating stack: " + x.message + "\n" + x.stack;
+        } catch (x2) {
+          JSCompiler_inline_result = "\nError generating stack: " + x2.message + "\n" + x2.stack;
         }
         return JSCompiler_inline_result;
       }
@@ -2329,9 +2333,9 @@ var require_react_dom_client_development = __commonJS({
             ));
           }
       }
-      function clz32Fallback(x) {
-        x >>>= 0;
-        return 0 === x ? 32 : 31 - (log(x) / LN2 | 0) | 0;
+      function clz32Fallback(x2) {
+        x2 >>>= 0;
+        return 0 === x2 ? 32 : 31 - (log(x2) / LN2 | 0) | 0;
       }
       function getHighestPriorityLanes(lanes) {
         var pendingSyncLanes = lanes & 42;
@@ -2813,7 +2817,7 @@ var require_react_dom_client_development = __commonJS({
         node = value;
         return node !== lastValue ? (tracker.setValue(node), true) : false;
       }
-      function getActiveElement(doc) {
+      function getActiveElement2(doc) {
         doc = doc || ("undefined" !== typeof document ? document : void 0);
         if ("undefined" === typeof doc) return null;
         try {
@@ -2878,10 +2882,10 @@ var require_react_dom_client_development = __commonJS({
         track(element);
       }
       function setDefaultValue(node, type, value) {
-        "number" === type && getActiveElement(node.ownerDocument) === node || node.defaultValue === "" + value || (node.defaultValue = "" + value);
+        "number" === type && getActiveElement2(node.ownerDocument) === node || node.defaultValue === "" + value || (node.defaultValue = "" + value);
       }
       function validateOptionProps(element, props) {
-        null == props.value && ("object" === typeof props.children && null !== props.children ? React38.Children.forEach(props.children, function(child) {
+        null == props.value && ("object" === typeof props.children && null !== props.children ? React60.Children.forEach(props.children, function(child) {
           null == child || "string" === typeof child || "number" === typeof child || "bigint" === typeof child || didWarnInvalidChild || (didWarnInvalidChild = true, console.error(
             "Cannot infer the option value of complex children. Pass a `value` prop or use a plain string as children to <option>."
           ));
@@ -3029,7 +3033,7 @@ var require_react_dom_client_development = __commonJS({
         return indentation(indent) + describeTextNode(clientText, maxLength) + "\n";
       }
       function objectName(object) {
-        return Object.prototype.toString.call(object).replace(/^\[object (.*)\]$/, function(m, p0) {
+        return Object.prototype.toString.call(object).replace(/^\[object (.*)\]$/, function(m2, p0) {
           return p0;
         });
       }
@@ -3230,7 +3234,7 @@ var require_react_dom_client_development = __commonJS({
       function describeDiff(rootNode) {
         try {
           return "\n\n" + describeNode(rootNode, 0);
-        } catch (x) {
+        } catch (x2) {
           return "";
         }
       }
@@ -3459,7 +3463,7 @@ var require_react_dom_client_development = __commonJS({
         node.textContent = text;
       }
       function camelize(string) {
-        return string.replace(hyphenPattern, function(_, character) {
+        return string.replace(hyphenPattern, function(_2, character) {
           return character.toUpperCase();
         });
       }
@@ -3876,8 +3880,8 @@ var require_react_dom_client_development = __commonJS({
           }
         }
       }
-      function batchedUpdates$1(fn, a, b) {
-        if (isInsideEventHandler) return fn(a, b);
+      function batchedUpdates$1(fn, a, b2) {
+        if (isInsideEventHandler) return fn(a, b2);
         isInsideEventHandler = true;
         try {
           var JSCompiler_inline_result = fn(a);
@@ -4090,10 +4094,10 @@ var require_react_dom_client_development = __commonJS({
         if ("input" === domEventName || "change" === domEventName)
           return getInstIfValueChanged(targetInst);
       }
-      function is(x, y) {
-        return x === y && (0 !== x || 1 / x === 1 / y) || x !== x && y !== y;
+      function is(x2, y2) {
+        return x2 === y2 && (0 !== x2 || 1 / x2 === 1 / y2) || x2 !== x2 && y2 !== y2;
       }
-      function shallowEqual(objA, objB) {
+      function shallowEqual2(objA, objB) {
         if (objectIs(objA, objB)) return true;
         if ("object" !== typeof objA || null === objA || "object" !== typeof objB || null === objB)
           return false;
@@ -4138,7 +4142,7 @@ var require_react_dom_client_development = __commonJS({
       }
       function getActiveElementDeep(containerInfo) {
         containerInfo = null != containerInfo && null != containerInfo.ownerDocument && null != containerInfo.ownerDocument.defaultView ? containerInfo.ownerDocument.defaultView : window;
-        for (var element = getActiveElement(containerInfo.document); element instanceof containerInfo.HTMLIFrameElement; ) {
+        for (var element = getActiveElement2(containerInfo.document); element instanceof containerInfo.HTMLIFrameElement; ) {
           try {
             var JSCompiler_inline_result = "string" === typeof element.contentWindow.location.href;
           } catch (err) {
@@ -4146,7 +4150,7 @@ var require_react_dom_client_development = __commonJS({
           }
           if (JSCompiler_inline_result) containerInfo = element.contentWindow;
           else break;
-          element = getActiveElement(containerInfo.document);
+          element = getActiveElement2(containerInfo.document);
         }
         return element;
       }
@@ -4156,12 +4160,12 @@ var require_react_dom_client_development = __commonJS({
       }
       function constructSelectEvent(dispatchQueue, nativeEvent, nativeEventTarget) {
         var doc = nativeEventTarget.window === nativeEventTarget ? nativeEventTarget.document : 9 === nativeEventTarget.nodeType ? nativeEventTarget : nativeEventTarget.ownerDocument;
-        mouseDown || null == activeElement || activeElement !== getActiveElement(doc) || (doc = activeElement, "selectionStart" in doc && hasSelectionCapabilities(doc) ? doc = { start: doc.selectionStart, end: doc.selectionEnd } : (doc = (doc.ownerDocument && doc.ownerDocument.defaultView || window).getSelection(), doc = {
+        mouseDown || null == activeElement || activeElement !== getActiveElement2(doc) || (doc = activeElement, "selectionStart" in doc && hasSelectionCapabilities(doc) ? doc = { start: doc.selectionStart, end: doc.selectionEnd } : (doc = (doc.ownerDocument && doc.ownerDocument.defaultView || window).getSelection(), doc = {
           anchorNode: doc.anchorNode,
           anchorOffset: doc.anchorOffset,
           focusNode: doc.focusNode,
           focusOffset: doc.focusOffset
-        }), lastSelection && shallowEqual(lastSelection, doc) || (lastSelection = doc, doc = accumulateTwoPhaseListeners(activeElementInst, "onSelect"), 0 < doc.length && (nativeEvent = new SyntheticEvent(
+        }), lastSelection && shallowEqual2(lastSelection, doc) || (lastSelection = doc, doc = accumulateTwoPhaseListeners(activeElementInst, "onSelect"), 0 < doc.length && (nativeEvent = new SyntheticEvent(
           "onSelect",
           "select",
           null,
@@ -4811,14 +4815,14 @@ var require_react_dom_client_development = __commonJS({
             "function" === typeof element && (needsCompareFamilies = true);
             break;
           case 0:
-            "function" === typeof element ? needsCompareFamilies = true : $$typeofNextType === REACT_LAZY_TYPE && (needsCompareFamilies = true);
+            "function" === typeof element ? needsCompareFamilies = true : $$typeofNextType === REACT_LAZY_TYPE2 && (needsCompareFamilies = true);
             break;
           case 11:
-            $$typeofNextType === REACT_FORWARD_REF_TYPE ? needsCompareFamilies = true : $$typeofNextType === REACT_LAZY_TYPE && (needsCompareFamilies = true);
+            $$typeofNextType === REACT_FORWARD_REF_TYPE ? needsCompareFamilies = true : $$typeofNextType === REACT_LAZY_TYPE2 && (needsCompareFamilies = true);
             break;
           case 14:
           case 15:
-            $$typeofNextType === REACT_MEMO_TYPE ? needsCompareFamilies = true : $$typeofNextType === REACT_LAZY_TYPE && (needsCompareFamilies = true);
+            $$typeofNextType === REACT_MEMO_TYPE ? needsCompareFamilies = true : $$typeofNextType === REACT_LAZY_TYPE2 && (needsCompareFamilies = true);
             break;
           default:
             return false;
@@ -4984,7 +4988,7 @@ var require_react_dom_client_development = __commonJS({
                   case REACT_MEMO_TYPE:
                     fiberTag = 14;
                     break a;
-                  case REACT_LAZY_TYPE:
+                  case REACT_LAZY_TYPE2:
                     fiberTag = 16;
                     resolvedType = null;
                     break a;
@@ -5779,10 +5783,10 @@ var require_react_dom_client_development = __commonJS({
       function resolveLazy(lazyType) {
         try {
           return callLazyInitInDEV(lazyType);
-        } catch (x) {
-          if (null !== x && "object" === typeof x && "function" === typeof x.then)
-            throw suspendedThenable = x, needsToResetSuspendedThenableDEV = true, SuspenseException;
-          throw x;
+        } catch (x2) {
+          if (null !== x2 && "object" === typeof x2 && "function" === typeof x2.then)
+            throw suspendedThenable = x2, needsToResetSuspendedThenableDEV = true, SuspenseException;
+          throw x2;
         }
       }
       function getSuspendedThenable() {
@@ -5962,7 +5966,7 @@ var require_react_dom_client_development = __commonJS({
               lanes,
               element.key
             ), validateFragmentProps(element, current2, returnFiber), current2;
-          if (null !== current2 && (current2.elementType === elementType || isCompatibleFamilyForHotReloading(current2, element) || "object" === typeof elementType && null !== elementType && elementType.$$typeof === REACT_LAZY_TYPE && resolveLazy(elementType) === current2.type))
+          if (null !== current2 && (current2.elementType === elementType || isCompatibleFamilyForHotReloading(current2, element) || "object" === typeof elementType && null !== elementType && elementType.$$typeof === REACT_LAZY_TYPE2 && resolveLazy(elementType) === current2.type))
             return current2 = useFiber(current2, element.props), coerceRef(current2, element), current2.return = returnFiber, current2._debugOwner = element._owner, current2._debugInfo = currentDebugInfo, current2;
           current2 = createFiberFromElement(element, returnFiber.mode, lanes);
           coerceRef(current2, element);
@@ -6012,7 +6016,7 @@ var require_react_dom_client_development = __commonJS({
                   returnFiber.mode,
                   lanes
                 ), newChild.return = returnFiber, newChild._debugInfo = currentDebugInfo, newChild;
-              case REACT_LAZY_TYPE:
+              case REACT_LAZY_TYPE2:
                 var _prevDebugInfo = pushDebugInfo(newChild._debugInfo);
                 newChild = resolveLazy(newChild);
                 returnFiber = createChild(returnFiber, newChild, lanes);
@@ -6059,7 +6063,7 @@ var require_react_dom_client_development = __commonJS({
                 ), currentDebugInfo = key, returnFiber) : null;
               case REACT_PORTAL_TYPE:
                 return newChild.key === key ? updatePortal(returnFiber, oldFiber, newChild, lanes) : null;
-              case REACT_LAZY_TYPE:
+              case REACT_LAZY_TYPE2:
                 return key = pushDebugInfo(newChild._debugInfo), newChild = resolveLazy(newChild), returnFiber = updateSlot(
                   returnFiber,
                   oldFiber,
@@ -6118,7 +6122,7 @@ var require_react_dom_client_development = __commonJS({
                 return existingChildren = existingChildren.get(
                   null === newChild.key ? newIdx : newChild.key
                 ) || null, updatePortal(returnFiber, existingChildren, newChild, lanes);
-              case REACT_LAZY_TYPE:
+              case REACT_LAZY_TYPE2:
                 var _prevDebugInfo7 = pushDebugInfo(newChild._debugInfo);
                 newChild = resolveLazy(newChild);
                 returnFiber = updateFromMap(
@@ -6185,7 +6189,7 @@ var require_react_dom_client_development = __commonJS({
                 );
               });
               break;
-            case REACT_LAZY_TYPE:
+            case REACT_LAZY_TYPE2:
               child = resolveLazy(child), warnOnInvalidKey(returnFiber, workInProgress2, child, knownKeys);
           }
           return knownKeys;
@@ -6351,7 +6355,7 @@ var require_react_dom_client_development = __commonJS({
                       } else if (currentFirstChild.elementType === key || isCompatibleFamilyForHotReloading(
                         currentFirstChild,
                         newChild
-                      ) || "object" === typeof key && null !== key && key.$$typeof === REACT_LAZY_TYPE && resolveLazy(key) === currentFirstChild.type) {
+                      ) || "object" === typeof key && null !== key && key.$$typeof === REACT_LAZY_TYPE2 && resolveLazy(key) === currentFirstChild.type) {
                         deleteRemainingChildren(
                           returnFiber,
                           currentFirstChild.sibling
@@ -6416,7 +6420,7 @@ var require_react_dom_client_development = __commonJS({
                   returnFiber = lanes;
                 }
                 return placeSingleChild(returnFiber);
-              case REACT_LAZY_TYPE:
+              case REACT_LAZY_TYPE2:
                 return prevDebugInfo = pushDebugInfo(newChild._debugInfo), newChild = resolveLazy(newChild), returnFiber = reconcileChildFibersImpl(
                   returnFiber,
                   currentFirstChild,
@@ -6499,9 +6503,9 @@ var require_react_dom_client_development = __commonJS({
             );
             thenableState$1 = null;
             return firstChildFiber;
-          } catch (x) {
-            if (x === SuspenseException || x === SuspenseActionException) throw x;
-            var fiber = createFiber(29, x, null, returnFiber.mode);
+          } catch (x2) {
+            if (x2 === SuspenseException || x2 === SuspenseActionException) throw x2;
+            var fiber = createFiber(29, x2, null, returnFiber.mode);
             fiber.lanes = lanes;
             fiber.return = returnFiber;
             var debugInfo = fiber._debugInfo = currentDebugInfo;
@@ -7072,7 +7076,7 @@ var require_react_dom_client_development = __commonJS({
         null === (null === workInProgressHook ? index2.memoizedState : workInProgressHook.next) && (index2 = index2.alternate, ReactSharedInternals.H = null !== index2 && null !== index2.memoizedState ? HooksDispatcherOnUpdateInDEV : HooksDispatcherOnMountInDEV);
         return thenable;
       }
-      function use(usable) {
+      function use2(usable) {
         if (null !== usable && "object" === typeof usable) {
           if ("function" === typeof usable.then) return useThenable(usable);
           if (usable.$$typeof === REACT_CONTEXT_TYPE) return readContext(usable);
@@ -7615,9 +7619,9 @@ var require_react_dom_client_development = __commonJS({
         if ("object" === typeof currentStateHook && null !== currentStateHook && "function" === typeof currentStateHook.then)
           try {
             var state = useThenable(currentStateHook);
-          } catch (x) {
-            if (x === SuspenseException) throw SuspenseActionException;
-            throw x;
+          } catch (x2) {
+            if (x2 === SuspenseException) throw SuspenseActionException;
+            throw x2;
           }
         else state = currentStateHook;
         currentStateHook = updateWorkInProgressHook();
@@ -8189,7 +8193,7 @@ var require_react_dom_client_development = __commonJS({
           );
           return oldProps;
         }
-        return ctor.prototype && ctor.prototype.isPureReactComponent ? !shallowEqual(oldProps, newProps) || !shallowEqual(oldState, newState) : true;
+        return ctor.prototype && ctor.prototype.isPureReactComponent ? !shallowEqual2(oldProps, newProps) || !shallowEqual2(oldState, newState) : true;
       }
       function callComponentWillReceiveProps(workInProgress2, instance, newProps, nextContext) {
         var oldState = instance.state;
@@ -8495,7 +8499,7 @@ var require_react_dom_client_development = __commonJS({
         if (!checkScheduledUpdateOrContext(current2, renderLanes2)) {
           var prevProps = type.memoizedProps;
           Component2 = Component2.compare;
-          Component2 = null !== Component2 ? Component2 : shallowEqual;
+          Component2 = null !== Component2 ? Component2 : shallowEqual2;
           if (Component2(prevProps, nextProps) && current2.ref === workInProgress2.ref)
             return bailoutOnAlreadyFinishedWork(
               current2,
@@ -8512,7 +8516,7 @@ var require_react_dom_client_development = __commonJS({
       function updateSimpleMemoComponent(current2, workInProgress2, Component2, nextProps, renderLanes2) {
         if (null !== current2) {
           var prevProps = current2.memoizedProps;
-          if (shallowEqual(prevProps, nextProps) && current2.ref === workInProgress2.ref && workInProgress2.type === current2.type)
+          if (shallowEqual2(prevProps, nextProps) && current2.ref === workInProgress2.ref && workInProgress2.type === current2.type)
             if (didReceiveUpdate = false, workInProgress2.pendingProps = nextProps = prevProps, checkScheduledUpdateOrContext(current2, renderLanes2))
               0 !== (current2.flags & 131072) && (didReceiveUpdate = true);
             else
@@ -9771,7 +9775,7 @@ var require_react_dom_client_development = __commonJS({
                 }
               }
               workInProgress2 = "";
-              null !== current2 && "object" === typeof current2 && current2.$$typeof === REACT_LAZY_TYPE && (workInProgress2 = " Did you wrap a component in React.lazy() more than once?");
+              null !== current2 && "object" === typeof current2 && current2.$$typeof === REACT_LAZY_TYPE2 && (workInProgress2 = " Did you wrap a component in React.lazy() more than once?");
               renderLanes2 = getComponentNameFromType(current2) || current2;
               throw Error(
                 "Element type is invalid. Received a promise that resolves to: " + renderLanes2 + ". Lazy element type must resolve to a class or function." + workInProgress2
@@ -18513,14 +18517,14 @@ var require_react_dom_client_development = __commonJS({
         ));
       }
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-      var Scheduler = require_scheduler(), React38 = require_react(), ReactDOM4 = require_react_dom(), assign = Object.assign, REACT_LEGACY_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.element"), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy");
+      var Scheduler = require_scheduler(), React60 = require_react(), ReactDOM4 = require_react_dom(), assign = Object.assign, REACT_LEGACY_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.element"), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE2 = /* @__PURE__ */ Symbol.for("react.lazy");
       /* @__PURE__ */ Symbol.for("react.scope");
       var REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity");
       /* @__PURE__ */ Symbol.for("react.legacy_hidden");
       /* @__PURE__ */ Symbol.for("react.tracing_marker");
       var REACT_MEMO_CACHE_SENTINEL = /* @__PURE__ */ Symbol.for("react.memo_cache_sentinel");
       /* @__PURE__ */ Symbol.for("react.view_transition");
-      var MAYBE_ITERATOR_SYMBOL = Symbol.iterator, REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), isArrayImpl = Array.isArray, ReactSharedInternals = React38.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, ReactDOMSharedInternals = ReactDOM4.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, NotPending = Object.freeze({
+      var MAYBE_ITERATOR_SYMBOL = Symbol.iterator, REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), isArrayImpl = Array.isArray, ReactSharedInternals = React60.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, ReactDOMSharedInternals = ReactDOM4.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, NotPending = Object.freeze({
         pending: false,
         data: null,
         method: null,
@@ -19891,7 +19895,7 @@ var require_react_dom_client_development = __commonJS({
       var didWarnAboutUseFormState = /* @__PURE__ */ new Set();
       var renderLanes = 0, currentlyRenderingFiber = null, currentHook = null, workInProgressHook = null, didScheduleRenderPhaseUpdate = false, didScheduleRenderPhaseUpdateDuringThisPass = false, shouldDoubleInvokeUserFnsInHooksDEV = false, localIdCounter = 0, thenableIndexCounter = 0, thenableState = null, globalClientIdCounter = 0, RE_RENDER_LIMIT = 25, currentHookNameInDev = null, hookTypesDev = null, hookTypesUpdateIndexDev = -1, ignorePreviousDependencies = false, ContextOnlyDispatcher = {
         readContext,
-        use,
+        use: use2,
         useCallback: throwInvalidHookError,
         useContext: throwInvalidHookError,
         useEffect: throwInvalidHookError,
@@ -19920,7 +19924,7 @@ var require_react_dom_client_development = __commonJS({
         readContext: function(context) {
           return readContext(context);
         },
-        use,
+        use: use2,
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
           mountHookTypesDev();
@@ -20056,7 +20060,7 @@ var require_react_dom_client_development = __commonJS({
         readContext: function(context) {
           return readContext(context);
         },
-        use,
+        use: use2,
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
           updateHookTypesDev();
@@ -20186,7 +20190,7 @@ var require_react_dom_client_development = __commonJS({
         readContext: function(context) {
           return readContext(context);
         },
-        use,
+        use: use2,
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
           updateHookTypesDev();
@@ -20316,7 +20320,7 @@ var require_react_dom_client_development = __commonJS({
         readContext: function(context) {
           return readContext(context);
         },
-        use,
+        use: use2,
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
           updateHookTypesDev();
@@ -20449,7 +20453,7 @@ var require_react_dom_client_development = __commonJS({
         },
         use: function(usable) {
           warnInvalidHookAccess();
-          return use(usable);
+          return use2(usable);
         },
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
@@ -20604,7 +20608,7 @@ var require_react_dom_client_development = __commonJS({
         },
         use: function(usable) {
           warnInvalidHookAccess();
-          return use(usable);
+          return use2(usable);
         },
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
@@ -20759,7 +20763,7 @@ var require_react_dom_client_development = __commonJS({
         },
         use: function(usable) {
           warnInvalidHookAccess();
-          return use(usable);
+          return use2(usable);
         },
         useCallback: function(callback, deps) {
           currentHookNameInDev = "useCallback";
@@ -21063,15 +21067,15 @@ var require_react_dom_client_development = __commonJS({
           previousDispatcher.C(href, crossOrigin);
           preconnectAs("preconnect", href, crossOrigin);
         },
-        L: function(href, as, options) {
-          previousDispatcher.L(href, as, options);
+        L: function(href, as, options2) {
+          previousDispatcher.L(href, as, options2);
           var ownerDocument = globalDocument;
           if (ownerDocument && href && as) {
             var preloadSelector = 'link[rel="preload"][as="' + escapeSelectorAttributeValueInsideDoubleQuotes(as) + '"]';
-            "image" === as ? options && options.imageSrcSet ? (preloadSelector += '[imagesrcset="' + escapeSelectorAttributeValueInsideDoubleQuotes(
-              options.imageSrcSet
-            ) + '"]', "string" === typeof options.imageSizes && (preloadSelector += '[imagesizes="' + escapeSelectorAttributeValueInsideDoubleQuotes(
-              options.imageSizes
+            "image" === as ? options2 && options2.imageSrcSet ? (preloadSelector += '[imagesrcset="' + escapeSelectorAttributeValueInsideDoubleQuotes(
+              options2.imageSrcSet
+            ) + '"]', "string" === typeof options2.imageSizes && (preloadSelector += '[imagesizes="' + escapeSelectorAttributeValueInsideDoubleQuotes(
+              options2.imageSizes
             ) + '"]')) : preloadSelector += '[href="' + escapeSelectorAttributeValueInsideDoubleQuotes(href) + '"]' : preloadSelector += '[href="' + escapeSelectorAttributeValueInsideDoubleQuotes(href) + '"]';
             var key = preloadSelector;
             switch (as) {
@@ -21084,20 +21088,20 @@ var require_react_dom_client_development = __commonJS({
             preloadPropsMap.has(key) || (href = assign(
               {
                 rel: "preload",
-                href: "image" === as && options && options.imageSrcSet ? void 0 : href,
+                href: "image" === as && options2 && options2.imageSrcSet ? void 0 : href,
                 as
               },
-              options
+              options2
             ), preloadPropsMap.set(key, href), null !== ownerDocument.querySelector(preloadSelector) || "style" === as && ownerDocument.querySelector(
               getStylesheetSelectorFromKey(key)
             ) || "script" === as && ownerDocument.querySelector(getScriptSelectorFromKey(key)) || (as = ownerDocument.createElement("link"), setInitialProperties(as, "link", href), markNodeAsHoistable(as), ownerDocument.head.appendChild(as)));
           }
         },
-        m: function(href, options) {
-          previousDispatcher.m(href, options);
+        m: function(href, options2) {
+          previousDispatcher.m(href, options2);
           var ownerDocument = globalDocument;
           if (ownerDocument && href) {
-            var as = options && "string" === typeof options.as ? options.as : "script", preloadSelector = 'link[rel="modulepreload"][as="' + escapeSelectorAttributeValueInsideDoubleQuotes(as) + '"][href="' + escapeSelectorAttributeValueInsideDoubleQuotes(href) + '"]', key = preloadSelector;
+            var as = options2 && "string" === typeof options2.as ? options2.as : "script", preloadSelector = 'link[rel="modulepreload"][as="' + escapeSelectorAttributeValueInsideDoubleQuotes(as) + '"][href="' + escapeSelectorAttributeValueInsideDoubleQuotes(href) + '"]', key = preloadSelector;
             switch (as) {
               case "audioworklet":
               case "paintworklet":
@@ -21107,7 +21111,7 @@ var require_react_dom_client_development = __commonJS({
               case "script":
                 key = getScriptKey(href);
             }
-            if (!preloadPropsMap.has(key) && (href = assign({ rel: "modulepreload", href }, options), preloadPropsMap.set(key, href), null === ownerDocument.querySelector(preloadSelector))) {
+            if (!preloadPropsMap.has(key) && (href = assign({ rel: "modulepreload", href }, options2), preloadPropsMap.set(key, href), null === ownerDocument.querySelector(preloadSelector))) {
               switch (as) {
                 case "audioworklet":
                 case "paintworklet":
@@ -21125,14 +21129,14 @@ var require_react_dom_client_development = __commonJS({
             }
           }
         },
-        X: function(src, options) {
-          previousDispatcher.X(src, options);
+        X: function(src, options2) {
+          previousDispatcher.X(src, options2);
           var ownerDocument = globalDocument;
           if (ownerDocument && src) {
             var scripts = getResourcesFromRoot(ownerDocument).hoistableScripts, key = getScriptKey(src), resource = scripts.get(key);
             resource || (resource = ownerDocument.querySelector(
               getScriptSelectorFromKey(key)
-            ), resource || (src = assign({ src, async: true }, options), (options = preloadPropsMap.get(key)) && adoptPreloadPropsForScript(src, options), resource = ownerDocument.createElement("script"), markNodeAsHoistable(resource), setInitialProperties(resource, "link", src), ownerDocument.head.appendChild(resource)), resource = {
+            ), resource || (src = assign({ src, async: true }, options2), (options2 = preloadPropsMap.get(key)) && adoptPreloadPropsForScript(src, options2), resource = ownerDocument.createElement("script"), markNodeAsHoistable(resource), setInitialProperties(resource, "link", src), ownerDocument.head.appendChild(resource)), resource = {
               type: "script",
               instance: resource,
               count: 1,
@@ -21140,8 +21144,8 @@ var require_react_dom_client_development = __commonJS({
             }, scripts.set(key, resource));
           }
         },
-        S: function(href, precedence, options) {
-          previousDispatcher.S(href, precedence, options);
+        S: function(href, precedence, options2) {
+          previousDispatcher.S(href, precedence, options2);
           var ownerDocument = globalDocument;
           if (ownerDocument && href) {
             var styles = getResourcesFromRoot(ownerDocument).hoistableStyles, key = getStyleKey(href);
@@ -21160,9 +21164,9 @@ var require_react_dom_client_development = __commonJS({
                     href,
                     "data-precedence": precedence
                   },
-                  options
+                  options2
                 );
-                (options = preloadPropsMap.get(key)) && adoptPreloadPropsForStylesheet(href, options);
+                (options2 = preloadPropsMap.get(key)) && adoptPreloadPropsForStylesheet(href, options2);
                 var link = resource = ownerDocument.createElement("link");
                 markNodeAsHoistable(link);
                 setInitialProperties(link, "link", href);
@@ -21189,14 +21193,14 @@ var require_react_dom_client_development = __commonJS({
             }
           }
         },
-        M: function(src, options) {
-          previousDispatcher.M(src, options);
+        M: function(src, options2) {
+          previousDispatcher.M(src, options2);
           var ownerDocument = globalDocument;
           if (ownerDocument && src) {
             var scripts = getResourcesFromRoot(ownerDocument).hoistableScripts, key = getScriptKey(src), resource = scripts.get(key);
             resource || (resource = ownerDocument.querySelector(
               getScriptSelectorFromKey(key)
-            ), resource || (src = assign({ src, async: true, type: "module" }, options), (options = preloadPropsMap.get(key)) && adoptPreloadPropsForScript(src, options), resource = ownerDocument.createElement("script"), markNodeAsHoistable(resource), setInitialProperties(resource, "link", src), ownerDocument.head.appendChild(resource)), resource = {
+            ), resource || (src = assign({ src, async: true, type: "module" }, options2), (options2 = preloadPropsMap.get(key)) && adoptPreloadPropsForScript(src, options2), resource = ownerDocument.createElement("script"), markNodeAsHoistable(resource), setInitialProperties(resource, "link", src), ownerDocument.head.appendChild(resource)), resource = {
               type: "script",
               instance: resource,
               count: 1,
@@ -21308,10 +21312,10 @@ var require_react_dom_client_development = __commonJS({
         }
       };
       (function() {
-        var isomorphicReactPackageVersion = React38.version;
-        if ("19.2.5" !== isomorphicReactPackageVersion)
+        var isomorphicReactPackageVersion = React60.version;
+        if ("19.2.7" !== isomorphicReactPackageVersion)
           throw Error(
-            'Incompatible React versions: The "react" and "react-dom" packages must have the exact same version. Instead got:\n  - react:      ' + (isomorphicReactPackageVersion + "\n  - react-dom:  19.2.5\nLearn more: https://react.dev/warnings/version-mismatch")
+            'Incompatible React versions: The "react" and "react-dom" packages must have the exact same version. Instead got:\n  - react:      ' + (isomorphicReactPackageVersion + "\n  - react-dom:  19.2.7\nLearn more: https://react.dev/warnings/version-mismatch")
           );
       })();
       "function" === typeof Map && null != Map.prototype && "function" === typeof Map.prototype.forEach && "function" === typeof Set && null != Set.prototype && "function" === typeof Set.prototype.clear && "function" === typeof Set.prototype.forEach || console.error(
@@ -21335,10 +21339,10 @@ var require_react_dom_client_development = __commonJS({
       if (!(function() {
         var internals = {
           bundleType: 1,
-          version: "19.2.5",
+          version: "19.2.7",
           rendererPackageName: "react-dom",
           currentDispatcherRef: ReactSharedInternals,
-          reconcilerVersion: "19.2.5"
+          reconcilerVersion: "19.2.7"
         };
         internals.overrideHookState = overrideHookState;
         internals.overrideHookStateDeletePath = overrideHookStateDeletePath;
@@ -21362,17 +21366,17 @@ var require_react_dom_client_development = __commonJS({
           "font-weight:bold"
         );
       }
-      exports.createRoot = function(container, options) {
+      exports.createRoot = function(container, options2) {
         if (!isValidContainer(container))
           throw Error("Target container is not a DOM element.");
         warnIfReactDOMContainerInDEV(container);
         var isStrictMode = false, identifierPrefix = "", onUncaughtError = defaultOnUncaughtError, onCaughtError = defaultOnCaughtError, onRecoverableError = defaultOnRecoverableError;
-        null !== options && void 0 !== options && (options.hydrate ? console.warn(
+        null !== options2 && void 0 !== options2 && (options2.hydrate ? console.warn(
           "hydrate through createRoot is deprecated. Use ReactDOMClient.hydrateRoot(container, <App />) instead."
-        ) : "object" === typeof options && null !== options && options.$$typeof === REACT_ELEMENT_TYPE && console.error(
+        ) : "object" === typeof options2 && null !== options2 && options2.$$typeof === REACT_ELEMENT_TYPE && console.error(
           "You passed a JSX element to createRoot. You probably meant to call root.render instead. Example usage:\n\n  let root = createRoot(domContainer);\n  root.render(<App />);"
-        ), true === options.unstable_strictMode && (isStrictMode = true), void 0 !== options.identifierPrefix && (identifierPrefix = options.identifierPrefix), void 0 !== options.onUncaughtError && (onUncaughtError = options.onUncaughtError), void 0 !== options.onCaughtError && (onCaughtError = options.onCaughtError), void 0 !== options.onRecoverableError && (onRecoverableError = options.onRecoverableError));
-        options = createFiberRoot(
+        ), true === options2.unstable_strictMode && (isStrictMode = true), void 0 !== options2.identifierPrefix && (identifierPrefix = options2.identifierPrefix), void 0 !== options2.onUncaughtError && (onUncaughtError = options2.onUncaughtError), void 0 !== options2.onCaughtError && (onCaughtError = options2.onCaughtError), void 0 !== options2.onRecoverableError && (onRecoverableError = options2.onRecoverableError));
+        options2 = createFiberRoot(
           container,
           1,
           false,
@@ -21386,11 +21390,11 @@ var require_react_dom_client_development = __commonJS({
           onRecoverableError,
           defaultOnDefaultTransitionIndicator
         );
-        container[internalContainerInstanceKey] = options.current;
+        container[internalContainerInstanceKey] = options2.current;
         listenToAllSupportedEvents(container);
-        return new ReactDOMRoot(options);
+        return new ReactDOMRoot(options2);
       };
-      exports.hydrateRoot = function(container, initialChildren, options) {
+      exports.hydrateRoot = function(container, initialChildren, options2) {
         if (!isValidContainer(container))
           throw Error("Target container is not a DOM element.");
         warnIfReactDOMContainerInDEV(container);
@@ -21398,13 +21402,13 @@ var require_react_dom_client_development = __commonJS({
           "Must provide initial children as second argument to hydrateRoot. Example usage: hydrateRoot(domContainer, <App />)"
         );
         var isStrictMode = false, identifierPrefix = "", onUncaughtError = defaultOnUncaughtError, onCaughtError = defaultOnCaughtError, onRecoverableError = defaultOnRecoverableError, formState = null;
-        null !== options && void 0 !== options && (true === options.unstable_strictMode && (isStrictMode = true), void 0 !== options.identifierPrefix && (identifierPrefix = options.identifierPrefix), void 0 !== options.onUncaughtError && (onUncaughtError = options.onUncaughtError), void 0 !== options.onCaughtError && (onCaughtError = options.onCaughtError), void 0 !== options.onRecoverableError && (onRecoverableError = options.onRecoverableError), void 0 !== options.formState && (formState = options.formState));
+        null !== options2 && void 0 !== options2 && (true === options2.unstable_strictMode && (isStrictMode = true), void 0 !== options2.identifierPrefix && (identifierPrefix = options2.identifierPrefix), void 0 !== options2.onUncaughtError && (onUncaughtError = options2.onUncaughtError), void 0 !== options2.onCaughtError && (onCaughtError = options2.onCaughtError), void 0 !== options2.onRecoverableError && (onRecoverableError = options2.onRecoverableError), void 0 !== options2.formState && (formState = options2.formState));
         initialChildren = createFiberRoot(
           container,
           1,
           true,
           initialChildren,
-          null != options ? options : null,
+          null != options2 ? options2 : null,
           isStrictMode,
           identifierPrefix,
           formState,
@@ -21414,22 +21418,22 @@ var require_react_dom_client_development = __commonJS({
           defaultOnDefaultTransitionIndicator
         );
         initialChildren.context = getContextForSubtree(null);
-        options = initialChildren.current;
-        isStrictMode = requestUpdateLane(options);
+        options2 = initialChildren.current;
+        isStrictMode = requestUpdateLane(options2);
         isStrictMode = getBumpedLaneForHydrationByLane(isStrictMode);
         identifierPrefix = createUpdate(isStrictMode);
         identifierPrefix.callback = null;
-        enqueueUpdate(options, identifierPrefix, isStrictMode);
+        enqueueUpdate(options2, identifierPrefix, isStrictMode);
         startUpdateTimerByLane(isStrictMode, "hydrateRoot()", null);
-        options = isStrictMode;
-        initialChildren.current.lanes = options;
-        markRootUpdated$1(initialChildren, options);
+        options2 = isStrictMode;
+        initialChildren.current.lanes = options2;
+        markRootUpdated$1(initialChildren, options2);
         ensureRootIsScheduled(initialChildren);
         container[internalContainerInstanceKey] = initialChildren.current;
         listenToAllSupportedEvents(container);
         return new ReactDOMHydrationRoot(initialChildren);
       };
-      exports.version = "19.2.5";
+      exports.version = "19.2.7";
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop(Error());
     })();
   }
@@ -21489,12 +21493,12 @@ var require_react_jsx_runtime_development = __commonJS({
               return type;
             case REACT_MEMO_TYPE:
               return innerType = type.displayName || null, null !== innerType ? innerType : getComponentNameFromType(type.type) || "Memo";
-            case REACT_LAZY_TYPE:
+            case REACT_LAZY_TYPE2:
               innerType = type._payload;
               type = type._init;
               try {
                 return getComponentNameFromType(type(innerType));
-              } catch (x) {
+              } catch (x2) {
               }
           }
         return null;
@@ -21523,12 +21527,12 @@ var require_react_jsx_runtime_development = __commonJS({
       }
       function getTaskName(type) {
         if (type === REACT_FRAGMENT_TYPE) return "<>";
-        if ("object" === typeof type && null !== type && type.$$typeof === REACT_LAZY_TYPE)
+        if ("object" === typeof type && null !== type && type.$$typeof === REACT_LAZY_TYPE2)
           return "<...>";
         try {
           var name = getComponentNameFromType(type);
           return name ? "<" + name + ">" : "<...>";
-        } catch (x) {
+        } catch (x2) {
           return "<...>";
         }
       }
@@ -21623,8 +21627,8 @@ var require_react_jsx_runtime_development = __commonJS({
           else validateChildKeys(children);
         if (hasOwnProperty.call(config, "key")) {
           children = getComponentNameFromType(type);
-          var keys = Object.keys(config).filter(function(k) {
-            return "key" !== k;
+          var keys = Object.keys(config).filter(function(k2) {
+            return "key" !== k2;
           });
           isStaticChildren = 0 < keys.length ? "{key: someKey, " + keys.join(": ..., ") + ": ...}" : "{key: someKey}";
           didWarnAboutKeySpread[children + isStaticChildren] || (keys = 0 < keys.length ? "{" + keys.join(": ..., ") + ": ...}" : "{}", console.error(
@@ -21657,23 +21661,23 @@ var require_react_jsx_runtime_development = __commonJS({
         );
       }
       function validateChildKeys(node) {
-        isValidElement2(node) ? node._store && (node._store.validated = 1) : "object" === typeof node && null !== node && node.$$typeof === REACT_LAZY_TYPE && ("fulfilled" === node._payload.status ? isValidElement2(node._payload.value) && node._payload.value._store && (node._payload.value._store.validated = 1) : node._store && (node._store.validated = 1));
+        isValidElement2(node) ? node._store && (node._store.validated = 1) : "object" === typeof node && null !== node && node.$$typeof === REACT_LAZY_TYPE2 && ("fulfilled" === node._payload.status ? isValidElement2(node._payload.value) && node._payload.value._store && (node._payload.value._store.validated = 1) : node._store && (node._store.validated = 1));
       }
       function isValidElement2(object) {
         return "object" === typeof object && null !== object && object.$$typeof === REACT_ELEMENT_TYPE;
       }
-      var React38 = require_react(), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy"), REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity"), REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), ReactSharedInternals = React38.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, hasOwnProperty = Object.prototype.hasOwnProperty, isArrayImpl = Array.isArray, createTask = console.createTask ? console.createTask : function() {
+      var React60 = require_react(), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE2 = /* @__PURE__ */ Symbol.for("react.lazy"), REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity"), REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), ReactSharedInternals = React60.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, hasOwnProperty = Object.prototype.hasOwnProperty, isArrayImpl = Array.isArray, createTask = console.createTask ? console.createTask : function() {
         return null;
       };
-      React38 = {
+      React60 = {
         react_stack_bottom_frame: function(callStackForError) {
           return callStackForError();
         }
       };
       var specialPropKeyWarningShown;
       var didWarnAboutElementRef = {};
-      var unknownOwnerDebugStack = React38.react_stack_bottom_frame.bind(
-        React38,
+      var unknownOwnerDebugStack = React60.react_stack_bottom_frame.bind(
+        React60,
         UnknownOwner
       )();
       var unknownOwnerDebugTask = createTask(getTaskName(UnknownOwner));
@@ -21718,8 +21722,313 @@ var require_jsx_runtime = __commonJS({
 });
 
 // react/app.tsx
-var import_react12 = __toESM(require_react(), 1);
+var import_react21 = __toESM(require_react(), 1);
 var import_client = __toESM(require_client(), 1);
+
+// ../../../../website/node_modules/sonner/dist/index.mjs
+var import_react = __toESM(require_react(), 1);
+var import_react_dom = __toESM(require_react_dom(), 1);
+var import_react2 = __toESM(require_react(), 1);
+var import_react3 = __toESM(require_react(), 1);
+var import_react4 = __toESM(require_react(), 1);
+var jt = (n) => {
+  switch (n) {
+    case "success":
+      return ee;
+    case "info":
+      return ae;
+    case "warning":
+      return oe;
+    case "error":
+      return se;
+    default:
+      return null;
+  }
+};
+var te = Array(12).fill(0);
+var Yt = ({ visible: n, className: e }) => import_react2.default.createElement("div", { className: ["sonner-loading-wrapper", e].filter(Boolean).join(" "), "data-visible": n }, import_react2.default.createElement("div", { className: "sonner-spinner" }, te.map((t, a) => import_react2.default.createElement("div", { className: "sonner-loading-bar", key: `spinner-bar-${a}` }))));
+var ee = import_react2.default.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor", height: "20", width: "20" }, import_react2.default.createElement("path", { fillRule: "evenodd", d: "M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z", clipRule: "evenodd" }));
+var oe = import_react2.default.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "currentColor", height: "20", width: "20" }, import_react2.default.createElement("path", { fillRule: "evenodd", d: "M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a.75.75 0 100-1.5.75.75 0 000 1.5z", clipRule: "evenodd" }));
+var ae = import_react2.default.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor", height: "20", width: "20" }, import_react2.default.createElement("path", { fillRule: "evenodd", d: "M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z", clipRule: "evenodd" }));
+var se = import_react2.default.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor", height: "20", width: "20" }, import_react2.default.createElement("path", { fillRule: "evenodd", d: "M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z", clipRule: "evenodd" }));
+var Ot = import_react2.default.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }, import_react2.default.createElement("line", { x1: "18", y1: "6", x2: "6", y2: "18" }), import_react2.default.createElement("line", { x1: "6", y1: "6", x2: "18", y2: "18" }));
+var Ft = () => {
+  let [n, e] = import_react3.default.useState(document.hidden);
+  return import_react3.default.useEffect(() => {
+    let t = () => {
+      e(document.hidden);
+    };
+    return document.addEventListener("visibilitychange", t), () => window.removeEventListener("visibilitychange", t);
+  }, []), n;
+};
+var bt = 1;
+var yt = class {
+  constructor() {
+    this.subscribe = (e) => (this.subscribers.push(e), () => {
+      let t = this.subscribers.indexOf(e);
+      this.subscribers.splice(t, 1);
+    });
+    this.publish = (e) => {
+      this.subscribers.forEach((t) => t(e));
+    };
+    this.addToast = (e) => {
+      this.publish(e), this.toasts = [...this.toasts, e];
+    };
+    this.create = (e) => {
+      var S;
+      let { message: t, ...a } = e, u3 = typeof (e == null ? void 0 : e.id) == "number" || ((S = e.id) == null ? void 0 : S.length) > 0 ? e.id : bt++, f = this.toasts.find((g2) => g2.id === u3), w2 = e.dismissible === void 0 ? true : e.dismissible;
+      return this.dismissedToasts.has(u3) && this.dismissedToasts.delete(u3), f ? this.toasts = this.toasts.map((g2) => g2.id === u3 ? (this.publish({ ...g2, ...e, id: u3, title: t }), { ...g2, ...e, id: u3, dismissible: w2, title: t }) : g2) : this.addToast({ title: t, ...a, dismissible: w2, id: u3 }), u3;
+    };
+    this.dismiss = (e) => (this.dismissedToasts.add(e), e || this.toasts.forEach((t) => {
+      this.subscribers.forEach((a) => a({ id: t.id, dismiss: true }));
+    }), this.subscribers.forEach((t) => t({ id: e, dismiss: true })), e);
+    this.message = (e, t) => this.create({ ...t, message: e });
+    this.error = (e, t) => this.create({ ...t, message: e, type: "error" });
+    this.success = (e, t) => this.create({ ...t, type: "success", message: e });
+    this.info = (e, t) => this.create({ ...t, type: "info", message: e });
+    this.warning = (e, t) => this.create({ ...t, type: "warning", message: e });
+    this.loading = (e, t) => this.create({ ...t, type: "loading", message: e });
+    this.promise = (e, t) => {
+      if (!t) return;
+      let a;
+      t.loading !== void 0 && (a = this.create({ ...t, promise: e, type: "loading", message: t.loading, description: typeof t.description != "function" ? t.description : void 0 }));
+      let u3 = e instanceof Promise ? e : e(), f = a !== void 0, w2, S = u3.then(async (i) => {
+        if (w2 = ["resolve", i], import_react4.default.isValidElement(i)) f = false, this.create({ id: a, type: "default", message: i });
+        else if (ie(i) && !i.ok) {
+          f = false;
+          let T2 = typeof t.error == "function" ? await t.error(`HTTP error! status: ${i.status}`) : t.error, F2 = typeof t.description == "function" ? await t.description(`HTTP error! status: ${i.status}`) : t.description;
+          this.create({ id: a, type: "error", message: T2, description: F2 });
+        } else if (t.success !== void 0) {
+          f = false;
+          let T2 = typeof t.success == "function" ? await t.success(i) : t.success, F2 = typeof t.description == "function" ? await t.description(i) : t.description;
+          this.create({ id: a, type: "success", message: T2, description: F2 });
+        }
+      }).catch(async (i) => {
+        if (w2 = ["reject", i], t.error !== void 0) {
+          f = false;
+          let D2 = typeof t.error == "function" ? await t.error(i) : t.error, T2 = typeof t.description == "function" ? await t.description(i) : t.description;
+          this.create({ id: a, type: "error", message: D2, description: T2 });
+        }
+      }).finally(() => {
+        var i;
+        f && (this.dismiss(a), a = void 0), (i = t.finally) == null || i.call(t);
+      }), g2 = () => new Promise((i, D2) => S.then(() => w2[0] === "reject" ? D2(w2[1]) : i(w2[1])).catch(D2));
+      return typeof a != "string" && typeof a != "number" ? { unwrap: g2 } : Object.assign(a, { unwrap: g2 });
+    };
+    this.custom = (e, t) => {
+      let a = (t == null ? void 0 : t.id) || bt++;
+      return this.create({ jsx: e(a), id: a, ...t }), a;
+    };
+    this.getActiveToasts = () => this.toasts.filter((e) => !this.dismissedToasts.has(e.id));
+    this.subscribers = [], this.toasts = [], this.dismissedToasts = /* @__PURE__ */ new Set();
+  }
+};
+var v = new yt();
+var ne = (n, e) => {
+  let t = (e == null ? void 0 : e.id) || bt++;
+  return v.addToast({ title: n, ...e, id: t }), t;
+};
+var ie = (n) => n && typeof n == "object" && "ok" in n && typeof n.ok == "boolean" && "status" in n && typeof n.status == "number";
+var le = ne;
+var ce = () => v.toasts;
+var de = () => v.getActiveToasts();
+var ue = Object.assign(le, { success: v.success, info: v.info, warning: v.warning, error: v.error, custom: v.custom, message: v.message, promise: v.promise, dismiss: v.dismiss, loading: v.loading }, { getHistory: ce, getToasts: de });
+function wt(n, { insertAt: e } = {}) {
+  if (!n || typeof document == "undefined") return;
+  let t = document.head || document.getElementsByTagName("head")[0], a = document.createElement("style");
+  a.type = "text/css", e === "top" && t.firstChild ? t.insertBefore(a, t.firstChild) : t.appendChild(a), a.styleSheet ? a.styleSheet.cssText = n : a.appendChild(document.createTextNode(n));
+}
+wt(`:where(html[dir="ltr"]),:where([data-sonner-toaster][dir="ltr"]){--toast-icon-margin-start: -3px;--toast-icon-margin-end: 4px;--toast-svg-margin-start: -1px;--toast-svg-margin-end: 0px;--toast-button-margin-start: auto;--toast-button-margin-end: 0;--toast-close-button-start: 0;--toast-close-button-end: unset;--toast-close-button-transform: translate(-35%, -35%)}:where(html[dir="rtl"]),:where([data-sonner-toaster][dir="rtl"]){--toast-icon-margin-start: 4px;--toast-icon-margin-end: -3px;--toast-svg-margin-start: 0px;--toast-svg-margin-end: -1px;--toast-button-margin-start: 0;--toast-button-margin-end: auto;--toast-close-button-start: unset;--toast-close-button-end: 0;--toast-close-button-transform: translate(35%, -35%)}:where([data-sonner-toaster]){position:fixed;width:var(--width);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica Neue,Arial,Noto Sans,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;--gray1: hsl(0, 0%, 99%);--gray2: hsl(0, 0%, 97.3%);--gray3: hsl(0, 0%, 95.1%);--gray4: hsl(0, 0%, 93%);--gray5: hsl(0, 0%, 90.9%);--gray6: hsl(0, 0%, 88.7%);--gray7: hsl(0, 0%, 85.8%);--gray8: hsl(0, 0%, 78%);--gray9: hsl(0, 0%, 56.1%);--gray10: hsl(0, 0%, 52.3%);--gray11: hsl(0, 0%, 43.5%);--gray12: hsl(0, 0%, 9%);--border-radius: 8px;box-sizing:border-box;padding:0;margin:0;list-style:none;outline:none;z-index:999999999;transition:transform .4s ease}:where([data-sonner-toaster][data-lifted="true"]){transform:translateY(-10px)}@media (hover: none) and (pointer: coarse){:where([data-sonner-toaster][data-lifted="true"]){transform:none}}:where([data-sonner-toaster][data-x-position="right"]){right:var(--offset-right)}:where([data-sonner-toaster][data-x-position="left"]){left:var(--offset-left)}:where([data-sonner-toaster][data-x-position="center"]){left:50%;transform:translate(-50%)}:where([data-sonner-toaster][data-y-position="top"]){top:var(--offset-top)}:where([data-sonner-toaster][data-y-position="bottom"]){bottom:var(--offset-bottom)}:where([data-sonner-toast]){--y: translateY(100%);--lift-amount: calc(var(--lift) * var(--gap));z-index:var(--z-index);position:absolute;opacity:0;transform:var(--y);filter:blur(0);touch-action:none;transition:transform .4s,opacity .4s,height .4s,box-shadow .2s;box-sizing:border-box;outline:none;overflow-wrap:anywhere}:where([data-sonner-toast][data-styled="true"]){padding:16px;background:var(--normal-bg);border:1px solid var(--normal-border);color:var(--normal-text);border-radius:var(--border-radius);box-shadow:0 4px 12px #0000001a;width:var(--width);font-size:13px;display:flex;align-items:center;gap:6px}:where([data-sonner-toast]:focus-visible){box-shadow:0 4px 12px #0000001a,0 0 0 2px #0003}:where([data-sonner-toast][data-y-position="top"]){top:0;--y: translateY(-100%);--lift: 1;--lift-amount: calc(1 * var(--gap))}:where([data-sonner-toast][data-y-position="bottom"]){bottom:0;--y: translateY(100%);--lift: -1;--lift-amount: calc(var(--lift) * var(--gap))}:where([data-sonner-toast]) :where([data-description]){font-weight:400;line-height:1.4;color:inherit}:where([data-sonner-toast]) :where([data-title]){font-weight:500;line-height:1.5;color:inherit}:where([data-sonner-toast]) :where([data-icon]){display:flex;height:16px;width:16px;position:relative;justify-content:flex-start;align-items:center;flex-shrink:0;margin-left:var(--toast-icon-margin-start);margin-right:var(--toast-icon-margin-end)}:where([data-sonner-toast][data-promise="true"]) :where([data-icon])>svg{opacity:0;transform:scale(.8);transform-origin:center;animation:sonner-fade-in .3s ease forwards}:where([data-sonner-toast]) :where([data-icon])>*{flex-shrink:0}:where([data-sonner-toast]) :where([data-icon]) svg{margin-left:var(--toast-svg-margin-start);margin-right:var(--toast-svg-margin-end)}:where([data-sonner-toast]) :where([data-content]){display:flex;flex-direction:column;gap:2px}[data-sonner-toast][data-styled=true] [data-button]{border-radius:4px;padding-left:8px;padding-right:8px;height:24px;font-size:12px;color:var(--normal-bg);background:var(--normal-text);margin-left:var(--toast-button-margin-start);margin-right:var(--toast-button-margin-end);border:none;cursor:pointer;outline:none;display:flex;align-items:center;flex-shrink:0;transition:opacity .4s,box-shadow .2s}:where([data-sonner-toast]) :where([data-button]):focus-visible{box-shadow:0 0 0 2px #0006}:where([data-sonner-toast]) :where([data-button]):first-of-type{margin-left:var(--toast-button-margin-start);margin-right:var(--toast-button-margin-end)}:where([data-sonner-toast]) :where([data-cancel]){color:var(--normal-text);background:rgba(0,0,0,.08)}:where([data-sonner-toast][data-theme="dark"]) :where([data-cancel]){background:rgba(255,255,255,.3)}:where([data-sonner-toast]) :where([data-close-button]){position:absolute;left:var(--toast-close-button-start);right:var(--toast-close-button-end);top:0;height:20px;width:20px;display:flex;justify-content:center;align-items:center;padding:0;color:var(--gray12);border:1px solid var(--gray4);transform:var(--toast-close-button-transform);border-radius:50%;cursor:pointer;z-index:1;transition:opacity .1s,background .2s,border-color .2s}[data-sonner-toast] [data-close-button]{background:var(--gray1)}:where([data-sonner-toast]) :where([data-close-button]):focus-visible{box-shadow:0 4px 12px #0000001a,0 0 0 2px #0003}:where([data-sonner-toast]) :where([data-disabled="true"]){cursor:not-allowed}:where([data-sonner-toast]):hover :where([data-close-button]):hover{background:var(--gray2);border-color:var(--gray5)}:where([data-sonner-toast][data-swiping="true"]):before{content:"";position:absolute;left:-50%;right:-50%;height:100%;z-index:-1}:where([data-sonner-toast][data-y-position="top"][data-swiping="true"]):before{bottom:50%;transform:scaleY(3) translateY(50%)}:where([data-sonner-toast][data-y-position="bottom"][data-swiping="true"]):before{top:50%;transform:scaleY(3) translateY(-50%)}:where([data-sonner-toast][data-swiping="false"][data-removed="true"]):before{content:"";position:absolute;inset:0;transform:scaleY(2)}:where([data-sonner-toast]):after{content:"";position:absolute;left:0;height:calc(var(--gap) + 1px);bottom:100%;width:100%}:where([data-sonner-toast][data-mounted="true"]){--y: translateY(0);opacity:1}:where([data-sonner-toast][data-expanded="false"][data-front="false"]){--scale: var(--toasts-before) * .05 + 1;--y: translateY(calc(var(--lift-amount) * var(--toasts-before))) scale(calc(-1 * var(--scale)));height:var(--front-toast-height)}:where([data-sonner-toast])>*{transition:opacity .4s}:where([data-sonner-toast][data-expanded="false"][data-front="false"][data-styled="true"])>*{opacity:0}:where([data-sonner-toast][data-visible="false"]){opacity:0;pointer-events:none}:where([data-sonner-toast][data-mounted="true"][data-expanded="true"]){--y: translateY(calc(var(--lift) * var(--offset)));height:var(--initial-height)}:where([data-sonner-toast][data-removed="true"][data-front="true"][data-swipe-out="false"]){--y: translateY(calc(var(--lift) * -100%));opacity:0}:where([data-sonner-toast][data-removed="true"][data-front="false"][data-swipe-out="false"][data-expanded="true"]){--y: translateY(calc(var(--lift) * var(--offset) + var(--lift) * -100%));opacity:0}:where([data-sonner-toast][data-removed="true"][data-front="false"][data-swipe-out="false"][data-expanded="false"]){--y: translateY(40%);opacity:0;transition:transform .5s,opacity .2s}:where([data-sonner-toast][data-removed="true"][data-front="false"]):before{height:calc(var(--initial-height) + 20%)}[data-sonner-toast][data-swiping=true]{transform:var(--y) translateY(var(--swipe-amount-y, 0px)) translate(var(--swipe-amount-x, 0px));transition:none}[data-sonner-toast][data-swiped=true]{user-select:none}[data-sonner-toast][data-swipe-out=true][data-y-position=bottom],[data-sonner-toast][data-swipe-out=true][data-y-position=top]{animation-duration:.2s;animation-timing-function:ease-out;animation-fill-mode:forwards}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=left]{animation-name:swipe-out-left}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=right]{animation-name:swipe-out-right}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=up]{animation-name:swipe-out-up}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=down]{animation-name:swipe-out-down}@keyframes swipe-out-left{0%{transform:var(--y) translate(var(--swipe-amount-x));opacity:1}to{transform:var(--y) translate(calc(var(--swipe-amount-x) - 100%));opacity:0}}@keyframes swipe-out-right{0%{transform:var(--y) translate(var(--swipe-amount-x));opacity:1}to{transform:var(--y) translate(calc(var(--swipe-amount-x) + 100%));opacity:0}}@keyframes swipe-out-up{0%{transform:var(--y) translateY(var(--swipe-amount-y));opacity:1}to{transform:var(--y) translateY(calc(var(--swipe-amount-y) - 100%));opacity:0}}@keyframes swipe-out-down{0%{transform:var(--y) translateY(var(--swipe-amount-y));opacity:1}to{transform:var(--y) translateY(calc(var(--swipe-amount-y) + 100%));opacity:0}}@media (max-width: 600px){[data-sonner-toaster]{position:fixed;right:var(--mobile-offset-right);left:var(--mobile-offset-left);width:100%}[data-sonner-toaster][dir=rtl]{left:calc(var(--mobile-offset-left) * -1)}[data-sonner-toaster] [data-sonner-toast]{left:0;right:0;width:calc(100% - var(--mobile-offset-left) * 2)}[data-sonner-toaster][data-x-position=left]{left:var(--mobile-offset-left)}[data-sonner-toaster][data-y-position=bottom]{bottom:var(--mobile-offset-bottom)}[data-sonner-toaster][data-y-position=top]{top:var(--mobile-offset-top)}[data-sonner-toaster][data-x-position=center]{left:var(--mobile-offset-left);right:var(--mobile-offset-right);transform:none}}[data-sonner-toaster][data-theme=light]{--normal-bg: #fff;--normal-border: var(--gray4);--normal-text: var(--gray12);--success-bg: hsl(143, 85%, 96%);--success-border: hsl(145, 92%, 91%);--success-text: hsl(140, 100%, 27%);--info-bg: hsl(208, 100%, 97%);--info-border: hsl(221, 91%, 91%);--info-text: hsl(210, 92%, 45%);--warning-bg: hsl(49, 100%, 97%);--warning-border: hsl(49, 91%, 91%);--warning-text: hsl(31, 92%, 45%);--error-bg: hsl(359, 100%, 97%);--error-border: hsl(359, 100%, 94%);--error-text: hsl(360, 100%, 45%)}[data-sonner-toaster][data-theme=light] [data-sonner-toast][data-invert=true]{--normal-bg: #000;--normal-border: hsl(0, 0%, 20%);--normal-text: var(--gray1)}[data-sonner-toaster][data-theme=dark] [data-sonner-toast][data-invert=true]{--normal-bg: #fff;--normal-border: var(--gray3);--normal-text: var(--gray12)}[data-sonner-toaster][data-theme=dark]{--normal-bg: #000;--normal-bg-hover: hsl(0, 0%, 12%);--normal-border: hsl(0, 0%, 20%);--normal-border-hover: hsl(0, 0%, 25%);--normal-text: var(--gray1);--success-bg: hsl(150, 100%, 6%);--success-border: hsl(147, 100%, 12%);--success-text: hsl(150, 86%, 65%);--info-bg: hsl(215, 100%, 6%);--info-border: hsl(223, 100%, 12%);--info-text: hsl(216, 87%, 65%);--warning-bg: hsl(64, 100%, 6%);--warning-border: hsl(60, 100%, 12%);--warning-text: hsl(46, 87%, 65%);--error-bg: hsl(358, 76%, 10%);--error-border: hsl(357, 89%, 16%);--error-text: hsl(358, 100%, 81%)}[data-sonner-toaster][data-theme=dark] [data-sonner-toast] [data-close-button]{background:var(--normal-bg);border-color:var(--normal-border);color:var(--normal-text)}[data-sonner-toaster][data-theme=dark] [data-sonner-toast] [data-close-button]:hover{background:var(--normal-bg-hover);border-color:var(--normal-border-hover)}[data-rich-colors=true][data-sonner-toast][data-type=success],[data-rich-colors=true][data-sonner-toast][data-type=success] [data-close-button]{background:var(--success-bg);border-color:var(--success-border);color:var(--success-text)}[data-rich-colors=true][data-sonner-toast][data-type=info],[data-rich-colors=true][data-sonner-toast][data-type=info] [data-close-button]{background:var(--info-bg);border-color:var(--info-border);color:var(--info-text)}[data-rich-colors=true][data-sonner-toast][data-type=warning],[data-rich-colors=true][data-sonner-toast][data-type=warning] [data-close-button]{background:var(--warning-bg);border-color:var(--warning-border);color:var(--warning-text)}[data-rich-colors=true][data-sonner-toast][data-type=error],[data-rich-colors=true][data-sonner-toast][data-type=error] [data-close-button]{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text)}.sonner-loading-wrapper{--size: 16px;height:var(--size);width:var(--size);position:absolute;inset:0;z-index:10}.sonner-loading-wrapper[data-visible=false]{transform-origin:center;animation:sonner-fade-out .2s ease forwards}.sonner-spinner{position:relative;top:50%;left:50%;height:var(--size);width:var(--size)}.sonner-loading-bar{animation:sonner-spin 1.2s linear infinite;background:var(--gray11);border-radius:6px;height:8%;left:-10%;position:absolute;top:-3.9%;width:24%}.sonner-loading-bar:nth-child(1){animation-delay:-1.2s;transform:rotate(.0001deg) translate(146%)}.sonner-loading-bar:nth-child(2){animation-delay:-1.1s;transform:rotate(30deg) translate(146%)}.sonner-loading-bar:nth-child(3){animation-delay:-1s;transform:rotate(60deg) translate(146%)}.sonner-loading-bar:nth-child(4){animation-delay:-.9s;transform:rotate(90deg) translate(146%)}.sonner-loading-bar:nth-child(5){animation-delay:-.8s;transform:rotate(120deg) translate(146%)}.sonner-loading-bar:nth-child(6){animation-delay:-.7s;transform:rotate(150deg) translate(146%)}.sonner-loading-bar:nth-child(7){animation-delay:-.6s;transform:rotate(180deg) translate(146%)}.sonner-loading-bar:nth-child(8){animation-delay:-.5s;transform:rotate(210deg) translate(146%)}.sonner-loading-bar:nth-child(9){animation-delay:-.4s;transform:rotate(240deg) translate(146%)}.sonner-loading-bar:nth-child(10){animation-delay:-.3s;transform:rotate(270deg) translate(146%)}.sonner-loading-bar:nth-child(11){animation-delay:-.2s;transform:rotate(300deg) translate(146%)}.sonner-loading-bar:nth-child(12){animation-delay:-.1s;transform:rotate(330deg) translate(146%)}@keyframes sonner-fade-in{0%{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}@keyframes sonner-fade-out{0%{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(.8)}}@keyframes sonner-spin{0%{opacity:1}to{opacity:.15}}@media (prefers-reduced-motion){[data-sonner-toast],[data-sonner-toast]>*,.sonner-loading-bar{transition:none!important;animation:none!important}}.sonner-loader{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);transform-origin:center;transition:opacity .2s,transform .2s}.sonner-loader[data-visible=false]{opacity:0;transform:scale(.8) translate(-50%,-50%)}
+`);
+function tt(n) {
+  return n.label !== void 0;
+}
+var pe = 3;
+var me = "32px";
+var ge = "16px";
+var Wt = 4e3;
+var he = 356;
+var be = 14;
+var ye = 20;
+var we = 200;
+function M(...n) {
+  return n.filter(Boolean).join(" ");
+}
+function xe(n) {
+  let [e, t] = n.split("-"), a = [];
+  return e && a.push(e), t && a.push(t), a;
+}
+var ve = (n) => {
+  var Dt, Pt, Nt, Bt, Ct, kt, It, Mt, Ht, At, Lt;
+  let { invert: e, toast: t, unstyled: a, interacting: u3, setHeights: f, visibleToasts: w2, heights: S, index: g2, toasts: i, expanded: D2, removeToast: T2, defaultRichColors: F2, closeButton: et2, style: ut, cancelButtonStyle: ft, actionButtonStyle: l, className: ot = "", descriptionClassName: at2 = "", duration: X3, position: st, gap: pt, loadingIcon: rt, expandByDefault: B2, classNames: s, icons: P2, closeButtonAriaLabel: nt2 = "Close toast", pauseWhenPageIsHidden: it } = n, [Y, C2] = import_react.default.useState(null), [lt, J2] = import_react.default.useState(null), [W2, H2] = import_react.default.useState(false), [A, mt] = import_react.default.useState(false), [L2, z2] = import_react.default.useState(false), [ct, d] = import_react.default.useState(false), [h, y2] = import_react.default.useState(false), [R, j2] = import_react.default.useState(0), [p, _2] = import_react.default.useState(0), O2 = import_react.default.useRef(t.duration || X3 || Wt), G2 = import_react.default.useRef(null), k2 = import_react.default.useRef(null), Vt = g2 === 0, Ut2 = g2 + 1 <= w2, N2 = t.type, V2 = t.dismissible !== false, Kt2 = t.className || "", Xt2 = t.descriptionClassName || "", dt = import_react.default.useMemo(() => S.findIndex((r2) => r2.toastId === t.id) || 0, [S, t.id]), Jt2 = import_react.default.useMemo(() => {
+    var r2;
+    return (r2 = t.closeButton) != null ? r2 : et2;
+  }, [t.closeButton, et2]), Tt = import_react.default.useMemo(() => t.duration || X3 || Wt, [t.duration, X3]), gt = import_react.default.useRef(0), U2 = import_react.default.useRef(0), St = import_react.default.useRef(0), K2 = import_react.default.useRef(null), [Gt, Qt2] = st.split("-"), Rt = import_react.default.useMemo(() => S.reduce((r2, m2, c) => c >= dt ? r2 : r2 + m2.height, 0), [S, dt]), Et = Ft(), qt = t.invert || e, ht = N2 === "loading";
+  U2.current = import_react.default.useMemo(() => dt * pt + Rt, [dt, Rt]), import_react.default.useEffect(() => {
+    O2.current = Tt;
+  }, [Tt]), import_react.default.useEffect(() => {
+    H2(true);
+  }, []), import_react.default.useEffect(() => {
+    let r2 = k2.current;
+    if (r2) {
+      let m2 = r2.getBoundingClientRect().height;
+      return _2(m2), f((c) => [{ toastId: t.id, height: m2, position: t.position }, ...c]), () => f((c) => c.filter((b2) => b2.toastId !== t.id));
+    }
+  }, [f, t.id]), import_react.default.useLayoutEffect(() => {
+    if (!W2) return;
+    let r2 = k2.current, m2 = r2.style.height;
+    r2.style.height = "auto";
+    let c = r2.getBoundingClientRect().height;
+    r2.style.height = m2, _2(c), f((b2) => b2.find((x2) => x2.toastId === t.id) ? b2.map((x2) => x2.toastId === t.id ? { ...x2, height: c } : x2) : [{ toastId: t.id, height: c, position: t.position }, ...b2]);
+  }, [W2, t.title, t.description, f, t.id]);
+  let $2 = import_react.default.useCallback(() => {
+    mt(true), j2(U2.current), f((r2) => r2.filter((m2) => m2.toastId !== t.id)), setTimeout(() => {
+      T2(t);
+    }, we);
+  }, [t, T2, f, U2]);
+  import_react.default.useEffect(() => {
+    if (t.promise && N2 === "loading" || t.duration === 1 / 0 || t.type === "loading") return;
+    let r2;
+    return D2 || u3 || it && Et ? (() => {
+      if (St.current < gt.current) {
+        let b2 = (/* @__PURE__ */ new Date()).getTime() - gt.current;
+        O2.current = O2.current - b2;
+      }
+      St.current = (/* @__PURE__ */ new Date()).getTime();
+    })() : (() => {
+      O2.current !== 1 / 0 && (gt.current = (/* @__PURE__ */ new Date()).getTime(), r2 = setTimeout(() => {
+        var b2;
+        (b2 = t.onAutoClose) == null || b2.call(t, t), $2();
+      }, O2.current));
+    })(), () => clearTimeout(r2);
+  }, [D2, u3, t, N2, it, Et, $2]), import_react.default.useEffect(() => {
+    t.delete && $2();
+  }, [$2, t.delete]);
+  function Zt() {
+    var r2, m2, c;
+    return P2 != null && P2.loading ? import_react.default.createElement("div", { className: M(s == null ? void 0 : s.loader, (r2 = t == null ? void 0 : t.classNames) == null ? void 0 : r2.loader, "sonner-loader"), "data-visible": N2 === "loading" }, P2.loading) : rt ? import_react.default.createElement("div", { className: M(s == null ? void 0 : s.loader, (m2 = t == null ? void 0 : t.classNames) == null ? void 0 : m2.loader, "sonner-loader"), "data-visible": N2 === "loading" }, rt) : import_react.default.createElement(Yt, { className: M(s == null ? void 0 : s.loader, (c = t == null ? void 0 : t.classNames) == null ? void 0 : c.loader), visible: N2 === "loading" });
+  }
+  return import_react.default.createElement("li", { tabIndex: 0, ref: k2, className: M(ot, Kt2, s == null ? void 0 : s.toast, (Dt = t == null ? void 0 : t.classNames) == null ? void 0 : Dt.toast, s == null ? void 0 : s.default, s == null ? void 0 : s[N2], (Pt = t == null ? void 0 : t.classNames) == null ? void 0 : Pt[N2]), "data-sonner-toast": "", "data-rich-colors": (Nt = t.richColors) != null ? Nt : F2, "data-styled": !(t.jsx || t.unstyled || a), "data-mounted": W2, "data-promise": !!t.promise, "data-swiped": h, "data-removed": A, "data-visible": Ut2, "data-y-position": Gt, "data-x-position": Qt2, "data-index": g2, "data-front": Vt, "data-swiping": L2, "data-dismissible": V2, "data-type": N2, "data-invert": qt, "data-swipe-out": ct, "data-swipe-direction": lt, "data-expanded": !!(D2 || B2 && W2), style: { "--index": g2, "--toasts-before": g2, "--z-index": i.length - g2, "--offset": `${A ? R : U2.current}px`, "--initial-height": B2 ? "auto" : `${p}px`, ...ut, ...t.style }, onDragEnd: () => {
+    z2(false), C2(null), K2.current = null;
+  }, onPointerDown: (r2) => {
+    ht || !V2 || (G2.current = /* @__PURE__ */ new Date(), j2(U2.current), r2.target.setPointerCapture(r2.pointerId), r2.target.tagName !== "BUTTON" && (z2(true), K2.current = { x: r2.clientX, y: r2.clientY }));
+  }, onPointerUp: () => {
+    var x2, Q2, q2, Z;
+    if (ct || !V2) return;
+    K2.current = null;
+    let r2 = Number(((x2 = k2.current) == null ? void 0 : x2.style.getPropertyValue("--swipe-amount-x").replace("px", "")) || 0), m2 = Number(((Q2 = k2.current) == null ? void 0 : Q2.style.getPropertyValue("--swipe-amount-y").replace("px", "")) || 0), c = (/* @__PURE__ */ new Date()).getTime() - ((q2 = G2.current) == null ? void 0 : q2.getTime()), b2 = Y === "x" ? r2 : m2, I2 = Math.abs(b2) / c;
+    if (Math.abs(b2) >= ye || I2 > 0.11) {
+      j2(U2.current), (Z = t.onDismiss) == null || Z.call(t, t), J2(Y === "x" ? r2 > 0 ? "right" : "left" : m2 > 0 ? "down" : "up"), $2(), d(true), y2(false);
+      return;
+    }
+    z2(false), C2(null);
+  }, onPointerMove: (r2) => {
+    var Q2, q2, Z, zt;
+    if (!K2.current || !V2 || ((Q2 = window.getSelection()) == null ? void 0 : Q2.toString().length) > 0) return;
+    let c = r2.clientY - K2.current.y, b2 = r2.clientX - K2.current.x, I2 = (q2 = n.swipeDirections) != null ? q2 : xe(st);
+    !Y && (Math.abs(b2) > 1 || Math.abs(c) > 1) && C2(Math.abs(b2) > Math.abs(c) ? "x" : "y");
+    let x2 = { x: 0, y: 0 };
+    Y === "y" ? (I2.includes("top") || I2.includes("bottom")) && (I2.includes("top") && c < 0 || I2.includes("bottom") && c > 0) && (x2.y = c) : Y === "x" && (I2.includes("left") || I2.includes("right")) && (I2.includes("left") && b2 < 0 || I2.includes("right") && b2 > 0) && (x2.x = b2), (Math.abs(x2.x) > 0 || Math.abs(x2.y) > 0) && y2(true), (Z = k2.current) == null || Z.style.setProperty("--swipe-amount-x", `${x2.x}px`), (zt = k2.current) == null || zt.style.setProperty("--swipe-amount-y", `${x2.y}px`);
+  } }, Jt2 && !t.jsx ? import_react.default.createElement("button", { "aria-label": nt2, "data-disabled": ht, "data-close-button": true, onClick: ht || !V2 ? () => {
+  } : () => {
+    var r2;
+    $2(), (r2 = t.onDismiss) == null || r2.call(t, t);
+  }, className: M(s == null ? void 0 : s.closeButton, (Bt = t == null ? void 0 : t.classNames) == null ? void 0 : Bt.closeButton) }, (Ct = P2 == null ? void 0 : P2.close) != null ? Ct : Ot) : null, t.jsx || (0, import_react.isValidElement)(t.title) ? t.jsx ? t.jsx : typeof t.title == "function" ? t.title() : t.title : import_react.default.createElement(import_react.default.Fragment, null, N2 || t.icon || t.promise ? import_react.default.createElement("div", { "data-icon": "", className: M(s == null ? void 0 : s.icon, (kt = t == null ? void 0 : t.classNames) == null ? void 0 : kt.icon) }, t.promise || t.type === "loading" && !t.icon ? t.icon || Zt() : null, t.type !== "loading" ? t.icon || (P2 == null ? void 0 : P2[N2]) || jt(N2) : null) : null, import_react.default.createElement("div", { "data-content": "", className: M(s == null ? void 0 : s.content, (It = t == null ? void 0 : t.classNames) == null ? void 0 : It.content) }, import_react.default.createElement("div", { "data-title": "", className: M(s == null ? void 0 : s.title, (Mt = t == null ? void 0 : t.classNames) == null ? void 0 : Mt.title) }, typeof t.title == "function" ? t.title() : t.title), t.description ? import_react.default.createElement("div", { "data-description": "", className: M(at2, Xt2, s == null ? void 0 : s.description, (Ht = t == null ? void 0 : t.classNames) == null ? void 0 : Ht.description) }, typeof t.description == "function" ? t.description() : t.description) : null), (0, import_react.isValidElement)(t.cancel) ? t.cancel : t.cancel && tt(t.cancel) ? import_react.default.createElement("button", { "data-button": true, "data-cancel": true, style: t.cancelButtonStyle || ft, onClick: (r2) => {
+    var m2, c;
+    tt(t.cancel) && V2 && ((c = (m2 = t.cancel).onClick) == null || c.call(m2, r2), $2());
+  }, className: M(s == null ? void 0 : s.cancelButton, (At = t == null ? void 0 : t.classNames) == null ? void 0 : At.cancelButton) }, t.cancel.label) : null, (0, import_react.isValidElement)(t.action) ? t.action : t.action && tt(t.action) ? import_react.default.createElement("button", { "data-button": true, "data-action": true, style: t.actionButtonStyle || l, onClick: (r2) => {
+    var m2, c;
+    tt(t.action) && ((c = (m2 = t.action).onClick) == null || c.call(m2, r2), !r2.defaultPrevented && $2());
+  }, className: M(s == null ? void 0 : s.actionButton, (Lt = t == null ? void 0 : t.classNames) == null ? void 0 : Lt.actionButton) }, t.action.label) : null));
+};
+function _t() {
+  if (typeof window == "undefined" || typeof document == "undefined") return "ltr";
+  let n = document.documentElement.getAttribute("dir");
+  return n === "auto" || !n ? window.getComputedStyle(document.documentElement).direction : n;
+}
+function Te(n, e) {
+  let t = {};
+  return [n, e].forEach((a, u3) => {
+    let f = u3 === 1, w2 = f ? "--mobile-offset" : "--offset", S = f ? ge : me;
+    function g2(i) {
+      ["top", "right", "bottom", "left"].forEach((D2) => {
+        t[`${w2}-${D2}`] = typeof i == "number" ? `${i}px` : i;
+      });
+    }
+    typeof a == "number" || typeof a == "string" ? g2(a) : typeof a == "object" ? ["top", "right", "bottom", "left"].forEach((i) => {
+      a[i] === void 0 ? t[`${w2}-${i}`] = S : t[`${w2}-${i}`] = typeof a[i] == "number" ? `${a[i]}px` : a[i];
+    }) : g2(S);
+  }), t;
+}
+var $e = (0, import_react.forwardRef)(function(e, t) {
+  let { invert: a, position: u3 = "bottom-right", hotkey: f = ["altKey", "KeyT"], expand: w2, closeButton: S, className: g2, offset: i, mobileOffset: D2, theme: T2 = "light", richColors: F2, duration: et2, style: ut, visibleToasts: ft = pe, toastOptions: l, dir: ot = _t(), gap: at2 = be, loadingIcon: X3, icons: st, containerAriaLabel: pt = "Notifications", pauseWhenPageIsHidden: rt } = e, [B2, s] = import_react.default.useState([]), P2 = import_react.default.useMemo(() => Array.from(new Set([u3].concat(B2.filter((d) => d.position).map((d) => d.position)))), [B2, u3]), [nt2, it] = import_react.default.useState([]), [Y, C2] = import_react.default.useState(false), [lt, J2] = import_react.default.useState(false), [W2, H2] = import_react.default.useState(T2 !== "system" ? T2 : typeof window != "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"), A = import_react.default.useRef(null), mt = f.join("+").replace(/Key/g, "").replace(/Digit/g, ""), L2 = import_react.default.useRef(null), z2 = import_react.default.useRef(false), ct = import_react.default.useCallback((d) => {
+    s((h) => {
+      var y2;
+      return (y2 = h.find((R) => R.id === d.id)) != null && y2.delete || v.dismiss(d.id), h.filter(({ id: R }) => R !== d.id);
+    });
+  }, []);
+  return import_react.default.useEffect(() => v.subscribe((d) => {
+    if (d.dismiss) {
+      s((h) => h.map((y2) => y2.id === d.id ? { ...y2, delete: true } : y2));
+      return;
+    }
+    setTimeout(() => {
+      import_react_dom.default.flushSync(() => {
+        s((h) => {
+          let y2 = h.findIndex((R) => R.id === d.id);
+          return y2 !== -1 ? [...h.slice(0, y2), { ...h[y2], ...d }, ...h.slice(y2 + 1)] : [d, ...h];
+        });
+      });
+    });
+  }), []), import_react.default.useEffect(() => {
+    if (T2 !== "system") {
+      H2(T2);
+      return;
+    }
+    if (T2 === "system" && (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? H2("dark") : H2("light")), typeof window == "undefined") return;
+    let d = window.matchMedia("(prefers-color-scheme: dark)");
+    try {
+      d.addEventListener("change", ({ matches: h }) => {
+        H2(h ? "dark" : "light");
+      });
+    } catch (h) {
+      d.addListener(({ matches: y2 }) => {
+        try {
+          H2(y2 ? "dark" : "light");
+        } catch (R) {
+          console.error(R);
+        }
+      });
+    }
+  }, [T2]), import_react.default.useEffect(() => {
+    B2.length <= 1 && C2(false);
+  }, [B2]), import_react.default.useEffect(() => {
+    let d = (h) => {
+      var R, j2;
+      f.every((p) => h[p] || h.code === p) && (C2(true), (R = A.current) == null || R.focus()), h.code === "Escape" && (document.activeElement === A.current || (j2 = A.current) != null && j2.contains(document.activeElement)) && C2(false);
+    };
+    return document.addEventListener("keydown", d), () => document.removeEventListener("keydown", d);
+  }, [f]), import_react.default.useEffect(() => {
+    if (A.current) return () => {
+      L2.current && (L2.current.focus({ preventScroll: true }), L2.current = null, z2.current = false);
+    };
+  }, [A.current]), import_react.default.createElement("section", { ref: t, "aria-label": `${pt} ${mt}`, tabIndex: -1, "aria-live": "polite", "aria-relevant": "additions text", "aria-atomic": "false", suppressHydrationWarning: true }, P2.map((d, h) => {
+    var j2;
+    let [y2, R] = d.split("-");
+    return B2.length ? import_react.default.createElement("ol", { key: d, dir: ot === "auto" ? _t() : ot, tabIndex: -1, ref: A, className: g2, "data-sonner-toaster": true, "data-theme": W2, "data-y-position": y2, "data-lifted": Y && B2.length > 1 && !w2, "data-x-position": R, style: { "--front-toast-height": `${((j2 = nt2[0]) == null ? void 0 : j2.height) || 0}px`, "--width": `${he}px`, "--gap": `${at2}px`, ...ut, ...Te(i, D2) }, onBlur: (p) => {
+      z2.current && !p.currentTarget.contains(p.relatedTarget) && (z2.current = false, L2.current && (L2.current.focus({ preventScroll: true }), L2.current = null));
+    }, onFocus: (p) => {
+      p.target instanceof HTMLElement && p.target.dataset.dismissible === "false" || z2.current || (z2.current = true, L2.current = p.relatedTarget);
+    }, onMouseEnter: () => C2(true), onMouseMove: () => C2(true), onMouseLeave: () => {
+      lt || C2(false);
+    }, onDragEnd: () => C2(false), onPointerDown: (p) => {
+      p.target instanceof HTMLElement && p.target.dataset.dismissible === "false" || J2(true);
+    }, onPointerUp: () => J2(false) }, B2.filter((p) => !p.position && h === 0 || p.position === d).map((p, _2) => {
+      var O2, G2;
+      return import_react.default.createElement(ve, { key: p.id, icons: st, index: _2, toast: p, defaultRichColors: F2, duration: (O2 = l == null ? void 0 : l.duration) != null ? O2 : et2, className: l == null ? void 0 : l.className, descriptionClassName: l == null ? void 0 : l.descriptionClassName, invert: a, visibleToasts: ft, closeButton: (G2 = l == null ? void 0 : l.closeButton) != null ? G2 : S, interacting: lt, position: d, style: l == null ? void 0 : l.style, unstyled: l == null ? void 0 : l.unstyled, classNames: l == null ? void 0 : l.classNames, cancelButtonStyle: l == null ? void 0 : l.cancelButtonStyle, actionButtonStyle: l == null ? void 0 : l.actionButtonStyle, removeToast: ct, toasts: B2.filter((k2) => k2.position == p.position), heights: nt2.filter((k2) => k2.position == p.position), setHeights: it, expandByDefault: w2, gap: at2, loadingIcon: X3, expanded: Y, pauseWhenPageIsHidden: rt, swipeDirections: e.swipeDirections });
+    })) : null;
+  }));
+});
 
 // standalone/maho_ai.mojom-webui.js
 var API_PREFIX = "/api";
@@ -21744,6 +22053,38 @@ function readString(value, fallback = "") {
 }
 function readNullableString(value) {
   return typeof value === "string" ? value : null;
+}
+function approvalPolicyFromPayload(value) {
+  switch (readString(value, "prompt").replaceAll("-", "_")) {
+    case "allow_all":
+    case "allow":
+      return ApprovalPolicy.kAllowAll;
+    case "allow_mcp":
+      return ApprovalPolicy.kAllowMcp;
+    case "deny_sensitive":
+      return ApprovalPolicy.kDenySensitive;
+    case "deny_all":
+    case "deny":
+      return ApprovalPolicy.kDenyAll;
+    case "prompt":
+    default:
+      return ApprovalPolicy.kPrompt;
+  }
+}
+function approvalSensitivityFromPayload(value) {
+  return readString(value) === "read_only" ? ApprovalSensitivity.kReadOnly : ApprovalSensitivity.kSensitive;
+}
+function approvalDecisionFromReply(reply) {
+  if (reply === "always" || reply === "allow") {
+    return ApprovalDecision.kAllow;
+  }
+  if (reply === "once" || reply === "yes" || reply === "approve") {
+    return ApprovalDecision.kAllowOnce;
+  }
+  return ApprovalDecision.kDeny;
+}
+function approvalStateFromReply(approved) {
+  return approved ? ApprovalState.kApproved : ApprovalState.kDenied;
 }
 function readNumber(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -21783,6 +22124,13 @@ var ListenerList = class {
 var InteractionMode = {
   kAssistant: 0,
   kDeveloper: 1
+};
+var ContextSourceKind = {
+  kCurrentPage: 0,
+  kOpenTab: 1,
+  kHistory: 2,
+  kBookmark: 3,
+  kFile: 4
 };
 var ViewMode = {
   kSidebar: 0,
@@ -21824,6 +22172,29 @@ var ToolCallStatus = {
   kCompleted: 2,
   kFailed: 3,
   kCancelled: 4
+};
+var ApprovalPolicy = {
+  kPrompt: 0,
+  kAllowAll: 1,
+  kAllowMcp: 2,
+  kDenySensitive: 3,
+  kDenyAll: 4
+};
+var ApprovalSensitivity = {
+  kReadOnly: 0,
+  kSensitive: 1
+};
+var ApprovalState = {
+  kPending: 0,
+  kApproved: 1,
+  kDenied: 2,
+  kCancelled: 3
+};
+var ApprovalDecision = {
+  kNone: 0,
+  kAllow: 1,
+  kAllowOnce: 2,
+  kDeny: 3
 };
 var SessionStatus = {
   kCreated: 0,
@@ -21876,6 +22247,8 @@ var PageCallbackRouter = class {
     this.onRuntimeEvent = new ListenerList();
     this.onConnectionStateChanged = new ListenerList();
     this.onSessionUpdated = new ListenerList();
+    this.onAISettingsChanged = new ListenerList();
+    this.onAskMahoSessionAccepted = new ListenerList();
   }
 };
 var PageHandlerFactory = class {
@@ -21978,6 +22351,15 @@ var PageHandlerRemote = class {
       totalCount: events.length
     };
   }
+  async getOpenTabs() {
+    return { tabs: [] };
+  }
+  async searchHistory(query, maxResults) {
+    return { items: [] };
+  }
+  async searchBookmarks(query, maxResults) {
+    return { items: [] };
+  }
   async submitPrompt(sessionId, prompt, attachBrowserContext, mode) {
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
@@ -22061,6 +22443,10 @@ var PageHandlerRemote = class {
   }
   async openSettings() {
     window.open("chrome://maho-settings/", "_blank");
+  }
+  async openSettingsPane(paneKey) {
+    const safePane = paneKey === "maho-ai-developers" ? paneKey : "maho-ai";
+    window.open(`chrome://maho-settings/?pane=${safePane}`, "_blank");
   }
   async getViewMode() {
     return { mode: ViewMode.kSidebar };
@@ -22236,11 +22622,15 @@ var PageHandlerRemote = class {
         this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalRequest, {
           approvalRequest: {
             approvalId,
+            approvalPolicy: approvalPolicyFromPayload(payload.approval_policy || payload.approvalPolicy),
             description: readString(
               payload.description || payload.title || payload.method,
               "Approval required"
             ),
-            relatedToolCall: toolCall
+            pageDerivedJustification: Boolean(payload.page_derived_justification || payload.pageDerivedJustification),
+            relatedToolCall: toolCall ? { ...toolCall, argumentsJson: "" } : null,
+            sensitivity: approvalSensitivityFromPayload(payload.sensitivity),
+            state: ApprovalState.kPending
           }
         });
         this.upsertSession(sessionId, {
@@ -22255,11 +22645,17 @@ var PageHandlerRemote = class {
       }
       case "permission.replied": {
         const reply = readString(payload.reply);
+        const approved = reply === "once" || reply === "always" || reply === "yes" || reply === "approve";
         this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalResult, {
           approvalResult: {
             approvalId: readString(payload.requestID || payload.requestId || payload.id),
-            approved: reply === "once" || reply === "always" || reply === "yes" || reply === "approve",
-            reason: readNullableString(payload.reason)
+            approvalPolicy: approvalPolicyFromPayload(payload.approval_policy || payload.approvalPolicy),
+            approved,
+            decision: approvalDecisionFromReply(reply),
+            pageDerivedJustification: Boolean(payload.page_derived_justification || payload.pageDerivedJustification),
+            reason: readNullableString(payload.reason),
+            sensitivity: approvalSensitivityFromPayload(payload.sensitivity),
+            state: approvalStateFromReply(approved)
           }
         });
         this.upsertSession(sessionId, {
@@ -22418,10 +22814,282 @@ var PageHandlerRemote = class {
 };
 
 // types.ts
+var DEFAULT_BOOKMARKS_SEARCH_STATE = {
+  query: "",
+  items: [],
+  loading: false,
+  error: null
+};
+var CURRENT_PAGE_ATTACHMENT = {
+  id: "currentPage",
+  kind: "currentPage",
+  label: "Current page"
+};
+var DEFAULT_OPEN_TABS_STATE = {
+  items: [],
+  loading: false,
+  loaded: false,
+  error: null
+};
+var DEFAULT_HISTORY_SEARCH_STATE = {
+  query: "",
+  items: [],
+  loading: false,
+  error: null
+};
+function hasCurrentPageAttachment(attachments) {
+  return attachments.some((a) => a.id === "currentPage");
+}
+function isTabAttachment(attachment) {
+  return attachment.kind === "tab";
+}
+function isHistoryAttachment(attachment) {
+  return attachment.kind === "history";
+}
+function getFileAttachmentId(file) {
+  return `file:${file.name}:${file.size}:${file.lastModified}`;
+}
+function inferMimeType(file) {
+  const trimmedType = file.type.trim();
+  if (trimmedType) {
+    return trimmedType;
+  }
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "pdf":
+      return "application/pdf";
+    default:
+      return "application/octet-stream";
+  }
+}
+function ensureSupportedFile(file, mimeType) {
+  const lowerName = file.name.trim().toLowerCase();
+  if (mimeType === "image/svg+xml" || lowerName.endsWith(".svg")) {
+    throw new Error("SVG attachments are not supported. Please upload a PNG, JPEG, WebP, GIF, PDF, or text file instead.");
+  }
+}
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 32768;
+  for (let offset4 = 0; offset4 < bytes.length; offset4 += chunkSize) {
+    const chunk = bytes.subarray(offset4, offset4 + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+function dataUrlToByteArray(dataUrl) {
+  if (!dataUrl) {
+    return [];
+  }
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex < 0) {
+    return [];
+  }
+  try {
+    const decoded = atob(dataUrl.slice(commaIndex + 1));
+    return Array.from(decoded, (char) => char.charCodeAt(0));
+  } catch {
+    return [];
+  }
+}
+async function readFileBytes(file) {
+  if (typeof file.arrayBuffer === "function") {
+    return new Uint8Array(await file.arrayBuffer());
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Failed to read file attachment."));
+    reader.onload = () => {
+      const result = reader.result;
+      if (!(result instanceof ArrayBuffer)) {
+        reject(new Error("Failed to read file attachment."));
+        return;
+      }
+      resolve(new Uint8Array(result));
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+async function createFileAttachment(file) {
+  const mimeType = inferMimeType(file);
+  ensureSupportedFile(file, mimeType);
+  const bytes = await readFileBytes(file);
+  const dataUrl = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
+  return {
+    dataUrl,
+    detail: `${mimeType} \xB7 ${bytes.length} byte${bytes.length === 1 ? "" : "s"}`,
+    id: getFileAttachmentId(file),
+    kind: "file",
+    label: file.name,
+    mimeType,
+    size: bytes.length
+  };
+}
+function getTabAttachmentId(tabId) {
+  return `tab:${tabId}`;
+}
+function redactUrlForDisplay(url) {
+  const trimmed = url?.trim() || "";
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    const queryIndex = trimmed.indexOf("?");
+    const hashIndex = trimmed.indexOf("#");
+    const cutoff = [queryIndex, hashIndex].filter((index2) => index2 >= 0).reduce((smallest, index2) => Math.min(smallest, index2), trimmed.length);
+    return trimmed.slice(0, cutoff);
+  }
+}
+function getOpenTabTitle(tab) {
+  return tab.title.trim() || redactUrlForDisplay(tab.url) || `Tab ${tab.index + 1}`;
+}
+function getOpenTabDetail(tab) {
+  return redactUrlForDisplay(tab.url) || (tab.isActive ? "Active tab" : `Tab ${tab.index + 1}`);
+}
+function createTabAttachment(tab) {
+  return {
+    id: getTabAttachmentId(tab.tabId),
+    kind: "tab",
+    label: getOpenTabTitle(tab),
+    detail: getOpenTabDetail(tab),
+    tabId: tab.tabId,
+    url: tab.url
+  };
+}
+function getHistoryAttachmentId(url) {
+  return `history:${url}`;
+}
+function normalizeHistoryTimestamp(value) {
+  if (value === null || value === void 0 || value === "") {
+    return null;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : new Date(parsed);
+  }
+  const absolute = Math.abs(value);
+  if (absolute >= 1e14) {
+    return new Date(value / 1e3);
+  }
+  if (absolute >= 1e12) {
+    return new Date(value);
+  }
+  return new Date(value * 1e3);
+}
+function formatHistoryVisitedAt(value) {
+  const date = normalizeHistoryTimestamp(value);
+  if (!date) {
+    return null;
+  }
+  return new Intl.DateTimeFormat(void 0, {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short"
+  }).format(date);
+}
+function getHistoryItemTitle(item) {
+  return item.title.trim() || redactUrlForDisplay(item.url) || "Visited page";
+}
+function getHistoryVisitedLabel(item) {
+  return formatHistoryVisitedAt(item.visitedAt);
+}
+function getHistoryItemDetail(item) {
+  const visitedLabel = getHistoryVisitedLabel(item);
+  const url = redactUrlForDisplay(item.url);
+  if (!visitedLabel) {
+    return url || "Visited page";
+  }
+  return url ? `${url} \xB7 ${visitedLabel}` : visitedLabel;
+}
+function createHistoryAttachment(item) {
+  return {
+    id: getHistoryAttachmentId(item.url),
+    kind: "history",
+    label: getHistoryItemTitle(item),
+    detail: getHistoryItemDetail(item),
+    url: item.url
+  };
+}
+function getSubmitContextAttachments(attachments) {
+  const submitAttachments = attachments.flatMap((attachment) => {
+    switch (attachment.kind) {
+      case "currentPage":
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kCurrentPage,
+          label: attachment.label,
+          tabId: -1,
+          url: ""
+        }];
+      case "tab":
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kOpenTab,
+          label: attachment.label,
+          tabId: attachment.tabId ?? -1,
+          url: attachment.url || ""
+        }];
+      case "history":
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kHistory,
+          label: attachment.label,
+          tabId: -1,
+          url: attachment.url || ""
+        }];
+      case "bookmark":
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kBookmark,
+          label: attachment.label,
+          tabId: -1,
+          url: attachment.url || ""
+        }];
+      case "file":
+        return [{
+          bytes: dataUrlToByteArray(attachment.dataUrl),
+          kind: ContextSourceKind.kFile,
+          label: attachment.label,
+          mimeType: attachment.mimeType || "application/octet-stream",
+          tabId: -1,
+          url: attachment.url || ""
+        }];
+      default:
+        return [];
+    }
+  });
+  if (!submitAttachments.length) {
+    return null;
+  }
+  return submitAttachments;
+}
 var DEFAULT_COMPOSER_STATE = {
   prompt: "",
-  attachBrowserContext: true,
-  modeLabel: "Task"
+  attachments: [],
+  modeLabel: "Task",
+  focusRequest: 0
+};
+var DEFAULT_VOICE_STATE = {
+  active: false,
+  status: "idle",
+  transcript: "",
+  level: 0,
+  error: null
 };
 function createInitialState() {
   return {
@@ -22443,8 +23111,26 @@ function createInitialState() {
     approvalResultsById: {},
     selectedInspector: { kind: "session" },
     composer: { ...DEFAULT_COMPOSER_STATE },
+    voice: { ...DEFAULT_VOICE_STATE },
+    openTabs: { ...DEFAULT_OPEN_TABS_STATE, items: [] },
+    historySearch: { ...DEFAULT_HISTORY_SEARCH_STATE },
+    bookmarksSearch: { ...DEFAULT_BOOKMARKS_SEARCH_STATE },
+    toast: null,
+    aiProviders: [],
+    aiSettings: {
+      activeModelId: null,
+      activeProviderId: null
+    },
     turnPendingBySessionId: {},
-    lastContextBySessionId: {}
+    contextsBySessionId: {},
+    creditBalance: null,
+    chatBlockedReason: null,
+    activeProfileId: null,
+    profiles: [],
+    activeWorkspace: null,
+    mcpServers: [],
+    cliTools: [],
+    activeSlashEditor: null
   };
 }
 function getSessionTitle(session) {
@@ -22539,18 +23225,6 @@ function getBrowserContextStatusTone(status) {
       return "danger";
   }
 }
-function getLastBrowserContext(events) {
-  for (let index2 = events.length - 1; index2 >= 0; index2--) {
-    const event = events[index2];
-    if (!event) {
-      continue;
-    }
-    if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
-      return event.browserContext;
-    }
-  }
-  return void 0;
-}
 function toTitleCaseRuntimeStateLabel(state) {
   return state.split(/[_-]+/).filter(Boolean).map((part) => part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : "").join(" ");
 }
@@ -22585,6 +23259,56 @@ function getRuntimeStateLabel(state) {
       return "Resumed";
   }
   return toTitleCaseRuntimeStateLabel(state);
+}
+function getApprovalPolicyLabel(policy) {
+  switch (policy) {
+    case ApprovalPolicy.kAllowAll:
+      return "Allow all";
+    case ApprovalPolicy.kAllowMcp:
+      return "Allow MCP";
+    case ApprovalPolicy.kDenySensitive:
+      return "Deny sensitive";
+    case ApprovalPolicy.kDenyAll:
+      return "Deny all";
+    case ApprovalPolicy.kPrompt:
+    default:
+      return "Prompt";
+  }
+}
+function getApprovalSensitivityLabel(sensitivity) {
+  switch (sensitivity) {
+    case ApprovalSensitivity.kReadOnly:
+      return "Read-only";
+    case ApprovalSensitivity.kSensitive:
+    default:
+      return "Sensitive";
+  }
+}
+function getApprovalStateLabel(state) {
+  switch (state) {
+    case ApprovalState.kApproved:
+      return "Approved";
+    case ApprovalState.kDenied:
+      return "Denied";
+    case ApprovalState.kCancelled:
+      return "Cancelled";
+    case ApprovalState.kPending:
+    default:
+      return "Pending";
+  }
+}
+function getApprovalDecisionLabel(decision) {
+  switch (decision) {
+    case ApprovalDecision.kAllow:
+      return "Allow";
+    case ApprovalDecision.kAllowOnce:
+      return "Allow once";
+    case ApprovalDecision.kDeny:
+      return "Deny";
+    case ApprovalDecision.kNone:
+    default:
+      return "None";
+  }
 }
 function getEventText(event) {
   return event.text || "";
@@ -22653,6 +23377,10 @@ function normalizeToolName(toolName) {
   }
   return toolName.split(".").at(-1)?.toLowerCase() || toolName.toLowerCase();
 }
+function getToolDisplayName(toolName) {
+  const trimmed = toolName?.trim();
+  return trimmed ? trimmed : void 0;
+}
 function getToolProgressLabel(toolName) {
   const normalizedName = normalizeToolName(toolName);
   if (normalizedName.includes("read")) {
@@ -22691,6 +23419,22 @@ function humanizeToolRequest(toolCall) {
   const libraryId = getStringField(args, "libraryId");
   const description = getStringField(args, "description");
   const normalizedName = normalizeToolName(toolCall.toolName);
+  if (normalizedName === "read_current_page") {
+    return "Reading current page";
+  }
+  if (normalizedName === "get_selected_text") {
+    return "Reading selected text";
+  }
+  if (normalizedName === "get_active_tab") {
+    return "Checking active tab";
+  }
+  if (normalizedName === "search_in_page") {
+    const detail = query || pattern;
+    return detail ? `Searching page for \u201C${summarizeInlineText(detail, 40)}\u201D` : "Searching current page";
+  }
+  if (normalizedName === "extract_structured_page_context") {
+    return "Extracting page structure";
+  }
   if (normalizedName.includes("read")) {
     return filePath ? `Reading ${filePath}` : "Reading a file";
   }
@@ -22713,7 +23457,8 @@ function humanizeToolRequest(toolCall) {
   if (normalizedName.includes("bash") || normalizedName.includes("command")) {
     return description ? `Running ${summarizeInlineText(description, 40)}` : "Running a command";
   }
-  return getToolProgressLabel(toolCall.toolName).replace(/…$/, "");
+  const display = getToolDisplayName(toolCall.toolName);
+  return display ? `Calling ${display}` : getToolProgressLabel(toolCall.toolName).replace(/…$/, "");
 }
 function countOutputLines(text) {
   if (!text) {
@@ -22781,6 +23526,20 @@ function getToolStatusChip(status) {
       return { text: "Pending", tone: "warning" };
   }
 }
+function buildApprovalChips(policy, sensitivity, pageDerivedJustification) {
+  const chips = [
+    { text: getApprovalPolicyLabel(policy ?? ApprovalPolicy.kPrompt), tone: "warning" },
+    { text: getApprovalSensitivityLabel(sensitivity ?? ApprovalSensitivity.kSensitive), tone: "danger" }
+  ];
+  if (pageDerivedJustification) {
+    chips.push({ text: "Page-derived", tone: "accent" });
+  }
+  return chips;
+}
+function getApprovalToolAction(toolName) {
+  const display = getToolDisplayName(toolName);
+  return display ? `Calling ${display}` : void 0;
+}
 function collectConversationItems(entries) {
   const items = [];
   const toolCallsById = /* @__PURE__ */ new Map();
@@ -22828,7 +23587,7 @@ function collectConversationItems(entries) {
           timestamp: event.timestamp
         });
         break;
-      case RuntimeEventKind.kAssistantToken:
+      case RuntimeEventKind.kAssistantToken: {
         if (!text) {
           break;
         }
@@ -22859,6 +23618,7 @@ function collectConversationItems(entries) {
           timestamp: event.timestamp
         };
         break;
+      }
       case RuntimeEventKind.kAssistantThinking:
         if (!text) {
           break;
@@ -22887,7 +23647,7 @@ function collectConversationItems(entries) {
           timestamp: event.timestamp
         };
         break;
-      case RuntimeEventKind.kTurnComplete:
+      case RuntimeEventKind.kTurnComplete: {
         if (!text) {
           clearAssistantState();
           break;
@@ -22918,6 +23678,7 @@ function collectConversationItems(entries) {
         });
         clearAssistantState();
         break;
+      }
       case RuntimeEventKind.kToolRequest:
         splitAssistantState();
         if (event.toolCall?.callId) {
@@ -22932,24 +23693,29 @@ function collectConversationItems(entries) {
           role: "system",
           text: humanizeToolRequest(event.toolCall),
           timestamp: event.timestamp,
-          tone: "accent"
+          tone: "accent",
+          toolName: getToolDisplayName(event.toolCall?.toolName)
         });
         break;
       case RuntimeEventKind.kToolResult: {
         splitAssistantState();
         const toolCall = event.toolResult?.callId ? toolCallsById.get(event.toolResult.callId) : void 0;
         const existingToolIndex = event.toolResult?.callId ? toolItemIndexByCallId.get(event.toolResult.callId) : void 0;
-        const resultText = humanizeToolResult(toolCall, event.toolResult);
-        const resultTone = event.toolResult?.success ? "success" : "danger";
-        const resultNote = !event.toolResult?.success ? summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || "", 72) : event.toolResult?.output ? summarizeInlineText(event.toolResult.output, 120) : void 0;
+        const success = event.toolResult?.success === true;
+        const requestText = toolCall ? humanizeToolRequest(toolCall) : void 0;
+        const failureText = humanizeToolResult(toolCall, event.toolResult);
+        const resultTone = success ? "success" : "danger";
+        const resultNote = !success ? summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || "", 72) : void 0;
         if (existingToolIndex !== void 0 && items[existingToolIndex]) {
+          const existingItem = items[existingToolIndex];
           items[existingToolIndex] = {
-            ...items[existingToolIndex],
-            chips: [getToolStatusChip(event.toolResult?.success ? ToolCallStatus.kCompleted : ToolCallStatus.kFailed)],
-            text: resultText,
+            ...existingItem,
+            chips: [getToolStatusChip(success ? ToolCallStatus.kCompleted : ToolCallStatus.kFailed)],
+            text: success ? existingItem.text : failureText,
             note: resultNote,
             tone: resultTone,
-            timestamp: event.timestamp
+            timestamp: event.timestamp,
+            toolName: existingItem.toolName || getToolDisplayName(toolCall?.toolName)
           };
         } else {
           items.push({
@@ -22958,14 +23724,15 @@ function collectConversationItems(entries) {
             markdown: false,
             note: resultNote,
             role: "system",
-            text: resultText,
+            text: success ? requestText || failureText : failureText,
             timestamp: event.timestamp,
-            tone: resultTone
+            tone: resultTone,
+            toolName: getToolDisplayName(toolCall?.toolName)
           });
         }
         break;
       }
-      case RuntimeEventKind.kApprovalRequest:
+      case RuntimeEventKind.kApprovalRequest: {
         splitAssistantState();
         const approvalIndex = items.length;
         if (event.approvalRequest?.relatedToolCall?.callId) {
@@ -22977,8 +23744,25 @@ function collectConversationItems(entries) {
         items.push({
           approval: event.approvalRequest?.approvalId ? {
             approvalId: event.approvalRequest.approvalId,
-            status: "pending"
+            status: "pending",
+            approvalPolicy: getApprovalPolicyLabel(
+              event.approvalRequest.approvalPolicy ?? ApprovalPolicy.kPrompt
+            ),
+            pageDerivedJustification: event.approvalRequest.pageDerivedJustification,
+            sensitivity: getApprovalSensitivityLabel(
+              event.approvalRequest.sensitivity ?? ApprovalSensitivity.kSensitive
+            ),
+            state: getApprovalStateLabel(event.approvalRequest.state),
+            toolAction: getApprovalToolAction(
+              event.approvalRequest.relatedToolCall?.toolName
+            ),
+            toolName: getToolDisplayName(event.approvalRequest.relatedToolCall?.toolName)
           } : void 0,
+          chips: event.approvalRequest ? buildApprovalChips(
+            event.approvalRequest.approvalPolicy,
+            event.approvalRequest.sensitivity,
+            event.approvalRequest.pageDerivedJustification
+          ) : void 0,
           kind: "approval",
           key,
           markdown: false,
@@ -22991,6 +23775,7 @@ function collectConversationItems(entries) {
           approvalItemIndexById.set(event.approvalRequest.approvalId, approvalIndex);
         }
         break;
+      }
       case RuntimeEventKind.kApprovalResult:
         splitAssistantState();
         if (event.approvalResult?.approvalId) {
@@ -23001,10 +23786,25 @@ function collectConversationItems(entries) {
               items[existingApprovalIndex] = {
                 ...approvalItem,
                 approval: {
+                  ...approvalItem.approval || {},
                   approvalId: event.approvalResult.approvalId,
+                  approvalPolicy: getApprovalPolicyLabel(
+                    event.approvalResult.approvalPolicy
+                  ),
+                  decision: getApprovalDecisionLabel(event.approvalResult.decision),
+                  pageDerivedJustification: event.approvalResult.pageDerivedJustification,
                   reason: event.approvalResult.reason || void 0,
+                  sensitivity: getApprovalSensitivityLabel(
+                    event.approvalResult.sensitivity
+                  ),
+                  state: getApprovalStateLabel(event.approvalResult.state),
                   status: event.approvalResult.approved ? "approved" : "denied"
                 },
+                chips: buildApprovalChips(
+                  event.approvalResult.approvalPolicy,
+                  event.approvalResult.sensitivity,
+                  event.approvalResult.pageDerivedJustification
+                ),
                 note: event.approvalResult.reason || approvalItem.note,
                 tone: event.approvalResult.approved ? "success" : "danger"
               };
@@ -23043,13 +23843,6 @@ function collectConversationItems(entries) {
   return items;
 }
 
-// standalone/load_time_data.js
-var loadTimeData = {
-  getString(_key) {
-    return "";
-  }
-};
-
 // ../maho_common/react/store_utils.ts
 function notifyListeners(listeners) {
   for (const listener of listeners) {
@@ -23083,13 +23876,24 @@ function cloneState(state) {
     approvalsById: { ...state.approvalsById },
     approvalResultsById: { ...state.approvalResultsById },
     selectedInspector: { ...state.selectedInspector },
-    composer: { ...state.composer },
+    composer: { ...state.composer, attachments: [...state.composer.attachments] },
+    voice: { ...state.voice },
+    openTabs: { ...state.openTabs, items: [...state.openTabs.items] },
+    historySearch: { ...state.historySearch, items: [...state.historySearch.items] },
+    bookmarksSearch: { ...state.bookmarksSearch, items: [...state.bookmarksSearch.items] },
+    toast: state.toast ? { ...state.toast } : null,
+    aiProviders: state.aiProviders.map((provider) => ({ ...provider, models: [...provider.models] })),
+    aiSettings: { ...state.aiSettings },
     turnPendingBySessionId: { ...state.turnPendingBySessionId },
-    lastContextBySessionId: { ...state.lastContextBySessionId }
+    contextsBySessionId: Object.fromEntries(
+      Object.entries(state.contextsBySessionId).map(([key, value]) => [key, [...value]])
+    ),
+    creditBalance: state.creditBalance ? { ...state.creditBalance } : null,
+    chatBlockedReason: state.chatBlockedReason
   };
 }
 function sortSessionIds(sessionsById) {
-  return Object.values(sessionsById).sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map((session) => session.sessionId);
+  return Object.values(sessionsById).sort((a, b2) => (b2.updatedAt || b2.createdAt) - (a.updatedAt || a.createdAt)).map((session) => session.sessionId);
 }
 function createMahoAiStore() {
   const { router, handler } = bindMojoPageHandler(
@@ -23109,6 +23913,13 @@ var MahoAiStore = class {
   callbackRouter;
   state = createInitialState();
   listeners = /* @__PURE__ */ new Set();
+  acceptedAskMahoSessionIds = /* @__PURE__ */ new Set();
+  pendingRuntimeEventsBySessionId = /* @__PURE__ */ new Map();
+  selectionRevision = 0;
+  // RAF-coalesced notify: multiple patches within one frame (e.g. streaming
+  // tokens) collapse into a single React render, killing sub-frame flicker.
+  notifyScheduled = false;
+  rafHandle = null;
   getSnapshot() {
     return this.state;
   }
@@ -23116,17 +23927,19 @@ var MahoAiStore = class {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  async bootstrap(initialPrompt) {
+  async bootstrap() {
+    const selectionRevision = this.selectionRevision;
+    const currentSessionId = this.state.currentSessionId;
     this.patch((state) => {
       state.booting = true;
       state.bootError = null;
-      state.composer.prompt = initialPrompt || "";
     });
     try {
       const [{ state, activeAdapterName }, { sessions }] = await Promise.all([
         this.pageHandler.getConnectionState(),
         this.pageHandler.getSessionList()
       ]);
+      let sessionIdToResume = null;
       this.patch((next) => {
         next.connectionState = state;
         next.activeAdapterName = activeAdapterName || "OpenCode";
@@ -23137,13 +23950,30 @@ var MahoAiStore = class {
           }
         }
         next.sessionOrder = sortSessionIds(next.sessionsById);
-        next.currentSessionId = sessions[0]?.sessionId || null;
+        if (this.selectionRevision === selectionRevision) {
+          if (!next.currentSessionId) {
+            next.currentSessionId = sessions[0]?.sessionId || null;
+            sessionIdToResume = next.currentSessionId;
+          } else if (next.currentSessionId === currentSessionId) {
+            sessionIdToResume = currentSessionId;
+          }
+        }
         next.initialized = true;
         next.booting = false;
       });
-      if (this.state.currentSessionId) {
-        await this.resumeSession(this.state.currentSessionId);
+      if (sessionIdToResume) {
+        await this.resumeSession(sessionIdToResume);
       }
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const spaceId = urlParams.get("spaceId") || urlParams.get("space_id") || null;
+        await this.loadAiExtensibility(spaceId);
+      } catch (err) {
+        console.warn("[maho-ai] initial loadAiExtensibility failed", err);
+      }
+      void this.fetchCreditBalance().catch((err) => {
+        console.warn("[maho-ai] initial credit balance fetch failed", err);
+      });
     } catch (error) {
       this.patch((state) => {
         state.booting = false;
@@ -23155,6 +23985,47 @@ var MahoAiStore = class {
   setComposerPrompt(prompt) {
     this.patch((state) => {
       state.composer.prompt = prompt;
+    });
+  }
+  openVoice() {
+    this.patch((state) => {
+      state.voice = {
+        active: true,
+        status: "idle",
+        transcript: "",
+        level: 0,
+        error: null
+      };
+    });
+  }
+  closeVoice() {
+    this.patch((state) => {
+      state.voice = { ...DEFAULT_VOICE_STATE };
+    });
+  }
+  setVoiceStatus(status) {
+    this.patch((state) => {
+      state.voice.status = status;
+    });
+  }
+  setVoiceTranscript(transcript) {
+    this.patch((state) => {
+      state.voice.transcript = transcript;
+    });
+  }
+  setVoiceLevel(level) {
+    const nextLevel = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
+    this.patch((state) => {
+      state.voice.level = nextLevel;
+    });
+  }
+  setVoiceError(error) {
+    this.patch((state) => {
+      state.voice.error = error;
+      if (error) {
+        state.voice.status = "error";
+        state.voice.level = 0;
+      }
     });
   }
   setSessionSearchQuery(query) {
@@ -23187,35 +24058,256 @@ var MahoAiStore = class {
     });
     await this.resumeSession(session.sessionId, false);
   }
+  /**
+   * Creates a new session without forwarding the prompt through
+   * StartSession(initial_prompt), then submits the pending composer state
+   * (prompt + attachments) via the normal submitPrompt path.  Use this for
+   * first-send when there is no current session so that attachment state is
+   * preserved correctly.
+   */
+  async startSessionThenSubmit() {
+    const mode = this.state.developerMode ? InteractionMode.kDeveloper : InteractionMode.kAssistant;
+    const { session } = await this.pageHandler.startSession(null, mode);
+    this.patch((state) => {
+      state.sessionsById[session.sessionId] = session;
+      state.sessionOrder = sortSessionIds(state.sessionsById);
+      state.currentSessionId = session.sessionId;
+      state.selectedInspector = { kind: "session", id: session.sessionId };
+      state.eventsBySessionId[session.sessionId] = [];
+    });
+    await this.resumeSession(session.sessionId, false);
+    await this.submitPrompt();
+  }
   async resumeSession(sessionId, fetchHistory = true) {
+    const selectionRevision = ++this.selectionRevision;
     const { session, replayEvents } = await this.pageHandler.resumeSession(sessionId);
     this.patch((state) => {
-      state.currentSessionId = sessionId;
+      if (this.selectionRevision === selectionRevision) {
+        state.currentSessionId = sessionId;
+        state.selectedInspector = { kind: "session", id: sessionId };
+      }
       if (session) {
         state.sessionsById[session.sessionId] = session;
         state.sessionOrder = sortSessionIds(state.sessionsById);
       }
-      state.selectedInspector = { kind: "session", id: sessionId };
-      this.updateLastContextSnapshot(state, sessionId, replayEvents);
+      this.updateContextSnapshot(state, sessionId, replayEvents);
       if (replayEvents.length) {
         state.eventsBySessionId[sessionId] = replayEvents.filter(isRenderableTimelineEvent).map((event) => ({ sessionId, event }));
       }
     });
-    if (fetchHistory) {
+    if (fetchHistory && this.selectionRevision === selectionRevision && this.state.currentSessionId === sessionId) {
       await this.loadHistory(sessionId);
     }
   }
-  async loadHistory(sessionId) {
-    const { events, totalCount } = await this.pageHandler.getSessionHistory(sessionId, 0, 200);
+  async loadHistory(sessionId, pageSize = 200) {
+    const { events, totalCount } = await this.pageHandler.getSessionHistory(sessionId, 0, pageSize);
     this.patch((state) => {
-      this.updateLastContextSnapshot(state, sessionId, events);
-      state.eventsBySessionId[sessionId] = events.filter(isRenderableTimelineEvent).map((event) => ({ sessionId, event }));
-      state.historiesBySessionId[sessionId] = { loaded: true, totalCount };
+      this.updateContextSnapshot(state, sessionId, events);
+      const entries = events.filter(isRenderableTimelineEvent).map((event) => ({ sessionId, event }));
+      state.eventsBySessionId[sessionId] = entries;
+      state.historiesBySessionId[sessionId] = { loaded: true, totalCount, loadedCount: entries.length };
+    });
+  }
+  async loadEarlierHistory(sessionId, pageSize = 200) {
+    const hist = this.state.historiesBySessionId[sessionId];
+    if (!hist || hist.loadedCount >= hist.totalCount) {
+      return;
+    }
+    const { events } = await this.pageHandler.getSessionHistory(sessionId, hist.loadedCount, pageSize);
+    this.patch((state) => {
+      const incoming = events.filter(isRenderableTimelineEvent).map((event) => ({ sessionId, event }));
+      const existing = state.eventsBySessionId[sessionId] || [];
+      state.eventsBySessionId[sessionId] = [...incoming, ...existing];
+      const current = state.historiesBySessionId[sessionId];
+      if (current) {
+        state.historiesBySessionId[sessionId] = {
+          ...current,
+          loadedCount: current.loadedCount + incoming.length
+        };
+      }
+    });
+  }
+  toggleAttachment(attachment) {
+    this.patch((state) => {
+      const idx = state.composer.attachments.findIndex((a) => a.id === attachment.id);
+      if (idx >= 0) {
+        state.composer.attachments.splice(idx, 1);
+      } else {
+        state.composer.attachments.push(attachment);
+      }
+    });
+  }
+  addAttachment(attachment) {
+    this.patch((state) => {
+      if (!state.composer.attachments.some((a) => a.id === attachment.id)) {
+        state.composer.attachments.push(attachment);
+      }
+    });
+  }
+  removeAttachment(attachmentId) {
+    this.patch((state) => {
+      state.composer.attachments = state.composer.attachments.filter((a) => a.id !== attachmentId);
     });
   }
   toggleBrowserContext() {
+    this.toggleAttachment(CURRENT_PAGE_ATTACHMENT);
+  }
+  async loadOpenTabs(force = false) {
+    if (this.state.openTabs.loading || this.state.openTabs.loaded && !force) {
+      return;
+    }
     this.patch((state) => {
-      state.composer.attachBrowserContext = !state.composer.attachBrowserContext;
+      state.openTabs = {
+        ...state.openTabs,
+        loading: true,
+        error: null
+      };
+    });
+    try {
+      const { tabs } = await this.pageHandler.getOpenTabs();
+      this.patch((state) => {
+        state.openTabs = {
+          items: tabs,
+          loading: false,
+          loaded: true,
+          error: null
+        };
+      });
+    } catch (error) {
+      this.patch((state) => {
+        state.openTabs = {
+          ...state.openTabs,
+          loading: false,
+          loaded: true,
+          error: error instanceof Error ? error.message : String(error)
+        };
+      });
+    }
+  }
+  resetOpenTabs() {
+    this.patch((state) => {
+      state.openTabs = { ...DEFAULT_OPEN_TABS_STATE, items: [] };
+    });
+  }
+  async searchHistory(query, maxResults = 20) {
+    this.patch((state) => {
+      state.historySearch = {
+        query,
+        items: state.historySearch.items,
+        loading: true,
+        error: null
+      };
+    });
+    try {
+      const { items } = await this.pageHandler.searchHistory(query, maxResults);
+      this.patch((state) => {
+        state.historySearch = {
+          query,
+          items,
+          loading: false,
+          error: null
+        };
+      });
+    } catch (error) {
+      this.patch((state) => {
+        state.historySearch = {
+          ...state.historySearch,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
+      });
+    }
+  }
+  resetHistorySearch() {
+    this.patch((state) => {
+      state.historySearch = { ...DEFAULT_HISTORY_SEARCH_STATE };
+    });
+  }
+  async searchBookmarks(query, maxResults = 20) {
+    this.patch((state) => {
+      state.bookmarksSearch = {
+        query,
+        items: state.bookmarksSearch.items,
+        loading: true,
+        error: null
+      };
+    });
+    try {
+      const { items } = await this.pageHandler.searchBookmarks(query, maxResults);
+      this.patch((state) => {
+        state.bookmarksSearch = {
+          query,
+          items,
+          loading: false,
+          error: null
+        };
+      });
+    } catch (error) {
+      this.patch((state) => {
+        state.bookmarksSearch = {
+          ...state.bookmarksSearch,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
+      });
+    }
+  }
+  resetBookmarksSearch() {
+    this.patch((state) => {
+      state.bookmarksSearch = { ...DEFAULT_BOOKMARKS_SEARCH_STATE };
+    });
+  }
+  addToast(text, tone = "info") {
+    switch (tone) {
+      case "danger":
+        ue.error(text);
+        break;
+      case "success":
+        ue.success(text);
+        break;
+      default:
+        ue.message(text);
+        break;
+    }
+  }
+  clearToast() {
+    ue.dismiss();
+  }
+  async requestFileChooser() {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.style.display = "none";
+    document.body.appendChild(input);
+    const cleanup = () => {
+      input.remove();
+    };
+    input.addEventListener("change", () => {
+      const files = Array.from(input.files || []);
+      cleanup();
+      void (async () => {
+        for (const file of files) {
+          try {
+            const attachment = await createFileAttachment(file);
+            this.addAttachment(attachment);
+          } catch (error) {
+            this.addToast(error instanceof Error ? error.message : String(error), "danger");
+          }
+        }
+      })();
+    }, { once: true });
+    input.addEventListener("cancel", cleanup, { once: true });
+    input.click();
+  }
+  async setActiveAI(providerId, modelId) {
+    this.patch((state) => {
+      state.aiSettings = {
+        activeModelId: modelId,
+        activeProviderId: providerId
+      };
     });
   }
   async submitPrompt() {
@@ -23225,13 +24317,42 @@ var MahoAiStore = class {
     if (!sessionId || !prompt || session?.isReadOnly) {
       return;
     }
-    const attachBrowserContext = this.state.composer.attachBrowserContext;
+    const attachments = getSubmitContextAttachments(this.state.composer.attachments);
+    const attachBrowserContext = attachments === null && hasCurrentPageAttachment(this.state.composer.attachments);
     const mode = this.state.developerMode ? InteractionMode.kDeveloper : InteractionMode.kAssistant;
     this.patch((state) => {
       state.turnPendingBySessionId[sessionId] = true;
       state.composer.prompt = "";
+      state.chatBlockedReason = null;
     });
-    await this.pageHandler.submitPrompt(sessionId, prompt, attachBrowserContext, mode);
+    await this.pageHandler.submitPrompt(
+      sessionId,
+      prompt,
+      attachBrowserContext,
+      mode,
+      attachments
+    );
+  }
+  async ingestAskMahoSessionAccepted(requestId, session) {
+    if (this.acceptedAskMahoSessionIds.has(session.sessionId)) {
+      return;
+    }
+    this.acceptedAskMahoSessionIds.add(session.sessionId);
+    ++this.selectionRevision;
+    const pendingEvents = this.pendingRuntimeEventsBySessionId.get(session.sessionId) || [];
+    this.pendingRuntimeEventsBySessionId.delete(session.sessionId);
+    this.patch((state) => {
+      state.sessionsById[session.sessionId] = session;
+      state.sessionOrder = sortSessionIds(state.sessionsById);
+      state.currentSessionId = session.sessionId;
+      state.selectedInspector = { kind: "session", id: session.sessionId };
+      state.eventsBySessionId[session.sessionId] = state.eventsBySessionId[session.sessionId] || [];
+      state.turnPendingBySessionId[session.sessionId] = true;
+      state.composer.focusRequest += 1;
+      for (const event of pendingEvents) {
+        this.applyRuntimeEvent(state, session.sessionId, event);
+      }
+    });
   }
   async cancelTurn() {
     const sessionId = this.state.currentSessionId;
@@ -23255,7 +24376,12 @@ var MahoAiStore = class {
   async closePanel() {
     await this.pageHandler.closePanel();
   }
-  async openSettings() {
+  async openSettings(paneKey) {
+    const targetPaneKey = paneKey?.trim();
+    if (targetPaneKey) {
+      await this.pageHandler.openSettingsPane(targetPaneKey);
+      return;
+    }
     await this.pageHandler.openSettings();
   }
   async getViewMode() {
@@ -23265,36 +24391,42 @@ var MahoAiStore = class {
   async setViewMode(mode) {
     await this.pageHandler.setViewMode(mode);
   }
+  async requestTabTidy(tabs) {
+    const { folders } = await this.pageHandler.requestTabTidy(tabs);
+    return folders;
+  }
+  async applyTabTidyFolders(folders) {
+    await this.pageHandler.applyTabTidyFolders(folders);
+  }
+  async fetchCreditBalance() {
+    const { info } = await this.pageHandler.getCreditBalance();
+    this.patch((state) => {
+      state.creditBalance = info;
+    });
+    return info;
+  }
+  async getBuyCreditsUrl(packSizeUsd) {
+    const { checkoutUrl } = await this.pageHandler.getBuyCreditsUrl(packSizeUsd);
+    return checkoutUrl;
+  }
+  setChatBlockedReason(reason) {
+    this.patch((state) => {
+      state.chatBlockedReason = reason;
+    });
+  }
   bindCallbacks() {
     this.callbackRouter.onRuntimeEvent.addListener((event) => {
-      const sessionId = this.state.currentSessionId;
-      if (!sessionId) {
+      const sessionId = event.sessionId;
+      if (!this.state.sessionsById[sessionId]) {
+        console.warn("[maho-ai] runtime event deferred for unknown session", sessionId);
+        const pendingEvents = this.pendingRuntimeEventsBySessionId.get(sessionId) || [];
+        if (!pendingEvents.some((pendingEvent) => pendingEvent.sequence === event.sequence)) {
+          this.pendingRuntimeEventsBySessionId.set(sessionId, [...pendingEvents, event]);
+        }
         return;
       }
       this.patch((state) => {
-        this.appendEventInternal(state, sessionId, event);
-        if (event.toolCall?.callId) {
-          state.toolCallsById[event.toolCall.callId] = event.toolCall;
-          state.selectedInspector = { kind: "tool", id: event.toolCall.callId };
-        }
-        if (event.toolResult?.callId) {
-          state.toolResultsByCallId[event.toolResult.callId] = event.toolResult;
-          state.selectedInspector = { kind: "tool", id: event.toolResult.callId };
-        }
-        if (event.approvalRequest?.approvalId) {
-          state.approvalsById[event.approvalRequest.approvalId] = event.approvalRequest;
-          state.selectedInspector = { kind: "approval", id: event.approvalRequest.approvalId };
-        }
-        if (event.approvalResult?.approvalId) {
-          state.approvalResultsById[event.approvalResult.approvalId] = event.approvalResult;
-          state.selectedInspector = { kind: "approval", id: event.approvalResult.approvalId };
-        }
-        if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
-          state.turnPendingBySessionId[sessionId] = false;
-        }
-        if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
-          state.lastContextBySessionId[sessionId] = event.browserContext;
-        }
+        this.applyRuntimeEvent(state, sessionId, event);
       });
     });
     this.callbackRouter.onConnectionStateChanged.addListener((state) => {
@@ -23308,6 +24440,46 @@ var MahoAiStore = class {
         state.sessionOrder = sortSessionIds(state.sessionsById);
       });
     });
+    this.callbackRouter.onAISettingsChanged.addListener(
+      (info) => {
+        this.applyAISettings(info);
+      }
+    );
+    this.callbackRouter.onAskMahoSessionAccepted.addListener((requestId, session) => {
+      void this.ingestAskMahoSessionAccepted(requestId, session);
+    });
+    this.bindCreditBalanceRefresh();
+  }
+  creditBalanceRefreshTimer = void 0;
+  bindCreditBalanceRefresh() {
+    const scheduleRefresh = () => {
+      if (this.creditBalanceRefreshTimer !== void 0) {
+        clearTimeout(this.creditBalanceRefreshTimer);
+      }
+      this.creditBalanceRefreshTimer = setTimeout(() => {
+        this.creditBalanceRefreshTimer = void 0;
+        this.fetchCreditBalance().catch((err) => {
+          console.warn("[maho-ai] credit balance refresh failed", err);
+        });
+      }, 500);
+    };
+    window.addEventListener("focus", scheduleRefresh);
+  }
+  async refreshAISettings() {
+    try {
+      const { info } = await this.pageHandler.getAISettings();
+      this.applyAISettings(info);
+    } catch (err) {
+      console.warn("[maho-ai] refreshAISettings failed", err);
+    }
+  }
+  applyAISettings(info) {
+    this.patch((state) => {
+      state.aiSettings = {
+        activeProviderId: info.activeProviderId || null,
+        activeModelId: info.activeModelId || null
+      };
+    });
   }
   appendEventInternal(state, sessionId, event) {
     if (!isRenderableTimelineEvent(event)) {
@@ -23319,8 +24491,7 @@ var MahoAiStore = class {
       previous.event = {
         ...previous.event,
         text: `${previous.event.text || ""}${event.text || ""}`,
-        timestamp: event.timestamp,
-        sequence: event.sequence
+        timestamp: event.timestamp
       };
       state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
       return;
@@ -23329,8 +24500,7 @@ var MahoAiStore = class {
       previous.event = {
         ...previous.event,
         text: `${previous.event.text || ""}${event.text || ""}`,
-        timestamp: event.timestamp,
-        sequence: event.sequence
+        timestamp: event.timestamp
       };
       state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
       return;
@@ -23338,32 +24508,254 @@ var MahoAiStore = class {
     const nextEntry = { sessionId, event };
     state.eventsBySessionId[sessionId] = [...existing, nextEntry];
   }
-  updateLastContextSnapshot(state, sessionId, events) {
-    const browserContext = getLastBrowserContext(events);
-    if (browserContext) {
-      state.lastContextBySessionId[sessionId] = browserContext;
+  applyRuntimeEvent(state, sessionId, event) {
+    const isSelectedSession = state.currentSessionId === sessionId;
+    this.appendEventInternal(state, sessionId, event);
+    if (event.toolCall?.callId) {
+      state.toolCallsById[event.toolCall.callId] = event.toolCall;
+      if (isSelectedSession) {
+        state.selectedInspector = { kind: "tool", id: event.toolCall.callId };
+      }
+    }
+    if (event.toolResult?.callId) {
+      state.toolResultsByCallId[event.toolResult.callId] = event.toolResult;
+      if (isSelectedSession) {
+        state.selectedInspector = { kind: "tool", id: event.toolResult.callId };
+      }
+    }
+    if (event.approvalRequest?.approvalId) {
+      state.approvalsById[event.approvalRequest.approvalId] = event.approvalRequest;
+      if (isSelectedSession) {
+        state.selectedInspector = { kind: "approval", id: event.approvalRequest.approvalId };
+      }
+    }
+    if (event.approvalResult?.approvalId) {
+      state.approvalResultsById[event.approvalResult.approvalId] = event.approvalResult;
+      if (isSelectedSession) {
+        state.selectedInspector = { kind: "approval", id: event.approvalResult.approvalId };
+      }
+    }
+    if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
+      state.turnPendingBySessionId[sessionId] = false;
+      if (isSelectedSession && event.kind === RuntimeEventKind.kError) {
+        const errorText = event.text || "";
+        if (errorText.includes("402") || errorText.toLowerCase().includes("quota") || errorText.toLowerCase().includes("payment required") || errorText.toLowerCase().includes("deny-paid")) {
+          state.chatBlockedReason = "quota-exhausted";
+        }
+      }
+    }
+    if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
+      const existing = state.contextsBySessionId[sessionId] || [];
+      state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
+    }
+    if (event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
+      const activeSpaceId = state.activeWorkspace?.spaceId ?? null;
+      void this.loadAiExtensibility(activeSpaceId);
+    }
+  }
+  updateContextSnapshot(state, sessionId, events) {
+    const payloads = events.filter((e) => e.kind === RuntimeEventKind.kBrowserContextInjected && e.browserContext).map((e) => e.browserContext);
+    if (payloads.length) {
+      state.contextsBySessionId[sessionId] = payloads;
       return;
     }
-    delete state.lastContextBySessionId[sessionId];
+    delete state.contextsBySessionId[sessionId];
   }
   patch(mutator) {
     const draft = cloneState(this.state);
     mutator(draft);
     this.state = draft;
-    notifyListeners(this.listeners);
+    this.scheduleNotify();
+  }
+  scheduleNotify() {
+    if (this.notifyScheduled) {
+      return;
+    }
+    this.notifyScheduled = true;
+    const flush = () => {
+      this.notifyScheduled = false;
+      this.rafHandle = null;
+      notifyListeners(this.listeners);
+    };
+    if (typeof requestAnimationFrame === "function") {
+      this.rafHandle = requestAnimationFrame(flush);
+    } else {
+      setTimeout(flush, 0);
+    }
+  }
+  // Load AI extensibility states
+  async loadAiExtensibility(spaceId = null) {
+    try {
+      const [profilesRes, workspacesRes] = await Promise.all([
+        this.pageHandler.getAiProfiles(),
+        this.pageHandler.getAiWorkspaces()
+      ]);
+      const profiles = JSON.parse(profilesRes.profilesJson);
+      const workspaces = JSON.parse(workspacesRes.workspacesJson);
+      let activeWorkspace = null;
+      let mcpServers = [];
+      let cliTools = [];
+      const targetWorkspace = workspaces.find((w2) => w2.spaceId === spaceId) || workspaces[0];
+      if (targetWorkspace) {
+        const [workspaceInfoRes, mcpRes, cliRes] = await Promise.all([
+          this.pageHandler.getActiveAiWorkspace(spaceId || ""),
+          this.pageHandler.getMcpServers(targetWorkspace.id),
+          this.pageHandler.getCliTools(targetWorkspace.id)
+        ]);
+        if (workspaceInfoRes.workspaceJson) {
+          activeWorkspace = JSON.parse(workspaceInfoRes.workspaceJson);
+        }
+        if (mcpRes.serversJson) {
+          mcpServers = JSON.parse(mcpRes.serversJson);
+        }
+        if (cliRes.toolsJson) {
+          cliTools = JSON.parse(cliRes.toolsJson);
+        }
+      }
+      this.patch((state) => {
+        state.profiles = profiles;
+        state.activeWorkspace = activeWorkspace;
+        state.mcpServers = mcpServers;
+        state.cliTools = cliTools;
+        if (activeWorkspace) {
+          state.activeProfileId = activeWorkspace.profileId;
+        } else {
+          const defaultProfile = profiles.find((p) => p.isDefault);
+          state.activeProfileId = defaultProfile ? defaultProfile.id : profiles[0]?.id || null;
+        }
+      });
+    } catch (err) {
+      console.warn("[maho-ai] loadAiExtensibility failed", err);
+    }
+  }
+  async switchWorkspaceProfile(workspaceId, profileId) {
+    try {
+      const { success } = await this.pageHandler.switchWorkspaceProfile(workspaceId, profileId);
+      if (success) {
+        this.patch((state) => {
+          state.activeProfileId = profileId;
+          if (state.activeWorkspace && state.activeWorkspace.id === workspaceId) {
+            state.activeWorkspace.profileId = profileId;
+          }
+        });
+        ue.success("Workspace profile switched");
+      } else {
+        ue.error("Failed to switch workspace profile");
+      }
+    } catch (err) {
+      console.error("[maho-ai] switchWorkspaceProfile failed", err);
+    }
+  }
+  async approveMcpServerTrust(workspaceId, serverName, tools) {
+    try {
+      const { success } = await this.pageHandler.approveMcpServerTrust(workspaceId, serverName, tools);
+      if (success) {
+        ue.success("MCP server trusted");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        ue.error("Failed to trust MCP server");
+      }
+    } catch (err) {
+      console.error("[maho-ai] approveMcpServerTrust failed", err);
+    }
+  }
+  async importProfileFromToml(workspaceId, tomlPath) {
+    try {
+      const { profileIdOrError } = await this.pageHandler.importProfileFromToml(workspaceId, tomlPath);
+      if (profileIdOrError && !profileIdOrError.startsWith("Error")) {
+        ue.success("Profile imported successfully");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        ue.error(profileIdOrError || "Failed to import profile");
+      }
+    } catch (err) {
+      console.error("[maho-ai] importProfileFromToml failed", err);
+    }
+  }
+  async registerMcpServer(workspaceId, configJson) {
+    try {
+      const { success } = await this.pageHandler.registerMcpServer(workspaceId, configJson);
+      if (success) {
+        ue.success("MCP server registered");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+        return true;
+      } else {
+        ue.error("Failed to register MCP server");
+        return false;
+      }
+    } catch (err) {
+      console.error("[maho-ai] registerMcpServer failed", err);
+      return false;
+    }
+  }
+  async removeMcpServer(workspaceId, serverName) {
+    try {
+      const { success } = await this.pageHandler.removeMcpServer(workspaceId, serverName);
+      if (success) {
+        ue.success("MCP server removed");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        ue.error("Failed to remove MCP server");
+      }
+    } catch (err) {
+      console.error("[maho-ai] removeMcpServer failed", err);
+    }
+  }
+  async registerCliTool(workspaceId, toolJson) {
+    try {
+      const { success } = await this.pageHandler.registerCliTool(workspaceId, toolJson);
+      if (success) {
+        ue.success("CLI tool registered");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+        return true;
+      } else {
+        ue.error("Failed to register CLI tool");
+        return false;
+      }
+    } catch (err) {
+      console.error("[maho-ai] registerCliTool failed", err);
+      return false;
+    }
+  }
+  async removeCliTool(workspaceId, toolName) {
+    try {
+      const { success } = await this.pageHandler.removeCliTool(workspaceId, toolName);
+      if (success) {
+        ue.success("CLI tool removed");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        ue.error("Failed to remove CLI tool");
+      }
+    } catch (err) {
+      console.error("[maho-ai] removeCliTool failed", err);
+    }
+  }
+  async createAiProfile(name, systemPrompt, model) {
+    try {
+      const { profileId } = await this.pageHandler.createAiProfile(name, systemPrompt, model);
+      if (profileId) {
+        ue.success("Agent profile created");
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+        return true;
+      } else {
+        ue.error("Failed to create agent profile");
+        return false;
+      }
+    } catch (err) {
+      console.error("[maho-ai] createAiProfile failed", err);
+      return false;
+    }
+  }
+  setActiveSlashEditor(editor) {
+    this.patch((state) => {
+      state.activeSlashEditor = editor;
+    });
   }
 };
 
 // react/store.ts
-function readPendingAiQuery() {
-  try {
-    return loadTimeData.getString("pendingAiQuery").trim();
-  } catch {
-    return "";
-  }
-}
 async function bootstrapStore(store2) {
-  await store2.bootstrap(readPendingAiQuery() || void 0);
+  await store2.bootstrap();
 }
 
 // react/boot-guard.ts
@@ -23385,28 +24777,3404 @@ function runWithBootGuard(root, init) {
   }
 }
 
-// react/features/compact/compact-stage.tsx
-var import_jsx_runtime = __toESM(require_jsx_runtime(), 1);
-function CompactStage({ state }) {
-  const label = state.currentSessionId ? "Live session ready" : "Ready when you are";
-  const description = state.currentSessionId ? "Ask anything about this page to start the conversation." : "Start with a prompt below and Maho AI will open a live session in this thread.";
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", { className: "compact-thread compact-thread--empty", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "compact-thread__list compact-thread__list--empty", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", { className: "compact-thread__row compact-thread__row--empty", "aria-labelledby": "compact-stage-title", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "compact-thread__welcome", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "compact-thread__welcome-copy", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "compact-thread__welcome-title", id: "compact-stage-title", children: label }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "compact-thread__welcome-text", children: description })
-  ] }) }) }) }) });
+// react/features/dismissible-mcp-guidance-card.tsx
+var import_react5 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/clsx/dist/clsx.mjs
+function r(e) {
+  var t, f, n = "";
+  if ("string" == typeof e || "number" == typeof e) n += e;
+  else if ("object" == typeof e) if (Array.isArray(e)) {
+    var o2 = e.length;
+    for (t = 0; t < o2; t++) e[t] && (f = r(e[t])) && (n && (n += " "), n += f);
+  } else for (f in e) e[f] && (n && (n += " "), n += f);
+  return n;
+}
+function clsx() {
+  for (var e, t, f = 0, n = "", o2 = arguments.length; f < o2; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
+  return n;
 }
 
-// react/features/compact/compact-topbar.tsx
-var import_react6 = __toESM(require_react(), 1);
+// ../../../../website/node_modules/tailwind-merge/dist/bundle-mjs.mjs
+var concatArrays = (array1, array2) => {
+  const combinedArray = new Array(array1.length + array2.length);
+  for (let i = 0; i < array1.length; i++) {
+    combinedArray[i] = array1[i];
+  }
+  for (let i = 0; i < array2.length; i++) {
+    combinedArray[array1.length + i] = array2[i];
+  }
+  return combinedArray;
+};
+var createClassValidatorObject = (classGroupId, validator) => ({
+  classGroupId,
+  validator
+});
+var createClassPartObject = (nextPart = /* @__PURE__ */ new Map(), validators = null, classGroupId) => ({
+  nextPart,
+  validators,
+  classGroupId
+});
+var CLASS_PART_SEPARATOR = "-";
+var EMPTY_CONFLICTS = [];
+var ARBITRARY_PROPERTY_PREFIX = "arbitrary..";
+var createClassGroupUtils = (config) => {
+  const classMap = createClassMap(config);
+  const {
+    conflictingClassGroups,
+    conflictingClassGroupModifiers
+  } = config;
+  const getClassGroupId = (className) => {
+    if (className.startsWith("[") && className.endsWith("]")) {
+      return getGroupIdForArbitraryProperty(className);
+    }
+    const classParts = className.split(CLASS_PART_SEPARATOR);
+    const startIndex = classParts[0] === "" && classParts.length > 1 ? 1 : 0;
+    return getGroupRecursive(classParts, startIndex, classMap);
+  };
+  const getConflictingClassGroupIds = (classGroupId, hasPostfixModifier) => {
+    if (hasPostfixModifier) {
+      const modifierConflicts = conflictingClassGroupModifiers[classGroupId];
+      const baseConflicts = conflictingClassGroups[classGroupId];
+      if (modifierConflicts) {
+        if (baseConflicts) {
+          return concatArrays(baseConflicts, modifierConflicts);
+        }
+        return modifierConflicts;
+      }
+      return baseConflicts || EMPTY_CONFLICTS;
+    }
+    return conflictingClassGroups[classGroupId] || EMPTY_CONFLICTS;
+  };
+  return {
+    getClassGroupId,
+    getConflictingClassGroupIds
+  };
+};
+var getGroupRecursive = (classParts, startIndex, classPartObject) => {
+  const classPathsLength = classParts.length - startIndex;
+  if (classPathsLength === 0) {
+    return classPartObject.classGroupId;
+  }
+  const currentClassPart = classParts[startIndex];
+  const nextClassPartObject = classPartObject.nextPart.get(currentClassPart);
+  if (nextClassPartObject) {
+    const result = getGroupRecursive(classParts, startIndex + 1, nextClassPartObject);
+    if (result) return result;
+  }
+  const validators = classPartObject.validators;
+  if (validators === null) {
+    return void 0;
+  }
+  const classRest = startIndex === 0 ? classParts.join(CLASS_PART_SEPARATOR) : classParts.slice(startIndex).join(CLASS_PART_SEPARATOR);
+  const validatorsLength = validators.length;
+  for (let i = 0; i < validatorsLength; i++) {
+    const validatorObj = validators[i];
+    if (validatorObj.validator(classRest)) {
+      return validatorObj.classGroupId;
+    }
+  }
+  return void 0;
+};
+var getGroupIdForArbitraryProperty = (className) => className.slice(1, -1).indexOf(":") === -1 ? void 0 : (() => {
+  const content = className.slice(1, -1);
+  const colonIndex = content.indexOf(":");
+  const property = content.slice(0, colonIndex);
+  return property ? ARBITRARY_PROPERTY_PREFIX + property : void 0;
+})();
+var createClassMap = (config) => {
+  const {
+    theme,
+    classGroups
+  } = config;
+  return processClassGroups(classGroups, theme);
+};
+var processClassGroups = (classGroups, theme) => {
+  const classMap = createClassPartObject();
+  for (const classGroupId in classGroups) {
+    const group = classGroups[classGroupId];
+    processClassesRecursively(group, classMap, classGroupId, theme);
+  }
+  return classMap;
+};
+var processClassesRecursively = (classGroup, classPartObject, classGroupId, theme) => {
+  const len = classGroup.length;
+  for (let i = 0; i < len; i++) {
+    const classDefinition = classGroup[i];
+    processClassDefinition(classDefinition, classPartObject, classGroupId, theme);
+  }
+};
+var processClassDefinition = (classDefinition, classPartObject, classGroupId, theme) => {
+  if (typeof classDefinition === "string") {
+    processStringDefinition(classDefinition, classPartObject, classGroupId);
+    return;
+  }
+  if (typeof classDefinition === "function") {
+    processFunctionDefinition(classDefinition, classPartObject, classGroupId, theme);
+    return;
+  }
+  processObjectDefinition(classDefinition, classPartObject, classGroupId, theme);
+};
+var processStringDefinition = (classDefinition, classPartObject, classGroupId) => {
+  const classPartObjectToEdit = classDefinition === "" ? classPartObject : getPart(classPartObject, classDefinition);
+  classPartObjectToEdit.classGroupId = classGroupId;
+};
+var processFunctionDefinition = (classDefinition, classPartObject, classGroupId, theme) => {
+  if (isThemeGetter(classDefinition)) {
+    processClassesRecursively(classDefinition(theme), classPartObject, classGroupId, theme);
+    return;
+  }
+  if (classPartObject.validators === null) {
+    classPartObject.validators = [];
+  }
+  classPartObject.validators.push(createClassValidatorObject(classGroupId, classDefinition));
+};
+var processObjectDefinition = (classDefinition, classPartObject, classGroupId, theme) => {
+  const entries = Object.entries(classDefinition);
+  const len = entries.length;
+  for (let i = 0; i < len; i++) {
+    const [key, value] = entries[i];
+    processClassesRecursively(value, getPart(classPartObject, key), classGroupId, theme);
+  }
+};
+var getPart = (classPartObject, path) => {
+  let current = classPartObject;
+  const parts = path.split(CLASS_PART_SEPARATOR);
+  const len = parts.length;
+  for (let i = 0; i < len; i++) {
+    const part = parts[i];
+    let next = current.nextPart.get(part);
+    if (!next) {
+      next = createClassPartObject();
+      current.nextPart.set(part, next);
+    }
+    current = next;
+  }
+  return current;
+};
+var isThemeGetter = (func) => "isThemeGetter" in func && func.isThemeGetter === true;
+var createLruCache = (maxCacheSize) => {
+  if (maxCacheSize < 1) {
+    return {
+      get: () => void 0,
+      set: () => {
+      }
+    };
+  }
+  let cacheSize = 0;
+  let cache = /* @__PURE__ */ Object.create(null);
+  let previousCache = /* @__PURE__ */ Object.create(null);
+  const update = (key, value) => {
+    cache[key] = value;
+    cacheSize++;
+    if (cacheSize > maxCacheSize) {
+      cacheSize = 0;
+      previousCache = cache;
+      cache = /* @__PURE__ */ Object.create(null);
+    }
+  };
+  return {
+    get(key) {
+      let value = cache[key];
+      if (value !== void 0) {
+        return value;
+      }
+      if ((value = previousCache[key]) !== void 0) {
+        update(key, value);
+        return value;
+      }
+    },
+    set(key, value) {
+      if (key in cache) {
+        cache[key] = value;
+      } else {
+        update(key, value);
+      }
+    }
+  };
+};
+var IMPORTANT_MODIFIER = "!";
+var MODIFIER_SEPARATOR = ":";
+var EMPTY_MODIFIERS = [];
+var createResultObject = (modifiers, hasImportantModifier, baseClassName, maybePostfixModifierPosition, isExternal) => ({
+  modifiers,
+  hasImportantModifier,
+  baseClassName,
+  maybePostfixModifierPosition,
+  isExternal
+});
+var createParseClassName = (config) => {
+  const {
+    prefix,
+    experimentalParseClassName
+  } = config;
+  let parseClassName = (className) => {
+    const modifiers = [];
+    let bracketDepth = 0;
+    let parenDepth = 0;
+    let modifierStart = 0;
+    let postfixModifierPosition;
+    const len = className.length;
+    for (let index2 = 0; index2 < len; index2++) {
+      const currentCharacter = className[index2];
+      if (bracketDepth === 0 && parenDepth === 0) {
+        if (currentCharacter === MODIFIER_SEPARATOR) {
+          modifiers.push(className.slice(modifierStart, index2));
+          modifierStart = index2 + 1;
+          continue;
+        }
+        if (currentCharacter === "/") {
+          postfixModifierPosition = index2;
+          continue;
+        }
+      }
+      if (currentCharacter === "[") bracketDepth++;
+      else if (currentCharacter === "]") bracketDepth--;
+      else if (currentCharacter === "(") parenDepth++;
+      else if (currentCharacter === ")") parenDepth--;
+    }
+    const baseClassNameWithImportantModifier = modifiers.length === 0 ? className : className.slice(modifierStart);
+    let baseClassName = baseClassNameWithImportantModifier;
+    let hasImportantModifier = false;
+    if (baseClassNameWithImportantModifier.endsWith(IMPORTANT_MODIFIER)) {
+      baseClassName = baseClassNameWithImportantModifier.slice(0, -1);
+      hasImportantModifier = true;
+    } else if (
+      /**
+       * In Tailwind CSS v3 the important modifier was at the start of the base class name. This is still supported for legacy reasons.
+       * @see https://github.com/dcastil/tailwind-merge/issues/513#issuecomment-2614029864
+       */
+      baseClassNameWithImportantModifier.startsWith(IMPORTANT_MODIFIER)
+    ) {
+      baseClassName = baseClassNameWithImportantModifier.slice(1);
+      hasImportantModifier = true;
+    }
+    const maybePostfixModifierPosition = postfixModifierPosition && postfixModifierPosition > modifierStart ? postfixModifierPosition - modifierStart : void 0;
+    return createResultObject(modifiers, hasImportantModifier, baseClassName, maybePostfixModifierPosition);
+  };
+  if (prefix) {
+    const fullPrefix = prefix + MODIFIER_SEPARATOR;
+    const parseClassNameOriginal = parseClassName;
+    parseClassName = (className) => className.startsWith(fullPrefix) ? parseClassNameOriginal(className.slice(fullPrefix.length)) : createResultObject(EMPTY_MODIFIERS, false, className, void 0, true);
+  }
+  if (experimentalParseClassName) {
+    const parseClassNameOriginal = parseClassName;
+    parseClassName = (className) => experimentalParseClassName({
+      className,
+      parseClassName: parseClassNameOriginal
+    });
+  }
+  return parseClassName;
+};
+var createSortModifiers = (config) => {
+  const modifierWeights = /* @__PURE__ */ new Map();
+  config.orderSensitiveModifiers.forEach((mod, index2) => {
+    modifierWeights.set(mod, 1e6 + index2);
+  });
+  return (modifiers) => {
+    const result = [];
+    let currentSegment = [];
+    for (let i = 0; i < modifiers.length; i++) {
+      const modifier = modifiers[i];
+      const isArbitrary = modifier[0] === "[";
+      const isOrderSensitive = modifierWeights.has(modifier);
+      if (isArbitrary || isOrderSensitive) {
+        if (currentSegment.length > 0) {
+          currentSegment.sort();
+          result.push(...currentSegment);
+          currentSegment = [];
+        }
+        result.push(modifier);
+      } else {
+        currentSegment.push(modifier);
+      }
+    }
+    if (currentSegment.length > 0) {
+      currentSegment.sort();
+      result.push(...currentSegment);
+    }
+    return result;
+  };
+};
+var createConfigUtils = (config) => ({
+  cache: createLruCache(config.cacheSize),
+  parseClassName: createParseClassName(config),
+  sortModifiers: createSortModifiers(config),
+  postfixLookupClassGroupIds: createPostfixLookupClassGroupIds(config),
+  ...createClassGroupUtils(config)
+});
+var createPostfixLookupClassGroupIds = (config) => {
+  const lookup = /* @__PURE__ */ Object.create(null);
+  const classGroupIds = config.postfixLookupClassGroups;
+  if (classGroupIds) {
+    for (let i = 0; i < classGroupIds.length; i++) {
+      lookup[classGroupIds[i]] = true;
+    }
+  }
+  return lookup;
+};
+var SPLIT_CLASSES_REGEX = /\s+/;
+var mergeClassList = (classList, configUtils) => {
+  const {
+    parseClassName,
+    getClassGroupId,
+    getConflictingClassGroupIds,
+    sortModifiers,
+    postfixLookupClassGroupIds
+  } = configUtils;
+  const classGroupsInConflict = [];
+  const classNames = classList.trim().split(SPLIT_CLASSES_REGEX);
+  let result = "";
+  for (let index2 = classNames.length - 1; index2 >= 0; index2 -= 1) {
+    const originalClassName = classNames[index2];
+    const {
+      isExternal,
+      modifiers,
+      hasImportantModifier,
+      baseClassName,
+      maybePostfixModifierPosition
+    } = parseClassName(originalClassName);
+    if (isExternal) {
+      result = originalClassName + (result.length > 0 ? " " + result : result);
+      continue;
+    }
+    let hasPostfixModifier = !!maybePostfixModifierPosition;
+    let classGroupId;
+    if (hasPostfixModifier) {
+      const baseClassNameWithoutPostfix = baseClassName.substring(0, maybePostfixModifierPosition);
+      classGroupId = getClassGroupId(baseClassNameWithoutPostfix);
+      const classGroupIdWithPostfix = classGroupId && postfixLookupClassGroupIds[classGroupId] ? getClassGroupId(baseClassName) : void 0;
+      if (classGroupIdWithPostfix && classGroupIdWithPostfix !== classGroupId) {
+        classGroupId = classGroupIdWithPostfix;
+        hasPostfixModifier = false;
+      }
+    } else {
+      classGroupId = getClassGroupId(baseClassName);
+    }
+    if (!classGroupId) {
+      if (!hasPostfixModifier) {
+        result = originalClassName + (result.length > 0 ? " " + result : result);
+        continue;
+      }
+      classGroupId = getClassGroupId(baseClassName);
+      if (!classGroupId) {
+        result = originalClassName + (result.length > 0 ? " " + result : result);
+        continue;
+      }
+      hasPostfixModifier = false;
+    }
+    const variantModifier = modifiers.length === 0 ? "" : modifiers.length === 1 ? modifiers[0] : sortModifiers(modifiers).join(":");
+    const modifierId = hasImportantModifier ? variantModifier + IMPORTANT_MODIFIER : variantModifier;
+    const classId = modifierId + classGroupId;
+    if (classGroupsInConflict.indexOf(classId) > -1) {
+      continue;
+    }
+    classGroupsInConflict.push(classId);
+    const conflictGroups = getConflictingClassGroupIds(classGroupId, hasPostfixModifier);
+    for (let i = 0; i < conflictGroups.length; ++i) {
+      const group = conflictGroups[i];
+      classGroupsInConflict.push(modifierId + group);
+    }
+    result = originalClassName + (result.length > 0 ? " " + result : result);
+  }
+  return result;
+};
+var twJoin = (...classLists) => {
+  let index2 = 0;
+  let argument;
+  let resolvedValue;
+  let string = "";
+  while (index2 < classLists.length) {
+    if (argument = classLists[index2++]) {
+      if (resolvedValue = toValue(argument)) {
+        string && (string += " ");
+        string += resolvedValue;
+      }
+    }
+  }
+  return string;
+};
+var toValue = (mix) => {
+  if (typeof mix === "string") {
+    return mix;
+  }
+  let resolvedValue;
+  let string = "";
+  for (let k2 = 0; k2 < mix.length; k2++) {
+    if (mix[k2]) {
+      if (resolvedValue = toValue(mix[k2])) {
+        string && (string += " ");
+        string += resolvedValue;
+      }
+    }
+  }
+  return string;
+};
+var createTailwindMerge = (createConfigFirst, ...createConfigRest) => {
+  let configUtils;
+  let cacheGet;
+  let cacheSet;
+  let functionToCall;
+  const initTailwindMerge = (classList) => {
+    const config = createConfigRest.reduce((previousConfig, createConfigCurrent) => createConfigCurrent(previousConfig), createConfigFirst());
+    configUtils = createConfigUtils(config);
+    cacheGet = configUtils.cache.get;
+    cacheSet = configUtils.cache.set;
+    functionToCall = tailwindMerge;
+    return tailwindMerge(classList);
+  };
+  const tailwindMerge = (classList) => {
+    const cachedResult = cacheGet(classList);
+    if (cachedResult) {
+      return cachedResult;
+    }
+    const result = mergeClassList(classList, configUtils);
+    cacheSet(classList, result);
+    return result;
+  };
+  functionToCall = initTailwindMerge;
+  return (...args) => functionToCall(twJoin(...args));
+};
+var fallbackThemeArr = [];
+var fromTheme = (key) => {
+  const themeGetter = (theme) => theme[key] || fallbackThemeArr;
+  themeGetter.isThemeGetter = true;
+  return themeGetter;
+};
+var arbitraryValueRegex = /^\[(?:(\w[\w-]*):)?(.+)\]$/i;
+var arbitraryVariableRegex = /^\((?:(\w[\w-]*):)?(.+)\)$/i;
+var fractionRegex = /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?$/;
+var tshirtUnitRegex = /^(\d+(\.\d+)?)?(xs|sm|md|lg|xl)$/;
+var lengthUnitRegex = /\d+(%|px|r?em|[sdl]?v([hwib]|min|max)|pt|pc|in|cm|mm|cap|ch|ex|r?lh|cq(w|h|i|b|min|max))|\b(calc|min|max|clamp)\(.+\)|^0$/;
+var colorFunctionRegex = /^(rgba?|hsla?|hwb|(ok)?(lab|lch)|color-mix)\(.+\)$/;
+var shadowRegex = /^(inset_)?-?((\d+)?\.?(\d+)[a-z]+|0)_-?((\d+)?\.?(\d+)[a-z]+|0)/;
+var imageRegex = /^(url|image|image-set|cross-fade|element|(repeating-)?(linear|radial|conic)-gradient)\(.+\)$/;
+var isFraction = (value) => fractionRegex.test(value);
+var isNumber = (value) => !!value && !Number.isNaN(Number(value));
+var isInteger = (value) => !!value && Number.isInteger(Number(value));
+var isPercent = (value) => value.endsWith("%") && isNumber(value.slice(0, -1));
+var isTshirtSize = (value) => tshirtUnitRegex.test(value);
+var isAny = () => true;
+var isLengthOnly = (value) => (
+  // `colorFunctionRegex` check is necessary because color functions can have percentages in them which which would be incorrectly classified as lengths.
+  // For example, `hsl(0 0% 0%)` would be classified as a length without this check.
+  // I could also use lookbehind assertion in `lengthUnitRegex` but that isn't supported widely enough.
+  lengthUnitRegex.test(value) && !colorFunctionRegex.test(value)
+);
+var isNever = () => false;
+var isShadow = (value) => shadowRegex.test(value);
+var isImage = (value) => imageRegex.test(value);
+var isAnyNonArbitrary = (value) => !isArbitraryValue(value) && !isArbitraryVariable(value);
+var isNamedContainerQuery = (value) => value.startsWith("@container") && (value[10] === "/" && value[11] !== void 0 || value[11] === "s" && value[16] !== void 0 && value.startsWith("-size/", 10) || value[11] === "n" && value[18] !== void 0 && value.startsWith("-normal/", 10));
+var isArbitrarySize = (value) => getIsArbitraryValue(value, isLabelSize, isNever);
+var isArbitraryValue = (value) => arbitraryValueRegex.test(value);
+var isArbitraryLength = (value) => getIsArbitraryValue(value, isLabelLength, isLengthOnly);
+var isArbitraryNumber = (value) => getIsArbitraryValue(value, isLabelNumber, isNumber);
+var isArbitraryWeight = (value) => getIsArbitraryValue(value, isLabelWeight, isAny);
+var isArbitraryFamilyName = (value) => getIsArbitraryValue(value, isLabelFamilyName, isNever);
+var isArbitraryPosition = (value) => getIsArbitraryValue(value, isLabelPosition, isNever);
+var isArbitraryImage = (value) => getIsArbitraryValue(value, isLabelImage, isImage);
+var isArbitraryShadow = (value) => getIsArbitraryValue(value, isLabelShadow, isShadow);
+var isArbitraryVariable = (value) => arbitraryVariableRegex.test(value);
+var isArbitraryVariableLength = (value) => getIsArbitraryVariable(value, isLabelLength);
+var isArbitraryVariableFamilyName = (value) => getIsArbitraryVariable(value, isLabelFamilyName);
+var isArbitraryVariablePosition = (value) => getIsArbitraryVariable(value, isLabelPosition);
+var isArbitraryVariableSize = (value) => getIsArbitraryVariable(value, isLabelSize);
+var isArbitraryVariableImage = (value) => getIsArbitraryVariable(value, isLabelImage);
+var isArbitraryVariableShadow = (value) => getIsArbitraryVariable(value, isLabelShadow, true);
+var isArbitraryVariableWeight = (value) => getIsArbitraryVariable(value, isLabelWeight, true);
+var getIsArbitraryValue = (value, testLabel, testValue) => {
+  const result = arbitraryValueRegex.exec(value);
+  if (result) {
+    if (result[1]) {
+      return testLabel(result[1]);
+    }
+    return testValue(result[2]);
+  }
+  return false;
+};
+var getIsArbitraryVariable = (value, testLabel, shouldMatchNoLabel = false) => {
+  const result = arbitraryVariableRegex.exec(value);
+  if (result) {
+    if (result[1]) {
+      return testLabel(result[1]);
+    }
+    return shouldMatchNoLabel;
+  }
+  return false;
+};
+var isLabelPosition = (label) => label === "position" || label === "percentage";
+var isLabelImage = (label) => label === "image" || label === "url";
+var isLabelSize = (label) => label === "length" || label === "size" || label === "bg-size";
+var isLabelLength = (label) => label === "length";
+var isLabelNumber = (label) => label === "number";
+var isLabelFamilyName = (label) => label === "family-name";
+var isLabelWeight = (label) => label === "number" || label === "weight";
+var isLabelShadow = (label) => label === "shadow";
+var getDefaultConfig = () => {
+  const themeColor = fromTheme("color");
+  const themeFont = fromTheme("font");
+  const themeText = fromTheme("text");
+  const themeFontWeight = fromTheme("font-weight");
+  const themeTracking = fromTheme("tracking");
+  const themeLeading = fromTheme("leading");
+  const themeBreakpoint = fromTheme("breakpoint");
+  const themeContainer = fromTheme("container");
+  const themeSpacing = fromTheme("spacing");
+  const themeRadius = fromTheme("radius");
+  const themeShadow = fromTheme("shadow");
+  const themeInsetShadow = fromTheme("inset-shadow");
+  const themeTextShadow = fromTheme("text-shadow");
+  const themeDropShadow = fromTheme("drop-shadow");
+  const themeBlur = fromTheme("blur");
+  const themePerspective = fromTheme("perspective");
+  const themeAspect = fromTheme("aspect");
+  const themeEase = fromTheme("ease");
+  const themeAnimate = fromTheme("animate");
+  const scaleBreak = () => ["auto", "avoid", "all", "avoid-page", "page", "left", "right", "column"];
+  const scalePosition = () => [
+    "center",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "top-left",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "left-top",
+    "top-right",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "right-top",
+    "bottom-right",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "right-bottom",
+    "bottom-left",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "left-bottom"
+  ];
+  const scalePositionWithArbitrary = () => [...scalePosition(), isArbitraryVariable, isArbitraryValue];
+  const scaleOverflow = () => ["auto", "hidden", "clip", "visible", "scroll"];
+  const scaleOverscroll = () => ["auto", "contain", "none"];
+  const scaleUnambiguousSpacing = () => [isArbitraryVariable, isArbitraryValue, themeSpacing];
+  const scaleInset = () => [isFraction, "full", "auto", ...scaleUnambiguousSpacing()];
+  const scaleGridTemplateColsRows = () => [isInteger, "none", "subgrid", isArbitraryVariable, isArbitraryValue];
+  const scaleGridColRowStartAndEnd = () => ["auto", {
+    span: ["full", isInteger, isArbitraryVariable, isArbitraryValue]
+  }, isInteger, isArbitraryVariable, isArbitraryValue];
+  const scaleGridColRowStartOrEnd = () => [isInteger, "auto", isArbitraryVariable, isArbitraryValue];
+  const scaleGridAutoColsRows = () => ["auto", "min", "max", "fr", isArbitraryVariable, isArbitraryValue];
+  const scaleAlignPrimaryAxis = () => ["start", "end", "center", "between", "around", "evenly", "stretch", "baseline", "center-safe", "end-safe"];
+  const scaleAlignSecondaryAxis = () => ["start", "end", "center", "stretch", "center-safe", "end-safe"];
+  const scaleMargin = () => ["auto", ...scaleUnambiguousSpacing()];
+  const scaleSizing = () => [isFraction, "auto", "full", "dvw", "dvh", "lvw", "lvh", "svw", "svh", "min", "max", "fit", ...scaleUnambiguousSpacing()];
+  const scaleSizingInline = () => [isFraction, "screen", "full", "dvw", "lvw", "svw", "min", "max", "fit", ...scaleUnambiguousSpacing()];
+  const scaleSizingBlock = () => [isFraction, "screen", "full", "lh", "dvh", "lvh", "svh", "min", "max", "fit", ...scaleUnambiguousSpacing()];
+  const scaleColor = () => [themeColor, isArbitraryVariable, isArbitraryValue];
+  const scaleBgPosition = () => [...scalePosition(), isArbitraryVariablePosition, isArbitraryPosition, {
+    position: [isArbitraryVariable, isArbitraryValue]
+  }];
+  const scaleBgRepeat = () => ["no-repeat", {
+    repeat: ["", "x", "y", "space", "round"]
+  }];
+  const scaleBgSize = () => ["auto", "cover", "contain", isArbitraryVariableSize, isArbitrarySize, {
+    size: [isArbitraryVariable, isArbitraryValue]
+  }];
+  const scaleGradientStopPosition = () => [isPercent, isArbitraryVariableLength, isArbitraryLength];
+  const scaleRadius = () => [
+    // Deprecated since Tailwind CSS v4.0.0
+    "",
+    "none",
+    "full",
+    themeRadius,
+    isArbitraryVariable,
+    isArbitraryValue
+  ];
+  const scaleBorderWidth = () => ["", isNumber, isArbitraryVariableLength, isArbitraryLength];
+  const scaleLineStyle = () => ["solid", "dashed", "dotted", "double"];
+  const scaleBlendMode = () => ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"];
+  const scaleMaskImagePosition = () => [isNumber, isPercent, isArbitraryVariablePosition, isArbitraryPosition];
+  const scaleBlur = () => [
+    // Deprecated since Tailwind CSS v4.0.0
+    "",
+    "none",
+    themeBlur,
+    isArbitraryVariable,
+    isArbitraryValue
+  ];
+  const scaleRotate = () => ["none", isNumber, isArbitraryVariable, isArbitraryValue];
+  const scaleScale = () => ["none", isNumber, isArbitraryVariable, isArbitraryValue];
+  const scaleSkew = () => [isNumber, isArbitraryVariable, isArbitraryValue];
+  const scaleTranslate = () => [isFraction, "full", ...scaleUnambiguousSpacing()];
+  return {
+    cacheSize: 500,
+    theme: {
+      animate: ["spin", "ping", "pulse", "bounce"],
+      aspect: ["video"],
+      blur: [isTshirtSize],
+      breakpoint: [isTshirtSize],
+      color: [isAny],
+      container: [isTshirtSize],
+      "drop-shadow": [isTshirtSize],
+      ease: ["in", "out", "in-out"],
+      font: [isAnyNonArbitrary],
+      "font-weight": ["thin", "extralight", "light", "normal", "medium", "semibold", "bold", "extrabold", "black"],
+      "inset-shadow": [isTshirtSize],
+      leading: ["none", "tight", "snug", "normal", "relaxed", "loose"],
+      perspective: ["dramatic", "near", "normal", "midrange", "distant", "none"],
+      radius: [isTshirtSize],
+      shadow: [isTshirtSize],
+      spacing: ["px", isNumber],
+      text: [isTshirtSize],
+      "text-shadow": [isTshirtSize],
+      tracking: ["tighter", "tight", "normal", "wide", "wider", "widest"]
+    },
+    classGroups: {
+      // --------------
+      // --- Layout ---
+      // --------------
+      /**
+       * Aspect Ratio
+       * @see https://tailwindcss.com/docs/aspect-ratio
+       */
+      aspect: [{
+        aspect: ["auto", "square", isFraction, isArbitraryValue, isArbitraryVariable, themeAspect]
+      }],
+      /**
+       * Container
+       * @see https://tailwindcss.com/docs/container
+       * @deprecated since Tailwind CSS v4.0.0
+       */
+      container: ["container"],
+      /**
+       * Container Type
+       * @see https://tailwindcss.com/docs/responsive-design#container-queries
+       */
+      "container-type": [{
+        "@container": ["", "normal", "size", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Container Name
+       * @see https://tailwindcss.com/docs/responsive-design#named-containers
+       */
+      "container-named": [isNamedContainerQuery],
+      /**
+       * Columns
+       * @see https://tailwindcss.com/docs/columns
+       */
+      columns: [{
+        columns: [isNumber, isArbitraryValue, isArbitraryVariable, themeContainer]
+      }],
+      /**
+       * Break After
+       * @see https://tailwindcss.com/docs/break-after
+       */
+      "break-after": [{
+        "break-after": scaleBreak()
+      }],
+      /**
+       * Break Before
+       * @see https://tailwindcss.com/docs/break-before
+       */
+      "break-before": [{
+        "break-before": scaleBreak()
+      }],
+      /**
+       * Break Inside
+       * @see https://tailwindcss.com/docs/break-inside
+       */
+      "break-inside": [{
+        "break-inside": ["auto", "avoid", "avoid-page", "avoid-column"]
+      }],
+      /**
+       * Box Decoration Break
+       * @see https://tailwindcss.com/docs/box-decoration-break
+       */
+      "box-decoration": [{
+        "box-decoration": ["slice", "clone"]
+      }],
+      /**
+       * Box Sizing
+       * @see https://tailwindcss.com/docs/box-sizing
+       */
+      box: [{
+        box: ["border", "content"]
+      }],
+      /**
+       * Display
+       * @see https://tailwindcss.com/docs/display
+       */
+      display: ["block", "inline-block", "inline", "flex", "inline-flex", "table", "inline-table", "table-caption", "table-cell", "table-column", "table-column-group", "table-footer-group", "table-header-group", "table-row-group", "table-row", "flow-root", "grid", "inline-grid", "contents", "list-item", "hidden"],
+      /**
+       * Screen Reader Only
+       * @see https://tailwindcss.com/docs/display#screen-reader-only
+       */
+      sr: ["sr-only", "not-sr-only"],
+      /**
+       * Floats
+       * @see https://tailwindcss.com/docs/float
+       */
+      float: [{
+        float: ["right", "left", "none", "start", "end"]
+      }],
+      /**
+       * Clear
+       * @see https://tailwindcss.com/docs/clear
+       */
+      clear: [{
+        clear: ["left", "right", "both", "none", "start", "end"]
+      }],
+      /**
+       * Isolation
+       * @see https://tailwindcss.com/docs/isolation
+       */
+      isolation: ["isolate", "isolation-auto"],
+      /**
+       * Object Fit
+       * @see https://tailwindcss.com/docs/object-fit
+       */
+      "object-fit": [{
+        object: ["contain", "cover", "fill", "none", "scale-down"]
+      }],
+      /**
+       * Object Position
+       * @see https://tailwindcss.com/docs/object-position
+       */
+      "object-position": [{
+        object: scalePositionWithArbitrary()
+      }],
+      /**
+       * Overflow
+       * @see https://tailwindcss.com/docs/overflow
+       */
+      overflow: [{
+        overflow: scaleOverflow()
+      }],
+      /**
+       * Overflow X
+       * @see https://tailwindcss.com/docs/overflow
+       */
+      "overflow-x": [{
+        "overflow-x": scaleOverflow()
+      }],
+      /**
+       * Overflow Y
+       * @see https://tailwindcss.com/docs/overflow
+       */
+      "overflow-y": [{
+        "overflow-y": scaleOverflow()
+      }],
+      /**
+       * Overscroll Behavior
+       * @see https://tailwindcss.com/docs/overscroll-behavior
+       */
+      overscroll: [{
+        overscroll: scaleOverscroll()
+      }],
+      /**
+       * Overscroll Behavior X
+       * @see https://tailwindcss.com/docs/overscroll-behavior
+       */
+      "overscroll-x": [{
+        "overscroll-x": scaleOverscroll()
+      }],
+      /**
+       * Overscroll Behavior Y
+       * @see https://tailwindcss.com/docs/overscroll-behavior
+       */
+      "overscroll-y": [{
+        "overscroll-y": scaleOverscroll()
+      }],
+      /**
+       * Position
+       * @see https://tailwindcss.com/docs/position
+       */
+      position: ["static", "fixed", "absolute", "relative", "sticky"],
+      /**
+       * Inset
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      inset: [{
+        inset: scaleInset()
+      }],
+      /**
+       * Inset Inline
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      "inset-x": [{
+        "inset-x": scaleInset()
+      }],
+      /**
+       * Inset Block
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      "inset-y": [{
+        "inset-y": scaleInset()
+      }],
+      /**
+       * Inset Inline Start
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       * @todo class group will be renamed to `inset-s` in next major release
+       */
+      start: [{
+        "inset-s": scaleInset(),
+        /**
+         * @deprecated since Tailwind CSS v4.2.0 in favor of `inset-s-*` utilities.
+         * @see https://github.com/tailwindlabs/tailwindcss/pull/19613
+         */
+        start: scaleInset()
+      }],
+      /**
+       * Inset Inline End
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       * @todo class group will be renamed to `inset-e` in next major release
+       */
+      end: [{
+        "inset-e": scaleInset(),
+        /**
+         * @deprecated since Tailwind CSS v4.2.0 in favor of `inset-e-*` utilities.
+         * @see https://github.com/tailwindlabs/tailwindcss/pull/19613
+         */
+        end: scaleInset()
+      }],
+      /**
+       * Inset Block Start
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      "inset-bs": [{
+        "inset-bs": scaleInset()
+      }],
+      /**
+       * Inset Block End
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      "inset-be": [{
+        "inset-be": scaleInset()
+      }],
+      /**
+       * Top
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      top: [{
+        top: scaleInset()
+      }],
+      /**
+       * Right
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      right: [{
+        right: scaleInset()
+      }],
+      /**
+       * Bottom
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      bottom: [{
+        bottom: scaleInset()
+      }],
+      /**
+       * Left
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      left: [{
+        left: scaleInset()
+      }],
+      /**
+       * Visibility
+       * @see https://tailwindcss.com/docs/visibility
+       */
+      visibility: ["visible", "invisible", "collapse"],
+      /**
+       * Z-Index
+       * @see https://tailwindcss.com/docs/z-index
+       */
+      z: [{
+        z: [isInteger, "auto", isArbitraryVariable, isArbitraryValue]
+      }],
+      // ------------------------
+      // --- Flexbox and Grid ---
+      // ------------------------
+      /**
+       * Flex Basis
+       * @see https://tailwindcss.com/docs/flex-basis
+       */
+      basis: [{
+        basis: [isFraction, "full", "auto", themeContainer, ...scaleUnambiguousSpacing()]
+      }],
+      /**
+       * Flex Direction
+       * @see https://tailwindcss.com/docs/flex-direction
+       */
+      "flex-direction": [{
+        flex: ["row", "row-reverse", "col", "col-reverse"]
+      }],
+      /**
+       * Flex Wrap
+       * @see https://tailwindcss.com/docs/flex-wrap
+       */
+      "flex-wrap": [{
+        flex: ["nowrap", "wrap", "wrap-reverse"]
+      }],
+      /**
+       * Flex
+       * @see https://tailwindcss.com/docs/flex
+       */
+      flex: [{
+        flex: [isNumber, isFraction, "auto", "initial", "none", isArbitraryValue]
+      }],
+      /**
+       * Flex Grow
+       * @see https://tailwindcss.com/docs/flex-grow
+       */
+      grow: [{
+        grow: ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Flex Shrink
+       * @see https://tailwindcss.com/docs/flex-shrink
+       */
+      shrink: [{
+        shrink: ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Order
+       * @see https://tailwindcss.com/docs/order
+       */
+      order: [{
+        order: [isInteger, "first", "last", "none", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Grid Template Columns
+       * @see https://tailwindcss.com/docs/grid-template-columns
+       */
+      "grid-cols": [{
+        "grid-cols": scaleGridTemplateColsRows()
+      }],
+      /**
+       * Grid Column Start / End
+       * @see https://tailwindcss.com/docs/grid-column
+       */
+      "col-start-end": [{
+        col: scaleGridColRowStartAndEnd()
+      }],
+      /**
+       * Grid Column Start
+       * @see https://tailwindcss.com/docs/grid-column
+       */
+      "col-start": [{
+        "col-start": scaleGridColRowStartOrEnd()
+      }],
+      /**
+       * Grid Column End
+       * @see https://tailwindcss.com/docs/grid-column
+       */
+      "col-end": [{
+        "col-end": scaleGridColRowStartOrEnd()
+      }],
+      /**
+       * Grid Template Rows
+       * @see https://tailwindcss.com/docs/grid-template-rows
+       */
+      "grid-rows": [{
+        "grid-rows": scaleGridTemplateColsRows()
+      }],
+      /**
+       * Grid Row Start / End
+       * @see https://tailwindcss.com/docs/grid-row
+       */
+      "row-start-end": [{
+        row: scaleGridColRowStartAndEnd()
+      }],
+      /**
+       * Grid Row Start
+       * @see https://tailwindcss.com/docs/grid-row
+       */
+      "row-start": [{
+        "row-start": scaleGridColRowStartOrEnd()
+      }],
+      /**
+       * Grid Row End
+       * @see https://tailwindcss.com/docs/grid-row
+       */
+      "row-end": [{
+        "row-end": scaleGridColRowStartOrEnd()
+      }],
+      /**
+       * Grid Auto Flow
+       * @see https://tailwindcss.com/docs/grid-auto-flow
+       */
+      "grid-flow": [{
+        "grid-flow": ["row", "col", "dense", "row-dense", "col-dense"]
+      }],
+      /**
+       * Grid Auto Columns
+       * @see https://tailwindcss.com/docs/grid-auto-columns
+       */
+      "auto-cols": [{
+        "auto-cols": scaleGridAutoColsRows()
+      }],
+      /**
+       * Grid Auto Rows
+       * @see https://tailwindcss.com/docs/grid-auto-rows
+       */
+      "auto-rows": [{
+        "auto-rows": scaleGridAutoColsRows()
+      }],
+      /**
+       * Gap
+       * @see https://tailwindcss.com/docs/gap
+       */
+      gap: [{
+        gap: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Gap X
+       * @see https://tailwindcss.com/docs/gap
+       */
+      "gap-x": [{
+        "gap-x": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Gap Y
+       * @see https://tailwindcss.com/docs/gap
+       */
+      "gap-y": [{
+        "gap-y": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Justify Content
+       * @see https://tailwindcss.com/docs/justify-content
+       */
+      "justify-content": [{
+        justify: [...scaleAlignPrimaryAxis(), "normal"]
+      }],
+      /**
+       * Justify Items
+       * @see https://tailwindcss.com/docs/justify-items
+       */
+      "justify-items": [{
+        "justify-items": [...scaleAlignSecondaryAxis(), "normal"]
+      }],
+      /**
+       * Justify Self
+       * @see https://tailwindcss.com/docs/justify-self
+       */
+      "justify-self": [{
+        "justify-self": ["auto", ...scaleAlignSecondaryAxis()]
+      }],
+      /**
+       * Align Content
+       * @see https://tailwindcss.com/docs/align-content
+       */
+      "align-content": [{
+        content: ["normal", ...scaleAlignPrimaryAxis()]
+      }],
+      /**
+       * Align Items
+       * @see https://tailwindcss.com/docs/align-items
+       */
+      "align-items": [{
+        items: [...scaleAlignSecondaryAxis(), {
+          baseline: ["", "last"]
+        }]
+      }],
+      /**
+       * Align Self
+       * @see https://tailwindcss.com/docs/align-self
+       */
+      "align-self": [{
+        self: ["auto", ...scaleAlignSecondaryAxis(), {
+          baseline: ["", "last"]
+        }]
+      }],
+      /**
+       * Place Content
+       * @see https://tailwindcss.com/docs/place-content
+       */
+      "place-content": [{
+        "place-content": scaleAlignPrimaryAxis()
+      }],
+      /**
+       * Place Items
+       * @see https://tailwindcss.com/docs/place-items
+       */
+      "place-items": [{
+        "place-items": [...scaleAlignSecondaryAxis(), "baseline"]
+      }],
+      /**
+       * Place Self
+       * @see https://tailwindcss.com/docs/place-self
+       */
+      "place-self": [{
+        "place-self": ["auto", ...scaleAlignSecondaryAxis()]
+      }],
+      // Spacing
+      /**
+       * Padding
+       * @see https://tailwindcss.com/docs/padding
+       */
+      p: [{
+        p: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Inline
+       * @see https://tailwindcss.com/docs/padding
+       */
+      px: [{
+        px: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Block
+       * @see https://tailwindcss.com/docs/padding
+       */
+      py: [{
+        py: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Inline Start
+       * @see https://tailwindcss.com/docs/padding
+       */
+      ps: [{
+        ps: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Inline End
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pe: [{
+        pe: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Block Start
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pbs: [{
+        pbs: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Block End
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pbe: [{
+        pbe: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Top
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pt: [{
+        pt: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Right
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pr: [{
+        pr: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Bottom
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pb: [{
+        pb: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Left
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pl: [{
+        pl: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Margin
+       * @see https://tailwindcss.com/docs/margin
+       */
+      m: [{
+        m: scaleMargin()
+      }],
+      /**
+       * Margin Inline
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mx: [{
+        mx: scaleMargin()
+      }],
+      /**
+       * Margin Block
+       * @see https://tailwindcss.com/docs/margin
+       */
+      my: [{
+        my: scaleMargin()
+      }],
+      /**
+       * Margin Inline Start
+       * @see https://tailwindcss.com/docs/margin
+       */
+      ms: [{
+        ms: scaleMargin()
+      }],
+      /**
+       * Margin Inline End
+       * @see https://tailwindcss.com/docs/margin
+       */
+      me: [{
+        me: scaleMargin()
+      }],
+      /**
+       * Margin Block Start
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mbs: [{
+        mbs: scaleMargin()
+      }],
+      /**
+       * Margin Block End
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mbe: [{
+        mbe: scaleMargin()
+      }],
+      /**
+       * Margin Top
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mt: [{
+        mt: scaleMargin()
+      }],
+      /**
+       * Margin Right
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mr: [{
+        mr: scaleMargin()
+      }],
+      /**
+       * Margin Bottom
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mb: [{
+        mb: scaleMargin()
+      }],
+      /**
+       * Margin Left
+       * @see https://tailwindcss.com/docs/margin
+       */
+      ml: [{
+        ml: scaleMargin()
+      }],
+      /**
+       * Space Between X
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
+       */
+      "space-x": [{
+        "space-x": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Space Between X Reverse
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
+       */
+      "space-x-reverse": ["space-x-reverse"],
+      /**
+       * Space Between Y
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
+       */
+      "space-y": [{
+        "space-y": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Space Between Y Reverse
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
+       */
+      "space-y-reverse": ["space-y-reverse"],
+      // --------------
+      // --- Sizing ---
+      // --------------
+      /**
+       * Size
+       * @see https://tailwindcss.com/docs/width#setting-both-width-and-height
+       */
+      size: [{
+        size: scaleSizing()
+      }],
+      /**
+       * Inline Size
+       * @see https://tailwindcss.com/docs/width
+       */
+      "inline-size": [{
+        inline: ["auto", ...scaleSizingInline()]
+      }],
+      /**
+       * Min-Inline Size
+       * @see https://tailwindcss.com/docs/min-width
+       */
+      "min-inline-size": [{
+        "min-inline": ["auto", ...scaleSizingInline()]
+      }],
+      /**
+       * Max-Inline Size
+       * @see https://tailwindcss.com/docs/max-width
+       */
+      "max-inline-size": [{
+        "max-inline": ["none", ...scaleSizingInline()]
+      }],
+      /**
+       * Block Size
+       * @see https://tailwindcss.com/docs/height
+       */
+      "block-size": [{
+        block: ["auto", ...scaleSizingBlock()]
+      }],
+      /**
+       * Min-Block Size
+       * @see https://tailwindcss.com/docs/min-height
+       */
+      "min-block-size": [{
+        "min-block": ["auto", ...scaleSizingBlock()]
+      }],
+      /**
+       * Max-Block Size
+       * @see https://tailwindcss.com/docs/max-height
+       */
+      "max-block-size": [{
+        "max-block": ["none", ...scaleSizingBlock()]
+      }],
+      /**
+       * Width
+       * @see https://tailwindcss.com/docs/width
+       */
+      w: [{
+        w: [themeContainer, "screen", ...scaleSizing()]
+      }],
+      /**
+       * Min-Width
+       * @see https://tailwindcss.com/docs/min-width
+       */
+      "min-w": [{
+        "min-w": [
+          themeContainer,
+          "screen",
+          /** Deprecated. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          "none",
+          ...scaleSizing()
+        ]
+      }],
+      /**
+       * Max-Width
+       * @see https://tailwindcss.com/docs/max-width
+       */
+      "max-w": [{
+        "max-w": [
+          themeContainer,
+          "screen",
+          "none",
+          /** Deprecated since Tailwind CSS v4.0.0. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          "prose",
+          /** Deprecated since Tailwind CSS v4.0.0. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          {
+            screen: [themeBreakpoint]
+          },
+          ...scaleSizing()
+        ]
+      }],
+      /**
+       * Height
+       * @see https://tailwindcss.com/docs/height
+       */
+      h: [{
+        h: ["screen", "lh", ...scaleSizing()]
+      }],
+      /**
+       * Min-Height
+       * @see https://tailwindcss.com/docs/min-height
+       */
+      "min-h": [{
+        "min-h": ["screen", "lh", "none", ...scaleSizing()]
+      }],
+      /**
+       * Max-Height
+       * @see https://tailwindcss.com/docs/max-height
+       */
+      "max-h": [{
+        "max-h": ["screen", "lh", ...scaleSizing()]
+      }],
+      // ------------------
+      // --- Typography ---
+      // ------------------
+      /**
+       * Font Size
+       * @see https://tailwindcss.com/docs/font-size
+       */
+      "font-size": [{
+        text: ["base", themeText, isArbitraryVariableLength, isArbitraryLength]
+      }],
+      /**
+       * Font Smoothing
+       * @see https://tailwindcss.com/docs/font-smoothing
+       */
+      "font-smoothing": ["antialiased", "subpixel-antialiased"],
+      /**
+       * Font Style
+       * @see https://tailwindcss.com/docs/font-style
+       */
+      "font-style": ["italic", "not-italic"],
+      /**
+       * Font Weight
+       * @see https://tailwindcss.com/docs/font-weight
+       */
+      "font-weight": [{
+        font: [themeFontWeight, isArbitraryVariableWeight, isArbitraryWeight]
+      }],
+      /**
+       * Font Stretch
+       * @see https://tailwindcss.com/docs/font-stretch
+       */
+      "font-stretch": [{
+        "font-stretch": ["ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "normal", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded", isPercent, isArbitraryValue]
+      }],
+      /**
+       * Font Family
+       * @see https://tailwindcss.com/docs/font-family
+       */
+      "font-family": [{
+        font: [isArbitraryVariableFamilyName, isArbitraryFamilyName, themeFont]
+      }],
+      /**
+       * Font Feature Settings
+       * @see https://tailwindcss.com/docs/font-feature-settings
+       */
+      "font-features": [{
+        "font-features": [isArbitraryValue]
+      }],
+      /**
+       * Font Variant Numeric
+       * @see https://tailwindcss.com/docs/font-variant-numeric
+       */
+      "fvn-normal": ["normal-nums"],
+      /**
+       * Font Variant Numeric
+       * @see https://tailwindcss.com/docs/font-variant-numeric
+       */
+      "fvn-ordinal": ["ordinal"],
+      /**
+       * Font Variant Numeric
+       * @see https://tailwindcss.com/docs/font-variant-numeric
+       */
+      "fvn-slashed-zero": ["slashed-zero"],
+      /**
+       * Font Variant Numeric
+       * @see https://tailwindcss.com/docs/font-variant-numeric
+       */
+      "fvn-figure": ["lining-nums", "oldstyle-nums"],
+      /**
+       * Font Variant Numeric
+       * @see https://tailwindcss.com/docs/font-variant-numeric
+       */
+      "fvn-spacing": ["proportional-nums", "tabular-nums"],
+      /**
+       * Font Variant Numeric
+       * @see https://tailwindcss.com/docs/font-variant-numeric
+       */
+      "fvn-fraction": ["diagonal-fractions", "stacked-fractions"],
+      /**
+       * Letter Spacing
+       * @see https://tailwindcss.com/docs/letter-spacing
+       */
+      tracking: [{
+        tracking: [themeTracking, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Line Clamp
+       * @see https://tailwindcss.com/docs/line-clamp
+       */
+      "line-clamp": [{
+        "line-clamp": [isNumber, "none", isArbitraryVariable, isArbitraryNumber]
+      }],
+      /**
+       * Line Height
+       * @see https://tailwindcss.com/docs/line-height
+       */
+      leading: [{
+        leading: [
+          /** Deprecated since Tailwind CSS v4.0.0. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          themeLeading,
+          ...scaleUnambiguousSpacing()
+        ]
+      }],
+      /**
+       * List Style Image
+       * @see https://tailwindcss.com/docs/list-style-image
+       */
+      "list-image": [{
+        "list-image": ["none", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * List Style Position
+       * @see https://tailwindcss.com/docs/list-style-position
+       */
+      "list-style-position": [{
+        list: ["inside", "outside"]
+      }],
+      /**
+       * List Style Type
+       * @see https://tailwindcss.com/docs/list-style-type
+       */
+      "list-style-type": [{
+        list: ["disc", "decimal", "none", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Text Alignment
+       * @see https://tailwindcss.com/docs/text-align
+       */
+      "text-alignment": [{
+        text: ["left", "center", "right", "justify", "start", "end"]
+      }],
+      /**
+       * Placeholder Color
+       * @deprecated since Tailwind CSS v3.0.0
+       * @see https://v3.tailwindcss.com/docs/placeholder-color
+       */
+      "placeholder-color": [{
+        placeholder: scaleColor()
+      }],
+      /**
+       * Text Color
+       * @see https://tailwindcss.com/docs/text-color
+       */
+      "text-color": [{
+        text: scaleColor()
+      }],
+      /**
+       * Text Decoration
+       * @see https://tailwindcss.com/docs/text-decoration
+       */
+      "text-decoration": ["underline", "overline", "line-through", "no-underline"],
+      /**
+       * Text Decoration Style
+       * @see https://tailwindcss.com/docs/text-decoration-style
+       */
+      "text-decoration-style": [{
+        decoration: [...scaleLineStyle(), "wavy"]
+      }],
+      /**
+       * Text Decoration Thickness
+       * @see https://tailwindcss.com/docs/text-decoration-thickness
+       */
+      "text-decoration-thickness": [{
+        decoration: [isNumber, "from-font", "auto", isArbitraryVariable, isArbitraryLength]
+      }],
+      /**
+       * Text Decoration Color
+       * @see https://tailwindcss.com/docs/text-decoration-color
+       */
+      "text-decoration-color": [{
+        decoration: scaleColor()
+      }],
+      /**
+       * Text Underline Offset
+       * @see https://tailwindcss.com/docs/text-underline-offset
+       */
+      "underline-offset": [{
+        "underline-offset": [isNumber, "auto", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Text Transform
+       * @see https://tailwindcss.com/docs/text-transform
+       */
+      "text-transform": ["uppercase", "lowercase", "capitalize", "normal-case"],
+      /**
+       * Text Overflow
+       * @see https://tailwindcss.com/docs/text-overflow
+       */
+      "text-overflow": ["truncate", "text-ellipsis", "text-clip"],
+      /**
+       * Text Wrap
+       * @see https://tailwindcss.com/docs/text-wrap
+       */
+      "text-wrap": [{
+        text: ["wrap", "nowrap", "balance", "pretty"]
+      }],
+      /**
+       * Text Indent
+       * @see https://tailwindcss.com/docs/text-indent
+       */
+      indent: [{
+        indent: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Tab Size
+       * @see https://tailwindcss.com/docs/tab-size
+       */
+      "tab-size": [{
+        tab: [isInteger, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Vertical Alignment
+       * @see https://tailwindcss.com/docs/vertical-align
+       */
+      "vertical-align": [{
+        align: ["baseline", "top", "middle", "bottom", "text-top", "text-bottom", "sub", "super", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Whitespace
+       * @see https://tailwindcss.com/docs/whitespace
+       */
+      whitespace: [{
+        whitespace: ["normal", "nowrap", "pre", "pre-line", "pre-wrap", "break-spaces"]
+      }],
+      /**
+       * Word Break
+       * @see https://tailwindcss.com/docs/word-break
+       */
+      break: [{
+        break: ["normal", "words", "all", "keep"]
+      }],
+      /**
+       * Overflow Wrap
+       * @see https://tailwindcss.com/docs/overflow-wrap
+       */
+      wrap: [{
+        wrap: ["break-word", "anywhere", "normal"]
+      }],
+      /**
+       * Hyphens
+       * @see https://tailwindcss.com/docs/hyphens
+       */
+      hyphens: [{
+        hyphens: ["none", "manual", "auto"]
+      }],
+      /**
+       * Content
+       * @see https://tailwindcss.com/docs/content
+       */
+      content: [{
+        content: ["none", isArbitraryVariable, isArbitraryValue]
+      }],
+      // -------------------
+      // --- Backgrounds ---
+      // -------------------
+      /**
+       * Background Attachment
+       * @see https://tailwindcss.com/docs/background-attachment
+       */
+      "bg-attachment": [{
+        bg: ["fixed", "local", "scroll"]
+      }],
+      /**
+       * Background Clip
+       * @see https://tailwindcss.com/docs/background-clip
+       */
+      "bg-clip": [{
+        "bg-clip": ["border", "padding", "content", "text"]
+      }],
+      /**
+       * Background Origin
+       * @see https://tailwindcss.com/docs/background-origin
+       */
+      "bg-origin": [{
+        "bg-origin": ["border", "padding", "content"]
+      }],
+      /**
+       * Background Position
+       * @see https://tailwindcss.com/docs/background-position
+       */
+      "bg-position": [{
+        bg: scaleBgPosition()
+      }],
+      /**
+       * Background Repeat
+       * @see https://tailwindcss.com/docs/background-repeat
+       */
+      "bg-repeat": [{
+        bg: scaleBgRepeat()
+      }],
+      /**
+       * Background Size
+       * @see https://tailwindcss.com/docs/background-size
+       */
+      "bg-size": [{
+        bg: scaleBgSize()
+      }],
+      /**
+       * Background Image
+       * @see https://tailwindcss.com/docs/background-image
+       */
+      "bg-image": [{
+        bg: ["none", {
+          linear: [{
+            to: ["t", "tr", "r", "br", "b", "bl", "l", "tl"]
+          }, isInteger, isArbitraryVariable, isArbitraryValue],
+          radial: ["", isArbitraryVariable, isArbitraryValue],
+          conic: [isInteger, isArbitraryVariable, isArbitraryValue]
+        }, isArbitraryVariableImage, isArbitraryImage]
+      }],
+      /**
+       * Background Color
+       * @see https://tailwindcss.com/docs/background-color
+       */
+      "bg-color": [{
+        bg: scaleColor()
+      }],
+      /**
+       * Gradient Color Stops From Position
+       * @see https://tailwindcss.com/docs/gradient-color-stops
+       */
+      "gradient-from-pos": [{
+        from: scaleGradientStopPosition()
+      }],
+      /**
+       * Gradient Color Stops Via Position
+       * @see https://tailwindcss.com/docs/gradient-color-stops
+       */
+      "gradient-via-pos": [{
+        via: scaleGradientStopPosition()
+      }],
+      /**
+       * Gradient Color Stops To Position
+       * @see https://tailwindcss.com/docs/gradient-color-stops
+       */
+      "gradient-to-pos": [{
+        to: scaleGradientStopPosition()
+      }],
+      /**
+       * Gradient Color Stops From
+       * @see https://tailwindcss.com/docs/gradient-color-stops
+       */
+      "gradient-from": [{
+        from: scaleColor()
+      }],
+      /**
+       * Gradient Color Stops Via
+       * @see https://tailwindcss.com/docs/gradient-color-stops
+       */
+      "gradient-via": [{
+        via: scaleColor()
+      }],
+      /**
+       * Gradient Color Stops To
+       * @see https://tailwindcss.com/docs/gradient-color-stops
+       */
+      "gradient-to": [{
+        to: scaleColor()
+      }],
+      // ---------------
+      // --- Borders ---
+      // ---------------
+      /**
+       * Border Radius
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      rounded: [{
+        rounded: scaleRadius()
+      }],
+      /**
+       * Border Radius Start
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-s": [{
+        "rounded-s": scaleRadius()
+      }],
+      /**
+       * Border Radius End
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-e": [{
+        "rounded-e": scaleRadius()
+      }],
+      /**
+       * Border Radius Top
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-t": [{
+        "rounded-t": scaleRadius()
+      }],
+      /**
+       * Border Radius Right
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-r": [{
+        "rounded-r": scaleRadius()
+      }],
+      /**
+       * Border Radius Bottom
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-b": [{
+        "rounded-b": scaleRadius()
+      }],
+      /**
+       * Border Radius Left
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-l": [{
+        "rounded-l": scaleRadius()
+      }],
+      /**
+       * Border Radius Start Start
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-ss": [{
+        "rounded-ss": scaleRadius()
+      }],
+      /**
+       * Border Radius Start End
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-se": [{
+        "rounded-se": scaleRadius()
+      }],
+      /**
+       * Border Radius End End
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-ee": [{
+        "rounded-ee": scaleRadius()
+      }],
+      /**
+       * Border Radius End Start
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-es": [{
+        "rounded-es": scaleRadius()
+      }],
+      /**
+       * Border Radius Top Left
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-tl": [{
+        "rounded-tl": scaleRadius()
+      }],
+      /**
+       * Border Radius Top Right
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-tr": [{
+        "rounded-tr": scaleRadius()
+      }],
+      /**
+       * Border Radius Bottom Right
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-br": [{
+        "rounded-br": scaleRadius()
+      }],
+      /**
+       * Border Radius Bottom Left
+       * @see https://tailwindcss.com/docs/border-radius
+       */
+      "rounded-bl": [{
+        "rounded-bl": scaleRadius()
+      }],
+      /**
+       * Border Width
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w": [{
+        border: scaleBorderWidth()
+      }],
+      /**
+       * Border Width Inline
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-x": [{
+        "border-x": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Block
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-y": [{
+        "border-y": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Inline Start
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-s": [{
+        "border-s": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Inline End
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-e": [{
+        "border-e": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Block Start
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-bs": [{
+        "border-bs": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Block End
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-be": [{
+        "border-be": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Top
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-t": [{
+        "border-t": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Right
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-r": [{
+        "border-r": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Bottom
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-b": [{
+        "border-b": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Left
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-l": [{
+        "border-l": scaleBorderWidth()
+      }],
+      /**
+       * Divide Width X
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-x": [{
+        "divide-x": scaleBorderWidth()
+      }],
+      /**
+       * Divide Width X Reverse
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-x-reverse": ["divide-x-reverse"],
+      /**
+       * Divide Width Y
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-y": [{
+        "divide-y": scaleBorderWidth()
+      }],
+      /**
+       * Divide Width Y Reverse
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-y-reverse": ["divide-y-reverse"],
+      /**
+       * Border Style
+       * @see https://tailwindcss.com/docs/border-style
+       */
+      "border-style": [{
+        border: [...scaleLineStyle(), "hidden", "none"]
+      }],
+      /**
+       * Divide Style
+       * @see https://tailwindcss.com/docs/border-style#setting-the-divider-style
+       */
+      "divide-style": [{
+        divide: [...scaleLineStyle(), "hidden", "none"]
+      }],
+      /**
+       * Border Color
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color": [{
+        border: scaleColor()
+      }],
+      /**
+       * Border Color Inline
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-x": [{
+        "border-x": scaleColor()
+      }],
+      /**
+       * Border Color Block
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-y": [{
+        "border-y": scaleColor()
+      }],
+      /**
+       * Border Color Inline Start
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-s": [{
+        "border-s": scaleColor()
+      }],
+      /**
+       * Border Color Inline End
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-e": [{
+        "border-e": scaleColor()
+      }],
+      /**
+       * Border Color Block Start
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-bs": [{
+        "border-bs": scaleColor()
+      }],
+      /**
+       * Border Color Block End
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-be": [{
+        "border-be": scaleColor()
+      }],
+      /**
+       * Border Color Top
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-t": [{
+        "border-t": scaleColor()
+      }],
+      /**
+       * Border Color Right
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-r": [{
+        "border-r": scaleColor()
+      }],
+      /**
+       * Border Color Bottom
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-b": [{
+        "border-b": scaleColor()
+      }],
+      /**
+       * Border Color Left
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-l": [{
+        "border-l": scaleColor()
+      }],
+      /**
+       * Divide Color
+       * @see https://tailwindcss.com/docs/divide-color
+       */
+      "divide-color": [{
+        divide: scaleColor()
+      }],
+      /**
+       * Outline Style
+       * @see https://tailwindcss.com/docs/outline-style
+       */
+      "outline-style": [{
+        outline: [...scaleLineStyle(), "none", "hidden"]
+      }],
+      /**
+       * Outline Offset
+       * @see https://tailwindcss.com/docs/outline-offset
+       */
+      "outline-offset": [{
+        "outline-offset": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Outline Width
+       * @see https://tailwindcss.com/docs/outline-width
+       */
+      "outline-w": [{
+        outline: ["", isNumber, isArbitraryVariableLength, isArbitraryLength]
+      }],
+      /**
+       * Outline Color
+       * @see https://tailwindcss.com/docs/outline-color
+       */
+      "outline-color": [{
+        outline: scaleColor()
+      }],
+      // ---------------
+      // --- Effects ---
+      // ---------------
+      /**
+       * Box Shadow
+       * @see https://tailwindcss.com/docs/box-shadow
+       */
+      shadow: [{
+        shadow: [
+          // Deprecated since Tailwind CSS v4.0.0
+          "",
+          "none",
+          themeShadow,
+          isArbitraryVariableShadow,
+          isArbitraryShadow
+        ]
+      }],
+      /**
+       * Box Shadow Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-shadow-color
+       */
+      "shadow-color": [{
+        shadow: scaleColor()
+      }],
+      /**
+       * Inset Box Shadow
+       * @see https://tailwindcss.com/docs/box-shadow#adding-an-inset-shadow
+       */
+      "inset-shadow": [{
+        "inset-shadow": ["none", themeInsetShadow, isArbitraryVariableShadow, isArbitraryShadow]
+      }],
+      /**
+       * Inset Box Shadow Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-inset-shadow-color
+       */
+      "inset-shadow-color": [{
+        "inset-shadow": scaleColor()
+      }],
+      /**
+       * Ring Width
+       * @see https://tailwindcss.com/docs/box-shadow#adding-a-ring
+       */
+      "ring-w": [{
+        ring: scaleBorderWidth()
+      }],
+      /**
+       * Ring Width Inset
+       * @see https://v3.tailwindcss.com/docs/ring-width#inset-rings
+       * @deprecated since Tailwind CSS v4.0.0
+       * @see https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/tailwindcss/src/utilities.ts#L4158
+       */
+      "ring-w-inset": ["ring-inset"],
+      /**
+       * Ring Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-ring-color
+       */
+      "ring-color": [{
+        ring: scaleColor()
+      }],
+      /**
+       * Ring Offset Width
+       * @see https://v3.tailwindcss.com/docs/ring-offset-width
+       * @deprecated since Tailwind CSS v4.0.0
+       * @see https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/tailwindcss/src/utilities.ts#L4158
+       */
+      "ring-offset-w": [{
+        "ring-offset": [isNumber, isArbitraryLength]
+      }],
+      /**
+       * Ring Offset Color
+       * @see https://v3.tailwindcss.com/docs/ring-offset-color
+       * @deprecated since Tailwind CSS v4.0.0
+       * @see https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/tailwindcss/src/utilities.ts#L4158
+       */
+      "ring-offset-color": [{
+        "ring-offset": scaleColor()
+      }],
+      /**
+       * Inset Ring Width
+       * @see https://tailwindcss.com/docs/box-shadow#adding-an-inset-ring
+       */
+      "inset-ring-w": [{
+        "inset-ring": scaleBorderWidth()
+      }],
+      /**
+       * Inset Ring Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-inset-ring-color
+       */
+      "inset-ring-color": [{
+        "inset-ring": scaleColor()
+      }],
+      /**
+       * Text Shadow
+       * @see https://tailwindcss.com/docs/text-shadow
+       */
+      "text-shadow": [{
+        "text-shadow": ["none", themeTextShadow, isArbitraryVariableShadow, isArbitraryShadow]
+      }],
+      /**
+       * Text Shadow Color
+       * @see https://tailwindcss.com/docs/text-shadow#setting-the-shadow-color
+       */
+      "text-shadow-color": [{
+        "text-shadow": scaleColor()
+      }],
+      /**
+       * Opacity
+       * @see https://tailwindcss.com/docs/opacity
+       */
+      opacity: [{
+        opacity: [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Mix Blend Mode
+       * @see https://tailwindcss.com/docs/mix-blend-mode
+       */
+      "mix-blend": [{
+        "mix-blend": [...scaleBlendMode(), "plus-darker", "plus-lighter"]
+      }],
+      /**
+       * Background Blend Mode
+       * @see https://tailwindcss.com/docs/background-blend-mode
+       */
+      "bg-blend": [{
+        "bg-blend": scaleBlendMode()
+      }],
+      /**
+       * Mask Clip
+       * @see https://tailwindcss.com/docs/mask-clip
+       */
+      "mask-clip": [{
+        "mask-clip": ["border", "padding", "content", "fill", "stroke", "view"]
+      }, "mask-no-clip"],
+      /**
+       * Mask Composite
+       * @see https://tailwindcss.com/docs/mask-composite
+       */
+      "mask-composite": [{
+        mask: ["add", "subtract", "intersect", "exclude"]
+      }],
+      /**
+       * Mask Image
+       * @see https://tailwindcss.com/docs/mask-image
+       */
+      "mask-image-linear-pos": [{
+        "mask-linear": [isNumber]
+      }],
+      "mask-image-linear-from-pos": [{
+        "mask-linear-from": scaleMaskImagePosition()
+      }],
+      "mask-image-linear-to-pos": [{
+        "mask-linear-to": scaleMaskImagePosition()
+      }],
+      "mask-image-linear-from-color": [{
+        "mask-linear-from": scaleColor()
+      }],
+      "mask-image-linear-to-color": [{
+        "mask-linear-to": scaleColor()
+      }],
+      "mask-image-t-from-pos": [{
+        "mask-t-from": scaleMaskImagePosition()
+      }],
+      "mask-image-t-to-pos": [{
+        "mask-t-to": scaleMaskImagePosition()
+      }],
+      "mask-image-t-from-color": [{
+        "mask-t-from": scaleColor()
+      }],
+      "mask-image-t-to-color": [{
+        "mask-t-to": scaleColor()
+      }],
+      "mask-image-r-from-pos": [{
+        "mask-r-from": scaleMaskImagePosition()
+      }],
+      "mask-image-r-to-pos": [{
+        "mask-r-to": scaleMaskImagePosition()
+      }],
+      "mask-image-r-from-color": [{
+        "mask-r-from": scaleColor()
+      }],
+      "mask-image-r-to-color": [{
+        "mask-r-to": scaleColor()
+      }],
+      "mask-image-b-from-pos": [{
+        "mask-b-from": scaleMaskImagePosition()
+      }],
+      "mask-image-b-to-pos": [{
+        "mask-b-to": scaleMaskImagePosition()
+      }],
+      "mask-image-b-from-color": [{
+        "mask-b-from": scaleColor()
+      }],
+      "mask-image-b-to-color": [{
+        "mask-b-to": scaleColor()
+      }],
+      "mask-image-l-from-pos": [{
+        "mask-l-from": scaleMaskImagePosition()
+      }],
+      "mask-image-l-to-pos": [{
+        "mask-l-to": scaleMaskImagePosition()
+      }],
+      "mask-image-l-from-color": [{
+        "mask-l-from": scaleColor()
+      }],
+      "mask-image-l-to-color": [{
+        "mask-l-to": scaleColor()
+      }],
+      "mask-image-x-from-pos": [{
+        "mask-x-from": scaleMaskImagePosition()
+      }],
+      "mask-image-x-to-pos": [{
+        "mask-x-to": scaleMaskImagePosition()
+      }],
+      "mask-image-x-from-color": [{
+        "mask-x-from": scaleColor()
+      }],
+      "mask-image-x-to-color": [{
+        "mask-x-to": scaleColor()
+      }],
+      "mask-image-y-from-pos": [{
+        "mask-y-from": scaleMaskImagePosition()
+      }],
+      "mask-image-y-to-pos": [{
+        "mask-y-to": scaleMaskImagePosition()
+      }],
+      "mask-image-y-from-color": [{
+        "mask-y-from": scaleColor()
+      }],
+      "mask-image-y-to-color": [{
+        "mask-y-to": scaleColor()
+      }],
+      "mask-image-radial": [{
+        "mask-radial": [isArbitraryVariable, isArbitraryValue]
+      }],
+      "mask-image-radial-from-pos": [{
+        "mask-radial-from": scaleMaskImagePosition()
+      }],
+      "mask-image-radial-to-pos": [{
+        "mask-radial-to": scaleMaskImagePosition()
+      }],
+      "mask-image-radial-from-color": [{
+        "mask-radial-from": scaleColor()
+      }],
+      "mask-image-radial-to-color": [{
+        "mask-radial-to": scaleColor()
+      }],
+      "mask-image-radial-shape": [{
+        "mask-radial": ["circle", "ellipse"]
+      }],
+      "mask-image-radial-size": [{
+        "mask-radial": [{
+          closest: ["side", "corner"],
+          farthest: ["side", "corner"]
+        }]
+      }],
+      "mask-image-radial-pos": [{
+        "mask-radial-at": scalePosition()
+      }],
+      "mask-image-conic-pos": [{
+        "mask-conic": [isNumber]
+      }],
+      "mask-image-conic-from-pos": [{
+        "mask-conic-from": scaleMaskImagePosition()
+      }],
+      "mask-image-conic-to-pos": [{
+        "mask-conic-to": scaleMaskImagePosition()
+      }],
+      "mask-image-conic-from-color": [{
+        "mask-conic-from": scaleColor()
+      }],
+      "mask-image-conic-to-color": [{
+        "mask-conic-to": scaleColor()
+      }],
+      /**
+       * Mask Mode
+       * @see https://tailwindcss.com/docs/mask-mode
+       */
+      "mask-mode": [{
+        mask: ["alpha", "luminance", "match"]
+      }],
+      /**
+       * Mask Origin
+       * @see https://tailwindcss.com/docs/mask-origin
+       */
+      "mask-origin": [{
+        "mask-origin": ["border", "padding", "content", "fill", "stroke", "view"]
+      }],
+      /**
+       * Mask Position
+       * @see https://tailwindcss.com/docs/mask-position
+       */
+      "mask-position": [{
+        mask: scaleBgPosition()
+      }],
+      /**
+       * Mask Repeat
+       * @see https://tailwindcss.com/docs/mask-repeat
+       */
+      "mask-repeat": [{
+        mask: scaleBgRepeat()
+      }],
+      /**
+       * Mask Size
+       * @see https://tailwindcss.com/docs/mask-size
+       */
+      "mask-size": [{
+        mask: scaleBgSize()
+      }],
+      /**
+       * Mask Type
+       * @see https://tailwindcss.com/docs/mask-type
+       */
+      "mask-type": [{
+        "mask-type": ["alpha", "luminance"]
+      }],
+      /**
+       * Mask Image
+       * @see https://tailwindcss.com/docs/mask-image
+       */
+      "mask-image": [{
+        mask: ["none", isArbitraryVariable, isArbitraryValue]
+      }],
+      // ---------------
+      // --- Filters ---
+      // ---------------
+      /**
+       * Filter
+       * @see https://tailwindcss.com/docs/filter
+       */
+      filter: [{
+        filter: [
+          // Deprecated since Tailwind CSS v3.0.0
+          "",
+          "none",
+          isArbitraryVariable,
+          isArbitraryValue
+        ]
+      }],
+      /**
+       * Blur
+       * @see https://tailwindcss.com/docs/blur
+       */
+      blur: [{
+        blur: scaleBlur()
+      }],
+      /**
+       * Brightness
+       * @see https://tailwindcss.com/docs/brightness
+       */
+      brightness: [{
+        brightness: [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Contrast
+       * @see https://tailwindcss.com/docs/contrast
+       */
+      contrast: [{
+        contrast: [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Drop Shadow
+       * @see https://tailwindcss.com/docs/drop-shadow
+       */
+      "drop-shadow": [{
+        "drop-shadow": [
+          // Deprecated since Tailwind CSS v4.0.0
+          "",
+          "none",
+          themeDropShadow,
+          isArbitraryVariableShadow,
+          isArbitraryShadow
+        ]
+      }],
+      /**
+       * Drop Shadow Color
+       * @see https://tailwindcss.com/docs/filter-drop-shadow#setting-the-shadow-color
+       */
+      "drop-shadow-color": [{
+        "drop-shadow": scaleColor()
+      }],
+      /**
+       * Grayscale
+       * @see https://tailwindcss.com/docs/grayscale
+       */
+      grayscale: [{
+        grayscale: ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Hue Rotate
+       * @see https://tailwindcss.com/docs/hue-rotate
+       */
+      "hue-rotate": [{
+        "hue-rotate": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Invert
+       * @see https://tailwindcss.com/docs/invert
+       */
+      invert: [{
+        invert: ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Saturate
+       * @see https://tailwindcss.com/docs/saturate
+       */
+      saturate: [{
+        saturate: [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Sepia
+       * @see https://tailwindcss.com/docs/sepia
+       */
+      sepia: [{
+        sepia: ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Filter
+       * @see https://tailwindcss.com/docs/backdrop-filter
+       */
+      "backdrop-filter": [{
+        "backdrop-filter": [
+          // Deprecated since Tailwind CSS v3.0.0
+          "",
+          "none",
+          isArbitraryVariable,
+          isArbitraryValue
+        ]
+      }],
+      /**
+       * Backdrop Blur
+       * @see https://tailwindcss.com/docs/backdrop-blur
+       */
+      "backdrop-blur": [{
+        "backdrop-blur": scaleBlur()
+      }],
+      /**
+       * Backdrop Brightness
+       * @see https://tailwindcss.com/docs/backdrop-brightness
+       */
+      "backdrop-brightness": [{
+        "backdrop-brightness": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Contrast
+       * @see https://tailwindcss.com/docs/backdrop-contrast
+       */
+      "backdrop-contrast": [{
+        "backdrop-contrast": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Grayscale
+       * @see https://tailwindcss.com/docs/backdrop-grayscale
+       */
+      "backdrop-grayscale": [{
+        "backdrop-grayscale": ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Hue Rotate
+       * @see https://tailwindcss.com/docs/backdrop-hue-rotate
+       */
+      "backdrop-hue-rotate": [{
+        "backdrop-hue-rotate": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Invert
+       * @see https://tailwindcss.com/docs/backdrop-invert
+       */
+      "backdrop-invert": [{
+        "backdrop-invert": ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Opacity
+       * @see https://tailwindcss.com/docs/backdrop-opacity
+       */
+      "backdrop-opacity": [{
+        "backdrop-opacity": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Saturate
+       * @see https://tailwindcss.com/docs/backdrop-saturate
+       */
+      "backdrop-saturate": [{
+        "backdrop-saturate": [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Backdrop Sepia
+       * @see https://tailwindcss.com/docs/backdrop-sepia
+       */
+      "backdrop-sepia": [{
+        "backdrop-sepia": ["", isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      // --------------
+      // --- Tables ---
+      // --------------
+      /**
+       * Border Collapse
+       * @see https://tailwindcss.com/docs/border-collapse
+       */
+      "border-collapse": [{
+        border: ["collapse", "separate"]
+      }],
+      /**
+       * Border Spacing
+       * @see https://tailwindcss.com/docs/border-spacing
+       */
+      "border-spacing": [{
+        "border-spacing": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Border Spacing X
+       * @see https://tailwindcss.com/docs/border-spacing
+       */
+      "border-spacing-x": [{
+        "border-spacing-x": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Border Spacing Y
+       * @see https://tailwindcss.com/docs/border-spacing
+       */
+      "border-spacing-y": [{
+        "border-spacing-y": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Table Layout
+       * @see https://tailwindcss.com/docs/table-layout
+       */
+      "table-layout": [{
+        table: ["auto", "fixed"]
+      }],
+      /**
+       * Caption Side
+       * @see https://tailwindcss.com/docs/caption-side
+       */
+      caption: [{
+        caption: ["top", "bottom"]
+      }],
+      // ---------------------------------
+      // --- Transitions and Animation ---
+      // ---------------------------------
+      /**
+       * Transition Property
+       * @see https://tailwindcss.com/docs/transition-property
+       */
+      transition: [{
+        transition: ["", "all", "colors", "opacity", "shadow", "transform", "none", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Transition Behavior
+       * @see https://tailwindcss.com/docs/transition-behavior
+       */
+      "transition-behavior": [{
+        transition: ["normal", "discrete"]
+      }],
+      /**
+       * Transition Duration
+       * @see https://tailwindcss.com/docs/transition-duration
+       */
+      duration: [{
+        duration: [isNumber, "initial", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Transition Timing Function
+       * @see https://tailwindcss.com/docs/transition-timing-function
+       */
+      ease: [{
+        ease: ["linear", "initial", themeEase, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Transition Delay
+       * @see https://tailwindcss.com/docs/transition-delay
+       */
+      delay: [{
+        delay: [isNumber, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Animation
+       * @see https://tailwindcss.com/docs/animation
+       */
+      animate: [{
+        animate: ["none", themeAnimate, isArbitraryVariable, isArbitraryValue]
+      }],
+      // ------------------
+      // --- Transforms ---
+      // ------------------
+      /**
+       * Backface Visibility
+       * @see https://tailwindcss.com/docs/backface-visibility
+       */
+      backface: [{
+        backface: ["hidden", "visible"]
+      }],
+      /**
+       * Perspective
+       * @see https://tailwindcss.com/docs/perspective
+       */
+      perspective: [{
+        perspective: [themePerspective, isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Perspective Origin
+       * @see https://tailwindcss.com/docs/perspective-origin
+       */
+      "perspective-origin": [{
+        "perspective-origin": scalePositionWithArbitrary()
+      }],
+      /**
+       * Rotate
+       * @see https://tailwindcss.com/docs/rotate
+       */
+      rotate: [{
+        rotate: scaleRotate()
+      }],
+      /**
+       * Rotate X
+       * @see https://tailwindcss.com/docs/rotate
+       */
+      "rotate-x": [{
+        "rotate-x": scaleRotate()
+      }],
+      /**
+       * Rotate Y
+       * @see https://tailwindcss.com/docs/rotate
+       */
+      "rotate-y": [{
+        "rotate-y": scaleRotate()
+      }],
+      /**
+       * Rotate Z
+       * @see https://tailwindcss.com/docs/rotate
+       */
+      "rotate-z": [{
+        "rotate-z": scaleRotate()
+      }],
+      /**
+       * Scale
+       * @see https://tailwindcss.com/docs/scale
+       */
+      scale: [{
+        scale: scaleScale()
+      }],
+      /**
+       * Scale X
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-x": [{
+        "scale-x": scaleScale()
+      }],
+      /**
+       * Scale Y
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-y": [{
+        "scale-y": scaleScale()
+      }],
+      /**
+       * Scale Z
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-z": [{
+        "scale-z": scaleScale()
+      }],
+      /**
+       * Scale 3D
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-3d": ["scale-3d"],
+      /**
+       * Skew
+       * @see https://tailwindcss.com/docs/skew
+       */
+      skew: [{
+        skew: scaleSkew()
+      }],
+      /**
+       * Skew X
+       * @see https://tailwindcss.com/docs/skew
+       */
+      "skew-x": [{
+        "skew-x": scaleSkew()
+      }],
+      /**
+       * Skew Y
+       * @see https://tailwindcss.com/docs/skew
+       */
+      "skew-y": [{
+        "skew-y": scaleSkew()
+      }],
+      /**
+       * Transform
+       * @see https://tailwindcss.com/docs/transform
+       */
+      transform: [{
+        transform: [isArbitraryVariable, isArbitraryValue, "", "none", "gpu", "cpu"]
+      }],
+      /**
+       * Transform Origin
+       * @see https://tailwindcss.com/docs/transform-origin
+       */
+      "transform-origin": [{
+        origin: scalePositionWithArbitrary()
+      }],
+      /**
+       * Transform Style
+       * @see https://tailwindcss.com/docs/transform-style
+       */
+      "transform-style": [{
+        transform: ["3d", "flat"]
+      }],
+      /**
+       * Translate
+       * @see https://tailwindcss.com/docs/translate
+       */
+      translate: [{
+        translate: scaleTranslate()
+      }],
+      /**
+       * Translate X
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-x": [{
+        "translate-x": scaleTranslate()
+      }],
+      /**
+       * Translate Y
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-y": [{
+        "translate-y": scaleTranslate()
+      }],
+      /**
+       * Translate Z
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-z": [{
+        "translate-z": scaleTranslate()
+      }],
+      /**
+       * Translate None
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-none": ["translate-none"],
+      /**
+       * Zoom
+       * @see https://tailwindcss.com/docs/zoom
+       */
+      zoom: [{
+        zoom: [isInteger, isArbitraryVariable, isArbitraryValue]
+      }],
+      // ---------------------
+      // --- Interactivity ---
+      // ---------------------
+      /**
+       * Accent Color
+       * @see https://tailwindcss.com/docs/accent-color
+       */
+      accent: [{
+        accent: scaleColor()
+      }],
+      /**
+       * Appearance
+       * @see https://tailwindcss.com/docs/appearance
+       */
+      appearance: [{
+        appearance: ["none", "auto"]
+      }],
+      /**
+       * Caret Color
+       * @see https://tailwindcss.com/docs/just-in-time-mode#caret-color-utilities
+       */
+      "caret-color": [{
+        caret: scaleColor()
+      }],
+      /**
+       * Color Scheme
+       * @see https://tailwindcss.com/docs/color-scheme
+       */
+      "color-scheme": [{
+        scheme: ["normal", "dark", "light", "light-dark", "only-dark", "only-light"]
+      }],
+      /**
+       * Cursor
+       * @see https://tailwindcss.com/docs/cursor
+       */
+      cursor: [{
+        cursor: ["auto", "default", "pointer", "wait", "text", "move", "help", "not-allowed", "none", "context-menu", "progress", "cell", "crosshair", "vertical-text", "alias", "copy", "no-drop", "grab", "grabbing", "all-scroll", "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Field Sizing
+       * @see https://tailwindcss.com/docs/field-sizing
+       */
+      "field-sizing": [{
+        "field-sizing": ["fixed", "content"]
+      }],
+      /**
+       * Pointer Events
+       * @see https://tailwindcss.com/docs/pointer-events
+       */
+      "pointer-events": [{
+        "pointer-events": ["auto", "none"]
+      }],
+      /**
+       * Resize
+       * @see https://tailwindcss.com/docs/resize
+       */
+      resize: [{
+        resize: ["none", "", "y", "x"]
+      }],
+      /**
+       * Scroll Behavior
+       * @see https://tailwindcss.com/docs/scroll-behavior
+       */
+      "scroll-behavior": [{
+        scroll: ["auto", "smooth"]
+      }],
+      /**
+       * Scrollbar Thumb Color
+       * @see https://tailwindcss.com/docs/scrollbar-color
+       */
+      "scrollbar-thumb-color": [{
+        "scrollbar-thumb": scaleColor()
+      }],
+      /**
+       * Scrollbar Track Color
+       * @see https://tailwindcss.com/docs/scrollbar-color
+       */
+      "scrollbar-track-color": [{
+        "scrollbar-track": scaleColor()
+      }],
+      /**
+       * Scrollbar Gutter
+       * @see https://tailwindcss.com/docs/scrollbar-gutter
+       */
+      "scrollbar-gutter": [{
+        "scrollbar-gutter": ["auto", "stable", "both"]
+      }],
+      /**
+       * Scrollbar Width
+       * @see https://tailwindcss.com/docs/scrollbar-width
+       */
+      "scrollbar-w": [{
+        scrollbar: ["auto", "thin", "none"]
+      }],
+      /**
+       * Scroll Margin
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-m": [{
+        "scroll-m": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Inline
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mx": [{
+        "scroll-mx": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Block
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-my": [{
+        "scroll-my": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Inline Start
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-ms": [{
+        "scroll-ms": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Inline End
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-me": [{
+        "scroll-me": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Block Start
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mbs": [{
+        "scroll-mbs": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Block End
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mbe": [{
+        "scroll-mbe": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Top
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mt": [{
+        "scroll-mt": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Right
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mr": [{
+        "scroll-mr": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Bottom
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mb": [{
+        "scroll-mb": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Left
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-ml": [{
+        "scroll-ml": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-p": [{
+        "scroll-p": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Inline
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-px": [{
+        "scroll-px": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Block
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-py": [{
+        "scroll-py": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Inline Start
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-ps": [{
+        "scroll-ps": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Inline End
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pe": [{
+        "scroll-pe": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Block Start
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pbs": [{
+        "scroll-pbs": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Block End
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pbe": [{
+        "scroll-pbe": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Top
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pt": [{
+        "scroll-pt": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Right
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pr": [{
+        "scroll-pr": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Bottom
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pb": [{
+        "scroll-pb": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Left
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pl": [{
+        "scroll-pl": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Snap Align
+       * @see https://tailwindcss.com/docs/scroll-snap-align
+       */
+      "snap-align": [{
+        snap: ["start", "end", "center", "align-none"]
+      }],
+      /**
+       * Scroll Snap Stop
+       * @see https://tailwindcss.com/docs/scroll-snap-stop
+       */
+      "snap-stop": [{
+        snap: ["normal", "always"]
+      }],
+      /**
+       * Scroll Snap Type
+       * @see https://tailwindcss.com/docs/scroll-snap-type
+       */
+      "snap-type": [{
+        snap: ["none", "x", "y", "both"]
+      }],
+      /**
+       * Scroll Snap Type Strictness
+       * @see https://tailwindcss.com/docs/scroll-snap-type
+       */
+      "snap-strictness": [{
+        snap: ["mandatory", "proximity"]
+      }],
+      /**
+       * Touch Action
+       * @see https://tailwindcss.com/docs/touch-action
+       */
+      touch: [{
+        touch: ["auto", "none", "manipulation"]
+      }],
+      /**
+       * Touch Action X
+       * @see https://tailwindcss.com/docs/touch-action
+       */
+      "touch-x": [{
+        "touch-pan": ["x", "left", "right"]
+      }],
+      /**
+       * Touch Action Y
+       * @see https://tailwindcss.com/docs/touch-action
+       */
+      "touch-y": [{
+        "touch-pan": ["y", "up", "down"]
+      }],
+      /**
+       * Touch Action Pinch Zoom
+       * @see https://tailwindcss.com/docs/touch-action
+       */
+      "touch-pz": ["touch-pinch-zoom"],
+      /**
+       * User Select
+       * @see https://tailwindcss.com/docs/user-select
+       */
+      select: [{
+        select: ["none", "text", "all", "auto"]
+      }],
+      /**
+       * Will Change
+       * @see https://tailwindcss.com/docs/will-change
+       */
+      "will-change": [{
+        "will-change": ["auto", "scroll", "contents", "transform", isArbitraryVariable, isArbitraryValue]
+      }],
+      // -----------
+      // --- SVG ---
+      // -----------
+      /**
+       * Fill
+       * @see https://tailwindcss.com/docs/fill
+       */
+      fill: [{
+        fill: ["none", ...scaleColor()]
+      }],
+      /**
+       * Stroke Width
+       * @see https://tailwindcss.com/docs/stroke-width
+       */
+      "stroke-w": [{
+        stroke: [isNumber, isArbitraryVariableLength, isArbitraryLength, isArbitraryNumber]
+      }],
+      /**
+       * Stroke
+       * @see https://tailwindcss.com/docs/stroke
+       */
+      stroke: [{
+        stroke: ["none", ...scaleColor()]
+      }],
+      // ---------------------
+      // --- Accessibility ---
+      // ---------------------
+      /**
+       * Forced Color Adjust
+       * @see https://tailwindcss.com/docs/forced-color-adjust
+       */
+      "forced-color-adjust": [{
+        "forced-color-adjust": ["auto", "none"]
+      }]
+    },
+    conflictingClassGroups: {
+      "container-named": ["container-type"],
+      overflow: ["overflow-x", "overflow-y"],
+      overscroll: ["overscroll-x", "overscroll-y"],
+      inset: ["inset-x", "inset-y", "inset-bs", "inset-be", "start", "end", "top", "right", "bottom", "left"],
+      "inset-x": ["right", "left"],
+      "inset-y": ["top", "bottom"],
+      flex: ["basis", "grow", "shrink"],
+      gap: ["gap-x", "gap-y"],
+      p: ["px", "py", "ps", "pe", "pbs", "pbe", "pt", "pr", "pb", "pl"],
+      px: ["pr", "pl"],
+      py: ["pt", "pb"],
+      m: ["mx", "my", "ms", "me", "mbs", "mbe", "mt", "mr", "mb", "ml"],
+      mx: ["mr", "ml"],
+      my: ["mt", "mb"],
+      size: ["w", "h"],
+      "font-size": ["leading"],
+      "fvn-normal": ["fvn-ordinal", "fvn-slashed-zero", "fvn-figure", "fvn-spacing", "fvn-fraction"],
+      "fvn-ordinal": ["fvn-normal"],
+      "fvn-slashed-zero": ["fvn-normal"],
+      "fvn-figure": ["fvn-normal"],
+      "fvn-spacing": ["fvn-normal"],
+      "fvn-fraction": ["fvn-normal"],
+      "line-clamp": ["display", "overflow"],
+      rounded: ["rounded-s", "rounded-e", "rounded-t", "rounded-r", "rounded-b", "rounded-l", "rounded-ss", "rounded-se", "rounded-ee", "rounded-es", "rounded-tl", "rounded-tr", "rounded-br", "rounded-bl"],
+      "rounded-s": ["rounded-ss", "rounded-es"],
+      "rounded-e": ["rounded-se", "rounded-ee"],
+      "rounded-t": ["rounded-tl", "rounded-tr"],
+      "rounded-r": ["rounded-tr", "rounded-br"],
+      "rounded-b": ["rounded-br", "rounded-bl"],
+      "rounded-l": ["rounded-tl", "rounded-bl"],
+      "border-spacing": ["border-spacing-x", "border-spacing-y"],
+      "border-w": ["border-w-x", "border-w-y", "border-w-s", "border-w-e", "border-w-bs", "border-w-be", "border-w-t", "border-w-r", "border-w-b", "border-w-l"],
+      "border-w-x": ["border-w-r", "border-w-l"],
+      "border-w-y": ["border-w-t", "border-w-b"],
+      "border-color": ["border-color-x", "border-color-y", "border-color-s", "border-color-e", "border-color-bs", "border-color-be", "border-color-t", "border-color-r", "border-color-b", "border-color-l"],
+      "border-color-x": ["border-color-r", "border-color-l"],
+      "border-color-y": ["border-color-t", "border-color-b"],
+      translate: ["translate-x", "translate-y", "translate-none"],
+      "translate-none": ["translate", "translate-x", "translate-y", "translate-z"],
+      "scroll-m": ["scroll-mx", "scroll-my", "scroll-ms", "scroll-me", "scroll-mbs", "scroll-mbe", "scroll-mt", "scroll-mr", "scroll-mb", "scroll-ml"],
+      "scroll-mx": ["scroll-mr", "scroll-ml"],
+      "scroll-my": ["scroll-mt", "scroll-mb"],
+      "scroll-p": ["scroll-px", "scroll-py", "scroll-ps", "scroll-pe", "scroll-pbs", "scroll-pbe", "scroll-pt", "scroll-pr", "scroll-pb", "scroll-pl"],
+      "scroll-px": ["scroll-pr", "scroll-pl"],
+      "scroll-py": ["scroll-pt", "scroll-pb"],
+      touch: ["touch-x", "touch-y", "touch-pz"],
+      "touch-x": ["touch"],
+      "touch-y": ["touch"],
+      "touch-pz": ["touch"]
+    },
+    conflictingClassGroupModifiers: {
+      "font-size": ["leading"]
+    },
+    postfixLookupClassGroups: ["container-type"],
+    orderSensitiveModifiers: ["*", "**", "after", "backdrop", "before", "details-content", "file", "first-letter", "first-line", "marker", "placeholder", "selection"]
+  };
+};
+var twMerge = /* @__PURE__ */ createTailwindMerge(getDefaultConfig);
 
-// react/ui/icon-button.tsx
-var import_react = __toESM(require_react(), 1);
+// ../maho_common/react/lib/utils.ts
+function cn(...inputs) {
+  return twMerge(clsx(inputs));
+}
+
+// ../maho_common/react/ui/agent-brand-icons.tsx
+var import_jsx_runtime = __toESM(require_jsx_runtime());
+function CodexBrandIcon({ className }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "svg",
+    {
+      viewBox: "0 0 24 24",
+      role: "img",
+      "aria-hidden": "true",
+      className: cn("size-full", className),
+      xmlns: "http://www.w3.org/2000/svg",
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", { width: "24", height: "24", fill: "#0D0D0D" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("g", { transform: "translate(3.84 3.84) scale(0.68)", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "path",
+          {
+            fill: "#FFFFFF",
+            d: "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"
+          }
+        ) })
+      ]
+    }
+  );
+}
+function ClaudeBrandIcon({ className }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "svg",
+    {
+      viewBox: "0 0 24 24",
+      role: "img",
+      "aria-hidden": "true",
+      className: cn("size-full", className),
+      xmlns: "http://www.w3.org/2000/svg",
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", { width: "24", height: "24", fill: "#D97757" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("g", { transform: "translate(3.6 3.6) scale(0.7)", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "path",
+          {
+            fill: "#FAFAF7",
+            d: "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"
+          }
+        ) })
+      ]
+    }
+  );
+}
+function OpenCodeBrandIcon({ className }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "svg",
+    {
+      viewBox: "0 0 512 512",
+      role: "img",
+      "aria-hidden": "true",
+      className: cn("size-full", className),
+      xmlns: "http://www.w3.org/2000/svg",
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", { width: "512", height: "512", fill: "#131010" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M320 224V352H192V224H320Z", fill: "#5A5858" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "path",
+          {
+            fillRule: "evenodd",
+            clipRule: "evenodd",
+            d: "M384 416H128V96H384V416ZM320 160H192V352H320V160Z",
+            fill: "#FFFFFF"
+          }
+        )
+      ]
+    }
+  );
+}
+function PiBrandIcon({ className }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "svg",
+    {
+      viewBox: "0 0 180 180",
+      role: "img",
+      "aria-hidden": "true",
+      className: cn("size-full", className),
+      xmlns: "http://www.w3.org/2000/svg",
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", { width: "180", height: "180", fill: "#FAF3EA" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "path",
+          {
+            fill: "#131212",
+            d: "M110.345 132.307V132.187C110.345 129.675 111.788 128.119 115.155 127.042C118.521 125.846 119.362 125.008 119.362 120.581V98.6853C119.362 94.2583 118.16 93.66 114.794 92.5832C112.029 91.7456 110.345 90.4295 110.345 88.3955C110.345 86.7204 111.428 85.4042 112.99 84.806L130.423 78.5842C134.27 77.1484 137.276 79.0628 137.276 82.5326V120.581C137.276 125.008 138.118 125.846 141.484 127.042C144.85 128.119 146.293 129.675 146.293 132.187V132.307C146.293 134.7 144.369 136.375 141.484 136.375H115.155C112.269 136.375 110.345 134.7 110.345 132.307ZM65.3811 69.1319C65.3811 53.8167 67.5451 48.7914 74.1576 48.7914C82.2127 48.7914 86.9015 56.5687 86.9015 69.8498C86.9015 83.1309 82.3329 91.1474 74.8789 91.1474C67.4249 91.1474 65.3811 85.2846 65.3811 69.1319ZM31.5977 132.187V132.307C31.5977 134.7 33.5213 136.375 36.4067 136.375H75.8407C78.7261 136.375 80.6497 134.7 80.6497 132.307V132.187C80.6497 129.914 79.3273 128.239 75.9609 127.521C67.5451 125.606 66.4631 124.769 66.4631 120.103V102.993C66.4631 100.839 67.4249 99.4032 69.4688 99.4032C71.5126 99.4032 73.1958 100.36 76.9227 100.36C96.3993 100.36 110.225 87.4383 110.225 69.2515C110.225 51.0648 97.2409 39.3391 78.7261 39.3391C68.6272 39.3391 61.1732 43.0482 51.4349 43.0482H36.4067C33.5213 43.0482 31.5977 44.7233 31.5977 47.1163V47.236C31.5977 49.7486 33.0404 51.3041 36.4067 52.1416C42.418 53.5774 43.2595 54.415 43.2595 58.842V120.581C43.2595 125.008 42.418 125.846 36.4067 127.282C33.0404 128.119 31.5977 129.675 31.5977 132.187Z"
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "path",
+          {
+            fill: "#131212",
+            d: "M128.475 48.7882C129.871 48.7886 131.316 49.0062 132.694 49.5959C134.197 50.2283 135.551 51.3521 136.448 52.7135C136.554 52.8993 136.656 53.0868 136.755 53.2753C138.14 53.4291 139.511 53.6652 140.867 53.9722C142.127 54.2587 143.284 54.6124 144.55 55.0234C144.965 55.1688 145.363 55.3924 145.656 55.7227C145.949 56.0528 146.114 56.4587 146.114 56.8752C146.114 57.2912 145.949 57.6955 145.656 58.0253C145.363 58.3556 144.965 58.5816 144.55 58.727C143.326 59.1389 142.234 59.5275 141.073 59.8964C140.207 60.1775 139.348 60.4414 138.5 60.6993C138.406 65.5325 136.046 70.3149 131.568 73.5049C129.381 74.9517 126.711 75.8218 124.068 75.9426C122.857 75.9899 121.647 75.8105 120.511 75.4266C117.995 74.5651 115.712 72.7894 114.45 70.028C113.117 67.2815 113.602 63.572 115.082 61.2948C118.112 56.7031 122.054 55.3649 125.428 54.2157C127.48 53.6028 129.511 53.2608 131.518 53.1355C131.422 53.0873 131.324 53.0406 131.225 52.9981C130.419 52.6521 129.483 52.4914 128.475 52.4917C127.983 52.4917 127.51 52.2963 127.161 51.9492C126.813 51.6019 126.617 51.1311 126.617 50.64C126.617 50.1489 126.813 49.678 127.161 49.3307C127.51 48.9837 127.983 48.7882 128.475 48.7882ZM132.665 62.9226C132.81 62.6915 132.591 62.4179 132.328 62.4927C130.95 62.8852 129.619 63.2677 128.347 63.6529C125.911 64.3442 123.579 65.6389 123.105 66.3245C121.873 68.0832 125.91 67.8435 127.914 67.0551C129.622 66.3981 131.437 64.883 132.665 62.9226Z"
+          }
+        )
+      ]
+    }
+  );
+}
+var AGENT_BRAND_ICONS = {
+  Codex: CodexBrandIcon,
+  Claude: ClaudeBrandIcon,
+  OpenCode: OpenCodeBrandIcon,
+  Pi: PiBrandIcon
+};
+function AgentBrandIcon({ name, className }) {
+  const Icon2 = AGENT_BRAND_ICONS[name];
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon2, { className });
+}
+
+// ../maho_common/react/ui/button.tsx
+var React3 = __toESM(require_react());
 
 // ../../../../website/node_modules/@radix-ui/react-slot/dist/index.mjs
 var React2 = __toESM(require_react(), 1);
 
 // ../../../../website/node_modules/@radix-ui/react-compose-refs/dist/index.mjs
 var React = __toESM(require_react(), 1);
+var __defProp2 = Object.defineProperty;
+var __name = (target, value) => __defProp2(target, "name", { value, configurable: true });
 function setRef(ref, value) {
   if (typeof ref === "function") {
     return ref(value);
@@ -23414,6 +28182,7 @@ function setRef(ref, value) {
     ref.current = value;
   }
 }
+__name(setRef, "setRef");
 function composeRefs(...refs) {
   return (node) => {
     let hasCleanup = false;
@@ -23438,58 +28207,88 @@ function composeRefs(...refs) {
     }
   };
 }
+__name(composeRefs, "composeRefs");
 function useComposedRefs(...refs) {
   return React.useCallback(composeRefs(...refs), refs);
 }
+__name(useComposedRefs, "useComposedRefs");
 
 // ../../../../website/node_modules/@radix-ui/react-slot/dist/index.mjs
-var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
+var __defProp3 = Object.defineProperty;
+var __name2 = (target, value) => __defProp3(target, "name", { value, configurable: true });
 // @__NO_SIDE_EFFECTS__
 function createSlot(ownerName) {
-  const SlotClone = /* @__PURE__ */ createSlotClone(ownerName);
   const Slot22 = React2.forwardRef((props, forwardedRef) => {
-    const { children, ...slotProps } = props;
-    const childrenArray = React2.Children.toArray(children);
-    const slottable = childrenArray.find(isSlottable);
-    if (slottable) {
-      const newElement = slottable.props.children;
-      const newChildren = childrenArray.map((child) => {
-        if (child === slottable) {
-          if (React2.Children.count(newElement) > 1) return React2.Children.only(null);
-          return React2.isValidElement(newElement) ? newElement.props.children : null;
-        } else {
-          return child;
-        }
-      });
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(SlotClone, { ...slotProps, ref: forwardedRef, children: React2.isValidElement(newElement) ? React2.cloneElement(newElement, void 0, newChildren) : null });
+    let { children, ...slotProps } = props;
+    let slottableElement = null;
+    let hasSlottable = false;
+    const newChildren = [];
+    if (isLazyComponent(children) && typeof use === "function") {
+      children = use(children._payload);
     }
-    return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(SlotClone, { ...slotProps, ref: forwardedRef, children });
+    React2.Children.forEach(children, (maybeSlottable) => {
+      if (isSlottable(maybeSlottable)) {
+        hasSlottable = true;
+        const slottable = maybeSlottable;
+        let child = "child" in slottable.props ? slottable.props.child : slottable.props.children;
+        if (isLazyComponent(child) && typeof use === "function") {
+          child = use(child._payload);
+        }
+        slottableElement = getSlottableElementFromSlottable(slottable, child);
+        newChildren.push(slottableElement?.props?.children);
+      } else {
+        newChildren.push(maybeSlottable);
+      }
+    });
+    if (slottableElement) {
+      slottableElement = React2.cloneElement(slottableElement, void 0, newChildren);
+    } else if (
+      // A `Slottable` was found but it didn't resolve to a single element (e.g.
+      // it wrapped multiple elements, text, or a render-prop `child` that
+      // wasn't an element). Don't fall back to treating the `Slottable` wrapper
+      // itself as the slot target — throw a descriptive error below instead.
+      !hasSlottable && React2.Children.count(children) === 1 && React2.isValidElement(children)
+    ) {
+      slottableElement = children;
+    }
+    const slottableElementRef = slottableElement ? getElementRef(slottableElement) : void 0;
+    const composedRef = useComposedRefs(forwardedRef, slottableElementRef);
+    if (!slottableElement) {
+      if (children || children === 0) {
+        throw new Error(
+          hasSlottable ? createSlottableError(ownerName) : createSlotError(ownerName)
+        );
+      }
+      return children;
+    }
+    const mergedProps = mergeProps(slotProps, slottableElement.props ?? {});
+    if (slottableElement.type !== React2.Fragment) {
+      mergedProps.ref = forwardedRef ? composedRef : slottableElementRef;
+    }
+    return React2.cloneElement(slottableElement, mergedProps);
   });
   Slot22.displayName = `${ownerName}.Slot`;
   return Slot22;
 }
+__name2(createSlot, "createSlot");
 var Slot = /* @__PURE__ */ createSlot("Slot");
+var SLOTTABLE_IDENTIFIER = /* @__PURE__ */ Symbol.for("radix.slottable");
 // @__NO_SIDE_EFFECTS__
-function createSlotClone(ownerName) {
-  const SlotClone = React2.forwardRef((props, forwardedRef) => {
-    const { children, ...slotProps } = props;
-    if (React2.isValidElement(children)) {
-      const childrenRef = getElementRef(children);
-      const props2 = mergeProps(slotProps, children.props);
-      if (children.type !== React2.Fragment) {
-        props2.ref = forwardedRef ? composeRefs(forwardedRef, childrenRef) : childrenRef;
-      }
-      return React2.cloneElement(children, props2);
-    }
-    return React2.Children.count(children) > 1 ? React2.Children.only(null) : null;
-  });
-  SlotClone.displayName = `${ownerName}.SlotClone`;
-  return SlotClone;
+function createSlottable(ownerName) {
+  const Slottable2 = /* @__PURE__ */ __name2((props) => "child" in props ? props.children(props.child) : props.children, "Slottable");
+  Slottable2.displayName = `${ownerName}.Slottable`;
+  Slottable2.__radixId = SLOTTABLE_IDENTIFIER;
+  return Slottable2;
 }
-var SLOTTABLE_IDENTIFIER = /* @__PURE__ */ Symbol("radix.slottable");
-function isSlottable(child) {
-  return React2.isValidElement(child) && typeof child.type === "function" && "__radixId" in child.type && child.type.__radixId === SLOTTABLE_IDENTIFIER;
-}
+__name2(createSlottable, "createSlottable");
+var getSlottableElementFromSlottable = /* @__PURE__ */ __name2((slottable, child) => {
+  if ("child" in slottable.props) {
+    const child2 = slottable.props.child;
+    if (!React2.isValidElement(child2)) return null;
+    return React2.cloneElement(child2, void 0, slottable.props.children(child2.props.children));
+  }
+  return React2.isValidElement(child) ? child : null;
+}, "getSlottableElementFromSlottable");
 function mergeProps(slotProps, childProps) {
   const overrideProps = { ...childProps };
   for (const propName in childProps) {
@@ -23514,6 +28313,7 @@ function mergeProps(slotProps, childProps) {
   }
   return { ...slotProps, ...overrideProps };
 }
+__name2(mergeProps, "mergeProps");
 function getElementRef(element) {
   let getter = Object.getOwnPropertyDescriptor(element.props, "ref")?.get;
   let mayWarn = getter && "isReactWarning" in getter && getter.isReactWarning;
@@ -23527,21 +28327,27 @@ function getElementRef(element) {
   }
   return element.props.ref || element.ref;
 }
-
-// ../../../../website/node_modules/clsx/dist/clsx.mjs
-function r(e) {
-  var t, f, n = "";
-  if ("string" == typeof e || "number" == typeof e) n += e;
-  else if ("object" == typeof e) if (Array.isArray(e)) {
-    var o = e.length;
-    for (t = 0; t < o; t++) e[t] && (f = r(e[t])) && (n && (n += " "), n += f);
-  } else for (f in e) e[f] && (n && (n += " "), n += f);
-  return n;
+__name2(getElementRef, "getElementRef");
+function isSlottable(child) {
+  return React2.isValidElement(child) && typeof child.type === "function" && "__radixId" in child.type && child.type.__radixId === SLOTTABLE_IDENTIFIER;
 }
-function clsx() {
-  for (var e, t, f = 0, n = "", o = arguments.length; f < o; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
-  return n;
+__name2(isSlottable, "isSlottable");
+var REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy");
+function isLazyComponent(element) {
+  return element != null && typeof element === "object" && "$$typeof" in element && element.$$typeof === REACT_LAZY_TYPE && "_payload" in element && isPromiseLike(element._payload);
 }
+__name2(isLazyComponent, "isLazyComponent");
+function isPromiseLike(value) {
+  return typeof value === "object" && value !== null && "then" in value;
+}
+__name2(isPromiseLike, "isPromiseLike");
+var createSlotError = /* @__PURE__ */ __name2((ownerName) => {
+  return `${ownerName} failed to slot onto its children. Expected a single React element child or \`Slottable\`.`;
+}, "createSlotError");
+var createSlottableError = /* @__PURE__ */ __name2((ownerName) => {
+  return `${ownerName} failed to slot onto its \`Slottable\`. Expected \`Slottable\` to receive a single React element child.`;
+}, "createSlottableError");
+var use = React2[" use ".trim().toString()];
 
 // ../../../../website/node_modules/class-variance-authority/dist/index.mjs
 var falsyToString = (value) => typeof value === "boolean" ? `${value}` : value === 0 ? "0" : value;
@@ -23585,180 +28391,436 @@ var cva = (base, config) => (props) => {
   return cx(base, getVariantClassNames, getCompoundVariantClassNames, props === null || props === void 0 ? void 0 : props.class, props === null || props === void 0 ? void 0 : props.className);
 };
 
-// react/ui/button.tsx
-var React3 = __toESM(require_react(), 1);
-
-// react/lib/cn.ts
-function cn(...inputs) {
-  return clsx(inputs);
-}
-
-// react/ui/button.tsx
-var import_jsx_runtime3 = __toESM(require_jsx_runtime(), 1);
-var buttonVariants = cva("", {
-  variants: {
-    variant: {
-      "approval-approve": "compact-thread__approval-button compact-thread__approval-button--approve",
-      "approval-deny": "compact-thread__approval-button compact-thread__approval-button--deny",
-      "compact-icon": "compact-icon-button",
-      "compact-icon-accent": "compact-icon-button compact-icon-button--accent",
-      "compact-icon-ghost": "compact-icon-button compact-icon-button--ghost",
-      "composer-icon": "compact-composer__icon-button",
-      "composer-send": "compact-composer__send",
-      "console-default": "console-button",
-      "console-primary": "console-button console-button--primary",
-      "inspector-tab": "inspector-tab",
-      "mode-toggle": "mode-toggle__button",
-      "overflow-item": "compact-overflow-menu__item",
-      "session-list-item": "session-list__item",
-      "thread-action": "compact-thread__action-button"
+// ../maho_common/react/ui/button.tsx
+var import_jsx_runtime2 = __toESM(require_jsx_runtime());
+var buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive: "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline: "border border-input bg-background shadow-sm hover:bg-surface-hover",
+        secondary: "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-surface-hover",
+        link: "text-primary underline-offset-4 hover:underline"
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9"
+      }
     },
-    size: {
-      auto: "",
-      icon: "",
-      medium: "",
-      small: ""
+    defaultVariants: {
+      variant: "default",
+      size: "default"
     }
-  },
-  defaultVariants: {
-    size: "auto",
-    variant: "console-default"
   }
-});
-var Button = React3.forwardRef(function Button2({ asChild, className, size: size4, type = "button", variant, ...props }, ref) {
-  const Comp = asChild ? Slot : "button";
-  return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-    Comp,
-    {
-      ref,
-      className: cn(buttonVariants({ variant, size: size4 }), className),
-      type: asChild ? void 0 : type,
-      ...props
-    }
-  );
-});
+);
+var Button = React3.forwardRef(
+  ({ className, variant, size: size4, asChild = false, ...props }, ref) => {
+    const Comp = asChild ? Slot : "button";
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+      Comp,
+      {
+        className: cn(buttonVariants({ variant, size: size4, className })),
+        ref,
+        ...props
+      }
+    );
+  }
+);
 Button.displayName = "Button";
 
-// standalone/icons_stub.ts
-function getSFSymbolUrl(_symbol) {
-  return "";
-}
+// ../maho_common/react/mcp-agent-guidance-copy.ts
+var MCP_AGENT_GUIDANCE_CLIENTS = ["Codex", "Claude", "OpenCode", "Pi"];
+var MCP_AGENT_GUIDANCE_VISIBLE_TEXT = "Use Maho MCP with Codex, Claude, OpenCode, or Pi.";
+var MCP_AGENT_GUIDANCE_CTA_LABEL = "Connect";
 
-// react/ui/icon.tsx
-var import_jsx_runtime4 = __toESM(require_jsx_runtime(), 1);
-function Icon({ symbol }) {
-  const style = {
-    "--maho-ai-icon-url": `url("${getSFSymbolUrl(symbol)}")`
-  };
-  return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-    "span",
+// ../maho_common/react/ui/mcp-agent-guidance-card.tsx
+var import_jsx_runtime3 = __toESM(require_jsx_runtime());
+var TILE_SHUFFLE_STYLES = `
+@keyframes maho-mcp-agent-codex {
+  0%, 100% { opacity: 1; transform: translate3d(0, 4px, 0) rotate(-4deg) scale(1); }
+  25% { opacity: 0.68; transform: translate3d(18px, 0, 0) rotate(5deg) scale(0.82); }
+  50% { opacity: 0.48; transform: translate3d(22px, 8px, 0) rotate(-2deg) scale(0.74); }
+  75% { opacity: 0.34; transform: translate3d(18px, 16px, 0) rotate(4deg) scale(0.66); }
+}
+@keyframes maho-mcp-agent-claude {
+  0%, 100% { opacity: 0.68; transform: translate3d(18px, 0, 0) rotate(5deg) scale(0.82); }
+  25% { opacity: 1; transform: translate3d(0, 4px, 0) rotate(-4deg) scale(1); }
+  50% { opacity: 0.68; transform: translate3d(18px, 0, 0) rotate(5deg) scale(0.82); }
+  75% { opacity: 0.48; transform: translate3d(22px, 8px, 0) rotate(-2deg) scale(0.74); }
+}
+@keyframes maho-mcp-agent-opencode {
+  0%, 100% { opacity: 0.48; transform: translate3d(22px, 8px, 0) rotate(-2deg) scale(0.74); }
+  25% { opacity: 0.34; transform: translate3d(18px, 16px, 0) rotate(4deg) scale(0.66); }
+  50% { opacity: 1; transform: translate3d(0, 4px, 0) rotate(-4deg) scale(1); }
+  75% { opacity: 0.68; transform: translate3d(18px, 0, 0) rotate(5deg) scale(0.82); }
+}
+@keyframes maho-mcp-agent-pi {
+  0%, 100% { opacity: 0.34; transform: translate3d(18px, 16px, 0) rotate(4deg) scale(0.66); }
+  25% { opacity: 0.48; transform: translate3d(22px, 8px, 0) rotate(-2deg) scale(0.74); }
+  50% { opacity: 0.68; transform: translate3d(18px, 0, 0) rotate(5deg) scale(0.82); }
+  75% { opacity: 1; transform: translate3d(0, 4px, 0) rotate(-4deg) scale(1); }
+}
+.maho-mcp-agent-tile {
+  animation-duration: 7.2s;
+  animation-iteration-count: infinite;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
+}
+.maho-mcp-agent-codex { animation-name: maho-mcp-agent-codex; }
+.maho-mcp-agent-claude { animation-name: maho-mcp-agent-claude; }
+.maho-mcp-agent-opencode { animation-name: maho-mcp-agent-opencode; }
+.maho-mcp-agent-pi { animation-name: maho-mcp-agent-pi; }
+.maho-mcp-agent-guidance:is(:hover, :focus-within) .maho-mcp-agent-tile {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .maho-mcp-agent-tile {
+    animation: none;
+    will-change: auto;
+  }
+  .maho-mcp-agent-codex { opacity: 1; transform: translate3d(0, 4px, 0) rotate(-4deg) scale(1); }
+  .maho-mcp-agent-claude { opacity: 0.68; transform: translate3d(18px, 0, 0) rotate(5deg) scale(0.82); }
+  .maho-mcp-agent-opencode { opacity: 0.48; transform: translate3d(22px, 8px, 0) rotate(-2deg) scale(0.74); }
+  .maho-mcp-agent-pi { opacity: 0.34; transform: translate3d(18px, 16px, 0) rotate(4deg) scale(0.66); }
+}`;
+var AGENT_ICON_TILES = [
+  { animationClassName: "maho-mcp-agent-codex", name: MCP_AGENT_GUIDANCE_CLIENTS[0] },
+  { animationClassName: "maho-mcp-agent-claude", name: MCP_AGENT_GUIDANCE_CLIENTS[1] },
+  { animationClassName: "maho-mcp-agent-opencode", name: MCP_AGENT_GUIDANCE_CLIENTS[2] },
+  { animationClassName: "maho-mcp-agent-pi", name: MCP_AGENT_GUIDANCE_CLIENTS[3] }
+];
+function AgentTileStack() {
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "relative h-10 w-14 shrink-0", "aria-hidden": "true", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("style", { children: TILE_SHUFFLE_STYLES }),
+    AGENT_ICON_TILES.map((tile) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+      "span",
+      {
+        className: cn(
+          "maho-mcp-agent-tile absolute left-0 top-0 flex size-8 items-center justify-center overflow-hidden rounded-xl border border-border/80 bg-background shadow-sm ring-1 ring-background/70",
+          tile.animationClassName
+        ),
+        "data-mcp-agent-tile": tile.name,
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(AgentBrandIcon, { name: tile.name }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset ring-foreground/10" })
+        ]
+      },
+      tile.name
+    ))
+  ] });
+}
+function McpAgentGuidanceCard({ className, onConnect, onDismiss }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+    "div",
     {
-      "aria-hidden": "true",
-      className: "maho-ai-icon",
-      "data-symbol": symbol,
-      style
+      role: "note",
+      className: cn(
+        "maho-mcp-agent-guidance grid min-h-14 w-full max-w-[23.5rem] items-center gap-3 rounded-xl border border-border/70 bg-card/95 px-3 py-2 shadow-sm ring-1 ring-background/40",
+        onDismiss ? "grid-cols-[auto_minmax(0,1fr)_auto_auto]" : "grid-cols-[auto_minmax(0,1fr)_auto]",
+        className
+      ),
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(AgentTileStack, {}),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "min-w-0 text-xs font-medium leading-4 text-foreground", children: MCP_AGENT_GUIDANCE_VISIBLE_TEXT }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          Button,
+          {
+            "aria-label": "Open Maho MCP setup guide",
+            className: "h-8 shrink-0 rounded-lg border-border bg-background/70 px-2.5 text-xs font-semibold text-foreground shadow-none hover:bg-surface-hover",
+            size: "sm",
+            type: "button",
+            variant: "outline",
+            onClick: onConnect,
+            children: MCP_AGENT_GUIDANCE_CTA_LABEL
+          }
+        ),
+        onDismiss ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          "button",
+          {
+            "aria-label": "Dismiss",
+            className: "flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            type: "button",
+            onClick: onDismiss,
+            children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { "aria-hidden": "true", className: "text-sm leading-none", children: "\u2715" })
+          }
+        ) : null
+      ]
     }
   );
 }
 
-// react/ui/icon-button.tsx
-var import_jsx_runtime5 = __toESM(require_jsx_runtime(), 1);
-var IconButton = (0, import_react.forwardRef)(function IconButton2({ ariaLabel, symbol, ...props }, ref) {
-  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(Button, { ref, "aria-label": ariaLabel, ...props, children: /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(Icon, { symbol }) });
-});
-IconButton.displayName = "IconButton";
-
-// ../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs
-var React34 = __toESM(require_react(), 1);
-
-// ../../../../website/node_modules/@radix-ui/primitive/dist/index.mjs
-var canUseDOM = !!(typeof window !== "undefined" && window.document && window.document.createElement);
-function composeEventHandlers(originalEventHandler, ourEventHandler, { checkForDefaultPrevented = true } = {}) {
-  return function handleEvent(event) {
-    originalEventHandler?.(event);
-    if (checkForDefaultPrevented === false || !event.defaultPrevented) {
-      return ourEventHandler?.(event);
+// react/features/dismissible-mcp-guidance-card.tsx
+var import_jsx_runtime4 = __toESM(require_jsx_runtime(), 1);
+var MCP_GUIDANCE_DISMISSED_KEY = "maho_ai_mcp_guidance_dismissed";
+function readDismissed() {
+  try {
+    return localStorage.getItem(MCP_GUIDANCE_DISMISSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+function writeDismissed() {
+  try {
+    localStorage.setItem(MCP_GUIDANCE_DISMISSED_KEY, "true");
+  } catch {
+  }
+}
+function DismissibleMcpGuidanceCard({ className, onConnect }) {
+  const [dismissed, setDismissed] = (0, import_react5.useState)(readDismissed);
+  if (dismissed) {
+    return null;
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+    McpAgentGuidanceCard,
+    {
+      className,
+      onConnect,
+      onDismiss: () => {
+        writeDismissed();
+        setDismissed(true);
+      }
     }
-  };
+  );
 }
 
+// react/features/compact/compact-stage.tsx
+var import_jsx_runtime5 = __toESM(require_jsx_runtime(), 1);
+var SUGGESTION_CHIPS = ["Analyze", "Explain", "Summarize"];
+function CompactStage({ onConnect }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+    "main",
+    {
+      "aria-label": "Empty conversation",
+      className: "flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-4 py-6",
+      children: /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(DismissibleMcpGuidanceCard, { onConnect })
+    }
+  );
+}
+function SuggestionChips({
+  disabled,
+  onSelect
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "flex flex-wrap items-center justify-center gap-2 pb-3", children: SUGGESTION_CHIPS.map((label) => /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+    "button",
+    {
+      className: "h-10 rounded-full bg-secondary px-5 text-sm font-semibold text-secondary-foreground transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50",
+      disabled,
+      type: "button",
+      onClick: () => onSelect(label),
+      children: label
+    },
+    label
+  )) });
+}
+
+// react/features/compact/compact-topbar.tsx
+var import_react11 = __toESM(require_react(), 1);
+
+// ../maho_common/react/ui/dropdown-menu.tsx
+var React36 = __toESM(require_react());
+
+// ../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs
+var React35 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/@radix-ui/primitive/dist/index.mjs
+var __defProp4 = Object.defineProperty;
+var __name3 = (target, value) => __defProp4(target, "name", { value, configurable: true });
+var canUseDOM = !!(typeof window !== "undefined" && window.document && window.document.createElement);
+function composeEventHandlers(originalEventHandler, ourEventHandler, { checkForDefaultPrevented = true } = {}) {
+  return /* @__PURE__ */ __name3(function handleEvent(event) {
+    originalEventHandler?.(event);
+    if (checkForDefaultPrevented === false || !event || !event.defaultPrevented) {
+      return ourEventHandler?.(event);
+    }
+  }, "handleEvent");
+}
+__name3(composeEventHandlers, "composeEventHandlers");
+function getOwnerWindow(element) {
+  if (!canUseDOM) {
+    throw new Error("Cannot access window outside of the DOM");
+  }
+  return element?.ownerDocument?.defaultView ?? window;
+}
+__name3(getOwnerWindow, "getOwnerWindow");
+function getOwnerDocument(element) {
+  if (!canUseDOM) {
+    throw new Error("Cannot access document outside of the DOM");
+  }
+  return element?.ownerDocument ?? document;
+}
+__name3(getOwnerDocument, "getOwnerDocument");
+function getActiveElement(node, activeDescendant = false) {
+  const { activeElement } = getOwnerDocument(node);
+  if (!activeElement?.nodeName) {
+    return null;
+  }
+  if (isFrame(activeElement) && activeElement.contentDocument) {
+    return getActiveElement(activeElement.contentDocument.body, activeDescendant);
+  }
+  if (activeDescendant) {
+    const id = activeElement.getAttribute("aria-activedescendant");
+    if (id) {
+      const element = getOwnerDocument(activeElement).getElementById(id);
+      if (element) {
+        return element;
+      }
+    }
+  }
+  return activeElement;
+}
+__name3(getActiveElement, "getActiveElement");
+function isFrame(element) {
+  return element.tagName === "IFRAME";
+}
+__name3(isFrame, "isFrame");
+
 // ../../../../website/node_modules/@radix-ui/react-context/dist/index.mjs
-var React4 = __toESM(require_react(), 1);
+var React5 = __toESM(require_react(), 1);
 var import_jsx_runtime6 = __toESM(require_jsx_runtime(), 1);
+var __defProp5 = Object.defineProperty;
+var __name4 = (target, value) => __defProp5(target, "name", { value, configurable: true });
+// @__NO_SIDE_EFFECTS__
+function createContext2(rootComponentName, defaultContext) {
+  const Context = React5.createContext(defaultContext);
+  Context.displayName = rootComponentName + "Context";
+  const Provider2 = /* @__PURE__ */ __name4((props) => {
+    const { children, ...context } = props;
+    const value = React5.useMemo(() => context, Object.values(context));
+    return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Context.Provider, { value, children });
+  }, "Provider");
+  Provider2.displayName = rootComponentName + "Provider";
+  function useContext22(consumerName, options2 = {}) {
+    const { optional = false } = options2;
+    const context = React5.useContext(Context);
+    if (context) return context;
+    if (defaultContext !== void 0) return defaultContext;
+    if (optional) return void 0;
+    throw new Error(`\`${consumerName}\` must be used within \`${rootComponentName}\``);
+  }
+  __name4(useContext22, "useContext");
+  return [Provider2, useContext22];
+}
+__name4(createContext2, "createContext");
+// @__NO_SIDE_EFFECTS__
 function createContextScope(scopeName, createContextScopeDeps = []) {
   let defaultContexts = [];
   function createContext32(rootComponentName, defaultContext) {
-    const BaseContext = React4.createContext(defaultContext);
+    const BaseContext = React5.createContext(defaultContext);
+    BaseContext.displayName = rootComponentName + "Context";
     const index2 = defaultContexts.length;
     defaultContexts = [...defaultContexts, defaultContext];
-    const Provider = (props) => {
+    const Provider2 = /* @__PURE__ */ __name4((props) => {
       const { scope, children, ...context } = props;
       const Context = scope?.[scopeName]?.[index2] || BaseContext;
-      const value = React4.useMemo(() => context, Object.values(context));
+      const value = React5.useMemo(() => context, Object.values(context));
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Context.Provider, { value, children });
-    };
-    Provider.displayName = rootComponentName + "Provider";
-    function useContext22(consumerName, scope) {
+    }, "Provider");
+    Provider2.displayName = rootComponentName + "Provider";
+    function useContext22(consumerName, scope, options2 = {}) {
+      const { optional = false } = options2;
       const Context = scope?.[scopeName]?.[index2] || BaseContext;
-      const context = React4.useContext(Context);
+      const context = React5.useContext(Context);
       if (context) return context;
       if (defaultContext !== void 0) return defaultContext;
+      if (optional) return void 0;
       throw new Error(`\`${consumerName}\` must be used within \`${rootComponentName}\``);
     }
-    return [Provider, useContext22];
+    __name4(useContext22, "useContext");
+    return [Provider2, useContext22];
   }
-  const createScope = () => {
+  __name4(createContext32, "createContext");
+  const createScope = /* @__PURE__ */ __name4(() => {
     const scopeContexts = defaultContexts.map((defaultContext) => {
-      return React4.createContext(defaultContext);
+      return React5.createContext(defaultContext);
     });
-    return function useScope(scope) {
+    return /* @__PURE__ */ __name4(function useScope(scope) {
       const contexts = scope?.[scopeName] || scopeContexts;
-      return React4.useMemo(
+      return React5.useMemo(
         () => ({ [`__scope${scopeName}`]: { ...scope, [scopeName]: contexts } }),
         [scope, contexts]
       );
-    };
-  };
+    }, "useScope");
+  }, "createScope");
   createScope.scopeName = scopeName;
   return [createContext32, composeContextScopes(createScope, ...createContextScopeDeps)];
 }
+__name4(createContextScope, "createContextScope");
 function composeContextScopes(...scopes) {
   const baseScope = scopes[0];
   if (scopes.length === 1) return baseScope;
-  const createScope = () => {
+  const createScope = /* @__PURE__ */ __name4(() => {
     const scopeHooks = scopes.map((createScope2) => ({
       useScope: createScope2(),
       scopeName: createScope2.scopeName
     }));
-    return function useComposedScopes(overrideScopes) {
+    return /* @__PURE__ */ __name4(function useComposedScopes(overrideScopes) {
       const nextScopes = scopeHooks.reduce((nextScopes2, { useScope, scopeName }) => {
         const scopeProps = useScope(overrideScopes);
         const currentScope = scopeProps[`__scope${scopeName}`];
         return { ...nextScopes2, ...currentScope };
       }, {});
-      return React4.useMemo(() => ({ [`__scope${baseScope.scopeName}`]: nextScopes }), [nextScopes]);
-    };
-  };
+      return React5.useMemo(() => ({ [`__scope${baseScope.scopeName}`]: nextScopes }), [nextScopes]);
+    }, "useComposedScopes");
+  }, "createScope");
   createScope.scopeName = baseScope.scopeName;
   return createScope;
 }
+__name4(composeContextScopes, "composeContextScopes");
 
 // ../../../../website/node_modules/@radix-ui/react-use-controllable-state/dist/index.mjs
-var React6 = __toESM(require_react(), 1);
+var React8 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/@radix-ui/primitive/dist/internal/is-development.false.mjs
+var IS_DEVELOPMENT = false;
 
 // ../../../../website/node_modules/@radix-ui/react-use-layout-effect/dist/index.mjs
-var React5 = __toESM(require_react(), 1);
-var useLayoutEffect2 = globalThis?.document ? React5.useLayoutEffect : () => {
+var React6 = __toESM(require_react(), 1);
+var useLayoutEffect2 = globalThis?.document ? React6.useLayoutEffect : () => {
 };
 
 // ../../../../website/node_modules/@radix-ui/react-use-controllable-state/dist/index.mjs
 var React22 = __toESM(require_react(), 1);
-var useInsertionEffect = React6[" useInsertionEffect ".trim().toString()] || useLayoutEffect2;
+
+// ../../../../website/node_modules/@radix-ui/react-use-effect-event/dist/index.mjs
+var React7 = __toESM(require_react(), 1);
+var __defProp6 = Object.defineProperty;
+var __name5 = (target, value) => __defProp6(target, "name", { value, configurable: true });
+var useReactEffectEvent = React7[" useEffectEvent ".trim().toString()];
+var useReactInsertionEffect = React7[" useInsertionEffect ".trim().toString()];
+function useEffectEvent(callback) {
+  if (typeof useReactEffectEvent === "function") {
+    return useReactEffectEvent(callback);
+  }
+  const ref = React7.useRef(() => {
+    throw new Error("Cannot call an event handler while rendering.");
+  });
+  if (typeof useReactInsertionEffect === "function") {
+    useReactInsertionEffect(() => {
+      ref.current = callback;
+    });
+  } else {
+    useLayoutEffect2(() => {
+      ref.current = callback;
+    });
+  }
+  return React7.useMemo(() => ((...args) => ref.current?.(...args)), []);
+}
+__name5(useEffectEvent, "useEffectEvent");
+
+// ../../../../website/node_modules/@radix-ui/react-use-controllable-state/dist/index.mjs
+var __defProp7 = Object.defineProperty;
+var __name6 = (target, value) => __defProp7(target, "name", { value, configurable: true });
+var useInsertionEffect = React8[" useInsertionEffect ".trim().toString()] || useLayoutEffect2;
 function useControllableState({
   prop,
   defaultProp,
-  onChange = () => {
-  },
+  onChange = /* @__PURE__ */ __name6(() => {
+  }, "onChange"),
   caller
 }) {
   const [uncontrolledProp, setUncontrolledProp, onChangeRef] = useUncontrolledState({
@@ -23767,9 +28829,9 @@ function useControllableState({
   });
   const isControlled = prop !== void 0;
   const value = isControlled ? prop : uncontrolledProp;
-  if (true) {
-    const isControlledRef = React6.useRef(prop !== void 0);
-    React6.useEffect(() => {
+  if (IS_DEVELOPMENT) {
+    const isControlledRef = React8.useRef(prop !== void 0);
+    React8.useEffect(() => {
       const wasControlled = isControlledRef.current;
       if (wasControlled !== isControlled) {
         const from = wasControlled ? "controlled" : "uncontrolled";
@@ -23781,7 +28843,7 @@ function useControllableState({
       isControlledRef.current = isControlled;
     }, [isControlled, caller]);
   }
-  const setValue = React6.useCallback(
+  const setValue = React8.useCallback(
     (nextValue) => {
       if (isControlled) {
         const value2 = isFunction(nextValue) ? nextValue(prop) : nextValue;
@@ -23796,17 +28858,18 @@ function useControllableState({
   );
   return [value, setValue];
 }
+__name6(useControllableState, "useControllableState");
 function useUncontrolledState({
   defaultProp,
   onChange
 }) {
-  const [value, setValue] = React6.useState(defaultProp);
-  const prevValueRef = React6.useRef(value);
-  const onChangeRef = React6.useRef(onChange);
+  const [value, setValue] = React8.useState(defaultProp);
+  const prevValueRef = React8.useRef(value);
+  const onChangeRef = React8.useRef(onChange);
   useInsertionEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
-  React6.useEffect(() => {
+  React8.useEffect(() => {
     if (prevValueRef.current !== value) {
       onChangeRef.current?.(value);
       prevValueRef.current = value;
@@ -23814,14 +28877,79 @@ function useUncontrolledState({
   }, [value, prevValueRef]);
   return [value, setValue, onChangeRef];
 }
+__name6(useUncontrolledState, "useUncontrolledState");
 function isFunction(value) {
   return typeof value === "function";
 }
+__name6(isFunction, "isFunction");
+var SYNC_STATE = /* @__PURE__ */ Symbol("RADIX:SYNC_STATE");
+function useControllableStateReducer(reducer, userArgs, initialArg, init) {
+  const { prop: controlledState, defaultProp, onChange: onChangeProp, caller } = userArgs;
+  const isControlled = controlledState !== void 0;
+  const onChange = useEffectEvent(onChangeProp);
+  if (IS_DEVELOPMENT) {
+    const isControlledRef = React22.useRef(controlledState !== void 0);
+    React22.useEffect(() => {
+      const wasControlled = isControlledRef.current;
+      if (wasControlled !== isControlled) {
+        const from = wasControlled ? "controlled" : "uncontrolled";
+        const to = isControlled ? "controlled" : "uncontrolled";
+        console.warn(
+          `${caller} is changing from ${from} to ${to}. Components should not switch from controlled to uncontrolled (or vice versa). Decide between using a controlled or uncontrolled value for the lifetime of the component.`
+        );
+      }
+      isControlledRef.current = isControlled;
+    }, [isControlled, caller]);
+  }
+  const args = [{ ...initialArg, state: defaultProp }];
+  if (init) {
+    args.push(init);
+  }
+  const [internalState, dispatch] = React22.useReducer(
+    (state2, action) => {
+      if (action.type === SYNC_STATE) {
+        return { ...state2, state: action.state };
+      }
+      const next = reducer(state2, action);
+      if (isControlled && !Object.is(next.state, state2.state)) {
+        onChange(next.state);
+      }
+      return next;
+    },
+    ...args
+  );
+  const uncontrolledState = internalState.state;
+  const prevValueRef = React22.useRef(uncontrolledState);
+  React22.useEffect(() => {
+    if (prevValueRef.current !== uncontrolledState) {
+      prevValueRef.current = uncontrolledState;
+      if (!isControlled) {
+        onChange(uncontrolledState);
+      }
+    }
+  }, [uncontrolledState, prevValueRef, isControlled]);
+  const state = React22.useMemo(() => {
+    const isControlled2 = controlledState !== void 0;
+    if (isControlled2) {
+      return { ...internalState, state: controlledState };
+    }
+    return internalState;
+  }, [internalState, controlledState]);
+  React22.useEffect(() => {
+    if (isControlled && !Object.is(controlledState, internalState.state)) {
+      dispatch({ type: SYNC_STATE, state: controlledState });
+    }
+  }, [controlledState, internalState.state, isControlled]);
+  return [state, dispatch];
+}
+__name6(useControllableStateReducer, "useControllableStateReducer");
 
 // ../../../../website/node_modules/@radix-ui/react-primitive/dist/index.mjs
-var React7 = __toESM(require_react(), 1);
+var React9 = __toESM(require_react(), 1);
 var ReactDOM = __toESM(require_react_dom(), 1);
 var import_jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
+var __defProp8 = Object.defineProperty;
+var __name7 = (target, value) => __defProp8(target, "name", { value, configurable: true });
 var NODES = [
   "a",
   "button",
@@ -23842,10 +28970,10 @@ var NODES = [
   "ul"
 ];
 var Primitive = NODES.reduce((primitive, node) => {
-  const Slot3 = createSlot(`Primitive.${node}`);
-  const Node2 = React7.forwardRef((props, forwardedRef) => {
+  const Slot5 = createSlot(`Primitive.${node}`);
+  const Node2 = React9.forwardRef((props, forwardedRef) => {
     const { asChild, ...primitiveProps } = props;
-    const Comp = asChild ? Slot3 : node;
+    const Comp = asChild ? Slot5 : node;
     if (typeof window !== "undefined") {
       window[/* @__PURE__ */ Symbol.for("radix-ui")] = true;
     }
@@ -23857,32 +28985,36 @@ var Primitive = NODES.reduce((primitive, node) => {
 function dispatchDiscreteCustomEvent(target, event) {
   if (target) ReactDOM.flushSync(() => target.dispatchEvent(event));
 }
+__name7(dispatchDiscreteCustomEvent, "dispatchDiscreteCustomEvent");
 
 // ../../../../website/node_modules/@radix-ui/react-menu/dist/index.mjs
-var React33 = __toESM(require_react(), 1);
+var React34 = __toESM(require_react(), 1);
 
 // ../../../../website/node_modules/@radix-ui/react-collection/dist/index.mjs
-var import_react2 = __toESM(require_react(), 1);
+var React10 = __toESM(require_react(), 1);
 var import_jsx_runtime8 = __toESM(require_jsx_runtime(), 1);
-var import_react3 = __toESM(require_react(), 1);
+var React23 = __toESM(require_react(), 1);
 var import_jsx_runtime9 = __toESM(require_jsx_runtime(), 1);
+var __defProp9 = Object.defineProperty;
+var __name8 = (target, value) => __defProp9(target, "name", { value, configurable: true });
+// @__NO_SIDE_EFFECTS__
 function createCollection(name) {
-  const PROVIDER_NAME = name + "CollectionProvider";
-  const [createCollectionContext, createCollectionScope3] = createContextScope(PROVIDER_NAME);
+  const PROVIDER_NAME2 = name + "CollectionProvider";
+  const [createCollectionContext, createCollectionScope3] = createContextScope(PROVIDER_NAME2);
   const [CollectionProviderImpl, useCollectionContext] = createCollectionContext(
-    PROVIDER_NAME,
+    PROVIDER_NAME2,
     { collectionRef: { current: null }, itemMap: /* @__PURE__ */ new Map() }
   );
-  const CollectionProvider = (props) => {
+  const CollectionProvider = /* @__PURE__ */ __name8((props) => {
     const { scope, children } = props;
-    const ref = import_react2.default.useRef(null);
-    const itemMap = import_react2.default.useRef(/* @__PURE__ */ new Map()).current;
+    const ref = React10.useRef(null);
+    const itemMap = React10.useRef(/* @__PURE__ */ new Map()).current;
     return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(CollectionProviderImpl, { scope, itemMap, collectionRef: ref, children });
-  };
-  CollectionProvider.displayName = PROVIDER_NAME;
+  }, "CollectionProvider");
+  CollectionProvider.displayName = PROVIDER_NAME2;
   const COLLECTION_SLOT_NAME = name + "CollectionSlot";
   const CollectionSlotImpl = createSlot(COLLECTION_SLOT_NAME);
-  const CollectionSlot = import_react2.default.forwardRef(
+  const CollectionSlot = React10.forwardRef(
     (props, forwardedRef) => {
       const { scope, children } = props;
       const context = useCollectionContext(COLLECTION_SLOT_NAME, scope);
@@ -23894,13 +29026,13 @@ function createCollection(name) {
   const ITEM_SLOT_NAME = name + "CollectionItemSlot";
   const ITEM_DATA_ATTR = "data-radix-collection-item";
   const CollectionItemSlotImpl = createSlot(ITEM_SLOT_NAME);
-  const CollectionItemSlot = import_react2.default.forwardRef(
+  const CollectionItemSlot = React10.forwardRef(
     (props, forwardedRef) => {
       const { scope, children, ...itemData } = props;
-      const ref = import_react2.default.useRef(null);
+      const ref = React10.useRef(null);
       const composedRefs = useComposedRefs(forwardedRef, ref);
       const context = useCollectionContext(ITEM_SLOT_NAME, scope);
-      import_react2.default.useEffect(() => {
+      React10.useEffect(() => {
         context.itemMap.set(ref, { ref, ...itemData });
         return () => void context.itemMap.delete(ref);
       });
@@ -23910,78 +29042,553 @@ function createCollection(name) {
   CollectionItemSlot.displayName = ITEM_SLOT_NAME;
   function useCollection3(scope) {
     const context = useCollectionContext(name + "CollectionConsumer", scope);
-    const getItems = import_react2.default.useCallback(() => {
+    const getItems = React10.useCallback(() => {
       const collectionNode = context.collectionRef.current;
       if (!collectionNode) return [];
       const orderedNodes = Array.from(collectionNode.querySelectorAll(`[${ITEM_DATA_ATTR}]`));
       const items = Array.from(context.itemMap.values());
       const orderedItems = items.sort(
-        (a, b) => orderedNodes.indexOf(a.ref.current) - orderedNodes.indexOf(b.ref.current)
+        (a, b2) => orderedNodes.indexOf(a.ref.current) - orderedNodes.indexOf(b2.ref.current)
       );
       return orderedItems;
     }, [context.collectionRef, context.itemMap]);
     return getItems;
   }
+  __name8(useCollection3, "useCollection");
   return [
     { Provider: CollectionProvider, Slot: CollectionSlot, ItemSlot: CollectionItemSlot },
     useCollection3,
     createCollectionScope3
   ];
 }
+__name8(createCollection, "createCollection");
+var __instanciated = /* @__PURE__ */ new WeakMap();
+var OrderedDict = class _OrderedDict extends Map {
+  static {
+    __name8(this, "OrderedDict");
+  }
+  #keys;
+  constructor(entries) {
+    super(entries);
+    this.#keys = [...super.keys()];
+    __instanciated.set(this, true);
+  }
+  set(key, value) {
+    if (__instanciated.get(this)) {
+      if (this.has(key)) {
+        this.#keys[this.#keys.indexOf(key)] = key;
+      } else {
+        this.#keys.push(key);
+      }
+    }
+    super.set(key, value);
+    return this;
+  }
+  insert(index2, key, value) {
+    const has = this.has(key);
+    const length = this.#keys.length;
+    const relativeIndex = toSafeInteger(index2);
+    let actualIndex = relativeIndex >= 0 ? relativeIndex : length + relativeIndex;
+    const safeIndex = actualIndex < 0 || actualIndex >= length ? -1 : actualIndex;
+    if (safeIndex === this.size || has && safeIndex === this.size - 1 || safeIndex === -1) {
+      this.set(key, value);
+      return this;
+    }
+    const size4 = this.size + (has ? 0 : 1);
+    if (relativeIndex < 0) {
+      actualIndex++;
+    }
+    const keys = [...this.#keys];
+    let nextValue;
+    let shouldSkip = false;
+    for (let i = actualIndex; i < size4; i++) {
+      if (actualIndex === i) {
+        let nextKey = keys[i];
+        if (keys[i] === key) {
+          nextKey = keys[i + 1];
+        }
+        if (has) {
+          this.delete(key);
+        }
+        nextValue = this.get(nextKey);
+        this.set(key, value);
+      } else {
+        if (!shouldSkip && keys[i - 1] === key) {
+          shouldSkip = true;
+        }
+        const currentKey = keys[shouldSkip ? i : i - 1];
+        const currentValue = nextValue;
+        nextValue = this.get(currentKey);
+        this.delete(currentKey);
+        this.set(currentKey, currentValue);
+      }
+    }
+    return this;
+  }
+  with(index2, key, value) {
+    const copy = new _OrderedDict(this);
+    copy.insert(index2, key, value);
+    return copy;
+  }
+  before(key) {
+    const index2 = this.#keys.indexOf(key) - 1;
+    if (index2 < 0) {
+      return void 0;
+    }
+    return this.entryAt(index2);
+  }
+  /**
+   * Sets a new key-value pair at the position before the given key.
+   */
+  setBefore(key, newKey, value) {
+    const index2 = this.#keys.indexOf(key);
+    if (index2 === -1) {
+      return this;
+    }
+    return this.insert(index2, newKey, value);
+  }
+  after(key) {
+    let index2 = this.#keys.indexOf(key);
+    index2 = index2 === -1 || index2 === this.size - 1 ? -1 : index2 + 1;
+    if (index2 === -1) {
+      return void 0;
+    }
+    return this.entryAt(index2);
+  }
+  /**
+   * Sets a new key-value pair at the position after the given key.
+   */
+  setAfter(key, newKey, value) {
+    const index2 = this.#keys.indexOf(key);
+    if (index2 === -1) {
+      return this;
+    }
+    return this.insert(index2 + 1, newKey, value);
+  }
+  first() {
+    return this.entryAt(0);
+  }
+  last() {
+    return this.entryAt(-1);
+  }
+  clear() {
+    this.#keys = [];
+    return super.clear();
+  }
+  delete(key) {
+    const deleted = super.delete(key);
+    if (deleted) {
+      this.#keys.splice(this.#keys.indexOf(key), 1);
+    }
+    return deleted;
+  }
+  deleteAt(index2) {
+    const key = this.keyAt(index2);
+    if (key !== void 0) {
+      return this.delete(key);
+    }
+    return false;
+  }
+  at(index2) {
+    const key = at(this.#keys, index2);
+    if (key !== void 0) {
+      return this.get(key);
+    }
+  }
+  entryAt(index2) {
+    const key = at(this.#keys, index2);
+    if (key !== void 0) {
+      return [key, this.get(key)];
+    }
+  }
+  indexOf(key) {
+    return this.#keys.indexOf(key);
+  }
+  keyAt(index2) {
+    return at(this.#keys, index2);
+  }
+  from(key, offset4) {
+    const index2 = this.indexOf(key);
+    if (index2 === -1) {
+      return void 0;
+    }
+    let dest = index2 + offset4;
+    if (dest < 0) dest = 0;
+    if (dest >= this.size) dest = this.size - 1;
+    return this.at(dest);
+  }
+  keyFrom(key, offset4) {
+    const index2 = this.indexOf(key);
+    if (index2 === -1) {
+      return void 0;
+    }
+    let dest = index2 + offset4;
+    if (dest < 0) dest = 0;
+    if (dest >= this.size) dest = this.size - 1;
+    return this.keyAt(dest);
+  }
+  find(predicate, thisArg) {
+    let index2 = 0;
+    for (const entry of this) {
+      if (Reflect.apply(predicate, thisArg, [entry, index2, this])) {
+        return entry;
+      }
+      index2++;
+    }
+    return void 0;
+  }
+  findIndex(predicate, thisArg) {
+    let index2 = 0;
+    for (const entry of this) {
+      if (Reflect.apply(predicate, thisArg, [entry, index2, this])) {
+        return index2;
+      }
+      index2++;
+    }
+    return -1;
+  }
+  filter(predicate, thisArg) {
+    const entries = [];
+    let index2 = 0;
+    for (const entry of this) {
+      if (Reflect.apply(predicate, thisArg, [entry, index2, this])) {
+        entries.push(entry);
+      }
+      index2++;
+    }
+    return new _OrderedDict(entries);
+  }
+  map(callbackfn, thisArg) {
+    const entries = [];
+    let index2 = 0;
+    for (const entry of this) {
+      entries.push([entry[0], Reflect.apply(callbackfn, thisArg, [entry, index2, this])]);
+      index2++;
+    }
+    return new _OrderedDict(entries);
+  }
+  reduce(...args) {
+    const [callbackfn, initialValue] = args;
+    let index2 = 0;
+    let accumulator = initialValue ?? this.at(0);
+    for (const entry of this) {
+      if (index2 === 0 && args.length === 1) {
+        accumulator = entry;
+      } else {
+        accumulator = Reflect.apply(callbackfn, this, [accumulator, entry, index2, this]);
+      }
+      index2++;
+    }
+    return accumulator;
+  }
+  reduceRight(...args) {
+    const [callbackfn, initialValue] = args;
+    let accumulator = initialValue ?? this.at(-1);
+    for (let index2 = this.size - 1; index2 >= 0; index2--) {
+      const entry = this.at(index2);
+      if (index2 === this.size - 1 && args.length === 1) {
+        accumulator = entry;
+      } else {
+        accumulator = Reflect.apply(callbackfn, this, [accumulator, entry, index2, this]);
+      }
+    }
+    return accumulator;
+  }
+  toSorted(compareFn) {
+    const entries = [...this.entries()].sort(compareFn);
+    return new _OrderedDict(entries);
+  }
+  toReversed() {
+    const reversed = new _OrderedDict();
+    for (let index2 = this.size - 1; index2 >= 0; index2--) {
+      const key = this.keyAt(index2);
+      const element = this.get(key);
+      reversed.set(key, element);
+    }
+    return reversed;
+  }
+  toSpliced(...args) {
+    const entries = [...this.entries()];
+    entries.splice(...args);
+    return new _OrderedDict(entries);
+  }
+  slice(start, end) {
+    const result = new _OrderedDict();
+    let stop = this.size - 1;
+    if (start === void 0) {
+      return result;
+    }
+    if (start < 0) {
+      start = start + this.size;
+    }
+    if (end !== void 0 && end > 0) {
+      stop = end - 1;
+    }
+    for (let index2 = start; index2 <= stop; index2++) {
+      const key = this.keyAt(index2);
+      const element = this.get(key);
+      result.set(key, element);
+    }
+    return result;
+  }
+  every(predicate, thisArg) {
+    let index2 = 0;
+    for (const entry of this) {
+      if (!Reflect.apply(predicate, thisArg, [entry, index2, this])) {
+        return false;
+      }
+      index2++;
+    }
+    return true;
+  }
+  some(predicate, thisArg) {
+    let index2 = 0;
+    for (const entry of this) {
+      if (Reflect.apply(predicate, thisArg, [entry, index2, this])) {
+        return true;
+      }
+      index2++;
+    }
+    return false;
+  }
+};
+function at(array, index2) {
+  if ("at" in Array.prototype) {
+    return Array.prototype.at.call(array, index2);
+  }
+  const actualIndex = toSafeIndex(array, index2);
+  return actualIndex === -1 ? void 0 : array[actualIndex];
+}
+__name8(at, "at");
+function toSafeIndex(array, index2) {
+  const length = array.length;
+  const relativeIndex = toSafeInteger(index2);
+  const actualIndex = relativeIndex >= 0 ? relativeIndex : length + relativeIndex;
+  return actualIndex < 0 || actualIndex >= length ? -1 : actualIndex;
+}
+__name8(toSafeIndex, "toSafeIndex");
+function toSafeInteger(number) {
+  return number !== number || number === 0 ? 0 : Math.trunc(number);
+}
+__name8(toSafeInteger, "toSafeInteger");
+// @__NO_SIDE_EFFECTS__
+function createCollection2(name) {
+  const PROVIDER_NAME2 = name + "CollectionProvider";
+  const [createCollectionContext, createCollectionScope3] = createContextScope(PROVIDER_NAME2);
+  const [CollectionContextProvider, useCollectionContext] = createCollectionContext(
+    PROVIDER_NAME2,
+    {
+      collectionElement: null,
+      collectionRef: { current: null },
+      collectionRefObject: { current: null },
+      itemMap: new OrderedDict(),
+      setItemMap: /* @__PURE__ */ __name8(() => void 0, "setItemMap")
+    }
+  );
+  const CollectionProvider = /* @__PURE__ */ __name8(({ state, ...props }) => {
+    return state ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(CollectionProviderImpl, { ...props, state }) : /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(CollectionInit, { ...props });
+  }, "CollectionProvider");
+  CollectionProvider.displayName = PROVIDER_NAME2;
+  const CollectionInit = /* @__PURE__ */ __name8((props) => {
+    const state = useInitCollection();
+    return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(CollectionProviderImpl, { ...props, state });
+  }, "CollectionInit");
+  CollectionInit.displayName = PROVIDER_NAME2 + "Init";
+  const CollectionProviderImpl = /* @__PURE__ */ __name8((props) => {
+    const { scope, children, state } = props;
+    const ref = React23.useRef(null);
+    const [collectionElement, setCollectionElement] = React23.useState(
+      null
+    );
+    const composeRefs2 = useComposedRefs(ref, setCollectionElement);
+    const [itemMap, setItemMap] = state;
+    React23.useEffect(() => {
+      if (!collectionElement) return;
+      const observer = getChildListObserver(() => {
+      });
+      observer.observe(collectionElement, {
+        childList: true,
+        subtree: true
+      });
+      return () => {
+        observer.disconnect();
+      };
+    }, [collectionElement]);
+    return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
+      CollectionContextProvider,
+      {
+        scope,
+        itemMap,
+        setItemMap,
+        collectionRef: composeRefs2,
+        collectionRefObject: ref,
+        collectionElement,
+        children
+      }
+    );
+  }, "CollectionProviderImpl");
+  CollectionProviderImpl.displayName = PROVIDER_NAME2 + "Impl";
+  const COLLECTION_SLOT_NAME = name + "CollectionSlot";
+  const CollectionSlotImpl = createSlot(COLLECTION_SLOT_NAME);
+  const CollectionSlot = React23.forwardRef(
+    (props, forwardedRef) => {
+      const { scope, children } = props;
+      const context = useCollectionContext(COLLECTION_SLOT_NAME, scope);
+      const composedRefs = useComposedRefs(forwardedRef, context.collectionRef);
+      return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(CollectionSlotImpl, { ref: composedRefs, children });
+    }
+  );
+  CollectionSlot.displayName = COLLECTION_SLOT_NAME;
+  const ITEM_SLOT_NAME = name + "CollectionItemSlot";
+  const ITEM_DATA_ATTR = "data-radix-collection-item";
+  const CollectionItemSlotImpl = createSlot(ITEM_SLOT_NAME);
+  const CollectionItemSlot = React23.forwardRef(
+    (props, forwardedRef) => {
+      const { scope, children, ...itemData } = props;
+      const ref = React23.useRef(null);
+      const [element, setElement] = React23.useState(null);
+      const composedRefs = useComposedRefs(forwardedRef, ref, setElement);
+      const context = useCollectionContext(ITEM_SLOT_NAME, scope);
+      const { setItemMap } = context;
+      const itemDataRef = React23.useRef(itemData);
+      if (!shallowEqual(itemDataRef.current, itemData)) {
+        itemDataRef.current = itemData;
+      }
+      const memoizedItemData = itemDataRef.current;
+      React23.useEffect(() => {
+        const itemData2 = memoizedItemData;
+        setItemMap((map) => {
+          if (!element) {
+            return map;
+          }
+          if (!map.has(element)) {
+            map.set(element, { ...itemData2, element });
+            return map.toSorted(sortByDocumentPosition);
+          }
+          return map.set(element, { ...itemData2, element }).toSorted(sortByDocumentPosition);
+        });
+        return () => {
+          setItemMap((map) => {
+            if (!element || !map.has(element)) {
+              return map;
+            }
+            map.delete(element);
+            return new OrderedDict(map);
+          });
+        };
+      }, [element, memoizedItemData, setItemMap]);
+      return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(CollectionItemSlotImpl, { ...{ [ITEM_DATA_ATTR]: "" }, ref: composedRefs, children });
+    }
+  );
+  CollectionItemSlot.displayName = ITEM_SLOT_NAME;
+  function useInitCollection() {
+    return React23.useState(new OrderedDict());
+  }
+  __name8(useInitCollection, "useInitCollection");
+  function useCollection3(scope) {
+    const { itemMap } = useCollectionContext(name + "CollectionConsumer", scope);
+    return itemMap;
+  }
+  __name8(useCollection3, "useCollection");
+  const functions = {
+    createCollectionScope: createCollectionScope3,
+    useCollection: useCollection3,
+    useInitCollection
+  };
+  return [
+    { Provider: CollectionProvider, Slot: CollectionSlot, ItemSlot: CollectionItemSlot },
+    functions
+  ];
+}
+__name8(createCollection2, "createCollection");
+function shallowEqual(a, b2) {
+  if (a === b2) return true;
+  if (typeof a !== "object" || typeof b2 !== "object") return false;
+  if (a == null || b2 == null) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b2);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b2, key)) return false;
+    if (a[key] !== b2[key]) return false;
+  }
+  return true;
+}
+__name8(shallowEqual, "shallowEqual");
+function isElementPreceding(a, b2) {
+  return !!(b2.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_PRECEDING);
+}
+__name8(isElementPreceding, "isElementPreceding");
+function sortByDocumentPosition(a, b2) {
+  return !a[1].element || !b2[1].element ? 0 : isElementPreceding(a[1].element, b2[1].element) ? -1 : 1;
+}
+__name8(sortByDocumentPosition, "sortByDocumentPosition");
+function getChildListObserver(callback) {
+  const observer = new MutationObserver((mutationsList) => {
+    for (const mutation of mutationsList) {
+      if (mutation.type === "childList") {
+        callback();
+        return;
+      }
+    }
+  });
+  return observer;
+}
+__name8(getChildListObserver, "getChildListObserver");
 
 // ../../../../website/node_modules/@radix-ui/react-direction/dist/index.mjs
-var React9 = __toESM(require_react(), 1);
+var React11 = __toESM(require_react(), 1);
 var import_jsx_runtime10 = __toESM(require_jsx_runtime(), 1);
-var DirectionContext = React9.createContext(void 0);
+var __defProp10 = Object.defineProperty;
+var __name9 = (target, value) => __defProp10(target, "name", { value, configurable: true });
+var DirectionContext = React11.createContext(void 0);
 function useDirection(localDir) {
-  const globalDir = React9.useContext(DirectionContext);
+  const globalDir = React11.useContext(DirectionContext);
   return localDir || globalDir || "ltr";
 }
+__name9(useDirection, "useDirection");
 
 // ../../../../website/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs
-var React12 = __toESM(require_react(), 1);
+var React13 = __toESM(require_react(), 1);
 
 // ../../../../website/node_modules/@radix-ui/react-use-callback-ref/dist/index.mjs
-var React10 = __toESM(require_react(), 1);
+var React12 = __toESM(require_react(), 1);
+var __defProp11 = Object.defineProperty;
+var __name10 = (target, value) => __defProp11(target, "name", { value, configurable: true });
 function useCallbackRef(callback) {
-  const callbackRef = React10.useRef(callback);
-  React10.useEffect(() => {
+  const callbackRef = React12.useRef(callback);
+  React12.useEffect(() => {
     callbackRef.current = callback;
   });
-  return React10.useMemo(() => (...args) => callbackRef.current?.(...args), []);
+  return React12.useMemo(() => ((...args) => callbackRef.current?.(...args)), []);
 }
-
-// ../../../../website/node_modules/@radix-ui/react-use-escape-keydown/dist/index.mjs
-var React11 = __toESM(require_react(), 1);
-function useEscapeKeydown(onEscapeKeyDownProp, ownerDocument = globalThis?.document) {
-  const onEscapeKeyDown = useCallbackRef(onEscapeKeyDownProp);
-  React11.useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") {
-        onEscapeKeyDown(event);
-      }
-    };
-    ownerDocument.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => ownerDocument.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [onEscapeKeyDown, ownerDocument]);
-}
+__name10(useCallbackRef, "useCallbackRef");
 
 // ../../../../website/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs
 var import_jsx_runtime11 = __toESM(require_jsx_runtime(), 1);
-var DISMISSABLE_LAYER_NAME = "DismissableLayer";
+var __defProp12 = Object.defineProperty;
+var __name11 = (target, value) => __defProp12(target, "name", { value, configurable: true });
 var CONTEXT_UPDATE = "dismissableLayer.update";
 var POINTER_DOWN_OUTSIDE = "dismissableLayer.pointerDownOutside";
 var FOCUS_OUTSIDE = "dismissableLayer.focusOutside";
 var originalBodyPointerEvents;
-var DismissableLayerContext = React12.createContext({
+var DismissableLayerContext = React13.createContext({
   layers: /* @__PURE__ */ new Set(),
   layersWithOutsidePointerEventsDisabled: /* @__PURE__ */ new Set(),
-  branches: /* @__PURE__ */ new Set()
+  branches: /* @__PURE__ */ new Set(),
+  // Outside elements that belong to a layer's own dismiss affordance (eg, a
+  // dialog overlay). Pressing them should dismiss the layer regardless of
+  // whether or not they stop propagation.
+  //
+  // See https://github.com/radix-ui/primitives/issues/3346
+  dismissableSurfaces: /* @__PURE__ */ new Set()
 });
-var DismissableLayer = React12.forwardRef(
-  (props, forwardedRef) => {
+var DismissableLayer = /* @__PURE__ */ React13.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name11(function DismissableLayer2(props, forwardedRef) {
     const {
       disableOutsidePointerEvents = false,
+      deferPointerDownOutside = false,
       onEscapeKeyDown,
       onPointerDownOutside,
       onFocusOutside,
@@ -23989,26 +29596,49 @@ var DismissableLayer = React12.forwardRef(
       onDismiss,
       ...layerProps
     } = props;
-    const context = React12.useContext(DismissableLayerContext);
-    const [node, setNode] = React12.useState(null);
+    const context = React13.useContext(DismissableLayerContext);
+    const [node, setNode] = React13.useState(null);
     const ownerDocument = node?.ownerDocument ?? globalThis?.document;
-    const [, force] = React12.useState({});
-    const composedRefs = useComposedRefs(forwardedRef, (node2) => setNode(node2));
+    const [, force] = React13.useState({});
+    const composedRefs = useComposedRefs(forwardedRef, setNode);
     const layers = Array.from(context.layers);
-    const [highestLayerWithOutsidePointerEventsDisabled] = [...context.layersWithOutsidePointerEventsDisabled].slice(-1);
-    const highestLayerWithOutsidePointerEventsDisabledIndex = layers.indexOf(highestLayerWithOutsidePointerEventsDisabled);
+    const [highestLayerWithOutsidePointerEventsDisabled] = [
+      ...context.layersWithOutsidePointerEventsDisabled
+    ].slice(-1);
+    const highestLayerWithOutsidePointerEventsDisabledIndex = highestLayerWithOutsidePointerEventsDisabled ? layers.indexOf(highestLayerWithOutsidePointerEventsDisabled) : -1;
     const index2 = node ? layers.indexOf(node) : -1;
     const isBodyPointerEventsDisabled = context.layersWithOutsidePointerEventsDisabled.size > 0;
     const isPointerEventsEnabled = index2 >= highestLayerWithOutsidePointerEventsDisabledIndex;
-    const pointerDownOutside = usePointerDownOutside((event) => {
-      const target = event.target;
-      const isPointerDownOnBranch = [...context.branches].some((branch) => branch.contains(target));
-      if (!isPointerEventsEnabled || isPointerDownOnBranch) return;
-      onPointerDownOutside?.(event);
-      onInteractOutside?.(event);
-      if (!event.defaultPrevented) onDismiss?.();
-    }, ownerDocument);
+    const isDeferredPointerDownOutsideRef = React13.useRef(false);
+    const pointerDownOutside = usePointerDownOutside(
+      (event) => {
+        onPointerDownOutside?.(event);
+        onInteractOutside?.(event);
+        if (!event.defaultPrevented) onDismiss?.();
+      },
+      {
+        ownerDocument,
+        deferPointerDownOutside,
+        isDeferredPointerDownOutsideRef,
+        dismissableSurfaces: context.dismissableSurfaces,
+        shouldHandlePointerDownOutside: React13.useCallback(
+          (target) => {
+            if (!(target instanceof Node)) {
+              return false;
+            }
+            const isPointerDownOnBranch = [...context.branches].some(
+              (branch) => branch.contains(target)
+            );
+            return isPointerEventsEnabled && !isPointerDownOnBranch;
+          },
+          [context.branches, isPointerEventsEnabled]
+        )
+      }
+    );
     const focusOutside = useFocusOutside((event) => {
+      if (deferPointerDownOutside && isDeferredPointerDownOutsideRef.current) {
+        return;
+      }
       const target = event.target;
       const isFocusInBranch = [...context.branches].some((branch) => branch.contains(target));
       if (isFocusInBranch) return;
@@ -24016,16 +29646,25 @@ var DismissableLayer = React12.forwardRef(
       onInteractOutside?.(event);
       if (!event.defaultPrevented) onDismiss?.();
     }, ownerDocument);
-    useEscapeKeydown((event) => {
-      const isHighestLayer = index2 === context.layers.size - 1;
-      if (!isHighestLayer) return;
+    const isHighestLayer = node ? index2 === layers.length - 1 : false;
+    const handleKeyDown = useCallbackRef((event) => {
+      if (event.key !== "Escape") {
+        return;
+      }
       onEscapeKeyDown?.(event);
       if (!event.defaultPrevented && onDismiss) {
         event.preventDefault();
         onDismiss();
       }
-    }, ownerDocument);
-    React12.useEffect(() => {
+    });
+    React13.useEffect(() => {
+      if (!isHighestLayer) {
+        return;
+      }
+      ownerDocument.addEventListener("keydown", handleKeyDown, { capture: true });
+      return () => ownerDocument.removeEventListener("keydown", handleKeyDown, { capture: true });
+    }, [ownerDocument, isHighestLayer, handleKeyDown]);
+    React13.useEffect(() => {
       if (!node) return;
       if (disableOutsidePointerEvents) {
         if (context.layersWithOutsidePointerEventsDisabled.size === 0) {
@@ -24037,12 +29676,15 @@ var DismissableLayer = React12.forwardRef(
       context.layers.add(node);
       dispatchUpdate();
       return () => {
-        if (disableOutsidePointerEvents && context.layersWithOutsidePointerEventsDisabled.size === 1) {
-          ownerDocument.body.style.pointerEvents = originalBodyPointerEvents;
+        if (disableOutsidePointerEvents) {
+          context.layersWithOutsidePointerEventsDisabled.delete(node);
+          if (context.layersWithOutsidePointerEventsDisabled.size === 0) {
+            ownerDocument.body.style.pointerEvents = originalBodyPointerEvents;
+          }
         }
       };
     }, [node, ownerDocument, disableOutsidePointerEvents, context]);
-    React12.useEffect(() => {
+    React13.useEffect(() => {
       return () => {
         if (!node) return;
         context.layers.delete(node);
@@ -24050,8 +29692,8 @@ var DismissableLayer = React12.forwardRef(
         dispatchUpdate();
       };
     }, [node, context]);
-    React12.useEffect(() => {
-      const handleUpdate = () => force({});
+    React13.useEffect(() => {
+      const handleUpdate = /* @__PURE__ */ __name11(() => force({}), "handleUpdate");
       document.addEventListener(CONTEXT_UPDATE, handleUpdate);
       return () => document.removeEventListener(CONTEXT_UPDATE, handleUpdate);
     }, []);
@@ -24072,56 +29714,125 @@ var DismissableLayer = React12.forwardRef(
         )
       }
     );
-  }
+  }, "DismissableLayer")
 );
-DismissableLayer.displayName = DISMISSABLE_LAYER_NAME;
-var BRANCH_NAME = "DismissableLayerBranch";
-var DismissableLayerBranch = React12.forwardRef((props, forwardedRef) => {
-  const context = React12.useContext(DismissableLayerContext);
-  const ref = React12.useRef(null);
-  const composedRefs = useComposedRefs(forwardedRef, ref);
-  React12.useEffect(() => {
-    const node = ref.current;
-    if (node) {
-      context.branches.add(node);
-      return () => {
-        context.branches.delete(node);
-      };
+function useDismissableLayerSurface() {
+  const context = React13.useContext(DismissableLayerContext);
+  const [node, setNode] = React13.useState(null);
+  React13.useEffect(() => {
+    if (!node) {
+      return;
     }
-  }, [context.branches]);
-  return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Primitive.div, { ...props, ref: composedRefs });
-});
-DismissableLayerBranch.displayName = BRANCH_NAME;
-function usePointerDownOutside(onPointerDownOutside, ownerDocument = globalThis?.document) {
+    context.dismissableSurfaces.add(node);
+    return () => {
+      context.dismissableSurfaces.delete(node);
+    };
+  }, [node, context.dismissableSurfaces]);
+  return setNode;
+}
+__name11(useDismissableLayerSurface, "useDismissableLayerSurface");
+var IS_TRUE = /* @__PURE__ */ __name11(() => true, "IS_TRUE");
+function usePointerDownOutside(onPointerDownOutside, args) {
+  const {
+    ownerDocument = globalThis?.document,
+    deferPointerDownOutside = false,
+    isDeferredPointerDownOutsideRef,
+    dismissableSurfaces,
+    shouldHandlePointerDownOutside = IS_TRUE
+  } = args;
   const handlePointerDownOutside = useCallbackRef(onPointerDownOutside);
-  const isPointerInsideReactTreeRef = React12.useRef(false);
-  const handleClickRef = React12.useRef(() => {
+  const isPointerInsideReactTreeRef = React13.useRef(false);
+  const isPointerDownOutsideRef = React13.useRef(false);
+  const interceptedOutsideInteractionEventsRef = React13.useRef(/* @__PURE__ */ new Map());
+  const handleClickRef = React13.useRef(() => {
   });
-  React12.useEffect(() => {
-    const handlePointerDown = (event) => {
+  React13.useEffect(() => {
+    function resetOutsideInteraction() {
+      isPointerDownOutsideRef.current = false;
+      isDeferredPointerDownOutsideRef.current = false;
+      interceptedOutsideInteractionEventsRef.current.clear();
+    }
+    __name11(resetOutsideInteraction, "resetOutsideInteraction");
+    function isOutsideInteractionIntercepted() {
+      return Array.from(interceptedOutsideInteractionEventsRef.current.values()).some(Boolean);
+    }
+    __name11(isOutsideInteractionIntercepted, "isOutsideInteractionIntercepted");
+    function handleInteractionCapture(event) {
+      if (!isPointerDownOutsideRef.current) {
+        return;
+      }
+      const target = event.target;
+      const isDismissableSurface = target instanceof Node && [...dismissableSurfaces].some((surface) => surface.contains(target));
+      if (!isDismissableSurface) {
+        interceptedOutsideInteractionEventsRef.current.set(event.type, true);
+      }
+      if (event.type === "click") {
+        window.setTimeout(() => {
+          if (isPointerDownOutsideRef.current) {
+            handleClickRef.current();
+          }
+        }, 0);
+      }
+    }
+    __name11(handleInteractionCapture, "handleInteractionCapture");
+    function handleInteractionBubble(event) {
+      if (isPointerDownOutsideRef.current) {
+        interceptedOutsideInteractionEventsRef.current.set(event.type, false);
+      }
+    }
+    __name11(handleInteractionBubble, "handleInteractionBubble");
+    const handlePointerDown = /* @__PURE__ */ __name11((event) => {
       if (event.target && !isPointerInsideReactTreeRef.current) {
         let handleAndDispatchPointerDownOutsideEvent2 = function() {
-          handleAndDispatchCustomEvent(
-            POINTER_DOWN_OUTSIDE,
-            handlePointerDownOutside,
-            eventDetail,
-            { discrete: true }
-          );
+          ownerDocument.removeEventListener("click", handleClickRef.current);
+          const wasOutsideInteractionIntercepted = isOutsideInteractionIntercepted();
+          resetOutsideInteraction();
+          if (!wasOutsideInteractionIntercepted) {
+            handleAndDispatchCustomEvent(
+              POINTER_DOWN_OUTSIDE,
+              handlePointerDownOutside,
+              eventDetail,
+              { discrete: true }
+            );
+          }
         };
         var handleAndDispatchPointerDownOutsideEvent = handleAndDispatchPointerDownOutsideEvent2;
+        __name11(handleAndDispatchPointerDownOutsideEvent2, "handleAndDispatchPointerDownOutsideEvent");
+        if (!shouldHandlePointerDownOutside(event.target)) {
+          ownerDocument.removeEventListener("click", handleClickRef.current);
+          resetOutsideInteraction();
+          isPointerInsideReactTreeRef.current = false;
+          return;
+        }
         const eventDetail = { originalEvent: event };
-        if (event.pointerType === "touch") {
+        isPointerDownOutsideRef.current = true;
+        isDeferredPointerDownOutsideRef.current = deferPointerDownOutside && event.button === 0;
+        interceptedOutsideInteractionEventsRef.current.clear();
+        if (!deferPointerDownOutside || event.button !== 0) {
+          handleAndDispatchPointerDownOutsideEvent2();
+        } else {
           ownerDocument.removeEventListener("click", handleClickRef.current);
           handleClickRef.current = handleAndDispatchPointerDownOutsideEvent2;
           ownerDocument.addEventListener("click", handleClickRef.current, { once: true });
-        } else {
-          handleAndDispatchPointerDownOutsideEvent2();
         }
       } else {
         ownerDocument.removeEventListener("click", handleClickRef.current);
+        resetOutsideInteraction();
       }
       isPointerInsideReactTreeRef.current = false;
-    };
+    }, "handlePointerDown");
+    const outsideInteractionEvents = [
+      "pointerup",
+      "mousedown",
+      "mouseup",
+      "touchstart",
+      "touchend",
+      "click"
+    ];
+    for (const eventName of outsideInteractionEvents) {
+      ownerDocument.addEventListener(eventName, handleInteractionCapture, true);
+      ownerDocument.addEventListener(eventName, handleInteractionBubble);
+    }
     const timerId = window.setTimeout(() => {
       ownerDocument.addEventListener("pointerdown", handlePointerDown);
     }, 0);
@@ -24129,37 +29840,51 @@ function usePointerDownOutside(onPointerDownOutside, ownerDocument = globalThis?
       window.clearTimeout(timerId);
       ownerDocument.removeEventListener("pointerdown", handlePointerDown);
       ownerDocument.removeEventListener("click", handleClickRef.current);
+      for (const eventName of outsideInteractionEvents) {
+        ownerDocument.removeEventListener(eventName, handleInteractionCapture, true);
+        ownerDocument.removeEventListener(eventName, handleInteractionBubble);
+      }
     };
-  }, [ownerDocument, handlePointerDownOutside]);
+  }, [
+    ownerDocument,
+    handlePointerDownOutside,
+    deferPointerDownOutside,
+    isDeferredPointerDownOutsideRef,
+    dismissableSurfaces,
+    shouldHandlePointerDownOutside
+  ]);
   return {
     // ensures we check React component tree (not just DOM tree)
-    onPointerDownCapture: () => isPointerInsideReactTreeRef.current = true
+    onPointerDownCapture: /* @__PURE__ */ __name11(() => isPointerInsideReactTreeRef.current = true, "onPointerDownCapture")
   };
 }
+__name11(usePointerDownOutside, "usePointerDownOutside");
 function useFocusOutside(onFocusOutside, ownerDocument = globalThis?.document) {
   const handleFocusOutside = useCallbackRef(onFocusOutside);
-  const isFocusInsideReactTreeRef = React12.useRef(false);
-  React12.useEffect(() => {
-    const handleFocus = (event) => {
+  const isFocusInsideReactTreeRef = React13.useRef(false);
+  React13.useEffect(() => {
+    const handleFocus = /* @__PURE__ */ __name11((event) => {
       if (event.target && !isFocusInsideReactTreeRef.current) {
         const eventDetail = { originalEvent: event };
         handleAndDispatchCustomEvent(FOCUS_OUTSIDE, handleFocusOutside, eventDetail, {
           discrete: false
         });
       }
-    };
+    }, "handleFocus");
     ownerDocument.addEventListener("focusin", handleFocus);
     return () => ownerDocument.removeEventListener("focusin", handleFocus);
   }, [ownerDocument, handleFocusOutside]);
   return {
-    onFocusCapture: () => isFocusInsideReactTreeRef.current = true,
-    onBlurCapture: () => isFocusInsideReactTreeRef.current = false
+    onFocusCapture: /* @__PURE__ */ __name11(() => isFocusInsideReactTreeRef.current = true, "onFocusCapture"),
+    onBlurCapture: /* @__PURE__ */ __name11(() => isFocusInsideReactTreeRef.current = false, "onBlurCapture")
   };
 }
+__name11(useFocusOutside, "useFocusOutside");
 function dispatchUpdate() {
   const event = new CustomEvent(CONTEXT_UPDATE);
   document.dispatchEvent(event);
 }
+__name11(dispatchUpdate, "dispatchUpdate");
 function handleAndDispatchCustomEvent(name, handler, detail, { discrete }) {
   const target = detail.originalEvent.target;
   const event = new CustomEvent(name, { bubbles: false, cancelable: true, detail });
@@ -24170,24 +29895,43 @@ function handleAndDispatchCustomEvent(name, handler, detail, { discrete }) {
     target.dispatchEvent(event);
   }
 }
+__name11(handleAndDispatchCustomEvent, "handleAndDispatchCustomEvent");
 
 // ../../../../website/node_modules/@radix-ui/react-focus-guards/dist/index.mjs
-var React13 = __toESM(require_react(), 1);
+var React14 = __toESM(require_react(), 1);
+var __defProp13 = Object.defineProperty;
+var __name12 = (target, value) => __defProp13(target, "name", { value, configurable: true });
 var count = 0;
+var guards = null;
+function FocusGuards(props) {
+  useFocusGuards();
+  return props.children;
+}
+__name12(FocusGuards, "FocusGuards");
 function useFocusGuards() {
-  React13.useEffect(() => {
-    const edgeGuards = document.querySelectorAll("[data-radix-focus-guard]");
-    document.body.insertAdjacentElement("afterbegin", edgeGuards[0] ?? createFocusGuard());
-    document.body.insertAdjacentElement("beforeend", edgeGuards[1] ?? createFocusGuard());
+  React14.useEffect(() => {
+    if (!guards) {
+      guards = { start: createFocusGuard(), end: createFocusGuard() };
+    }
+    const { start, end } = guards;
+    if (document.body.firstElementChild !== start) {
+      document.body.insertAdjacentElement("afterbegin", start);
+    }
+    if (document.body.lastElementChild !== end) {
+      document.body.insertAdjacentElement("beforeend", end);
+    }
     count++;
     return () => {
       if (count === 1) {
-        document.querySelectorAll("[data-radix-focus-guard]").forEach((node) => node.remove());
+        guards?.start.remove();
+        guards?.end.remove();
+        guards = null;
       }
-      count--;
+      count = Math.max(0, count - 1);
     };
   }, []);
 }
+__name12(useFocusGuards, "useFocusGuards");
 function createFocusGuard() {
   const element = document.createElement("span");
   element.setAttribute("data-radix-focus-guard", "");
@@ -24198,131 +29942,137 @@ function createFocusGuard() {
   element.style.pointerEvents = "none";
   return element;
 }
+__name12(createFocusGuard, "createFocusGuard");
 
 // ../../../../website/node_modules/@radix-ui/react-focus-scope/dist/index.mjs
-var React14 = __toESM(require_react(), 1);
+var React15 = __toESM(require_react(), 1);
 var import_jsx_runtime12 = __toESM(require_jsx_runtime(), 1);
+var __defProp14 = Object.defineProperty;
+var __name13 = (target, value) => __defProp14(target, "name", { value, configurable: true });
 var AUTOFOCUS_ON_MOUNT = "focusScope.autoFocusOnMount";
 var AUTOFOCUS_ON_UNMOUNT = "focusScope.autoFocusOnUnmount";
 var EVENT_OPTIONS = { bubbles: false, cancelable: true };
-var FOCUS_SCOPE_NAME = "FocusScope";
-var FocusScope = React14.forwardRef((props, forwardedRef) => {
-  const {
-    loop = false,
-    trapped = false,
-    onMountAutoFocus: onMountAutoFocusProp,
-    onUnmountAutoFocus: onUnmountAutoFocusProp,
-    ...scopeProps
-  } = props;
-  const [container, setContainer] = React14.useState(null);
-  const onMountAutoFocus = useCallbackRef(onMountAutoFocusProp);
-  const onUnmountAutoFocus = useCallbackRef(onUnmountAutoFocusProp);
-  const lastFocusedElementRef = React14.useRef(null);
-  const composedRefs = useComposedRefs(forwardedRef, (node) => setContainer(node));
-  const focusScope = React14.useRef({
-    paused: false,
-    pause() {
-      this.paused = true;
-    },
-    resume() {
-      this.paused = false;
-    }
-  }).current;
-  React14.useEffect(() => {
-    if (trapped) {
-      let handleFocusIn2 = function(event) {
-        if (focusScope.paused || !container) return;
-        const target = event.target;
-        if (container.contains(target)) {
-          lastFocusedElementRef.current = target;
-        } else {
-          focus(lastFocusedElementRef.current, { select: true });
+var FocusScope = /* @__PURE__ */ React15.forwardRef(
+  /* @__PURE__ */ __name13(function FocusScope2(props, forwardedRef) {
+    const {
+      loop = false,
+      trapped = false,
+      onMountAutoFocus: onMountAutoFocusProp,
+      onUnmountAutoFocus: onUnmountAutoFocusProp,
+      ...scopeProps
+    } = props;
+    const [container, setContainer] = React15.useState(null);
+    const onMountAutoFocus = useCallbackRef(onMountAutoFocusProp);
+    const onUnmountAutoFocus = useCallbackRef(onUnmountAutoFocusProp);
+    const lastFocusedElementRef = React15.useRef(null);
+    const composedRefs = useComposedRefs(forwardedRef, setContainer);
+    const focusScope = React15.useRef({
+      paused: false,
+      pause() {
+        this.paused = true;
+      },
+      resume() {
+        this.paused = false;
+      }
+    }).current;
+    React15.useEffect(() => {
+      if (trapped) {
+        let handleFocusIn2 = function(event) {
+          if (focusScope.paused || !container) return;
+          const target = event.target;
+          if (container.contains(target)) {
+            lastFocusedElementRef.current = target;
+          } else {
+            focus(lastFocusedElementRef.current, { select: true });
+          }
+        }, handleFocusOut2 = function(event) {
+          if (focusScope.paused || !container) return;
+          const relatedTarget = event.relatedTarget;
+          if (relatedTarget === null) return;
+          if (!container.contains(relatedTarget)) {
+            focus(lastFocusedElementRef.current, { select: true });
+          }
+        }, handleMutations2 = function(mutations) {
+          const focusedElement = document.activeElement;
+          if (focusedElement !== document.body) return;
+          for (const mutation of mutations) {
+            if (mutation.removedNodes.length > 0) focus(container);
+          }
+        };
+        var handleFocusIn = handleFocusIn2, handleFocusOut = handleFocusOut2, handleMutations = handleMutations2;
+        __name13(handleFocusIn2, "handleFocusIn");
+        __name13(handleFocusOut2, "handleFocusOut");
+        __name13(handleMutations2, "handleMutations");
+        document.addEventListener("focusin", handleFocusIn2);
+        document.addEventListener("focusout", handleFocusOut2);
+        const mutationObserver = new MutationObserver(handleMutations2);
+        if (container) mutationObserver.observe(container, { childList: true, subtree: true });
+        return () => {
+          document.removeEventListener("focusin", handleFocusIn2);
+          document.removeEventListener("focusout", handleFocusOut2);
+          mutationObserver.disconnect();
+        };
+      }
+    }, [trapped, container, focusScope.paused]);
+    React15.useEffect(() => {
+      if (container) {
+        focusScopesStack.add(focusScope);
+        const previouslyFocusedElement = document.activeElement;
+        const hasFocusedCandidate = container.contains(previouslyFocusedElement);
+        if (!hasFocusedCandidate) {
+          const mountEvent = new CustomEvent(AUTOFOCUS_ON_MOUNT, EVENT_OPTIONS);
+          container.addEventListener(AUTOFOCUS_ON_MOUNT, onMountAutoFocus);
+          container.dispatchEvent(mountEvent);
+          if (!mountEvent.defaultPrevented) {
+            focusFirst(removeLinks(getTabbableCandidates(container)), { select: true });
+            if (document.activeElement === previouslyFocusedElement) {
+              focus(container);
+            }
+          }
         }
-      }, handleFocusOut2 = function(event) {
-        if (focusScope.paused || !container) return;
-        const relatedTarget = event.relatedTarget;
-        if (relatedTarget === null) return;
-        if (!container.contains(relatedTarget)) {
-          focus(lastFocusedElementRef.current, { select: true });
-        }
-      }, handleMutations2 = function(mutations) {
+        return () => {
+          container.removeEventListener(AUTOFOCUS_ON_MOUNT, onMountAutoFocus);
+          setTimeout(() => {
+            const unmountEvent = new CustomEvent(AUTOFOCUS_ON_UNMOUNT, EVENT_OPTIONS);
+            container.addEventListener(AUTOFOCUS_ON_UNMOUNT, onUnmountAutoFocus);
+            container.dispatchEvent(unmountEvent);
+            if (!unmountEvent.defaultPrevented) {
+              focus(previouslyFocusedElement ?? document.body, { select: true });
+            }
+            container.removeEventListener(AUTOFOCUS_ON_UNMOUNT, onUnmountAutoFocus);
+            focusScopesStack.remove(focusScope);
+          }, 0);
+        };
+      }
+    }, [container, onMountAutoFocus, onUnmountAutoFocus, focusScope]);
+    const handleKeyDown = React15.useCallback(
+      (event) => {
+        if (!loop && !trapped) return;
+        if (focusScope.paused) return;
+        const isTabKey = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
         const focusedElement = document.activeElement;
-        if (focusedElement !== document.body) return;
-        for (const mutation of mutations) {
-          if (mutation.removedNodes.length > 0) focus(container);
-        }
-      };
-      var handleFocusIn = handleFocusIn2, handleFocusOut = handleFocusOut2, handleMutations = handleMutations2;
-      document.addEventListener("focusin", handleFocusIn2);
-      document.addEventListener("focusout", handleFocusOut2);
-      const mutationObserver = new MutationObserver(handleMutations2);
-      if (container) mutationObserver.observe(container, { childList: true, subtree: true });
-      return () => {
-        document.removeEventListener("focusin", handleFocusIn2);
-        document.removeEventListener("focusout", handleFocusOut2);
-        mutationObserver.disconnect();
-      };
-    }
-  }, [trapped, container, focusScope.paused]);
-  React14.useEffect(() => {
-    if (container) {
-      focusScopesStack.add(focusScope);
-      const previouslyFocusedElement = document.activeElement;
-      const hasFocusedCandidate = container.contains(previouslyFocusedElement);
-      if (!hasFocusedCandidate) {
-        const mountEvent = new CustomEvent(AUTOFOCUS_ON_MOUNT, EVENT_OPTIONS);
-        container.addEventListener(AUTOFOCUS_ON_MOUNT, onMountAutoFocus);
-        container.dispatchEvent(mountEvent);
-        if (!mountEvent.defaultPrevented) {
-          focusFirst(removeLinks(getTabbableCandidates(container)), { select: true });
-          if (document.activeElement === previouslyFocusedElement) {
-            focus(container);
+        if (isTabKey && focusedElement) {
+          const container2 = event.currentTarget;
+          const [first, last] = getTabbableEdges(container2);
+          const hasTabbableElementsInside = first && last;
+          if (!hasTabbableElementsInside) {
+            if (focusedElement === container2) event.preventDefault();
+          } else {
+            if (!event.shiftKey && focusedElement === last) {
+              event.preventDefault();
+              if (loop) focus(first, { select: true });
+            } else if (event.shiftKey && focusedElement === first) {
+              event.preventDefault();
+              if (loop) focus(last, { select: true });
+            }
           }
         }
-      }
-      return () => {
-        container.removeEventListener(AUTOFOCUS_ON_MOUNT, onMountAutoFocus);
-        setTimeout(() => {
-          const unmountEvent = new CustomEvent(AUTOFOCUS_ON_UNMOUNT, EVENT_OPTIONS);
-          container.addEventListener(AUTOFOCUS_ON_UNMOUNT, onUnmountAutoFocus);
-          container.dispatchEvent(unmountEvent);
-          if (!unmountEvent.defaultPrevented) {
-            focus(previouslyFocusedElement ?? document.body, { select: true });
-          }
-          container.removeEventListener(AUTOFOCUS_ON_UNMOUNT, onUnmountAutoFocus);
-          focusScopesStack.remove(focusScope);
-        }, 0);
-      };
-    }
-  }, [container, onMountAutoFocus, onUnmountAutoFocus, focusScope]);
-  const handleKeyDown = React14.useCallback(
-    (event) => {
-      if (!loop && !trapped) return;
-      if (focusScope.paused) return;
-      const isTabKey = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
-      const focusedElement = document.activeElement;
-      if (isTabKey && focusedElement) {
-        const container2 = event.currentTarget;
-        const [first, last] = getTabbableEdges(container2);
-        const hasTabbableElementsInside = first && last;
-        if (!hasTabbableElementsInside) {
-          if (focusedElement === container2) event.preventDefault();
-        } else {
-          if (!event.shiftKey && focusedElement === last) {
-            event.preventDefault();
-            if (loop) focus(first, { select: true });
-          } else if (event.shiftKey && focusedElement === first) {
-            event.preventDefault();
-            if (loop) focus(last, { select: true });
-          }
-        }
-      }
-    },
-    [loop, trapped, focusScope.paused]
-  );
-  return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Primitive.div, { tabIndex: -1, ...scopeProps, ref: composedRefs, onKeyDown: handleKeyDown });
-});
-FocusScope.displayName = FOCUS_SCOPE_NAME;
+      },
+      [loop, trapped, focusScope.paused]
+    );
+    return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Primitive.div, { tabIndex: -1, ...scopeProps, ref: composedRefs, onKeyDown: handleKeyDown });
+  }, "FocusScope")
+);
 function focusFirst(candidates, { select = false } = {}) {
   const previouslyFocusedElement = document.activeElement;
   for (const candidate of candidates) {
@@ -24330,29 +30080,37 @@ function focusFirst(candidates, { select = false } = {}) {
     if (document.activeElement !== previouslyFocusedElement) return;
   }
 }
+__name13(focusFirst, "focusFirst");
 function getTabbableEdges(container) {
   const candidates = getTabbableCandidates(container);
   const first = findVisible(candidates, container);
   const last = findVisible(candidates.reverse(), container);
   return [first, last];
 }
+__name13(getTabbableEdges, "getTabbableEdges");
 function getTabbableCandidates(container) {
   const nodes = [];
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT, {
-    acceptNode: (node) => {
+    acceptNode: /* @__PURE__ */ __name13((node) => {
       const isHiddenInput = node.tagName === "INPUT" && node.type === "hidden";
       if (node.disabled || node.hidden || isHiddenInput) return NodeFilter.FILTER_SKIP;
       return node.tabIndex >= 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
-    }
+    }, "acceptNode")
   });
   while (walker.nextNode()) nodes.push(walker.currentNode);
   return nodes;
 }
+__name13(getTabbableCandidates, "getTabbableCandidates");
 function findVisible(elements, container) {
+  const canUseCheckVisibility = typeof container.checkVisibility === "function" && container.checkVisibility({ checkVisibilityCSS: true });
   for (const element of elements) {
-    if (!isHidden(element, { upTo: container })) return element;
+    const hidden = canUseCheckVisibility ? !element.checkVisibility({ checkVisibilityCSS: true }) : isHidden(element, { upTo: container });
+    if (!hidden) {
+      return element;
+    }
   }
 }
+__name13(findVisible, "findVisible");
 function isHidden(node, { upTo }) {
   if (getComputedStyle(node).visibility === "hidden") return true;
   while (node) {
@@ -24362,9 +30120,11 @@ function isHidden(node, { upTo }) {
   }
   return false;
 }
+__name13(isHidden, "isHidden");
 function isSelectableInput(element) {
   return element instanceof HTMLInputElement && "select" in element;
 }
+__name13(isSelectableInput, "isSelectableInput");
 function focus(element, { select = false } = {}) {
   if (element && element.focus) {
     const previouslyFocusedElement = document.activeElement;
@@ -24373,6 +30133,7 @@ function focus(element, { select = false } = {}) {
       element.select();
   }
 }
+__name13(focus, "focus");
 var focusScopesStack = createFocusScopesStack();
 function createFocusScopesStack() {
   let stack = [];
@@ -24391,6 +30152,7 @@ function createFocusScopesStack() {
     }
   };
 }
+__name13(createFocusScopesStack, "createFocusScopesStack");
 function arrayRemove(array, item) {
   const updatedArray = [...array];
   const index2 = updatedArray.indexOf(item);
@@ -24399,24 +30161,29 @@ function arrayRemove(array, item) {
   }
   return updatedArray;
 }
+__name13(arrayRemove, "arrayRemove");
 function removeLinks(items) {
   return items.filter((item) => item.tagName !== "A");
 }
+__name13(removeLinks, "removeLinks");
 
 // ../../../../website/node_modules/@radix-ui/react-id/dist/index.mjs
-var React15 = __toESM(require_react(), 1);
-var useReactId = React15[" useId ".trim().toString()] || (() => void 0);
+var React16 = __toESM(require_react(), 1);
+var __defProp15 = Object.defineProperty;
+var __name14 = (target, value) => __defProp15(target, "name", { value, configurable: true });
+var useReactId = React16[" useId ".trim().toString()] || (() => void 0);
 var count2 = 0;
 function useId(deterministicId) {
-  const [id, setId] = React15.useState(useReactId());
+  const [id, setId] = React16.useState(useReactId());
   useLayoutEffect2(() => {
     if (!deterministicId) setId((reactId) => reactId ?? String(count2++));
   }, [deterministicId]);
   return deterministicId || (id ? `radix-${id}` : "");
 }
+__name14(useId, "useId");
 
 // ../../../../website/node_modules/@radix-ui/react-popper/dist/index.mjs
-var React19 = __toESM(require_react(), 1);
+var React20 = __toESM(require_react(), 1);
 
 // ../../../../website/node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs
 var sides = ["top", "right", "bottom", "left"];
@@ -24424,9 +30191,9 @@ var min = Math.min;
 var max = Math.max;
 var round = Math.round;
 var floor = Math.floor;
-var createCoords = (v) => ({
-  x: v,
-  y: v
+var createCoords = (v3) => ({
+  x: v3,
+  y: v3
 });
 var oppositeSideMap = {
   left: "right",
@@ -24512,12 +30279,12 @@ function getOppositePlacement(placement) {
   return oppositeSideMap[side] + placement.slice(side.length);
 }
 function expandPaddingObject(padding) {
+  var _padding$top, _padding$right, _padding$bottom, _padding$left;
   return {
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    ...padding
+    top: (_padding$top = padding.top) != null ? _padding$top : 0,
+    right: (_padding$right = padding.right) != null ? _padding$right : 0,
+    bottom: (_padding$bottom = padding.bottom) != null ? _padding$bottom : 0,
+    left: (_padding$left = padding.left) != null ? _padding$left : 0
   };
 }
 function getPaddingObject(padding) {
@@ -24530,20 +30297,20 @@ function getPaddingObject(padding) {
 }
 function rectToClientRect(rect) {
   const {
-    x,
-    y,
+    x: x2,
+    y: y2,
     width,
     height
   } = rect;
   return {
     width,
     height,
-    top: y,
-    left: x,
-    right: x + width,
-    bottom: y + height,
-    x,
-    y
+    top: y2,
+    left: x2,
+    right: x2 + width,
+    bottom: y2 + height,
+    x: x2,
+    y: y2
   };
 }
 
@@ -24593,24 +30360,20 @@ function computeCoordsFromPlacement(_ref, placement, rtl) {
         y: reference.y
       };
   }
-  switch (getAlignment(placement)) {
-    case "start":
-      coords[alignmentAxis] -= commonAlign * (rtl && isVertical ? -1 : 1);
-      break;
-    case "end":
-      coords[alignmentAxis] += commonAlign * (rtl && isVertical ? -1 : 1);
-      break;
+  const alignment = getAlignment(placement);
+  if (alignment) {
+    coords[alignmentAxis] += commonAlign * (alignment === "end" ? 1 : -1) * (rtl && isVertical ? -1 : 1);
   }
   return coords;
 }
-async function detectOverflow(state, options) {
+async function detectOverflow(state, options2) {
   var _await$platform$isEle;
-  if (options === void 0) {
-    options = {};
+  if (options2 === void 0) {
+    options2 = {};
   }
   const {
-    x,
-    y,
+    x: x2,
+    y: y2,
     platform: platform2,
     rects,
     elements,
@@ -24622,7 +30385,7 @@ async function detectOverflow(state, options) {
     elementContext = "floating",
     altBoundary = false,
     padding = 0
-  } = evaluate(options, state);
+  } = evaluate(options2, state);
   const paddingObject = getPaddingObject(padding);
   const altContext = elementContext === "floating" ? "reference" : "floating";
   const element = elements[altBoundary ? altContext : elementContext];
@@ -24633,16 +30396,13 @@ async function detectOverflow(state, options) {
     strategy
   }));
   const rect = elementContext === "floating" ? {
-    x,
-    y,
+    x: x2,
+    y: y2,
     width: rects.floating.width,
     height: rects.floating.height
   } : rects.reference;
   const offsetParent = await (platform2.getOffsetParent == null ? void 0 : platform2.getOffsetParent(elements.floating));
-  const offsetScale = await (platform2.isElement == null ? void 0 : platform2.isElement(offsetParent)) ? await (platform2.getScale == null ? void 0 : platform2.getScale(offsetParent)) || {
-    x: 1,
-    y: 1
-  } : {
+  const offsetScale = await (platform2.isElement == null ? void 0 : platform2.isElement(offsetParent)) && await (platform2.getScale == null ? void 0 : platform2.getScale(offsetParent)) || {
     x: 1,
     y: 1
   };
@@ -24678,8 +30438,8 @@ var computePosition = async (reference, floating, config) => {
     strategy
   });
   let {
-    x,
-    y
+    x: x2,
+    y: y2
   } = computeCoordsFromPlacement(rects, placement, rtl);
   let statefulPlacement = placement;
   let resetCount = 0;
@@ -24699,8 +30459,8 @@ var computePosition = async (reference, floating, config) => {
       data,
       reset
     } = await fn({
-      x,
-      y,
+      x: x2,
+      y: y2,
       initialPlacement: placement,
       placement: statefulPlacement,
       strategy,
@@ -24712,8 +30472,8 @@ var computePosition = async (reference, floating, config) => {
         floating
       }
     });
-    x = nextX != null ? nextX : x;
-    y = nextY != null ? nextY : y;
+    x2 = nextX != null ? nextX : x2;
+    y2 = nextY != null ? nextY : y2;
     middlewareData[name] = {
       ...middlewareData[name],
       ...data
@@ -24732,28 +30492,28 @@ var computePosition = async (reference, floating, config) => {
           }) : reset.rects;
         }
         ({
-          x,
-          y
+          x: x2,
+          y: y2
         } = computeCoordsFromPlacement(rects, statefulPlacement, rtl));
       }
       i = -1;
     }
   }
   return {
-    x,
-    y,
+    x: x2,
+    y: y2,
     placement: statefulPlacement,
     strategy,
     middlewareData
   };
 };
-var arrow = (options) => ({
+var arrow = (options2) => ({
   name: "arrow",
-  options,
+  options: options2,
   async fn(state) {
     const {
-      x,
-      y,
+      x: x2,
+      y: y2,
       placement,
       rects,
       platform: platform2,
@@ -24763,14 +30523,14 @@ var arrow = (options) => ({
     const {
       element,
       padding = 0
-    } = evaluate(options, state) || {};
+    } = evaluate(options2, state) || {};
     if (element == null) {
       return {};
     }
     const paddingObject = getPaddingObject(padding);
     const coords = {
-      x,
-      y
+      x: x2,
+      y: y2
     };
     const axis = getAlignmentAxis(placement);
     const length = getAxisLength(axis);
@@ -24790,12 +30550,11 @@ var arrow = (options) => ({
     const largestPossiblePadding = clientSize / 2 - arrowDimensions[length] / 2 - 1;
     const minPadding = min(paddingObject[minProp], largestPossiblePadding);
     const maxPadding = min(paddingObject[maxProp], largestPossiblePadding);
-    const min$1 = minPadding;
     const max2 = clientSize - arrowDimensions[length] - maxPadding;
     const center = clientSize / 2 - arrowDimensions[length] / 2 + centerToReference;
-    const offset4 = clamp(min$1, center, max2);
-    const shouldAddOffset = !middlewareData.arrow && getAlignment(placement) != null && center !== offset4 && rects.reference[length] / 2 - (center < min$1 ? minPadding : maxPadding) - arrowDimensions[length] / 2 < 0;
-    const alignmentOffset = shouldAddOffset ? center < min$1 ? center - min$1 : center - max2 : 0;
+    const offset4 = clamp(minPadding, center, max2);
+    const shouldAddOffset = !middlewareData.arrow && getAlignment(placement) != null && center !== offset4 && rects.reference[length] / 2 - (center < minPadding ? minPadding : maxPadding) - arrowDimensions[length] / 2 < 0;
+    const alignmentOffset = shouldAddOffset ? center < minPadding ? center - minPadding : center - max2 : 0;
     return {
       [axis]: coords[axis] + alignmentOffset,
       data: {
@@ -24809,13 +30568,13 @@ var arrow = (options) => ({
     };
   }
 });
-var flip = function(options) {
-  if (options === void 0) {
-    options = {};
+var flip = function(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   return {
     name: "flip",
-    options,
+    options: options2,
     async fn(state) {
       var _middlewareData$arrow, _middlewareData$flip;
       const {
@@ -24834,7 +30593,7 @@ var flip = function(options) {
         fallbackAxisSideDirection = "none",
         flipAlignment = true,
         ...detectOverflowOptions
-      } = evaluate(options, state);
+      } = evaluate(options2, state);
       if ((_middlewareData$arrow = middlewareData.arrow) != null && _middlewareData$arrow.alignmentOffset) {
         return {};
       }
@@ -24882,7 +30641,7 @@ var flip = function(options) {
             };
           }
         }
-        let resetPlacement = (_overflowsData$filter = overflowsData.filter((d) => d.overflows[0] <= 0).sort((a, b) => a.overflows[1] - b.overflows[1])[0]) == null ? void 0 : _overflowsData$filter.placement;
+        let resetPlacement = (_overflowsData$filter = overflowsData.filter((d) => d.overflows[0] <= 0).sort((a, b2) => a.overflows[1] - b2.overflows[1])[0]) == null ? void 0 : _overflowsData$filter.placement;
         if (!resetPlacement) {
           switch (fallbackStrategy) {
             case "bestFit": {
@@ -24895,7 +30654,7 @@ var flip = function(options) {
                   currentSideAxis === "y";
                 }
                 return true;
-              }).map((d) => [d.placement, d.overflows.filter((overflow2) => overflow2 > 0).reduce((acc, overflow2) => acc + overflow2, 0)]).sort((a, b) => a[1] - b[1])[0]) == null ? void 0 : _overflowsData$filter2[0];
+              }).map((d) => [d.placement, d.overflows.filter((overflow2) => overflow2 > 0).reduce((acc, overflow2) => acc + overflow2, 0)]).sort((a, b2) => a[1] - b2[1])[0]) == null ? void 0 : _overflowsData$filter2[0];
               if (placement2) {
                 resetPlacement = placement2;
               }
@@ -24929,13 +30688,13 @@ function getSideOffsets(overflow, rect) {
 function isAnySideFullyClipped(overflow) {
   return sides.some((side) => overflow[side] >= 0);
 }
-var hide = function(options) {
-  if (options === void 0) {
-    options = {};
+var hide = function(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   return {
     name: "hide",
-    options,
+    options: options2,
     async fn(state) {
       const {
         rects,
@@ -24944,7 +30703,7 @@ var hide = function(options) {
       const {
         strategy = "referenceHidden",
         ...detectOverflowOptions
-      } = evaluate(options, state);
+      } = evaluate(options2, state);
       switch (strategy) {
         case "referenceHidden": {
           const overflow = await platform2.detectOverflow(state, {
@@ -24980,7 +30739,7 @@ var hide = function(options) {
   };
 };
 var originSides = /* @__PURE__ */ new Set(["left", "top"]);
-async function convertValueToCoords(state, options) {
+async function convertValueToCoords(state, options2) {
   const {
     placement,
     platform: platform2,
@@ -24992,7 +30751,7 @@ async function convertValueToCoords(state, options) {
   const isVertical = getSideAxis(placement) === "y";
   const mainAxisMulti = originSides.has(side) ? -1 : 1;
   const crossAxisMulti = rtl && isVertical ? -1 : 1;
-  const rawValue = evaluate(options, state);
+  const rawValue = evaluate(options2, state);
   let {
     mainAxis,
     crossAxis,
@@ -25017,28 +30776,28 @@ async function convertValueToCoords(state, options) {
     y: crossAxis * crossAxisMulti
   };
 }
-var offset = function(options) {
-  if (options === void 0) {
-    options = 0;
+var offset = function(options2) {
+  if (options2 === void 0) {
+    options2 = 0;
   }
   return {
     name: "offset",
-    options,
+    options: options2,
     async fn(state) {
       var _middlewareData$offse, _middlewareData$arrow;
       const {
-        x,
-        y,
+        x: x2,
+        y: y2,
         placement,
         middlewareData
       } = state;
-      const diffCoords = await convertValueToCoords(state, options);
+      const diffCoords = await convertValueToCoords(state, options2);
       if (placement === ((_middlewareData$offse = middlewareData.offset) == null ? void 0 : _middlewareData$offse.placement) && (_middlewareData$arrow = middlewareData.arrow) != null && _middlewareData$arrow.alignmentOffset) {
         return {};
       }
       return {
-        x: x + diffCoords.x,
-        y: y + diffCoords.y,
+        x: x2 + diffCoords.x,
+        y: y2 + diffCoords.y,
         data: {
           ...diffCoords,
           placement
@@ -25047,17 +30806,17 @@ var offset = function(options) {
     }
   };
 };
-var shift = function(options) {
-  if (options === void 0) {
-    options = {};
+var shift = function(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   return {
     name: "shift",
-    options,
+    options: options2,
     async fn(state) {
       const {
-        x,
-        y,
+        x: x2,
+        y: y2,
         placement,
         platform: platform2
       } = state;
@@ -25067,39 +30826,32 @@ var shift = function(options) {
         limiter = {
           fn: (_ref) => {
             let {
-              x: x2,
-              y: y2
+              x: x3,
+              y: y3
             } = _ref;
             return {
-              x: x2,
-              y: y2
+              x: x3,
+              y: y3
             };
           }
         },
         ...detectOverflowOptions
-      } = evaluate(options, state);
+      } = evaluate(options2, state);
       const coords = {
-        x,
-        y
+        x: x2,
+        y: y2
       };
       const overflow = await platform2.detectOverflow(state, detectOverflowOptions);
-      const crossAxis = getSideAxis(getSide(placement));
+      const crossAxis = getSideAxis(placement);
       const mainAxis = getOppositeAxis(crossAxis);
       let mainAxisCoord = coords[mainAxis];
       let crossAxisCoord = coords[crossAxis];
+      const clampCoord = (axis, coord) => clamp(coord + overflow[axis === "y" ? "top" : "left"], coord, coord - overflow[axis === "y" ? "bottom" : "right"]);
       if (checkMainAxis) {
-        const minSide = mainAxis === "y" ? "top" : "left";
-        const maxSide = mainAxis === "y" ? "bottom" : "right";
-        const min2 = mainAxisCoord + overflow[minSide];
-        const max2 = mainAxisCoord - overflow[maxSide];
-        mainAxisCoord = clamp(min2, mainAxisCoord, max2);
+        mainAxisCoord = clampCoord(mainAxis, mainAxisCoord);
       }
       if (checkCrossAxis) {
-        const minSide = crossAxis === "y" ? "top" : "left";
-        const maxSide = crossAxis === "y" ? "bottom" : "right";
-        const min2 = crossAxisCoord + overflow[minSide];
-        const max2 = crossAxisCoord - overflow[maxSide];
-        crossAxisCoord = clamp(min2, crossAxisCoord, max2);
+        crossAxisCoord = clampCoord(crossAxis, crossAxisCoord);
       }
       const limitedCoords = limiter.fn({
         ...state,
@@ -25109,8 +30861,8 @@ var shift = function(options) {
       return {
         ...limitedCoords,
         data: {
-          x: limitedCoords.x - x,
-          y: limitedCoords.y - y,
+          x: limitedCoords.x - x2,
+          y: limitedCoords.y - y2,
           enabled: {
             [mainAxis]: checkMainAxis,
             [crossAxis]: checkCrossAxis
@@ -25120,16 +30872,17 @@ var shift = function(options) {
     }
   };
 };
-var limitShift = function(options) {
-  if (options === void 0) {
-    options = {};
+var limitShift = function(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   return {
-    options,
+    options: options2,
     fn(state) {
+      var _rawOffset$mainAxis, _rawOffset$crossAxis;
       const {
-        x,
-        y,
+        x: x2,
+        y: y2,
         placement,
         rects,
         middlewareData
@@ -25138,10 +30891,10 @@ var limitShift = function(options) {
         offset: offset4 = 0,
         mainAxis: checkMainAxis = true,
         crossAxis: checkCrossAxis = true
-      } = evaluate(options, state);
+      } = evaluate(options2, state);
       const coords = {
-        x,
-        y
+        x: x2,
+        y: y2
       };
       const crossAxis = getSideAxis(placement);
       const mainAxis = getOppositeAxis(crossAxis);
@@ -25152,9 +30905,8 @@ var limitShift = function(options) {
         mainAxis: rawOffset,
         crossAxis: 0
       } : {
-        mainAxis: 0,
-        crossAxis: 0,
-        ...rawOffset
+        mainAxis: (_rawOffset$mainAxis = rawOffset.mainAxis) != null ? _rawOffset$mainAxis : 0,
+        crossAxis: (_rawOffset$crossAxis = rawOffset.crossAxis) != null ? _rawOffset$crossAxis : 0
       };
       if (checkMainAxis) {
         const len = mainAxis === "y" ? "height" : "width";
@@ -25185,15 +30937,14 @@ var limitShift = function(options) {
     }
   };
 };
-var size = function(options) {
-  if (options === void 0) {
-    options = {};
+var size = function(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   return {
     name: "size",
-    options,
+    options: options2,
     async fn(state) {
-      var _state$middlewareData, _state$middlewareData2;
       const {
         placement,
         rects,
@@ -25204,7 +30955,7 @@ var size = function(options) {
         apply = () => {
         },
         ...detectOverflowOptions
-      } = evaluate(options, state);
+      } = evaluate(options2, state);
       const overflow = await platform2.detectOverflow(state, detectOverflowOptions);
       const side = getSide(placement);
       const alignment = getAlignment(placement);
@@ -25226,24 +30977,21 @@ var size = function(options) {
       const maximumClippingWidth = width - overflow.left - overflow.right;
       const overflowAvailableHeight = min(height - overflow[heightSide], maximumClippingHeight);
       const overflowAvailableWidth = min(width - overflow[widthSide], maximumClippingWidth);
-      const noShift = !state.middlewareData.shift;
+      const shiftData = state.middlewareData.shift;
+      const noShift = !shiftData;
       let availableHeight = overflowAvailableHeight;
       let availableWidth = overflowAvailableWidth;
-      if ((_state$middlewareData = state.middlewareData.shift) != null && _state$middlewareData.enabled.x) {
+      if (shiftData != null && shiftData.enabled.x) {
         availableWidth = maximumClippingWidth;
       }
-      if ((_state$middlewareData2 = state.middlewareData.shift) != null && _state$middlewareData2.enabled.y) {
+      if (shiftData != null && shiftData.enabled.y) {
         availableHeight = maximumClippingHeight;
       }
       if (noShift && !alignment) {
-        const xMin = max(overflow.left, 0);
-        const xMax = max(overflow.right, 0);
-        const yMin = max(overflow.top, 0);
-        const yMax = max(overflow.bottom, 0);
         if (isYAxis) {
-          availableWidth = width - 2 * (xMin !== 0 || xMax !== 0 ? xMin + xMax : max(overflow.left, overflow.right));
+          availableWidth = width - 2 * max(overflow.left, overflow.right);
         } else {
-          availableHeight = height - 2 * (yMin !== 0 || yMax !== 0 ? yMin + yMax : max(overflow.top, overflow.bottom));
+          availableHeight = height - 2 * max(overflow.top, overflow.bottom);
         }
       }
       await apply({
@@ -25323,11 +31071,11 @@ function isTopLayer(element) {
     if (element.matches(":popover-open")) {
       return true;
     }
-  } catch (_e) {
+  } catch (_e2) {
   }
   try {
     return element.matches(":modal");
-  } catch (_e) {
+  } catch (_e2) {
     return false;
   }
 }
@@ -25391,7 +31139,7 @@ function getParentNode(node) {
 function getNearestOverflowAncestor(node) {
   const parentNode = getParentNode(node);
   if (isLastTraversableNode(parentNode)) {
-    return node.ownerDocument ? node.ownerDocument.body : node.body;
+    return (node.ownerDocument || node).body;
   }
   if (isHTMLElement(parentNode) && isOverflowElement(parentNode)) {
     return parentNode;
@@ -25451,19 +31199,19 @@ function getScale(element) {
   const {
     width,
     height,
-    $
+    $: $2
   } = getCssDimensions(domElement);
-  let x = ($ ? round(rect.width) : rect.width) / width;
-  let y = ($ ? round(rect.height) : rect.height) / height;
-  if (!x || !Number.isFinite(x)) {
-    x = 1;
+  let x2 = ($2 ? round(rect.width) : rect.width) / width;
+  let y2 = ($2 ? round(rect.height) : rect.height) / height;
+  if (!x2 || !Number.isFinite(x2)) {
+    x2 = 1;
   }
-  if (!y || !Number.isFinite(y)) {
-    y = 1;
+  if (!y2 || !Number.isFinite(y2)) {
+    y2 = 1;
   }
   return {
-    x,
-    y
+    x: x2,
+    y: y2
   };
 }
 var noOffsets = /* @__PURE__ */ createCoords(0);
@@ -25481,10 +31229,7 @@ function shouldAddVisualOffsets(element, isFixed, floatingOffsetParent) {
   if (isFixed === void 0) {
     isFixed = false;
   }
-  if (!floatingOffsetParent || isFixed && floatingOffsetParent !== getWindow(element)) {
-    return false;
-  }
-  return isFixed;
+  return !!floatingOffsetParent && isFixed && floatingOffsetParent === getWindow(element);
 }
 function getBoundingClientRect(element, includeScale, isFixedStrategy, offsetParent) {
   if (includeScale === void 0) {
@@ -25506,27 +31251,27 @@ function getBoundingClientRect(element, includeScale, isFixedStrategy, offsetPar
     }
   }
   const visualOffsets = shouldAddVisualOffsets(domElement, isFixedStrategy, offsetParent) ? getVisualOffsets(domElement) : createCoords(0);
-  let x = (clientRect.left + visualOffsets.x) / scale.x;
-  let y = (clientRect.top + visualOffsets.y) / scale.y;
+  let x2 = (clientRect.left + visualOffsets.x) / scale.x;
+  let y2 = (clientRect.top + visualOffsets.y) / scale.y;
   let width = clientRect.width / scale.x;
   let height = clientRect.height / scale.y;
-  if (domElement) {
+  if (domElement && offsetParent) {
     const win = getWindow(domElement);
-    const offsetWin = offsetParent && isElement(offsetParent) ? getWindow(offsetParent) : offsetParent;
+    const offsetWin = isElement(offsetParent) ? getWindow(offsetParent) : offsetParent;
     let currentWin = win;
     let currentIFrame = getFrameElement(currentWin);
-    while (currentIFrame && offsetParent && offsetWin !== currentWin) {
+    while (currentIFrame && offsetWin !== currentWin) {
       const iframeScale = getScale(currentIFrame);
       const iframeRect = currentIFrame.getBoundingClientRect();
       const css = getComputedStyle2(currentIFrame);
       const left = iframeRect.left + (currentIFrame.clientLeft + parseFloat(css.paddingLeft)) * iframeScale.x;
       const top = iframeRect.top + (currentIFrame.clientTop + parseFloat(css.paddingTop)) * iframeScale.y;
-      x *= iframeScale.x;
-      y *= iframeScale.y;
+      x2 *= iframeScale.x;
+      y2 *= iframeScale.y;
       width *= iframeScale.x;
       height *= iframeScale.y;
-      x += left;
-      y += top;
+      x2 += left;
+      y2 += top;
       currentWin = getWindow(currentIFrame);
       currentIFrame = getFrameElement(currentWin);
     }
@@ -25534,8 +31279,8 @@ function getBoundingClientRect(element, includeScale, isFixedStrategy, offsetPar
   return rectToClientRect({
     width,
     height,
-    x,
-    y
+    x: x2,
+    y: y2
   });
 }
 function getWindowScrollBarX(element, rect) {
@@ -25547,11 +31292,11 @@ function getWindowScrollBarX(element, rect) {
 }
 function getHTMLOffset(documentElement, scroll) {
   const htmlRect = documentElement.getBoundingClientRect();
-  const x = htmlRect.left + scroll.scrollLeft - getWindowScrollBarX(documentElement, htmlRect);
-  const y = htmlRect.top + scroll.scrollTop;
+  const x2 = htmlRect.left + scroll.scrollLeft - getWindowScrollBarX(documentElement, htmlRect);
+  const y2 = htmlRect.top + scroll.scrollTop;
   return {
-    x,
-    y
+    x: x2,
+    y: y2
   };
 }
 function convertOffsetParentRelativeRectToViewportRelativeRect(_ref) {
@@ -25574,7 +31319,7 @@ function convertOffsetParentRelativeRectToViewportRelativeRect(_ref) {
   let scale = createCoords(1);
   const offsets = createCoords(0);
   const isOffsetParentAnElement = isHTMLElement(offsetParent);
-  if (isOffsetParentAnElement || !isOffsetParentAnElement && !isFixed) {
+  if (isOffsetParentAnElement || !isFixed) {
     if (getNodeName(offsetParent) !== "body" || isOverflowElement(documentElement)) {
       scroll = getNodeScroll(offsetParent);
     }
@@ -25594,42 +31339,52 @@ function convertOffsetParentRelativeRectToViewportRelativeRect(_ref) {
   };
 }
 function getClientRects(element) {
-  return Array.from(element.getClientRects());
+  return element.getClientRects ? Array.from(element.getClientRects()) : [];
 }
-function getDocumentRect(element) {
-  const html = getDocumentElement(element);
-  const scroll = getNodeScroll(element);
-  const body = element.ownerDocument.body;
+function getDocumentRect(html) {
+  const scroll = getNodeScroll(html);
+  const body = html.ownerDocument.body;
   const width = max(html.scrollWidth, html.clientWidth, body.scrollWidth, body.clientWidth);
   const height = max(html.scrollHeight, html.clientHeight, body.scrollHeight, body.clientHeight);
-  let x = -scroll.scrollLeft + getWindowScrollBarX(element);
-  const y = -scroll.scrollTop;
+  let x2 = -scroll.scrollLeft + getWindowScrollBarX(html);
+  const y2 = -scroll.scrollTop;
   if (getComputedStyle2(body).direction === "rtl") {
-    x += max(html.clientWidth, body.clientWidth) - width;
+    x2 += max(html.clientWidth, body.clientWidth) - width;
   }
   return {
     width,
     height,
-    x,
-    y
+    x: x2,
+    y: y2
   };
 }
 var SCROLLBAR_MAX = 25;
-function getViewportRect(element, strategy) {
+function getViewportRect(element, strategy, rootBoundary) {
+  if (rootBoundary === void 0) {
+    rootBoundary = "viewport";
+  }
+  const isLayoutViewport = rootBoundary === "layoutViewport";
   const win = getWindow(element);
   const html = getDocumentElement(element);
   const visualViewport = win.visualViewport;
   let width = html.clientWidth;
   let height = html.clientHeight;
-  let x = 0;
-  let y = 0;
+  let x2 = 0;
+  let y2 = 0;
   if (visualViewport) {
-    width = visualViewport.width;
-    height = visualViewport.height;
-    const visualViewportBased = isWebKit();
-    if (!visualViewportBased || visualViewportBased && strategy === "fixed") {
-      x = visualViewport.offsetLeft;
-      y = visualViewport.offsetTop;
+    const layoutRelativeClientCoords = !isWebKit() || strategy === "fixed";
+    if (isLayoutViewport) {
+      if (!layoutRelativeClientCoords) {
+        x2 = -visualViewport.offsetLeft;
+        y2 = -visualViewport.offsetTop;
+      }
+    } else {
+      width = visualViewport.width;
+      height = visualViewport.height;
+      if (layoutRelativeClientCoords) {
+        x2 = visualViewport.offsetLeft;
+        y2 = visualViewport.offsetTop;
+      }
     }
   }
   const windowScrollbarX = getWindowScrollBarX(html);
@@ -25638,40 +31393,39 @@ function getViewportRect(element, strategy) {
     const body = doc.body;
     const bodyStyles = getComputedStyle(body);
     const bodyMarginInline = doc.compatMode === "CSS1Compat" ? parseFloat(bodyStyles.marginLeft) + parseFloat(bodyStyles.marginRight) || 0 : 0;
-    const clippingStableScrollbarWidth = Math.abs(html.clientWidth - body.clientWidth - bodyMarginInline);
-    if (clippingStableScrollbarWidth <= SCROLLBAR_MAX) {
-      width -= clippingStableScrollbarWidth;
+    const reservedWidth = Math.abs(html.clientWidth - body.clientWidth - bodyMarginInline);
+    const gutter = getComputedStyle(html).scrollbarGutter === "stable both-edges" ? reservedWidth / 2 : reservedWidth;
+    if (gutter <= SCROLLBAR_MAX) {
+      width -= gutter;
     }
-  } else if (windowScrollbarX <= SCROLLBAR_MAX) {
-    width += windowScrollbarX;
   }
   return {
     width,
     height,
-    x,
-    y
+    x: x2,
+    y: y2
   };
 }
 function getInnerBoundingClientRect(element, strategy) {
   const clientRect = getBoundingClientRect(element, true, strategy === "fixed");
   const top = clientRect.top + element.clientTop;
   const left = clientRect.left + element.clientLeft;
-  const scale = isHTMLElement(element) ? getScale(element) : createCoords(1);
+  const scale = getScale(element);
   const width = element.clientWidth * scale.x;
   const height = element.clientHeight * scale.y;
-  const x = left * scale.x;
-  const y = top * scale.y;
+  const x2 = left * scale.x;
+  const y2 = top * scale.y;
   return {
     width,
     height,
-    x,
-    y
+    x: x2,
+    y: y2
   };
 }
 function getClientRectFromClippingAncestor(element, clippingAncestor, strategy) {
   let rect;
-  if (clippingAncestor === "viewport") {
-    rect = getViewportRect(element, strategy);
+  if (clippingAncestor === "viewport" || clippingAncestor === "layoutViewport") {
+    rect = getViewportRect(element, strategy, clippingAncestor);
   } else if (clippingAncestor === "document") {
     rect = getDocumentRect(getDocumentElement(element));
   } else if (isElement(clippingAncestor)) {
@@ -25687,33 +31441,24 @@ function getClientRectFromClippingAncestor(element, clippingAncestor, strategy) 
   }
   return rectToClientRect(rect);
 }
-function hasFixedPositionAncestor(element, stopNode) {
-  const parentNode = getParentNode(element);
-  if (parentNode === stopNode || !isElement(parentNode) || isLastTraversableNode(parentNode)) {
-    return false;
-  }
-  return getComputedStyle2(parentNode).position === "fixed" || hasFixedPositionAncestor(parentNode, stopNode);
-}
 function getClippingElementAncestors(element, cache) {
   const cachedResult = cache.get(element);
   if (cachedResult) {
     return cachedResult;
   }
   let result = getOverflowAncestors(element, [], false).filter((el) => isElement(el) && getNodeName(el) !== "body");
-  let currentContainingBlockComputedStyle = null;
+  let lastKeptComputedStyle = null;
   const elementIsFixed = getComputedStyle2(element).position === "fixed";
   let currentNode = elementIsFixed ? getParentNode(element) : element;
   while (isElement(currentNode) && !isLastTraversableNode(currentNode)) {
     const computedStyle = getComputedStyle2(currentNode);
     const currentNodeIsContaining = isContainingBlock(currentNode);
-    if (!currentNodeIsContaining && computedStyle.position === "fixed") {
-      currentContainingBlockComputedStyle = null;
-    }
-    const shouldDropCurrentNode = elementIsFixed ? !currentNodeIsContaining && !currentContainingBlockComputedStyle : !currentNodeIsContaining && computedStyle.position === "static" && !!currentContainingBlockComputedStyle && (currentContainingBlockComputedStyle.position === "absolute" || currentContainingBlockComputedStyle.position === "fixed") || isOverflowElement(currentNode) && !currentNodeIsContaining && hasFixedPositionAncestor(element, currentNode);
+    const lastPosition = lastKeptComputedStyle ? lastKeptComputedStyle.position : elementIsFixed ? "fixed" : "";
+    const shouldDropCurrentNode = !currentNodeIsContaining && (lastPosition === "fixed" || lastPosition === "absolute" && computedStyle.position === "static");
     if (shouldDropCurrentNode) {
       result = result.filter((ancestor) => ancestor !== currentNode);
     } else {
-      currentContainingBlockComputedStyle = computedStyle;
+      lastKeptComputedStyle = computedStyle;
     }
     currentNode = getParentNode(currentNode);
   }
@@ -25768,10 +31513,7 @@ function getRectRelativeToOffsetParent(element, offsetParent, strategy) {
     scrollTop: 0
   };
   const offsets = createCoords(0);
-  function setLeftRTLScrollbarOffset() {
-    offsets.x = getWindowScrollBarX(documentElement);
-  }
-  if (isOffsetParentAnElement || !isOffsetParentAnElement && !isFixed) {
+  if (isOffsetParentAnElement || !isFixed) {
     if (getNodeName(offsetParent) !== "body" || isOverflowElement(documentElement)) {
       scroll = getNodeScroll(offsetParent);
     }
@@ -25779,19 +31521,17 @@ function getRectRelativeToOffsetParent(element, offsetParent, strategy) {
       const offsetRect = getBoundingClientRect(offsetParent, true, isFixed, offsetParent);
       offsets.x = offsetRect.x + offsetParent.clientLeft;
       offsets.y = offsetRect.y + offsetParent.clientTop;
-    } else if (documentElement) {
-      setLeftRTLScrollbarOffset();
     }
   }
-  if (isFixed && !isOffsetParentAnElement && documentElement) {
-    setLeftRTLScrollbarOffset();
+  if (!isOffsetParentAnElement && documentElement) {
+    offsets.x = getWindowScrollBarX(documentElement);
   }
   const htmlOffset = documentElement && !isOffsetParentAnElement && !isFixed ? getHTMLOffset(documentElement, scroll) : createCoords(0);
-  const x = rect.left + scroll.scrollLeft - offsets.x - htmlOffset.x;
-  const y = rect.top + scroll.scrollTop - offsets.y - htmlOffset.y;
+  const x2 = rect.left + scroll.scrollLeft - offsets.x - htmlOffset.x;
+  const y2 = rect.top + scroll.scrollTop - offsets.y - htmlOffset.y;
   return {
-    x,
-    y,
+    x: x2,
+    y: y2,
     width: rect.width,
     height: rect.height
   };
@@ -25865,10 +31605,10 @@ var platform = {
   isElement,
   isRTL
 };
-function rectsAreEqual(a, b) {
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+function rectsAreEqual(a, b2) {
+  return a.x === b2.x && a.y === b2.y && a.width === b2.width && a.height === b2.height;
 }
-function observeMove(element, onMove) {
+function observeMove(element, onMove, ancestorResize) {
   let io = null;
   let timeoutId;
   const root = getDocumentElement(element);
@@ -25904,13 +31644,16 @@ function observeMove(element, onMove) {
     const insetBottom = floor(root.clientHeight - (top + height));
     const insetLeft = floor(left);
     const rootMargin = -insetTop + "px " + -insetRight + "px " + -insetBottom + "px " + -insetLeft + "px";
-    const options = {
+    const options2 = {
       rootMargin,
       threshold: max(0, min(1, threshold)) || 1
     };
     let isFirstUpdate = true;
     function handleObserve(entries) {
       const ratio = entries[0].intersectionRatio;
+      if (!rectsAreEqual(elementRectForRootMargin, element.getBoundingClientRect())) {
+        return refresh();
+      }
       if (ratio !== threshold) {
         if (!isFirstUpdate) {
           return refresh();
@@ -25923,28 +31666,31 @@ function observeMove(element, onMove) {
           refresh(false, ratio);
         }
       }
-      if (ratio === 1 && !rectsAreEqual(elementRectForRootMargin, element.getBoundingClientRect())) {
-        refresh();
-      }
       isFirstUpdate = false;
     }
     try {
       io = new IntersectionObserver(handleObserve, {
-        ...options,
+        ...options2,
         // Handle <iframe>s
         root: root.ownerDocument
       });
-    } catch (_e) {
-      io = new IntersectionObserver(handleObserve, options);
+    } catch (_e2) {
+      io = new IntersectionObserver(handleObserve, options2);
     }
     io.observe(element);
   }
+  const win = getWindow(element);
+  const handleResize = () => refresh(ancestorResize);
+  win.addEventListener("resize", handleResize);
   refresh(true);
-  return cleanup;
+  return () => {
+    win.removeEventListener("resize", handleResize);
+    cleanup();
+  };
 }
-function autoUpdate(reference, floating, update, options) {
-  if (options === void 0) {
-    options = {};
+function autoUpdate(reference, floating, update, options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   const {
     ancestorScroll = true,
@@ -25952,16 +31698,14 @@ function autoUpdate(reference, floating, update, options) {
     elementResize = typeof ResizeObserver === "function",
     layoutShift = typeof IntersectionObserver === "function",
     animationFrame = false
-  } = options;
+  } = options2;
   const referenceEl = unwrapElement(reference);
   const ancestors = ancestorScroll || ancestorResize ? [...referenceEl ? getOverflowAncestors(referenceEl) : [], ...floating ? getOverflowAncestors(floating) : []] : [];
   ancestors.forEach((ancestor) => {
-    ancestorScroll && ancestor.addEventListener("scroll", update, {
-      passive: true
-    });
+    ancestorScroll && ancestor.addEventListener("scroll", update);
     ancestorResize && ancestor.addEventListener("resize", update);
   });
-  const cleanupIo = referenceEl && layoutShift ? observeMove(referenceEl, update) : null;
+  const cleanupIo = referenceEl && layoutShift ? observeMove(referenceEl, update, ancestorResize) : null;
   let reobserveFrame = -1;
   let resizeObserver = null;
   if (elementResize) {
@@ -26019,13 +31763,11 @@ var size2 = size;
 var hide2 = hide;
 var arrow2 = arrow;
 var limitShift2 = limitShift;
-var computePosition2 = (reference, floating, options) => {
+var computePosition2 = (reference, floating, options2) => {
   const cache = /* @__PURE__ */ new Map();
-  const mergedOptions = {
-    platform,
-    ...options
-  };
+  const mergedOptions = options2 != null ? options2 : {};
   const platformWithCache = {
+    ...platform,
     ...mergedOptions.platform,
     _c: cache
   };
@@ -26036,32 +31778,32 @@ var computePosition2 = (reference, floating, options) => {
 };
 
 // ../../../../website/node_modules/@floating-ui/react-dom/dist/floating-ui.react-dom.mjs
-var React16 = __toESM(require_react(), 1);
-var import_react4 = __toESM(require_react(), 1);
+var React17 = __toESM(require_react(), 1);
+var import_react6 = __toESM(require_react(), 1);
 var ReactDOM2 = __toESM(require_react_dom(), 1);
 var isClient = typeof document !== "undefined";
 var noop = function noop2() {
 };
-var index = isClient ? import_react4.useLayoutEffect : noop;
-function deepEqual(a, b) {
-  if (a === b) {
+var index = isClient ? import_react6.useLayoutEffect : noop;
+function deepEqual(a, b2) {
+  if (a === b2) {
     return true;
   }
-  if (typeof a !== typeof b) {
+  if (typeof a !== typeof b2) {
     return false;
   }
-  if (typeof a === "function" && a.toString() === b.toString()) {
+  if (typeof a === "function" && a.toString() === b2.toString()) {
     return true;
   }
   let length;
   let i;
   let keys;
-  if (a && b && typeof a === "object") {
+  if (a && b2 && typeof a === "object") {
     if (Array.isArray(a)) {
       length = a.length;
-      if (length !== b.length) return false;
+      if (length !== b2.length) return false;
       for (i = length; i-- !== 0; ) {
-        if (!deepEqual(a[i], b[i])) {
+        if (!deepEqual(a[i], b2[i])) {
           return false;
         }
       }
@@ -26069,11 +31811,11 @@ function deepEqual(a, b) {
     }
     keys = Object.keys(a);
     length = keys.length;
-    if (length !== Object.keys(b).length) {
+    if (length !== Object.keys(b2).length) {
       return false;
     }
     for (i = length; i-- !== 0; ) {
-      if (!{}.hasOwnProperty.call(b, keys[i])) {
+      if (!{}.hasOwnProperty.call(b2, keys[i])) {
         return false;
       }
     }
@@ -26082,13 +31824,13 @@ function deepEqual(a, b) {
       if (key === "_owner" && a.$$typeof) {
         continue;
       }
-      if (!deepEqual(a[key], b[key])) {
+      if (!deepEqual(a[key], b2[key])) {
         return false;
       }
     }
     return true;
   }
-  return a !== a && b !== b;
+  return a !== a && b2 !== b2;
 }
 function getDPR(element) {
   if (typeof window === "undefined") {
@@ -26102,15 +31844,15 @@ function roundByDPR(element, value) {
   return Math.round(value * dpr) / dpr;
 }
 function useLatestRef(value) {
-  const ref = React16.useRef(value);
+  const ref = React17.useRef(value);
   index(() => {
     ref.current = value;
   });
   return ref;
 }
-function useFloating(options) {
-  if (options === void 0) {
-    options = {};
+function useFloating(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   const {
     placement = "bottom",
@@ -26124,8 +31866,8 @@ function useFloating(options) {
     transform = true,
     whileElementsMounted,
     open
-  } = options;
-  const [data, setData] = React16.useState({
+  } = options2;
+  const [data, setData] = React17.useState({
     x: 0,
     y: 0,
     strategy,
@@ -26133,19 +31875,19 @@ function useFloating(options) {
     middlewareData: {},
     isPositioned: false
   });
-  const [latestMiddleware, setLatestMiddleware] = React16.useState(middleware);
+  const [latestMiddleware, setLatestMiddleware] = React17.useState(middleware);
   if (!deepEqual(latestMiddleware, middleware)) {
     setLatestMiddleware(middleware);
   }
-  const [_reference, _setReference] = React16.useState(null);
-  const [_floating, _setFloating] = React16.useState(null);
-  const setReference = React16.useCallback((node) => {
+  const [_reference, _setReference] = React17.useState(null);
+  const [_floating, _setFloating] = React17.useState(null);
+  const setReference = React17.useCallback((node) => {
     if (node !== referenceRef.current) {
       referenceRef.current = node;
       _setReference(node);
     }
   }, []);
-  const setFloating = React16.useCallback((node) => {
+  const setFloating = React17.useCallback((node) => {
     if (node !== floatingRef.current) {
       floatingRef.current = node;
       _setFloating(node);
@@ -26153,14 +31895,14 @@ function useFloating(options) {
   }, []);
   const referenceEl = externalReference || _reference;
   const floatingEl = externalFloating || _floating;
-  const referenceRef = React16.useRef(null);
-  const floatingRef = React16.useRef(null);
-  const dataRef = React16.useRef(data);
+  const referenceRef = React17.useRef(null);
+  const floatingRef = React17.useRef(null);
+  const dataRef = React17.useRef(data);
   const hasWhileElementsMounted = whileElementsMounted != null;
   const whileElementsMountedRef = useLatestRef(whileElementsMounted);
   const platformRef = useLatestRef(platform2);
   const openRef = useLatestRef(open);
-  const update = React16.useCallback(() => {
+  const update = React17.useCallback(() => {
     if (!referenceRef.current || !floatingRef.current) {
       return;
     }
@@ -26198,7 +31940,7 @@ function useFloating(options) {
       }));
     }
   }, [open]);
-  const isMountedRef = React16.useRef(false);
+  const isMountedRef = React17.useRef(false);
   index(() => {
     isMountedRef.current = true;
     return () => {
@@ -26215,17 +31957,17 @@ function useFloating(options) {
       update();
     }
   }, [referenceEl, floatingEl, update, whileElementsMountedRef, hasWhileElementsMounted]);
-  const refs = React16.useMemo(() => ({
+  const refs = React17.useMemo(() => ({
     reference: referenceRef,
     floating: floatingRef,
     setReference,
     setFloating
   }), [setReference, setFloating]);
-  const elements = React16.useMemo(() => ({
+  const elements = React17.useMemo(() => ({
     reference: referenceEl,
     floating: floatingEl
   }), [referenceEl, floatingEl]);
-  const floatingStyles = React16.useMemo(() => {
+  const floatingStyles = React17.useMemo(() => {
     const initialStyles = {
       position: strategy,
       left: 0,
@@ -26234,12 +31976,12 @@ function useFloating(options) {
     if (!elements.floating) {
       return initialStyles;
     }
-    const x = roundByDPR(elements.floating, data.x);
-    const y = roundByDPR(elements.floating, data.y);
+    const x2 = roundByDPR(elements.floating, data.x);
+    const y2 = roundByDPR(elements.floating, data.y);
     if (transform) {
       return {
         ...initialStyles,
-        transform: "translate(" + x + "px, " + y + "px)",
+        transform: "translate(" + x2 + "px, " + y2 + "px)",
         ...getDPR(elements.floating) >= 1.5 && {
           willChange: "transform"
         }
@@ -26247,11 +31989,11 @@ function useFloating(options) {
     }
     return {
       position: strategy,
-      left: x,
-      top: y
+      left: x2,
+      top: y2
     };
   }, [strategy, transform, elements.floating, data.x, data.y]);
-  return React16.useMemo(() => ({
+  return React17.useMemo(() => ({
     ...data,
     update,
     refs,
@@ -26259,18 +32001,18 @@ function useFloating(options) {
     floatingStyles
   }), [data, update, refs, elements, floatingStyles]);
 }
-var arrow$1 = (options) => {
+var arrow$1 = (options2) => {
   function isRef(value) {
     return {}.hasOwnProperty.call(value, "current");
   }
   return {
     name: "arrow",
-    options,
+    options: options2,
     fn(state) {
       const {
         element,
         padding
-      } = typeof options === "function" ? options(state) : options;
+      } = typeof options2 === "function" ? options2(state) : options2;
       if (element && isRef(element)) {
         if (element.current != null) {
           return arrow2({
@@ -26290,88 +32032,92 @@ var arrow$1 = (options) => {
     }
   };
 };
-var offset3 = (options, deps) => {
-  const result = offset2(options);
+var offset3 = (options2, deps) => {
+  const result = offset2(options2);
   return {
     name: result.name,
     fn: result.fn,
-    options: [options, deps]
+    options: [options2, deps]
   };
 };
-var shift3 = (options, deps) => {
-  const result = shift2(options);
+var shift3 = (options2, deps) => {
+  const result = shift2(options2);
   return {
     name: result.name,
     fn: result.fn,
-    options: [options, deps]
+    options: [options2, deps]
   };
 };
-var limitShift3 = (options, deps) => {
-  const result = limitShift2(options);
+var limitShift3 = (options2, deps) => {
+  const result = limitShift2(options2);
   return {
     fn: result.fn,
-    options: [options, deps]
+    options: [options2, deps]
   };
 };
-var flip3 = (options, deps) => {
-  const result = flip2(options);
-  return {
-    name: result.name,
-    fn: result.fn,
-    options: [options, deps]
-  };
-};
-var size3 = (options, deps) => {
-  const result = size2(options);
+var flip3 = (options2, deps) => {
+  const result = flip2(options2);
   return {
     name: result.name,
     fn: result.fn,
-    options: [options, deps]
+    options: [options2, deps]
   };
 };
-var hide3 = (options, deps) => {
-  const result = hide2(options);
+var size3 = (options2, deps) => {
+  const result = size2(options2);
   return {
     name: result.name,
     fn: result.fn,
-    options: [options, deps]
+    options: [options2, deps]
   };
 };
-var arrow3 = (options, deps) => {
-  const result = arrow$1(options);
+var hide3 = (options2, deps) => {
+  const result = hide2(options2);
   return {
     name: result.name,
     fn: result.fn,
-    options: [options, deps]
+    options: [options2, deps]
+  };
+};
+var arrow3 = (options2, deps) => {
+  const result = arrow$1(options2);
+  return {
+    name: result.name,
+    fn: result.fn,
+    options: [options2, deps]
   };
 };
 
 // ../../../../website/node_modules/@radix-ui/react-arrow/dist/index.mjs
-var React17 = __toESM(require_react(), 1);
+var React18 = __toESM(require_react(), 1);
 var import_jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
-var NAME = "Arrow";
-var Arrow = React17.forwardRef((props, forwardedRef) => {
-  const { children, width = 10, height = 5, ...arrowProps } = props;
-  return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
-    Primitive.svg,
-    {
-      ...arrowProps,
-      ref: forwardedRef,
-      width,
-      height,
-      viewBox: "0 0 30 10",
-      preserveAspectRatio: "none",
-      children: props.asChild ? children : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("polygon", { points: "0,0 30,0 15,10" })
-    }
-  );
-});
-Arrow.displayName = NAME;
+var __defProp16 = Object.defineProperty;
+var __name15 = (target, value) => __defProp16(target, "name", { value, configurable: true });
+var Arrow = /* @__PURE__ */ React18.forwardRef(
+  /* @__PURE__ */ __name15(function Arrow2(props, forwardedRef) {
+    const { children, width = 10, height = 5, ...arrowProps } = props;
+    return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+      Primitive.svg,
+      {
+        ...arrowProps,
+        ref: forwardedRef,
+        width,
+        height,
+        viewBox: "0 0 30 10",
+        preserveAspectRatio: "none",
+        children: props.asChild ? children : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("polygon", { points: "0,0 30,0 15,10" })
+      }
+    );
+  }, "Arrow")
+);
 var Root = Arrow;
 
 // ../../../../website/node_modules/@radix-ui/react-use-size/dist/index.mjs
-var React18 = __toESM(require_react(), 1);
+var React19 = __toESM(require_react(), 1);
+var __defProp17 = Object.defineProperty;
+var __name16 = (target, value) => __defProp17(target, "name", { value, configurable: true });
 function useSize(element) {
-  const [size4, setSize] = React18.useState(void 0);
+  const [size4, setSize] = React19.useState(void 0);
   useLayoutEffect2(() => {
     if (element) {
       setSize({ width: element.offsetWidth, height: element.offsetHeight });
@@ -26404,41 +32150,77 @@ function useSize(element) {
   }, [element]);
   return size4;
 }
+__name16(useSize, "useSize");
 
 // ../../../../website/node_modules/@radix-ui/react-popper/dist/index.mjs
 var import_jsx_runtime14 = __toESM(require_jsx_runtime(), 1);
+var __defProp18 = Object.defineProperty;
+var __name17 = (target, value) => __defProp18(target, "name", { value, configurable: true });
 var POPPER_NAME = "Popper";
 var [createPopperContext, createPopperScope] = createContextScope(POPPER_NAME);
 var [PopperProvider, usePopperContext] = createPopperContext(POPPER_NAME);
-var Popper = (props) => {
+var Popper = /* @__PURE__ */ __name17((props) => {
   const { __scopePopper, children } = props;
-  const [anchor, setAnchor] = React19.useState(null);
-  return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(PopperProvider, { scope: __scopePopper, anchor, onAnchorChange: setAnchor, children });
-};
-Popper.displayName = POPPER_NAME;
+  const [anchor, setAnchor] = React20.useState(null);
+  const [placementState, setPlacementState] = React20.useState(void 0);
+  return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+    PopperProvider,
+    {
+      scope: __scopePopper,
+      anchor,
+      onAnchorChange: setAnchor,
+      placementState,
+      setPlacementState,
+      children
+    }
+  );
+}, "Popper");
 var ANCHOR_NAME = "PopperAnchor";
-var PopperAnchor = React19.forwardRef(
-  (props, forwardedRef) => {
+var PopperAnchor = /* @__PURE__ */ React20.forwardRef(
+  /* @__PURE__ */ __name17(function PopperAnchor2(props, forwardedRef) {
     const { __scopePopper, virtualRef, ...anchorProps } = props;
     const context = usePopperContext(ANCHOR_NAME, __scopePopper);
-    const ref = React19.useRef(null);
-    const composedRefs = useComposedRefs(forwardedRef, ref);
-    const anchorRef = React19.useRef(null);
-    React19.useEffect(() => {
+    const ref = React20.useRef(null);
+    const onAnchorChange = context.onAnchorChange;
+    const callbackRef = React20.useCallback(
+      (node) => {
+        ref.current = node;
+        if (node) {
+          onAnchorChange(node);
+        }
+      },
+      [onAnchorChange]
+    );
+    const composedRefs = useComposedRefs(forwardedRef, callbackRef);
+    const anchorRef = React20.useRef(null);
+    React20.useEffect(() => {
+      if (!virtualRef) {
+        return;
+      }
       const previousAnchor = anchorRef.current;
-      anchorRef.current = virtualRef?.current || ref.current;
+      anchorRef.current = virtualRef.current;
       if (previousAnchor !== anchorRef.current) {
-        context.onAnchorChange(anchorRef.current);
+        onAnchorChange(anchorRef.current);
       }
     });
-    return virtualRef ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Primitive.div, { ...anchorProps, ref: composedRefs });
-  }
+    const sideAndAlign = context.placementState && getSideAndAlignFromPlacement(context.placementState);
+    const placedSide = sideAndAlign?.[0];
+    const placedAlign = sideAndAlign?.[1];
+    return virtualRef ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+      Primitive.div,
+      {
+        "data-radix-popper-side": placedSide,
+        "data-radix-popper-align": placedAlign,
+        ...anchorProps,
+        ref: composedRefs
+      }
+    );
+  }, "PopperAnchor")
 );
-PopperAnchor.displayName = ANCHOR_NAME;
 var CONTENT_NAME = "PopperContent";
 var [PopperContentProvider, useContentContext] = createPopperContext(CONTENT_NAME);
-var PopperContent = React19.forwardRef(
-  (props, forwardedRef) => {
+var PopperContent = /* @__PURE__ */ React20.forwardRef(
+  /* @__PURE__ */ __name17(function PopperContent2(props, forwardedRef) {
     const {
       __scopePopper,
       side = "bottom",
@@ -26456,9 +32238,9 @@ var PopperContent = React19.forwardRef(
       ...contentProps
     } = props;
     const context = usePopperContext(CONTENT_NAME, __scopePopper);
-    const [content, setContent] = React19.useState(null);
-    const composedRefs = useComposedRefs(forwardedRef, (node) => setContent(node));
-    const [arrow4, setArrow] = React19.useState(null);
+    const [content, setContent] = React20.useState(null);
+    const composedRefs = useComposedRefs(forwardedRef, setContent);
+    const [arrow4, setArrow] = React20.useState(null);
     const arrowSize = useSize(arrow4);
     const arrowWidth = arrowSize?.width ?? 0;
     const arrowHeight = arrowSize?.height ?? 0;
@@ -26476,12 +32258,12 @@ var PopperContent = React19.forwardRef(
       // default to `fixed` strategy so users don't have to pick and we also avoid focus scroll issues
       strategy: "fixed",
       placement: desiredPlacement,
-      whileElementsMounted: (...args) => {
+      whileElementsMounted: /* @__PURE__ */ __name17((...args) => {
         const cleanup = autoUpdate(...args, {
           animationFrame: updatePositionStrategy === "always"
         });
         return cleanup;
-      },
+      }, "whileElementsMounted"),
       elements: {
         reference: context.anchor
       },
@@ -26496,20 +32278,38 @@ var PopperContent = React19.forwardRef(
         avoidCollisions && flip3({ ...detectOverflowOptions }),
         size3({
           ...detectOverflowOptions,
-          apply: ({ elements, rects, availableWidth, availableHeight }) => {
+          apply: /* @__PURE__ */ __name17(({ elements, rects, availableWidth, availableHeight }) => {
             const { width: anchorWidth, height: anchorHeight } = rects.reference;
             const contentStyle = elements.floating.style;
             contentStyle.setProperty("--radix-popper-available-width", `${availableWidth}px`);
             contentStyle.setProperty("--radix-popper-available-height", `${availableHeight}px`);
             contentStyle.setProperty("--radix-popper-anchor-width", `${anchorWidth}px`);
             contentStyle.setProperty("--radix-popper-anchor-height", `${anchorHeight}px`);
-          }
+          }, "apply")
         }),
         arrow4 && arrow3({ element: arrow4, padding: arrowPadding }),
         transformOrigin({ arrowWidth, arrowHeight }),
-        hideWhenDetached && hide3({ strategy: "referenceHidden", ...detectOverflowOptions })
+        hideWhenDetached && hide3({
+          strategy: "referenceHidden",
+          ...detectOverflowOptions,
+          // `hide` detects whether the anchor (reference) is clipped, so when
+          // no explicit `collisionBoundary` is set we fall back to Floating
+          // UI's default clipping ancestors (e.g. a scrollable menu). This
+          // lets an occluded submenu hide once its anchor scrolls out of view
+          // (#3237). The collision/size middlewares deliberately keep the
+          // viewport-based default to avoid clamping content rendered inside
+          // transformed or overflow-clipping portal containers.
+          boundary: hasExplicitBoundaries ? detectOverflowOptions.boundary : void 0
+        })
       ]
     });
+    const setPlacementState = context.setPlacementState;
+    useLayoutEffect2(() => {
+      setPlacementState(placement);
+      return () => {
+        setPlacementState(void 0);
+      };
+    }, [placement, setPlacementState]);
     const [placedSide, placedAlign] = getSideAndAlignFromPlacement(placement);
     const handlePlaced = useCallbackRef(onPlaced);
     useLayoutEffect2(() => {
@@ -26520,7 +32320,7 @@ var PopperContent = React19.forwardRef(
     const arrowX = middlewareData.arrow?.x;
     const arrowY = middlewareData.arrow?.y;
     const cannotCenterArrow = middlewareData.arrow?.centerOffset !== 0;
-    const [contentZIndex, setContentZIndex] = React19.useState();
+    const [contentZIndex, setContentZIndex] = React20.useState();
     useLayoutEffect2(() => {
       if (content) setContentZIndex(window.getComputedStyle(content).zIndex);
     }, [content]);
@@ -26535,7 +32335,7 @@ var PopperContent = React19.forwardRef(
           // keep off the page when measuring
           minWidth: "max-content",
           zIndex: contentZIndex,
-          ["--radix-popper-transform-origin"]: [
+          "--radix-popper-transform-origin": [
             middlewareData.transformOrigin?.x,
             middlewareData.transformOrigin?.y
           ].join(" "),
@@ -26553,6 +32353,7 @@ var PopperContent = React19.forwardRef(
           {
             scope: __scopePopper,
             placedSide,
+            placedAlign,
             onArrowChange: setArrow,
             arrowX,
             arrowY,
@@ -26566,9 +32367,10 @@ var PopperContent = React19.forwardRef(
                 ref: composedRefs,
                 style: {
                   ...contentProps.style,
-                  // if the PopperContent hasn't been placed yet (not all measurements done)
-                  // we prevent animations so that users's animation don't kick in too early referring wrong sides
-                  animation: !isPositioned ? "none" : void 0
+                  // if the PopperContent hasn't been placed yet (not all
+                  // measurements done) we prevent animations so that users'
+                  // animations don't kick in too early from the wrong sides.
+                  animation: !isPositioned ? "none" : contentProps.style?.animation
                 }
               }
             )
@@ -26576,9 +32378,8 @@ var PopperContent = React19.forwardRef(
         )
       }
     );
-  }
+  }, "PopperContent")
 );
-PopperContent.displayName = CONTENT_NAME;
 var ARROW_NAME = "PopperArrow";
 var OPPOSITE_SIDE = {
   top: "bottom",
@@ -26586,134 +32387,142 @@ var OPPOSITE_SIDE = {
   bottom: "top",
   left: "right"
 };
-var PopperArrow = React19.forwardRef(function PopperArrow2(props, forwardedRef) {
-  const { __scopePopper, ...arrowProps } = props;
-  const contentContext = useContentContext(ARROW_NAME, __scopePopper);
-  const baseSide = OPPOSITE_SIDE[contentContext.placedSide];
-  return (
-    // we have to use an extra wrapper because `ResizeObserver` (used by `useSize`)
-    // doesn't report size as we'd expect on SVG elements.
-    // it reports their bounding box which is effectively the largest path inside the SVG.
-    /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
-      "span",
-      {
-        ref: contentContext.onArrowChange,
-        style: {
-          position: "absolute",
-          left: contentContext.arrowX,
-          top: contentContext.arrowY,
-          [baseSide]: 0,
-          transformOrigin: {
-            top: "",
-            right: "0 0",
-            bottom: "center 0",
-            left: "100% 0"
-          }[contentContext.placedSide],
-          transform: {
-            top: "translateY(100%)",
-            right: "translateY(50%) rotate(90deg) translateX(-50%)",
-            bottom: `rotate(180deg)`,
-            left: "translateY(50%) rotate(-90deg) translateX(50%)"
-          }[contentContext.placedSide],
-          visibility: contentContext.shouldHideArrow ? "hidden" : void 0
-        },
-        children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
-          Root,
-          {
-            ...arrowProps,
-            ref: forwardedRef,
-            style: {
-              ...arrowProps.style,
-              // ensures the element can be measured correctly (mostly for if SVG)
-              display: "block"
+var PopperArrow = /* @__PURE__ */ React20.forwardRef(
+  /* @__PURE__ */ __name17(function PopperArrow2(props, forwardedRef) {
+    const { __scopePopper, ...arrowProps } = props;
+    const contentContext = useContentContext(ARROW_NAME, __scopePopper);
+    const baseSide = OPPOSITE_SIDE[contentContext.placedSide];
+    return (
+      // we have to use an extra wrapper because `ResizeObserver` (used by `useSize`)
+      // doesn't report size as we'd expect on SVG elements.
+      // it reports their bounding box which is effectively the largest path inside the SVG.
+      /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+        "span",
+        {
+          ref: contentContext.onArrowChange,
+          style: {
+            position: "absolute",
+            left: contentContext.arrowX,
+            top: contentContext.arrowY,
+            [baseSide]: 0,
+            transformOrigin: {
+              top: "",
+              right: "0 0",
+              bottom: "center 0",
+              left: "100% 0"
+            }[contentContext.placedSide],
+            transform: {
+              top: "translateY(100%)",
+              right: "translateY(50%) rotate(90deg) translateX(-50%)",
+              bottom: `rotate(180deg)`,
+              left: "translateY(50%) rotate(-90deg) translateX(50%)"
+            }[contentContext.placedSide],
+            visibility: contentContext.shouldHideArrow ? "hidden" : void 0
+          },
+          children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+            Root,
+            {
+              ...arrowProps,
+              ref: forwardedRef,
+              style: {
+                ...arrowProps.style,
+                // ensures the element can be measured correctly (mostly for if SVG)
+                display: "block"
+              }
             }
-          }
-        )
-      }
-    )
-  );
-});
-PopperArrow.displayName = ARROW_NAME;
+          )
+        }
+      )
+    );
+  }, "PopperArrow")
+);
 function isNotNull(value) {
   return value !== null;
 }
-var transformOrigin = (options) => ({
+__name17(isNotNull, "isNotNull");
+var transformOrigin = /* @__PURE__ */ __name17((options2) => ({
   name: "transformOrigin",
-  options,
+  options: options2,
   fn(data) {
     const { placement, rects, middlewareData } = data;
     const cannotCenterArrow = middlewareData.arrow?.centerOffset !== 0;
     const isArrowHidden = cannotCenterArrow;
-    const arrowWidth = isArrowHidden ? 0 : options.arrowWidth;
-    const arrowHeight = isArrowHidden ? 0 : options.arrowHeight;
+    const arrowWidth = isArrowHidden ? 0 : options2.arrowWidth;
+    const arrowHeight = isArrowHidden ? 0 : options2.arrowHeight;
     const [placedSide, placedAlign] = getSideAndAlignFromPlacement(placement);
     const noArrowAlign = { start: "0%", center: "50%", end: "100%" }[placedAlign];
     const arrowXCenter = (middlewareData.arrow?.x ?? 0) + arrowWidth / 2;
     const arrowYCenter = (middlewareData.arrow?.y ?? 0) + arrowHeight / 2;
-    let x = "";
-    let y = "";
+    let x2 = "";
+    let y2 = "";
     if (placedSide === "bottom") {
-      x = isArrowHidden ? noArrowAlign : `${arrowXCenter}px`;
-      y = `${-arrowHeight}px`;
+      x2 = isArrowHidden ? noArrowAlign : `${arrowXCenter}px`;
+      y2 = `${-arrowHeight}px`;
     } else if (placedSide === "top") {
-      x = isArrowHidden ? noArrowAlign : `${arrowXCenter}px`;
-      y = `${rects.floating.height + arrowHeight}px`;
+      x2 = isArrowHidden ? noArrowAlign : `${arrowXCenter}px`;
+      y2 = `${rects.floating.height + arrowHeight}px`;
     } else if (placedSide === "right") {
-      x = `${-arrowHeight}px`;
-      y = isArrowHidden ? noArrowAlign : `${arrowYCenter}px`;
+      x2 = `${-arrowHeight}px`;
+      y2 = isArrowHidden ? noArrowAlign : `${arrowYCenter}px`;
     } else if (placedSide === "left") {
-      x = `${rects.floating.width + arrowHeight}px`;
-      y = isArrowHidden ? noArrowAlign : `${arrowYCenter}px`;
+      x2 = `${rects.floating.width + arrowHeight}px`;
+      y2 = isArrowHidden ? noArrowAlign : `${arrowYCenter}px`;
     }
-    return { data: { x, y } };
+    return { data: { x: x2, y: y2 } };
   }
-});
+}), "transformOrigin");
 function getSideAndAlignFromPlacement(placement) {
   const [side, align = "center"] = placement.split("-");
   return [side, align];
 }
+__name17(getSideAndAlignFromPlacement, "getSideAndAlignFromPlacement");
 var Root2 = Popper;
 var Anchor = PopperAnchor;
 var Content = PopperContent;
-var Arrow2 = PopperArrow;
+var Arrow3 = PopperArrow;
 
 // ../../../../website/node_modules/@radix-ui/react-portal/dist/index.mjs
-var React20 = __toESM(require_react(), 1);
-var import_react_dom2 = __toESM(require_react_dom(), 1);
+var React21 = __toESM(require_react(), 1);
+var ReactDOM3 = __toESM(require_react_dom(), 1);
 var import_jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
-var PORTAL_NAME = "Portal";
-var Portal = React20.forwardRef((props, forwardedRef) => {
-  const { container: containerProp, ...portalProps } = props;
-  const [mounted, setMounted] = React20.useState(false);
-  useLayoutEffect2(() => setMounted(true), []);
-  const container = containerProp || mounted && globalThis?.document?.body;
-  return container ? import_react_dom2.default.createPortal(/* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Primitive.div, { ...portalProps, ref: forwardedRef }), container) : null;
-});
-Portal.displayName = PORTAL_NAME;
+var __defProp19 = Object.defineProperty;
+var __name18 = (target, value) => __defProp19(target, "name", { value, configurable: true });
+var Portal = /* @__PURE__ */ React21.forwardRef(
+  /* @__PURE__ */ __name18(function Portal2(props, forwardedRef) {
+    const { container: containerProp, ...portalProps } = props;
+    const [mounted, setMounted] = React21.useState(false);
+    useLayoutEffect2(() => setMounted(true), []);
+    const container = containerProp || mounted && globalThis?.document?.body;
+    return container ? ReactDOM3.createPortal(/* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Primitive.div, { ...portalProps, ref: forwardedRef }), container) : null;
+  }, "Portal")
+);
 
 // ../../../../website/node_modules/@radix-ui/react-presence/dist/index.mjs
 var React24 = __toESM(require_react(), 1);
-var React21 = __toESM(require_react(), 1);
+var React25 = __toESM(require_react(), 1);
+var __defProp20 = Object.defineProperty;
+var __name19 = (target, value) => __defProp20(target, "name", { value, configurable: true });
 function useStateMachine(initialState, machine) {
-  return React21.useReducer((state, event) => {
+  return React25.useReducer((state, event) => {
     const nextState = machine[state][event];
     return nextState ?? state;
   }, initialState);
 }
-var Presence = (props) => {
+__name19(useStateMachine, "useStateMachine");
+var Presence = /* @__PURE__ */ __name19((props) => {
   const { present, children } = props;
   const presence = usePresence(present);
   const child = typeof children === "function" ? children({ present: presence.isPresent }) : React24.Children.only(children);
-  const ref = useComposedRefs(presence.ref, getElementRef2(child));
+  const ref = useStableComposedRefs(presence.ref, getElementRef2(child));
   const forceMount = typeof children === "function";
   return forceMount || presence.isPresent ? React24.cloneElement(child, { ref }) : null;
-};
-Presence.displayName = "Presence";
+}, "Presence");
 function usePresence(present) {
   const [node, setNode] = React24.useState();
   const stylesRef = React24.useRef(null);
   const prevPresentRef = React24.useRef(present);
   const prevAnimationNameRef = React24.useRef("none");
+  const mountAnimationNameRef = React24.useRef(void 0);
   const initialState = present ? "mounted" : "unmounted";
   const [state, send] = useStateMachine(initialState, {
     mounted: {
@@ -26729,8 +32538,12 @@ function usePresence(present) {
     }
   });
   React24.useEffect(() => {
-    const currentAnimationName = getAnimationName(stylesRef.current);
-    prevAnimationNameRef.current = state === "mounted" ? currentAnimationName : "none";
+    if (state === "mounted") {
+      prevAnimationNameRef.current = mountAnimationNameRef.current ?? getAnimationName(stylesRef.current);
+      mountAnimationNameRef.current = void 0;
+    } else {
+      prevAnimationNameRef.current = "none";
+    }
   }, [state]);
   useLayoutEffect2(() => {
     const styles = stylesRef.current;
@@ -26740,6 +32553,7 @@ function usePresence(present) {
       const prevAnimationName = prevAnimationNameRef.current;
       const currentAnimationName = getAnimationName(styles);
       if (present) {
+        mountAnimationNameRef.current = currentAnimationName;
         send("MOUNT");
       } else if (currentAnimationName === "none" || styles?.display === "none") {
         send("UNMOUNT");
@@ -26758,7 +32572,7 @@ function usePresence(present) {
     if (node) {
       let timeoutId;
       const ownerWindow = node.ownerDocument.defaultView ?? window;
-      const handleAnimationEnd = (event) => {
+      const handleAnimationEnd = /* @__PURE__ */ __name19((event) => {
         const currentAnimationName = getAnimationName(stylesRef.current);
         const isCurrentAnimation = currentAnimationName.includes(CSS.escape(event.animationName));
         if (event.target === node && isCurrentAnimation) {
@@ -26773,12 +32587,12 @@ function usePresence(present) {
             });
           }
         }
-      };
-      const handleAnimationStart = (event) => {
+      }, "handleAnimationEnd");
+      const handleAnimationStart = /* @__PURE__ */ __name19((event) => {
         if (event.target === node) {
           prevAnimationNameRef.current = getAnimationName(stylesRef.current);
         }
-      };
+      }, "handleAnimationStart");
       node.addEventListener("animationstart", handleAnimationStart);
       node.addEventListener("animationcancel", handleAnimationEnd);
       node.addEventListener("animationend", handleAnimationEnd);
@@ -26795,14 +32609,58 @@ function usePresence(present) {
   return {
     isPresent: ["mounted", "unmountSuspended"].includes(state),
     ref: React24.useCallback((node2) => {
-      stylesRef.current = node2 ? getComputedStyle(node2) : null;
+      if (node2) {
+        const styles = getComputedStyle(node2);
+        stylesRef.current = styles;
+        mountAnimationNameRef.current = getAnimationName(styles);
+      } else {
+        stylesRef.current = null;
+      }
       setNode(node2);
     }, [])
   };
 }
+__name19(usePresence, "usePresence");
+function setRef2(ref, value) {
+  if (typeof ref === "function") {
+    return ref(value);
+  } else if (ref !== null && ref !== void 0) {
+    ref.current = value;
+  }
+}
+__name19(setRef2, "setRef");
+function useStableComposedRefs(...refs) {
+  const refsRef = React24.useRef(refs);
+  refsRef.current = refs;
+  return React24.useCallback((node) => {
+    const currentRefs = refsRef.current;
+    let hasCleanup = false;
+    const cleanups = currentRefs.map((ref) => {
+      const cleanup = setRef2(ref, node);
+      if (!hasCleanup && typeof cleanup === "function") {
+        hasCleanup = true;
+      }
+      return cleanup;
+    });
+    if (hasCleanup) {
+      return () => {
+        for (let i = 0; i < cleanups.length; i++) {
+          const cleanup = cleanups[i];
+          if (typeof cleanup === "function") {
+            cleanup();
+          } else {
+            setRef2(currentRefs[i], null);
+          }
+        }
+      };
+    }
+  }, []);
+}
+__name19(useStableComposedRefs, "useStableComposedRefs");
 function getAnimationName(styles) {
   return styles?.animationName || "none";
 }
+__name19(getAnimationName, "getAnimationName");
 function getElementRef2(element) {
   let getter = Object.getOwnPropertyDescriptor(element.props, "ref")?.get;
   let mayWarn = getter && "isReactWarning" in getter && getter.isReactWarning;
@@ -26816,9 +32674,10 @@ function getElementRef2(element) {
   }
   return element.props.ref || element.ref;
 }
+__name19(getElementRef2, "getElementRef");
 
 // ../../../../website/node_modules/@radix-ui/react-roving-focus/dist/index.mjs
-var React25 = __toESM(require_react(), 1);
+var React26 = __toESM(require_react(), 1);
 var import_jsx_runtime16 = __toESM(require_jsx_runtime(), 1);
 var ENTRY_FOCUS = "rovingFocusGroup.onEntryFocus";
 var EVENT_OPTIONS2 = { bubbles: false, cancelable: true };
@@ -26829,13 +32688,13 @@ var [createRovingFocusGroupContext, createRovingFocusGroupScope] = createContext
   [createCollectionScope]
 );
 var [RovingFocusProvider, useRovingFocusContext] = createRovingFocusGroupContext(GROUP_NAME);
-var RovingFocusGroup = React25.forwardRef(
+var RovingFocusGroup = React26.forwardRef(
   (props, forwardedRef) => {
     return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection.Provider, { scope: props.__scopeRovingFocusGroup, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection.Slot, { scope: props.__scopeRovingFocusGroup, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(RovingFocusGroupImpl, { ...props, ref: forwardedRef }) }) });
   }
 );
 RovingFocusGroup.displayName = GROUP_NAME;
-var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
+var RovingFocusGroupImpl = React26.forwardRef((props, forwardedRef) => {
   const {
     __scopeRovingFocusGroup,
     orientation,
@@ -26848,7 +32707,7 @@ var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
     preventScrollOnEntryFocus = false,
     ...groupProps
   } = props;
-  const ref = React25.useRef(null);
+  const ref = React26.useRef(null);
   const composedRefs = useComposedRefs(forwardedRef, ref);
   const direction = useDirection(dir);
   const [currentTabStopId, setCurrentTabStopId] = useControllableState({
@@ -26857,12 +32716,12 @@ var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
     onChange: onCurrentTabStopIdChange,
     caller: GROUP_NAME
   });
-  const [isTabbingBackOut, setIsTabbingBackOut] = React25.useState(false);
+  const [isTabbingBackOut, setIsTabbingBackOut] = React26.useState(false);
   const handleEntryFocus = useCallbackRef(onEntryFocus);
   const getItems = useCollection(__scopeRovingFocusGroup);
-  const isClickFocusRef = React25.useRef(false);
-  const [focusableItemsCount, setFocusableItemsCount] = React25.useState(0);
-  React25.useEffect(() => {
+  const isClickFocusRef = React26.useRef(false);
+  const [focusableItemsCount, setFocusableItemsCount] = React26.useState(0);
+  React26.useEffect(() => {
     const node = ref.current;
     if (node) {
       node.addEventListener(ENTRY_FOCUS, handleEntryFocus);
@@ -26877,16 +32736,16 @@ var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
       dir: direction,
       loop,
       currentTabStopId,
-      onItemFocus: React25.useCallback(
+      onItemFocus: React26.useCallback(
         (tabStopId) => setCurrentTabStopId(tabStopId),
         [setCurrentTabStopId]
       ),
-      onItemShiftTab: React25.useCallback(() => setIsTabbingBackOut(true), []),
-      onFocusableItemAdd: React25.useCallback(
+      onItemShiftTab: React26.useCallback(() => setIsTabbingBackOut(true), []),
+      onFocusableItemAdd: React26.useCallback(
         () => setFocusableItemsCount((prevCount) => prevCount + 1),
         []
       ),
-      onFocusableItemRemove: React25.useCallback(
+      onFocusableItemRemove: React26.useCallback(
         () => setFocusableItemsCount((prevCount) => prevCount - 1),
         []
       ),
@@ -26926,7 +32785,7 @@ var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
   );
 });
 var ITEM_NAME = "RovingFocusGroupItem";
-var RovingFocusGroupItem = React25.forwardRef(
+var RovingFocusGroupItem = React26.forwardRef(
   (props, forwardedRef) => {
     const {
       __scopeRovingFocusGroup,
@@ -26942,7 +32801,7 @@ var RovingFocusGroupItem = React25.forwardRef(
     const isCurrentTabStop = context.currentTabStopId === id;
     const getItems = useCollection(__scopeRovingFocusGroup);
     const { onFocusableItemAdd, onFocusableItemRemove, currentTabStopId } = context;
-    React25.useEffect(() => {
+    React26.useEffect(() => {
       if (focusable) {
         onFocusableItemAdd();
         return () => onFocusableItemRemove();
@@ -27025,7 +32884,7 @@ function focusFirst2(candidates, preventScroll = false) {
   }
 }
 function wrapArray(array, startIndex) {
-  return array.map((_, index2) => array[(startIndex + index2) % array.length]);
+  return array.map((_2, index2) => array[(startIndex + index2) % array.length]);
 }
 var Root3 = RovingFocusGroup;
 var Item = RovingFocusGroupItem;
@@ -27056,8 +32915,8 @@ var correctTargets = function(parent, targets) {
     }
     console.error("aria-hidden", target, "in not contained inside", parent, ". Doing nothing");
     return null;
-  }).filter(function(x) {
-    return Boolean(x);
+  }).filter(function(x2) {
+    return Boolean(x2);
   });
 };
 var applyAttributeToOthers = function(originalTarget, parentNode, markerName, controlAttribute) {
@@ -27184,10 +33043,10 @@ function __spreadArray(to, from, pack) {
 }
 
 // ../../../../website/node_modules/react-remove-scroll/dist/es2015/Combination.js
-var React32 = __toESM(require_react());
+var React33 = __toESM(require_react());
 
 // ../../../../website/node_modules/react-remove-scroll/dist/es2015/UI.js
-var React28 = __toESM(require_react());
+var React29 = __toESM(require_react());
 
 // ../../../../website/node_modules/react-remove-scroll-bar/dist/es2015/constants.js
 var zeroRightClassName = "right-scroll-bar-position";
@@ -27206,9 +33065,9 @@ function assignRef(ref, value) {
 }
 
 // ../../../../website/node_modules/use-callback-ref/dist/es2015/useRef.js
-var import_react5 = __toESM(require_react());
+var import_react7 = __toESM(require_react());
 function useCallbackRef2(initialValue, callback) {
-  var ref = (0, import_react5.useState)(function() {
+  var ref = (0, import_react7.useState)(function() {
     return {
       // value
       value: initialValue,
@@ -27234,8 +33093,8 @@ function useCallbackRef2(initialValue, callback) {
 }
 
 // ../../../../website/node_modules/use-callback-ref/dist/es2015/useMergeRef.js
-var React26 = __toESM(require_react());
-var useIsomorphicLayoutEffect = typeof window !== "undefined" ? React26.useLayoutEffect : React26.useEffect;
+var React27 = __toESM(require_react());
+var useIsomorphicLayoutEffect = typeof window !== "undefined" ? React27.useLayoutEffect : React27.useEffect;
 var currentValues = /* @__PURE__ */ new WeakMap();
 function useMergeRefs(refs, defaultValue) {
   var callbackRef = useCallbackRef2(defaultValue || null, function(newValue) {
@@ -27289,8 +33148,8 @@ function innerCreateMedium(defaults, middleware) {
       var item = middleware(data, assigned);
       buffer.push(item);
       return function() {
-        buffer = buffer.filter(function(x) {
-          return x !== item;
+        buffer = buffer.filter(function(x2) {
+          return x2 !== item;
         });
       };
     },
@@ -27302,8 +33161,8 @@ function innerCreateMedium(defaults, middleware) {
         cbs.forEach(cb);
       }
       buffer = {
-        push: function(x) {
-          return cb(x);
+        push: function(x2) {
+          return cb(x2);
         },
         filter: function() {
           return buffer;
@@ -27329,8 +33188,8 @@ function innerCreateMedium(defaults, middleware) {
       };
       cycle();
       buffer = {
-        push: function(x) {
-          pendingQueue.push(x);
+        push: function(x2) {
+          pendingQueue.push(x2);
           cycle();
         },
         filter: function(filter) {
@@ -27342,17 +33201,17 @@ function innerCreateMedium(defaults, middleware) {
   };
   return medium;
 }
-function createSidecarMedium(options) {
-  if (options === void 0) {
-    options = {};
+function createSidecarMedium(options2) {
+  if (options2 === void 0) {
+    options2 = {};
   }
   var medium = innerCreateMedium(null);
-  medium.options = __assign({ async: true, ssr: false }, options);
+  medium.options = __assign({ async: true, ssr: false }, options2);
   return medium;
 }
 
 // ../../../../website/node_modules/use-sidecar/dist/es2015/exports.js
-var React27 = __toESM(require_react());
+var React28 = __toESM(require_react());
 var SideCar = function(_a) {
   var sideCar = _a.sideCar, rest = __rest(_a, ["sideCar"]);
   if (!sideCar) {
@@ -27362,7 +33221,7 @@ var SideCar = function(_a) {
   if (!Target) {
     throw new Error("Sidecar medium not found");
   }
-  return React27.createElement(Target, __assign({}, rest));
+  return React28.createElement(Target, __assign({}, rest));
 };
 SideCar.isSideCarExport = true;
 function exportSidecar(medium, exported) {
@@ -27377,9 +33236,9 @@ var effectCar = createSidecarMedium();
 var nothing = function() {
   return;
 };
-var RemoveScroll = React28.forwardRef(function(props, parentRef) {
-  var ref = React28.useRef(null);
-  var _a = React28.useState({
+var RemoveScroll = React29.forwardRef(function(props, parentRef) {
+  var ref = React29.useRef(null);
+  var _a = React29.useState({
     onScrollCapture: nothing,
     onWheelCapture: nothing,
     onTouchMoveCapture: nothing
@@ -27388,11 +33247,11 @@ var RemoveScroll = React28.forwardRef(function(props, parentRef) {
   var SideCar2 = sideCar;
   var containerRef = useMergeRefs([ref, parentRef]);
   var containerProps = __assign(__assign({}, rest), callbacks);
-  return React28.createElement(
-    React28.Fragment,
+  return React29.createElement(
+    React29.Fragment,
     null,
-    enabled && React28.createElement(SideCar2, { sideCar: effectCar, removeScrollBar, shards, noRelative, noIsolation, inert, setCallbacks, allowPinchZoom: !!allowPinchZoom, lockRef: ref, gapMode }),
-    forwardProps ? React28.cloneElement(React28.Children.only(children), __assign(__assign({}, containerProps), { ref: containerRef })) : React28.createElement(Container, __assign({}, containerProps, { className, ref: containerRef }), children)
+    enabled && React29.createElement(SideCar2, { sideCar: effectCar, removeScrollBar, shards, noRelative, noIsolation, inert, setCallbacks, allowPinchZoom: !!allowPinchZoom, lockRef: ref, gapMode }),
+    forwardProps ? React29.cloneElement(React29.Children.only(children), __assign(__assign({}, containerProps), { ref: containerRef })) : React29.createElement(Container, __assign({}, containerProps, { className, ref: containerRef }), children)
   );
 });
 RemoveScroll.defaultProps = {
@@ -27406,13 +33265,13 @@ RemoveScroll.classNames = {
 };
 
 // ../../../../website/node_modules/react-remove-scroll/dist/es2015/SideEffect.js
-var React31 = __toESM(require_react());
+var React32 = __toESM(require_react());
 
 // ../../../../website/node_modules/react-remove-scroll-bar/dist/es2015/component.js
-var React30 = __toESM(require_react());
+var React31 = __toESM(require_react());
 
 // ../../../../website/node_modules/react-style-singleton/dist/es2015/hook.js
-var React29 = __toESM(require_react());
+var React30 = __toESM(require_react());
 
 // ../../../../website/node_modules/get-nonce/dist/es2015/index.js
 var currentNonce;
@@ -27476,7 +33335,7 @@ var stylesheetSingleton = function() {
 var styleHookSingleton = function() {
   var sheet = stylesheetSingleton();
   return function(styles, isDynamic) {
-    React29.useEffect(function() {
+    React30.useEffect(function() {
       sheet.add(styles);
       return function() {
         sheet.remove();
@@ -27503,8 +33362,8 @@ var zeroGap = {
   right: 0,
   gap: 0
 };
-var parse = function(x) {
-  return parseInt(x || "", 10) || 0;
+var parse = function(x2) {
+  return parseInt(x2 || "", 10) || 0;
 };
 var getOffset = function(gapMode) {
   var cs = window.getComputedStyle(document.body);
@@ -27550,7 +33409,7 @@ var getCurrentUseCounter = function() {
   return isFinite(counter) ? counter : 0;
 };
 var useLockAttribute = function() {
-  React30.useEffect(function() {
+  React31.useEffect(function() {
     document.body.setAttribute(lockAttribute, (getCurrentUseCounter() + 1).toString());
     return function() {
       var newCounter = getCurrentUseCounter() - 1;
@@ -27565,10 +33424,10 @@ var useLockAttribute = function() {
 var RemoveScrollBar = function(_a) {
   var noRelative = _a.noRelative, noImportant = _a.noImportant, _b = _a.gapMode, gapMode = _b === void 0 ? "margin" : _b;
   useLockAttribute();
-  var gap = React30.useMemo(function() {
+  var gap = React31.useMemo(function() {
     return getGapWidth(gapMode);
   }, [gapMode]);
-  return React30.createElement(Style, { styles: getStyles(gap, !noRelative, gapMode, !noImportant ? "!important" : "") });
+  return React31.createElement(Style, { styles: getStyles(gap, !noRelative, gapMode, !noImportant ? "!important" : "") });
 };
 
 // ../../../../website/node_modules/react-remove-scroll/dist/es2015/aggresiveCapture.js
@@ -27700,8 +33559,8 @@ var getDeltaXY = function(event) {
 var extractRef = function(ref) {
   return ref && "current" in ref ? ref.current : ref;
 };
-var deltaCompare = function(x, y) {
-  return x[0] === y[0] && x[1] === y[1];
+var deltaCompare = function(x2, y2) {
+  return x2[0] === y2[0] && x2[1] === y2[1];
 };
 var generateStyle = function(id) {
   return "\n  .block-interactivity-".concat(id, " {pointer-events: none;}\n  .allow-interactivity-").concat(id, " {pointer-events: all;}\n");
@@ -27709,16 +33568,16 @@ var generateStyle = function(id) {
 var idCounter = 0;
 var lockStack = [];
 function RemoveScrollSideCar(props) {
-  var shouldPreventQueue = React31.useRef([]);
-  var touchStartRef = React31.useRef([0, 0]);
-  var activeAxis = React31.useRef();
-  var id = React31.useState(idCounter++)[0];
-  var Style2 = React31.useState(styleSingleton)[0];
-  var lastProps = React31.useRef(props);
-  React31.useEffect(function() {
+  var shouldPreventQueue = React32.useRef([]);
+  var touchStartRef = React32.useRef([0, 0]);
+  var activeAxis = React32.useRef();
+  var id = React32.useState(idCounter++)[0];
+  var Style2 = React32.useState(styleSingleton)[0];
+  var lastProps = React32.useRef(props);
+  React32.useEffect(function() {
     lastProps.current = props;
   }, [props]);
-  React31.useEffect(function() {
+  React32.useEffect(function() {
     if (props.inert) {
       document.body.classList.add("block-interactivity-".concat(id));
       var allow_1 = __spreadArray([props.lockRef.current], (props.shards || []).map(extractRef), true).filter(Boolean);
@@ -27734,7 +33593,7 @@ function RemoveScrollSideCar(props) {
     }
     return;
   }, [props.inert, props.lockRef.current, props.shards]);
-  var shouldCancelEvent = React31.useCallback(function(event, parent) {
+  var shouldCancelEvent = React32.useCallback(function(event, parent) {
     if ("touches" in event && event.touches.length === 2 || event.type === "wheel" && event.ctrlKey) {
       return !lastProps.current.allowPinchZoom;
     }
@@ -27776,7 +33635,7 @@ function RemoveScrollSideCar(props) {
     var cancelingAxis = activeAxis.current || currentAxis;
     return handleScroll(cancelingAxis, parent, event, cancelingAxis === "h" ? deltaX : deltaY, true);
   }, []);
-  var shouldPrevent = React31.useCallback(function(_event) {
+  var shouldPrevent = React32.useCallback(function(_event) {
     var event = _event;
     if (!lockStack.length || lockStack[lockStack.length - 1] !== Style2) {
       return;
@@ -27803,7 +33662,7 @@ function RemoveScrollSideCar(props) {
       }
     }
   }, []);
-  var shouldCancel = React31.useCallback(function(name, delta, target, should) {
+  var shouldCancel = React32.useCallback(function(name, delta, target, should) {
     var event = { name, delta, target, should, shadowParent: getOutermostShadowParent(target) };
     shouldPreventQueue.current.push(event);
     setTimeout(function() {
@@ -27812,17 +33671,17 @@ function RemoveScrollSideCar(props) {
       });
     }, 1);
   }, []);
-  var scrollTouchStart = React31.useCallback(function(event) {
+  var scrollTouchStart = React32.useCallback(function(event) {
     touchStartRef.current = getTouchXY(event);
     activeAxis.current = void 0;
   }, []);
-  var scrollWheel = React31.useCallback(function(event) {
+  var scrollWheel = React32.useCallback(function(event) {
     shouldCancel(event.type, getDeltaXY(event), event.target, shouldCancelEvent(event, props.lockRef.current));
   }, []);
-  var scrollTouchMove = React31.useCallback(function(event) {
+  var scrollTouchMove = React32.useCallback(function(event) {
     shouldCancel(event.type, getTouchXY(event), event.target, shouldCancelEvent(event, props.lockRef.current));
   }, []);
-  React31.useEffect(function() {
+  React32.useEffect(function() {
     lockStack.push(Style2);
     props.setCallbacks({
       onScrollCapture: scrollWheel,
@@ -27842,11 +33701,11 @@ function RemoveScrollSideCar(props) {
     };
   }, []);
   var removeScrollBar = props.removeScrollBar, inert = props.inert;
-  return React31.createElement(
-    React31.Fragment,
+  return React32.createElement(
+    React32.Fragment,
     null,
-    inert ? React31.createElement(Style2, { styles: generateStyle(id) }) : null,
-    removeScrollBar ? React31.createElement(RemoveScrollBar, { noRelative: props.noRelative, gapMode: props.gapMode }) : null
+    inert ? React32.createElement(Style2, { styles: generateStyle(id) }) : null,
+    removeScrollBar ? React32.createElement(RemoveScrollBar, { noRelative: props.noRelative, gapMode: props.gapMode }) : null
   );
 }
 function getOutermostShadowParent(node) {
@@ -27865,8 +33724,8 @@ function getOutermostShadowParent(node) {
 var sidecar_default = exportSidecar(effectCar, RemoveScrollSideCar);
 
 // ../../../../website/node_modules/react-remove-scroll/dist/es2015/Combination.js
-var ReactRemoveScroll = React32.forwardRef(function(props, ref) {
-  return React32.createElement(RemoveScroll, __assign({}, props, { ref, sideCar: sidecar_default }));
+var ReactRemoveScroll = React33.forwardRef(function(props, ref) {
+  return React33.createElement(RemoveScroll, __assign({}, props, { ref, sideCar: sidecar_default }));
 });
 ReactRemoveScroll.classNames = RemoveScroll.classNames;
 var Combination_default = ReactRemoveScroll;
@@ -27899,11 +33758,11 @@ var [MenuRootProvider, useMenuRootContext] = createMenuContext(MENU_NAME);
 var Menu = (props) => {
   const { __scopeMenu, open = false, children, dir, onOpenChange, modal = true } = props;
   const popperScope = usePopperScope(__scopeMenu);
-  const [content, setContent] = React33.useState(null);
-  const isUsingKeyboardRef = React33.useRef(false);
+  const [content, setContent] = React34.useState(null);
+  const isUsingKeyboardRef = React34.useRef(false);
   const handleOpenChange = useCallbackRef(onOpenChange);
   const direction = useDirection(dir);
-  React33.useEffect(() => {
+  React34.useEffect(() => {
     const handleKeyDown = () => {
       isUsingKeyboardRef.current = true;
       document.addEventListener("pointerdown", handlePointer, { capture: true, once: true });
@@ -27917,6 +33776,14 @@ var Menu = (props) => {
       document.removeEventListener("pointermove", handlePointer, { capture: true });
     };
   }, []);
+  React34.useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handleBlur = () => handleOpenChange(false);
+    window.addEventListener("blur", handleBlur);
+    return () => window.removeEventListener("blur", handleBlur);
+  }, [open, handleOpenChange]);
   return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
     MenuProvider,
     {
@@ -27929,7 +33796,7 @@ var Menu = (props) => {
         MenuRootProvider,
         {
           scope: __scopeMenu,
-          onClose: React33.useCallback(() => handleOpenChange(false), [handleOpenChange]),
+          onClose: React34.useCallback(() => handleOpenChange(false), [handleOpenChange]),
           isUsingKeyboardRef,
           dir: direction,
           modal,
@@ -27941,7 +33808,7 @@ var Menu = (props) => {
 };
 Menu.displayName = MENU_NAME;
 var ANCHOR_NAME2 = "MenuAnchor";
-var MenuAnchor = React33.forwardRef(
+var MenuAnchor = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...anchorProps } = props;
     const popperScope = usePopperScope(__scopeMenu);
@@ -27949,19 +33816,19 @@ var MenuAnchor = React33.forwardRef(
   }
 );
 MenuAnchor.displayName = ANCHOR_NAME2;
-var PORTAL_NAME2 = "MenuPortal";
-var [PortalProvider, usePortalContext] = createMenuContext(PORTAL_NAME2, {
+var PORTAL_NAME = "MenuPortal";
+var [PortalProvider, usePortalContext] = createMenuContext(PORTAL_NAME, {
   forceMount: void 0
 });
 var MenuPortal = (props) => {
   const { __scopeMenu, forceMount, children, container } = props;
-  const context = useMenuContext(PORTAL_NAME2, __scopeMenu);
+  const context = useMenuContext(PORTAL_NAME, __scopeMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(PortalProvider, { scope: __scopeMenu, forceMount, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Portal, { asChild: true, container, children }) }) });
 };
-MenuPortal.displayName = PORTAL_NAME2;
+MenuPortal.displayName = PORTAL_NAME;
 var CONTENT_NAME2 = "MenuContent";
 var [MenuContentProvider, useMenuContentContext] = createMenuContext(CONTENT_NAME2);
-var MenuContent = React33.forwardRef(
+var MenuContent = React34.forwardRef(
   (props, forwardedRef) => {
     const portalContext = usePortalContext(CONTENT_NAME2, props.__scopeMenu);
     const { forceMount = portalContext.forceMount, ...contentProps } = props;
@@ -27970,12 +33837,12 @@ var MenuContent = React33.forwardRef(
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Provider, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Slot, { scope: props.__scopeMenu, children: rootContext.modal ? /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(MenuRootContentModal, { ...contentProps, ref: forwardedRef }) : /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(MenuRootContentNonModal, { ...contentProps, ref: forwardedRef }) }) }) });
   }
 );
-var MenuRootContentModal = React33.forwardRef(
+var MenuRootContentModal = React34.forwardRef(
   (props, forwardedRef) => {
     const context = useMenuContext(CONTENT_NAME2, props.__scopeMenu);
-    const ref = React33.useRef(null);
+    const ref = React34.useRef(null);
     const composedRefs = useComposedRefs(forwardedRef, ref);
-    React33.useEffect(() => {
+    React34.useEffect(() => {
       const content = ref.current;
       if (content) return hideOthers(content);
     }, []);
@@ -27997,7 +33864,7 @@ var MenuRootContentModal = React33.forwardRef(
     );
   }
 );
-var MenuRootContentNonModal = React33.forwardRef((props, forwardedRef) => {
+var MenuRootContentNonModal = React34.forwardRef((props, forwardedRef) => {
   const context = useMenuContext(CONTENT_NAME2, props.__scopeMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
     MenuContentImpl,
@@ -28012,7 +33879,7 @@ var MenuRootContentNonModal = React33.forwardRef((props, forwardedRef) => {
   );
 });
 var Slot2 = createSlot("MenuContent.ScrollLock");
-var MenuContentImpl = React33.forwardRef(
+var MenuContentImpl = React34.forwardRef(
   (props, forwardedRef) => {
     const {
       __scopeMenu,
@@ -28035,16 +33902,16 @@ var MenuContentImpl = React33.forwardRef(
     const popperScope = usePopperScope(__scopeMenu);
     const rovingFocusGroupScope = useRovingFocusGroupScope(__scopeMenu);
     const getItems = useCollection2(__scopeMenu);
-    const [currentItemId, setCurrentItemId] = React33.useState(null);
-    const contentRef = React33.useRef(null);
+    const [currentItemId, setCurrentItemId] = React34.useState(null);
+    const contentRef = React34.useRef(null);
     const composedRefs = useComposedRefs(forwardedRef, contentRef, context.onContentChange);
-    const timerRef = React33.useRef(0);
-    const searchRef = React33.useRef("");
-    const pointerGraceTimerRef = React33.useRef(0);
-    const pointerGraceIntentRef = React33.useRef(null);
-    const pointerDirRef = React33.useRef("right");
-    const lastPointerXRef = React33.useRef(0);
-    const ScrollLockWrapper = disableOutsideScroll ? Combination_default : React33.Fragment;
+    const timerRef = React34.useRef(0);
+    const searchRef = React34.useRef("");
+    const pointerGraceTimerRef = React34.useRef(0);
+    const pointerGraceIntentRef = React34.useRef(null);
+    const pointerDirRef = React34.useRef("right");
+    const lastPointerXRef = React34.useRef(0);
+    const ScrollLockWrapper = disableOutsideScroll ? Combination_default : React34.Fragment;
     const scrollLockWrapperProps = disableOutsideScroll ? { as: Slot2, allowPinchZoom: true } : void 0;
     const handleTypeaheadSearch = (key) => {
       const search = searchRef.current + key;
@@ -28063,11 +33930,11 @@ var MenuContentImpl = React33.forwardRef(
         setTimeout(() => newItem.focus());
       }
     };
-    React33.useEffect(() => {
+    React34.useEffect(() => {
       return () => window.clearTimeout(timerRef.current);
     }, []);
     useFocusGuards();
-    const isPointerMovingToSubmenu = React33.useCallback((event) => {
+    const isPointerMovingToSubmenu = React34.useCallback((event) => {
       const isMovingTowards = pointerDirRef.current === pointerGraceIntentRef.current?.side;
       return isMovingTowards && isPointerInGraceArea(event, pointerGraceIntentRef.current?.area);
     }, []);
@@ -28076,13 +33943,13 @@ var MenuContentImpl = React33.forwardRef(
       {
         scope: __scopeMenu,
         searchRef,
-        onItemEnter: React33.useCallback(
+        onItemEnter: React34.useCallback(
           (event) => {
             if (isPointerMovingToSubmenu(event)) event.preventDefault();
           },
           [isPointerMovingToSubmenu]
         ),
-        onItemLeave: React33.useCallback(
+        onItemLeave: React34.useCallback(
           (event) => {
             if (isPointerMovingToSubmenu(event)) return;
             contentRef.current?.focus();
@@ -28090,14 +33957,14 @@ var MenuContentImpl = React33.forwardRef(
           },
           [isPointerMovingToSubmenu]
         ),
-        onTriggerLeave: React33.useCallback(
+        onTriggerLeave: React34.useCallback(
           (event) => {
             if (isPointerMovingToSubmenu(event)) event.preventDefault();
           },
           [isPointerMovingToSubmenu]
         ),
         pointerGraceTimerRef,
-        onPointerGraceIntentChange: React33.useCallback((intent) => {
+        onPointerGraceIntentChange: React34.useCallback((intent) => {
           pointerGraceIntentRef.current = intent;
         }, []),
         children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(ScrollLockWrapper, { ...scrollLockWrapperProps, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
@@ -28196,7 +34063,7 @@ var MenuContentImpl = React33.forwardRef(
 );
 MenuContent.displayName = CONTENT_NAME2;
 var GROUP_NAME2 = "MenuGroup";
-var MenuGroup = React33.forwardRef(
+var MenuGroup = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...groupProps } = props;
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Primitive.div, { role: "group", ...groupProps, ref: forwardedRef });
@@ -28204,7 +34071,7 @@ var MenuGroup = React33.forwardRef(
 );
 MenuGroup.displayName = GROUP_NAME2;
 var LABEL_NAME = "MenuLabel";
-var MenuLabel = React33.forwardRef(
+var MenuLabel = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...labelProps } = props;
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Primitive.div, { ...labelProps, ref: forwardedRef });
@@ -28213,14 +34080,14 @@ var MenuLabel = React33.forwardRef(
 MenuLabel.displayName = LABEL_NAME;
 var ITEM_NAME2 = "MenuItem";
 var ITEM_SELECT = "menu.itemSelect";
-var MenuItem = React33.forwardRef(
+var MenuItem = React34.forwardRef(
   (props, forwardedRef) => {
     const { disabled = false, onSelect, ...itemProps } = props;
-    const ref = React33.useRef(null);
+    const ref = React34.useRef(null);
     const rootContext = useMenuRootContext(ITEM_NAME2, props.__scopeMenu);
     const contentContext = useMenuContentContext(ITEM_NAME2, props.__scopeMenu);
     const composedRefs = useComposedRefs(forwardedRef, ref);
-    const isPointerDownRef = React33.useRef(false);
+    const isPointerDownRef = React34.useRef(false);
     const handleSelect = () => {
       const menuItem = ref.current;
       if (!disabled && menuItem) {
@@ -28261,16 +34128,16 @@ var MenuItem = React33.forwardRef(
   }
 );
 MenuItem.displayName = ITEM_NAME2;
-var MenuItemImpl = React33.forwardRef(
+var MenuItemImpl = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, disabled = false, textValue, ...itemProps } = props;
     const contentContext = useMenuContentContext(ITEM_NAME2, __scopeMenu);
     const rovingFocusGroupScope = useRovingFocusGroupScope(__scopeMenu);
-    const ref = React33.useRef(null);
+    const ref = React34.useRef(null);
     const composedRefs = useComposedRefs(forwardedRef, ref);
-    const [isFocused, setIsFocused] = React33.useState(false);
-    const [textContent, setTextContent] = React33.useState("");
-    React33.useEffect(() => {
+    const [isFocused, setIsFocused] = React34.useState(false);
+    const [textContent, setTextContent] = React34.useState("");
+    React34.useEffect(() => {
       const menuItem = ref.current;
       if (menuItem) {
         setTextContent((menuItem.textContent ?? "").trim());
@@ -28318,7 +34185,7 @@ var MenuItemImpl = React33.forwardRef(
   }
 );
 var CHECKBOX_ITEM_NAME = "MenuCheckboxItem";
-var MenuCheckboxItem = React33.forwardRef(
+var MenuCheckboxItem = React34.forwardRef(
   (props, forwardedRef) => {
     const { checked = false, onCheckedChange, ...checkboxItemProps } = props;
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(ItemIndicatorProvider, { scope: props.__scopeMenu, checked, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
@@ -28345,7 +34212,7 @@ var [RadioGroupProvider, useRadioGroupContext] = createMenuContext(
   { value: void 0, onValueChange: () => {
   } }
 );
-var MenuRadioGroup = React33.forwardRef(
+var MenuRadioGroup = React34.forwardRef(
   (props, forwardedRef) => {
     const { value, onValueChange, ...groupProps } = props;
     const handleValueChange = useCallbackRef(onValueChange);
@@ -28354,7 +34221,7 @@ var MenuRadioGroup = React33.forwardRef(
 );
 MenuRadioGroup.displayName = RADIO_GROUP_NAME;
 var RADIO_ITEM_NAME = "MenuRadioItem";
-var MenuRadioItem = React33.forwardRef(
+var MenuRadioItem = React34.forwardRef(
   (props, forwardedRef) => {
     const { value, ...radioItemProps } = props;
     const context = useRadioGroupContext(RADIO_ITEM_NAME, props.__scopeMenu);
@@ -28382,7 +34249,7 @@ var [ItemIndicatorProvider, useItemIndicatorContext] = createMenuContext(
   ITEM_INDICATOR_NAME,
   { checked: false }
 );
-var MenuItemIndicator = React33.forwardRef(
+var MenuItemIndicator = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, forceMount, ...itemIndicatorProps } = props;
     const indicatorContext = useItemIndicatorContext(ITEM_INDICATOR_NAME, __scopeMenu);
@@ -28404,7 +34271,7 @@ var MenuItemIndicator = React33.forwardRef(
 );
 MenuItemIndicator.displayName = ITEM_INDICATOR_NAME;
 var SEPARATOR_NAME = "MenuSeparator";
-var MenuSeparator = React33.forwardRef(
+var MenuSeparator = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...separatorProps } = props;
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
@@ -28420,11 +34287,11 @@ var MenuSeparator = React33.forwardRef(
 );
 MenuSeparator.displayName = SEPARATOR_NAME;
 var ARROW_NAME2 = "MenuArrow";
-var MenuArrow = React33.forwardRef(
+var MenuArrow = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...arrowProps } = props;
     const popperScope = usePopperScope(__scopeMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Arrow2, { ...popperScope, ...arrowProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Arrow3, { ...popperScope, ...arrowProps, ref: forwardedRef });
   }
 );
 MenuArrow.displayName = ARROW_NAME2;
@@ -28434,10 +34301,10 @@ var MenuSub = (props) => {
   const { __scopeMenu, children, open = false, onOpenChange } = props;
   const parentMenuContext = useMenuContext(SUB_NAME, __scopeMenu);
   const popperScope = usePopperScope(__scopeMenu);
-  const [trigger, setTrigger] = React33.useState(null);
-  const [content, setContent] = React33.useState(null);
+  const [trigger, setTrigger] = React34.useState(null);
+  const [content, setContent] = React34.useState(null);
   const handleOpenChange = useCallbackRef(onOpenChange);
-  React33.useEffect(() => {
+  React34.useEffect(() => {
     if (parentMenuContext.open === false) handleOpenChange(false);
     return () => handleOpenChange(false);
   }, [parentMenuContext.open, handleOpenChange]);
@@ -28465,21 +34332,21 @@ var MenuSub = (props) => {
 };
 MenuSub.displayName = SUB_NAME;
 var SUB_TRIGGER_NAME = "MenuSubTrigger";
-var MenuSubTrigger = React33.forwardRef(
+var MenuSubTrigger = React34.forwardRef(
   (props, forwardedRef) => {
     const context = useMenuContext(SUB_TRIGGER_NAME, props.__scopeMenu);
     const rootContext = useMenuRootContext(SUB_TRIGGER_NAME, props.__scopeMenu);
     const subContext = useMenuSubContext(SUB_TRIGGER_NAME, props.__scopeMenu);
     const contentContext = useMenuContentContext(SUB_TRIGGER_NAME, props.__scopeMenu);
-    const openTimerRef = React33.useRef(null);
+    const openTimerRef = React34.useRef(null);
     const { pointerGraceTimerRef, onPointerGraceIntentChange } = contentContext;
     const scope = { __scopeMenu: props.__scopeMenu };
-    const clearOpenTimer = React33.useCallback(() => {
+    const clearOpenTimer = React34.useCallback(() => {
       if (openTimerRef.current) window.clearTimeout(openTimerRef.current);
       openTimerRef.current = null;
     }, []);
-    React33.useEffect(() => clearOpenTimer, [clearOpenTimer]);
-    React33.useEffect(() => {
+    React34.useEffect(() => clearOpenTimer, [clearOpenTimer]);
+    React34.useEffect(() => {
       const pointerGraceTimer = pointerGraceTimerRef.current;
       return () => {
         window.clearTimeout(pointerGraceTimer);
@@ -28492,7 +34359,7 @@ var MenuSubTrigger = React33.forwardRef(
         id: subContext.triggerId,
         "aria-haspopup": "menu",
         "aria-expanded": context.open,
-        "aria-controls": subContext.contentId,
+        "aria-controls": context.open ? subContext.contentId : void 0,
         "data-state": getOpenState(context.open),
         ...props,
         ref: composeRefs(forwardedRef, subContext.onTriggerChange),
@@ -28566,14 +34433,14 @@ var MenuSubTrigger = React33.forwardRef(
 );
 MenuSubTrigger.displayName = SUB_TRIGGER_NAME;
 var SUB_CONTENT_NAME = "MenuSubContent";
-var MenuSubContent = React33.forwardRef(
+var MenuSubContent = React34.forwardRef(
   (props, forwardedRef) => {
     const portalContext = usePortalContext(CONTENT_NAME2, props.__scopeMenu);
-    const { forceMount = portalContext.forceMount, ...subContentProps } = props;
+    const { forceMount = portalContext.forceMount, align = "start", ...subContentProps } = props;
     const context = useMenuContext(CONTENT_NAME2, props.__scopeMenu);
     const rootContext = useMenuRootContext(CONTENT_NAME2, props.__scopeMenu);
     const subContext = useMenuSubContext(SUB_CONTENT_NAME, props.__scopeMenu);
-    const ref = React33.useRef(null);
+    const ref = React34.useRef(null);
     const composedRefs = useComposedRefs(forwardedRef, ref);
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Provider, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Slot, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuContentImpl,
@@ -28582,7 +34449,7 @@ var MenuSubContent = React33.forwardRef(
         "aria-labelledby": subContext.triggerId,
         ...subContentProps,
         ref: composedRefs,
-        align: "start",
+        align,
         side: rootContext.dir === "rtl" ? "left" : "right",
         disableOutsidePointerEvents: false,
         disableOutsideScroll: false,
@@ -28631,7 +34498,7 @@ function focusFirst3(candidates) {
   }
 }
 function wrapArray2(array, startIndex) {
-  return array.map((_, index2) => array[(startIndex + index2) % array.length]);
+  return array.map((_2, index2) => array[(startIndex + index2) % array.length]);
 }
 function getNextMatch(values, search, currentMatch) {
   const isRepeated = search.length > 1 && Array.from(search).every((char) => char === search[0]);
@@ -28639,23 +34506,23 @@ function getNextMatch(values, search, currentMatch) {
   const currentMatchIndex = currentMatch ? values.indexOf(currentMatch) : -1;
   let wrappedValues = wrapArray2(values, Math.max(currentMatchIndex, 0));
   const excludeCurrentMatch = normalizedSearch.length === 1;
-  if (excludeCurrentMatch) wrappedValues = wrappedValues.filter((v) => v !== currentMatch);
+  if (excludeCurrentMatch) wrappedValues = wrappedValues.filter((v3) => v3 !== currentMatch);
   const nextMatch = wrappedValues.find(
     (value) => value.toLowerCase().startsWith(normalizedSearch.toLowerCase())
   );
   return nextMatch !== currentMatch ? nextMatch : void 0;
 }
 function isPointInPolygon(point, polygon) {
-  const { x, y } = point;
+  const { x: x2, y: y2 } = point;
   let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+  for (let i = 0, j2 = polygon.length - 1; i < polygon.length; j2 = i++) {
     const ii = polygon[i];
-    const jj = polygon[j];
+    const jj = polygon[j2];
     const xi = ii.x;
     const yi = ii.y;
     const xj = jj.x;
     const yj = jj.y;
-    const intersect = yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi;
+    const intersect = yi > y2 !== yj > y2 && x2 < (xj - xi) * (y2 - yi) / (yj - yi) + xi;
     if (intersect) inside = !inside;
   }
   return inside;
@@ -28670,7 +34537,7 @@ function whenMouse(handler) {
 }
 var Root32 = Menu;
 var Anchor2 = MenuAnchor;
-var Portal2 = MenuPortal;
+var Portal3 = MenuPortal;
 var Content2 = MenuContent;
 var Group = MenuGroup;
 var Label = MenuLabel;
@@ -28704,7 +34571,7 @@ var DropdownMenu = (props) => {
     modal = true
   } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  const triggerRef = React34.useRef(null);
+  const triggerRef = React35.useRef(null);
   const [open, setOpen] = useControllableState({
     prop: openProp,
     defaultProp: defaultOpen ?? false,
@@ -28720,7 +34587,7 @@ var DropdownMenu = (props) => {
       contentId: useId(),
       open,
       onOpenChange: setOpen,
-      onOpenToggle: React34.useCallback(() => setOpen((prevOpen) => !prevOpen), [setOpen]),
+      onOpenToggle: React35.useCallback(() => setOpen((prevOpen) => !prevOpen), [setOpen]),
       modal,
       children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Root32, { ...menuScope, open, onOpenChange: setOpen, dir, modal, children })
     }
@@ -28728,7 +34595,7 @@ var DropdownMenu = (props) => {
 };
 DropdownMenu.displayName = DROPDOWN_MENU_NAME;
 var TRIGGER_NAME = "DropdownMenuTrigger";
-var DropdownMenuTrigger = React34.forwardRef(
+var DropdownMenuTrigger = React35.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, disabled = false, ...triggerProps } = props;
     const context = useDropdownMenuContext(TRIGGER_NAME, __scopeDropdownMenu);
@@ -28763,20 +34630,20 @@ var DropdownMenuTrigger = React34.forwardRef(
   }
 );
 DropdownMenuTrigger.displayName = TRIGGER_NAME;
-var PORTAL_NAME3 = "DropdownMenuPortal";
+var PORTAL_NAME2 = "DropdownMenuPortal";
 var DropdownMenuPortal = (props) => {
   const { __scopeDropdownMenu, ...portalProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Portal2, { ...menuScope, ...portalProps });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Portal3, { ...menuScope, ...portalProps });
 };
-DropdownMenuPortal.displayName = PORTAL_NAME3;
+DropdownMenuPortal.displayName = PORTAL_NAME2;
 var CONTENT_NAME3 = "DropdownMenuContent";
-var DropdownMenuContent = React34.forwardRef(
+var DropdownMenuContent = React35.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...contentProps } = props;
     const context = useDropdownMenuContext(CONTENT_NAME3, __scopeDropdownMenu);
     const menuScope = useMenuScope(__scopeDropdownMenu);
-    const hasInteractedOutsideRef = React34.useRef(false);
+    const hasInteractedOutsideRef = React35.useRef(false);
     return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
       Content2,
       {
@@ -28813,7 +34680,7 @@ var DropdownMenuContent = React34.forwardRef(
 );
 DropdownMenuContent.displayName = CONTENT_NAME3;
 var GROUP_NAME3 = "DropdownMenuGroup";
-var DropdownMenuGroup = React34.forwardRef(
+var DropdownMenuGroup = React35.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...groupProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
@@ -28822,7 +34689,7 @@ var DropdownMenuGroup = React34.forwardRef(
 );
 DropdownMenuGroup.displayName = GROUP_NAME3;
 var LABEL_NAME2 = "DropdownMenuLabel";
-var DropdownMenuLabel = React34.forwardRef(
+var DropdownMenuLabel = React35.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...labelProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
@@ -28831,7 +34698,7 @@ var DropdownMenuLabel = React34.forwardRef(
 );
 DropdownMenuLabel.displayName = LABEL_NAME2;
 var ITEM_NAME3 = "DropdownMenuItem";
-var DropdownMenuItem = React34.forwardRef(
+var DropdownMenuItem = React35.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...itemProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
@@ -28840,42 +34707,42 @@ var DropdownMenuItem = React34.forwardRef(
 );
 DropdownMenuItem.displayName = ITEM_NAME3;
 var CHECKBOX_ITEM_NAME2 = "DropdownMenuCheckboxItem";
-var DropdownMenuCheckboxItem = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuCheckboxItem = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...checkboxItemProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(CheckboxItem, { ...menuScope, ...checkboxItemProps, ref: forwardedRef });
 });
 DropdownMenuCheckboxItem.displayName = CHECKBOX_ITEM_NAME2;
 var RADIO_GROUP_NAME2 = "DropdownMenuRadioGroup";
-var DropdownMenuRadioGroup = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuRadioGroup = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...radioGroupProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(RadioGroup, { ...menuScope, ...radioGroupProps, ref: forwardedRef });
 });
 DropdownMenuRadioGroup.displayName = RADIO_GROUP_NAME2;
 var RADIO_ITEM_NAME2 = "DropdownMenuRadioItem";
-var DropdownMenuRadioItem = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuRadioItem = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...radioItemProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(RadioItem, { ...menuScope, ...radioItemProps, ref: forwardedRef });
 });
 DropdownMenuRadioItem.displayName = RADIO_ITEM_NAME2;
 var INDICATOR_NAME = "DropdownMenuItemIndicator";
-var DropdownMenuItemIndicator = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuItemIndicator = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...itemIndicatorProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(ItemIndicator, { ...menuScope, ...itemIndicatorProps, ref: forwardedRef });
 });
 DropdownMenuItemIndicator.displayName = INDICATOR_NAME;
 var SEPARATOR_NAME2 = "DropdownMenuSeparator";
-var DropdownMenuSeparator = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuSeparator = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...separatorProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Separator, { ...menuScope, ...separatorProps, ref: forwardedRef });
 });
 DropdownMenuSeparator.displayName = SEPARATOR_NAME2;
 var ARROW_NAME3 = "DropdownMenuArrow";
-var DropdownMenuArrow = React34.forwardRef(
+var DropdownMenuArrow = React35.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...arrowProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
@@ -28884,14 +34751,14 @@ var DropdownMenuArrow = React34.forwardRef(
 );
 DropdownMenuArrow.displayName = ARROW_NAME3;
 var SUB_TRIGGER_NAME2 = "DropdownMenuSubTrigger";
-var DropdownMenuSubTrigger = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuSubTrigger = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...subTriggerProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(SubTrigger, { ...menuScope, ...subTriggerProps, ref: forwardedRef });
 });
 DropdownMenuSubTrigger.displayName = SUB_TRIGGER_NAME2;
 var SUB_CONTENT_NAME2 = "DropdownMenuSubContent";
-var DropdownMenuSubContent = React34.forwardRef((props, forwardedRef) => {
+var DropdownMenuSubContent = React35.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...subContentProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
   return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
@@ -28919,61 +34786,1044 @@ var Root22 = DropdownMenu;
 var Trigger = DropdownMenuTrigger;
 var Portal22 = DropdownMenuPortal;
 var Content22 = DropdownMenuContent;
+var Label2 = DropdownMenuLabel;
 var Item22 = DropdownMenuItem;
+var CheckboxItem2 = DropdownMenuCheckboxItem;
+var RadioItem2 = DropdownMenuRadioItem;
+var ItemIndicator2 = DropdownMenuItemIndicator;
+var Separator2 = DropdownMenuSeparator;
+var SubTrigger2 = DropdownMenuSubTrigger;
+var SubContent2 = DropdownMenuSubContent;
 
-// react/ui/dropdown-menu.tsx
-var React35 = __toESM(require_react(), 1);
-var import_jsx_runtime19 = __toESM(require_jsx_runtime(), 1);
+// ../maho_common/react/ui/dropdown-menu.tsx
+var import_jsx_runtime19 = __toESM(require_jsx_runtime());
 var DropdownMenu2 = Root22;
 var DropdownMenuTrigger2 = Trigger;
-var DropdownMenuContent2 = React35.forwardRef(
-  function DropdownMenuContent3({
-    align = "end",
-    className,
-    side = "bottom",
-    sideOffset = 8,
+var DropdownMenuSubTrigger2 = React36.forwardRef(({ className, inset, children, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+  SubTrigger2,
+  {
+    ref,
+    className: cn(
+      "flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+      inset && "pl-8",
+      className
+    ),
+    ...props,
+    children
+  }
+));
+DropdownMenuSubTrigger2.displayName = SubTrigger2.displayName;
+var DropdownMenuSubContent2 = React36.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+  SubContent2,
+  {
+    ref,
+    className: cn(
+      "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+      className
+    ),
     ...props
-  }, ref) {
-    const container = typeof document === "undefined" ? void 0 : document.getElementById("app") || void 0;
-    return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Portal22, { container, children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
-      Content22,
+  }
+));
+DropdownMenuSubContent2.displayName = SubContent2.displayName;
+var DropdownMenuContent2 = React36.forwardRef(({ className, sideOffset = 4, ...props }, ref) => {
+  const container = document.getElementById("app") || void 0;
+  return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Portal22, { container, children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+    Content22,
+    {
+      ref,
+      sideOffset,
+      className: cn(
+        "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        className
+      ),
+      ...props
+    }
+  ) });
+});
+DropdownMenuContent2.displayName = Content22.displayName;
+var DropdownMenuItem2 = React36.forwardRef(({ className, inset, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+  Item22,
+  {
+    ref,
+    className: cn(
+      "relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      inset && "pl-8",
+      className
+    ),
+    ...props
+  }
+));
+DropdownMenuItem2.displayName = Item22.displayName;
+var DropdownMenuCheckboxItem2 = React36.forwardRef(({ className, children, checked, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(
+  CheckboxItem2,
+  {
+    ref,
+    className: cn(
+      "relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      className
+    ),
+    checked,
+    ...props,
+    children: [
+      /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: "absolute left-2 flex h-3.5 w-3.5 items-center justify-center", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(ItemIndicator2, { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: "h-1.5 w-1.5 rounded-full bg-foreground" }) }) }),
+      children
+    ]
+  }
+));
+DropdownMenuCheckboxItem2.displayName = CheckboxItem2.displayName;
+var DropdownMenuRadioItem2 = React36.forwardRef(({ className, children, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(
+  RadioItem2,
+  {
+    ref,
+    className: cn(
+      "relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      className
+    ),
+    ...props,
+    children: [
+      /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: "absolute left-2 flex h-3.5 w-3.5 items-center justify-center", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(ItemIndicator2, { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: "h-1.5 w-1.5 rounded-full bg-foreground" }) }) }),
+      children
+    ]
+  }
+));
+DropdownMenuRadioItem2.displayName = RadioItem2.displayName;
+var DropdownMenuLabel2 = React36.forwardRef(({ className, inset, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+  Label2,
+  {
+    ref,
+    className: cn(
+      "px-2 py-1.5 text-sm font-semibold",
+      inset && "pl-8",
+      className
+    ),
+    ...props
+  }
+));
+DropdownMenuLabel2.displayName = Label2.displayName;
+var DropdownMenuSeparator2 = React36.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+  Separator2,
+  {
+    ref,
+    className: cn("-mx-1 my-1 h-px bg-muted", className),
+    ...props
+  }
+));
+DropdownMenuSeparator2.displayName = Separator2.displayName;
+var DropdownMenuShortcut = ({
+  className,
+  ...props
+}) => {
+  return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
+    "span",
+    {
+      className: cn("ml-auto text-xs tracking-widest opacity-60", className),
+      ...props
+    }
+  );
+};
+DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
+
+// ../maho_common/react/ui/tooltip.tsx
+var React39 = __toESM(require_react());
+
+// ../../../../website/node_modules/@radix-ui/react-tooltip/dist/index.mjs
+var React38 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/@radix-ui/react-visually-hidden/dist/index.mjs
+var React37 = __toESM(require_react(), 1);
+var import_jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
+var __defProp21 = Object.defineProperty;
+var __name20 = (target, value) => __defProp21(target, "name", { value, configurable: true });
+var VISUALLY_HIDDEN_STYLES = Object.freeze({
+  // See: https://github.com/twbs/bootstrap/blob/main/scss/mixins/_visually-hidden.scss
+  position: "absolute",
+  border: 0,
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  wordWrap: "normal"
+});
+var VisuallyHidden = /* @__PURE__ */ React37.forwardRef(
+  /* @__PURE__ */ __name20(function VisuallyHidden2(props, forwardedRef) {
+    return /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
+      Primitive.span,
       {
         ...props,
-        ref,
-        align,
-        className: cn("compact-overflow-menu", className),
-        side,
-        sideOffset
+        ref: forwardedRef,
+        style: { ...VISUALLY_HIDDEN_STYLES, ...props.style }
+      }
+    );
+  }, "VisuallyHidden")
+);
+var Root4 = VisuallyHidden;
+
+// ../../../../website/node_modules/@radix-ui/react-tooltip/dist/index.mjs
+var import_jsx_runtime21 = __toESM(require_jsx_runtime(), 1);
+var __defProp22 = Object.defineProperty;
+var __name21 = (target, value) => __defProp22(target, "name", { value, configurable: true });
+var [createTooltipContext, createTooltipScope] = createContextScope("Tooltip", [
+  createPopperScope
+]);
+var usePopperScope2 = createPopperScope();
+var PROVIDER_NAME = "TooltipProvider";
+var DEFAULT_DELAY_DURATION = 700;
+var TOOLTIP_OPEN = "tooltip.open";
+var [TooltipProviderContextProvider, useTooltipProviderContext] = createTooltipContext(PROVIDER_NAME);
+var TooltipProvider = /* @__PURE__ */ __name21((props) => {
+  const {
+    __scopeTooltip,
+    delayDuration = DEFAULT_DELAY_DURATION,
+    skipDelayDuration = 300,
+    disableHoverableContent = false,
+    children
+  } = props;
+  const isOpenDelayedRef = React38.useRef(true);
+  const isPointerInTransitRef = React38.useRef(false);
+  const skipDelayTimerRef = React38.useRef(0);
+  React38.useEffect(() => {
+    const skipDelayTimer = skipDelayTimerRef.current;
+    return () => window.clearTimeout(skipDelayTimer);
+  }, []);
+  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(
+    TooltipProviderContextProvider,
+    {
+      scope: __scopeTooltip,
+      isOpenDelayedRef,
+      delayDuration,
+      onOpen: React38.useCallback(() => {
+        if (skipDelayDuration <= 0) return;
+        window.clearTimeout(skipDelayTimerRef.current);
+        isOpenDelayedRef.current = false;
+      }, [skipDelayDuration]),
+      onClose: React38.useCallback(() => {
+        if (skipDelayDuration <= 0) return;
+        window.clearTimeout(skipDelayTimerRef.current);
+        skipDelayTimerRef.current = window.setTimeout(
+          () => isOpenDelayedRef.current = true,
+          skipDelayDuration
+        );
+      }, [skipDelayDuration]),
+      isPointerInTransitRef,
+      onPointerInTransitChange: React38.useCallback((inTransit) => {
+        isPointerInTransitRef.current = inTransit;
+      }, []),
+      disableHoverableContent,
+      children
+    }
+  );
+}, "TooltipProvider");
+var TOOLTIP_NAME = "Tooltip";
+var [TooltipContextProvider, useTooltipContext] = createTooltipContext(TOOLTIP_NAME);
+var Tooltip = /* @__PURE__ */ __name21((props) => {
+  const {
+    __scopeTooltip,
+    children,
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+    disableHoverableContent: disableHoverableContentProp,
+    delayDuration: delayDurationProp
+  } = props;
+  const providerContext = useTooltipProviderContext(TOOLTIP_NAME, props.__scopeTooltip);
+  const popperScope = usePopperScope2(__scopeTooltip);
+  const [trigger, setTrigger] = React38.useState(null);
+  const [contentIdState, setContentId] = React38.useState(void 0);
+  const generatedContentId = useId();
+  const openTimerRef = React38.useRef(0);
+  const disableHoverableContent = disableHoverableContentProp ?? providerContext.disableHoverableContent;
+  const delayDuration = delayDurationProp ?? providerContext.delayDuration;
+  const wasOpenDelayedRef = React38.useRef(false);
+  const [open, setOpen] = useControllableState({
+    prop: openProp,
+    defaultProp: defaultOpen ?? false,
+    onChange: /* @__PURE__ */ __name21((open2) => {
+      if (open2) {
+        providerContext.onOpen();
+        document.dispatchEvent(new CustomEvent(TOOLTIP_OPEN));
+      } else {
+        providerContext.onClose();
+      }
+      onOpenChange?.(open2);
+    }, "onChange"),
+    caller: TOOLTIP_NAME
+  });
+  const stateAttribute = React38.useMemo(() => {
+    return open ? wasOpenDelayedRef.current ? "delayed-open" : "instant-open" : "closed";
+  }, [open]);
+  const handleOpen = React38.useCallback(() => {
+    window.clearTimeout(openTimerRef.current);
+    openTimerRef.current = 0;
+    wasOpenDelayedRef.current = false;
+    setOpen(true);
+  }, [setOpen]);
+  const handleClose = React38.useCallback(() => {
+    window.clearTimeout(openTimerRef.current);
+    openTimerRef.current = 0;
+    setOpen(false);
+  }, [setOpen]);
+  const handleDelayedOpen = React38.useCallback(() => {
+    window.clearTimeout(openTimerRef.current);
+    openTimerRef.current = window.setTimeout(() => {
+      wasOpenDelayedRef.current = true;
+      setOpen(true);
+      openTimerRef.current = 0;
+    }, delayDuration);
+  }, [delayDuration, setOpen]);
+  React38.useEffect(() => {
+    return () => {
+      if (openTimerRef.current) {
+        window.clearTimeout(openTimerRef.current);
+        openTimerRef.current = 0;
+      }
+    };
+  }, []);
+  const contentId = contentIdState ?? generatedContentId;
+  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(
+    TooltipContextProvider,
+    {
+      scope: __scopeTooltip,
+      contentId,
+      setContentId,
+      open,
+      stateAttribute,
+      trigger,
+      onTriggerChange: setTrigger,
+      onTriggerEnter: React38.useCallback(() => {
+        if (providerContext.isOpenDelayedRef.current) handleDelayedOpen();
+        else handleOpen();
+      }, [providerContext.isOpenDelayedRef, handleDelayedOpen, handleOpen]),
+      onTriggerLeave: React38.useCallback(() => {
+        if (disableHoverableContent) {
+          handleClose();
+        } else {
+          window.clearTimeout(openTimerRef.current);
+          openTimerRef.current = 0;
+        }
+      }, [handleClose, disableHoverableContent]),
+      onOpen: handleOpen,
+      onClose: handleClose,
+      disableHoverableContent,
+      children
+    }
+  ) });
+}, "Tooltip");
+var TRIGGER_NAME2 = "TooltipTrigger";
+var TooltipTrigger = /* @__PURE__ */ React38.forwardRef(
+  /* @__PURE__ */ __name21(function TooltipTrigger2(props, forwardedRef) {
+    const { __scopeTooltip, ...triggerProps } = props;
+    const context = useTooltipContext(TRIGGER_NAME2, __scopeTooltip);
+    const providerContext = useTooltipProviderContext(TRIGGER_NAME2, __scopeTooltip);
+    const popperScope = usePopperScope2(__scopeTooltip);
+    const ref = React38.useRef(null);
+    const composedRefs = useComposedRefs(forwardedRef, ref, context.onTriggerChange);
+    const isPointerDownRef = React38.useRef(false);
+    const hasPointerMoveOpenedRef = React38.useRef(false);
+    const handlePointerUp = React38.useCallback(() => isPointerDownRef.current = false, []);
+    React38.useEffect(() => {
+      return () => document.removeEventListener("pointerup", handlePointerUp);
+    }, [handlePointerUp]);
+    return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Anchor, { asChild: true, ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(
+      Primitive.button,
+      {
+        "aria-describedby": context.open ? context.contentId : void 0,
+        "data-state": context.stateAttribute,
+        ...triggerProps,
+        ref: composedRefs,
+        onPointerMove: composeEventHandlers(props.onPointerMove, (event) => {
+          if (event.pointerType === "touch") return;
+          if (!hasPointerMoveOpenedRef.current && !providerContext.isPointerInTransitRef.current) {
+            context.onTriggerEnter();
+            hasPointerMoveOpenedRef.current = true;
+          }
+        }),
+        onPointerLeave: composeEventHandlers(props.onPointerLeave, () => {
+          context.onTriggerLeave();
+          hasPointerMoveOpenedRef.current = false;
+        }),
+        onPointerDown: composeEventHandlers(props.onPointerDown, () => {
+          if (context.open) {
+            context.onClose();
+          }
+          isPointerDownRef.current = true;
+          document.addEventListener("pointerup", handlePointerUp, { once: true });
+        }),
+        onFocus: composeEventHandlers(props.onFocus, () => {
+          if (!isPointerDownRef.current) context.onOpen();
+        }),
+        onBlur: composeEventHandlers(props.onBlur, context.onClose),
+        onClick: composeEventHandlers(props.onClick, context.onClose)
       }
     ) });
-  }
+  }, "TooltipTrigger")
 );
-DropdownMenuContent2.displayName = Content22.displayName;
-var DropdownMenuItem2 = React35.forwardRef(
-  function DropdownMenuItem3({ className, ...props }, ref) {
-    return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
-      Item22,
-      {
-        ...props,
-        ref,
-        className: cn("compact-overflow-menu__item", className)
+var PORTAL_NAME3 = "TooltipPortal";
+var [PortalProvider2, usePortalContext2] = createTooltipContext(PORTAL_NAME3, {
+  forceMount: void 0
+});
+var TooltipPortal = /* @__PURE__ */ __name21((props) => {
+  const { __scopeTooltip, forceMount, children, container } = props;
+  const context = useTooltipContext(PORTAL_NAME3, __scopeTooltip);
+  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(PortalProvider2, { scope: __scopeTooltip, forceMount, children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Portal, { asChild: true, container, children }) }) });
+}, "TooltipPortal");
+var CONTENT_NAME4 = "TooltipContent";
+var TooltipContent = /* @__PURE__ */ React38.forwardRef(
+  /* @__PURE__ */ __name21(function TooltipContent2(props, forwardedRef) {
+    const portalContext = usePortalContext2(CONTENT_NAME4, props.__scopeTooltip);
+    const { forceMount = portalContext.forceMount, side = "top", ...contentProps } = props;
+    const context = useTooltipContext(CONTENT_NAME4, props.__scopeTooltip);
+    return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Presence, { present: forceMount || context.open, children: context.disableHoverableContent ? /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(TooltipContentImpl, { side, ...contentProps, ref: forwardedRef }) : /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(TooltipContentHoverable, { side, ...contentProps, ref: forwardedRef }) });
+  }, "TooltipContent")
+);
+var TooltipContentHoverable = /* @__PURE__ */ React38.forwardRef(/* @__PURE__ */ __name21(function TooltipContentHoverable2(props, forwardedRef) {
+  const context = useTooltipContext(CONTENT_NAME4, props.__scopeTooltip);
+  const providerContext = useTooltipProviderContext(CONTENT_NAME4, props.__scopeTooltip);
+  const ref = React38.useRef(null);
+  const composedRefs = useComposedRefs(forwardedRef, ref);
+  const [pointerGraceArea, setPointerGraceArea] = React38.useState(null);
+  const { trigger, onClose } = context;
+  const content = ref.current;
+  const { onPointerInTransitChange } = providerContext;
+  const handleRemoveGraceArea = React38.useCallback(() => {
+    setPointerGraceArea(null);
+    onPointerInTransitChange(false);
+  }, [onPointerInTransitChange]);
+  const handleCreateGraceArea = React38.useCallback(
+    (event, hoverTarget) => {
+      const currentTarget = event.currentTarget;
+      const exitPoint = { x: event.clientX, y: event.clientY };
+      const exitSide = getExitSideFromRect(exitPoint, currentTarget.getBoundingClientRect());
+      const paddedExitPoints = getPaddedExitPoints(exitPoint, exitSide);
+      const hoverTargetPoints = getPointsFromRect(hoverTarget.getBoundingClientRect());
+      const graceArea = getHull([...paddedExitPoints, ...hoverTargetPoints]);
+      setPointerGraceArea(graceArea);
+      onPointerInTransitChange(true);
+    },
+    [onPointerInTransitChange]
+  );
+  React38.useEffect(() => {
+    return () => handleRemoveGraceArea();
+  }, [handleRemoveGraceArea]);
+  React38.useEffect(() => {
+    if (trigger && content) {
+      const handleTriggerLeave = /* @__PURE__ */ __name21((event) => handleCreateGraceArea(event, content), "handleTriggerLeave");
+      const handleContentLeave = /* @__PURE__ */ __name21((event) => handleCreateGraceArea(event, trigger), "handleContentLeave");
+      trigger.addEventListener("pointerleave", handleTriggerLeave);
+      content.addEventListener("pointerleave", handleContentLeave);
+      return () => {
+        trigger.removeEventListener("pointerleave", handleTriggerLeave);
+        content.removeEventListener("pointerleave", handleContentLeave);
+      };
+    }
+  }, [trigger, content, handleCreateGraceArea, handleRemoveGraceArea]);
+  React38.useEffect(() => {
+    if (pointerGraceArea) {
+      const handleTrackPointerGrace = /* @__PURE__ */ __name21((event) => {
+        const target = event.target;
+        const pointerPosition = { x: event.clientX, y: event.clientY };
+        const hasEnteredTarget = trigger?.contains(target) || content?.contains(target);
+        const isPointerOutsideGraceArea = !isPointInPolygon2(pointerPosition, pointerGraceArea);
+        if (hasEnteredTarget) {
+          handleRemoveGraceArea();
+        } else if (isPointerOutsideGraceArea) {
+          handleRemoveGraceArea();
+          onClose();
+        }
+      }, "handleTrackPointerGrace");
+      document.addEventListener("pointermove", handleTrackPointerGrace);
+      return () => document.removeEventListener("pointermove", handleTrackPointerGrace);
+    }
+  }, [trigger, content, pointerGraceArea, onClose, handleRemoveGraceArea]);
+  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(TooltipContentImpl, { ...props, ref: composedRefs });
+}, "TooltipContentHoverable"));
+var Slottable = createSlottable("TooltipContent");
+var TooltipContentImpl = /* @__PURE__ */ React38.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name21(function TooltipContentImpl2(props, forwardedRef) {
+    const {
+      __scopeTooltip,
+      children,
+      "aria-label": ariaLabel,
+      id: idProp,
+      onEscapeKeyDown,
+      onPointerDownOutside,
+      ...contentProps
+    } = props;
+    const context = useTooltipContext(CONTENT_NAME4, __scopeTooltip);
+    const popperScope = usePopperScope2(__scopeTooltip);
+    const { onClose } = context;
+    React38.useEffect(() => {
+      document.addEventListener(TOOLTIP_OPEN, onClose);
+      return () => document.removeEventListener(TOOLTIP_OPEN, onClose);
+    }, [onClose]);
+    React38.useEffect(() => {
+      if (context.trigger) {
+        const handleScroll2 = /* @__PURE__ */ __name21((event) => {
+          if (event.target instanceof Node && event.target.contains(context.trigger)) {
+            onClose();
+          }
+        }, "handleScroll");
+        window.addEventListener("scroll", handleScroll2, { capture: true });
+        return () => window.removeEventListener("scroll", handleScroll2, { capture: true });
       }
+    }, [context.trigger, onClose]);
+    const { setContentId } = context;
+    useLayoutEffect2(() => {
+      setContentId(idProp);
+      return () => {
+        setContentId(void 0);
+      };
+    }, [idProp, setContentId]);
+    return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(
+      DismissableLayer,
+      {
+        asChild: true,
+        disableOutsidePointerEvents: false,
+        onEscapeKeyDown,
+        onPointerDownOutside,
+        onFocusOutside: (event) => event.preventDefault(),
+        onDismiss: onClose,
+        children: /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(
+          Content,
+          {
+            "data-state": context.stateAttribute,
+            role: ariaLabel ? void 0 : "tooltip",
+            id: ariaLabel ? void 0 : context.contentId,
+            ...popperScope,
+            ...contentProps,
+            ref: forwardedRef,
+            style: {
+              ...contentProps.style,
+              // re-namespace exposed content custom properties
+              ...{
+                "--radix-tooltip-content-transform-origin": "var(--radix-popper-transform-origin)",
+                "--radix-tooltip-content-available-width": "var(--radix-popper-available-width)",
+                "--radix-tooltip-content-available-height": "var(--radix-popper-available-height)",
+                "--radix-tooltip-trigger-width": "var(--radix-popper-anchor-width)",
+                "--radix-tooltip-trigger-height": "var(--radix-popper-anchor-height)"
+              }
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Slottable, { children }),
+              ariaLabel ? /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Root4, { id: context.contentId, role: "tooltip", children: ariaLabel }) : null
+            ]
+          }
+        )
+      }
+    );
+  }, "TooltipContentImpl")
+);
+function getExitSideFromRect(point, rect) {
+  const top = Math.abs(rect.top - point.y);
+  const bottom = Math.abs(rect.bottom - point.y);
+  const right = Math.abs(rect.right - point.x);
+  const left = Math.abs(rect.left - point.x);
+  switch (Math.min(top, bottom, right, left)) {
+    case left:
+      return "left";
+    case right:
+      return "right";
+    case top:
+      return "top";
+    case bottom:
+      return "bottom";
+    default:
+      throw new Error("unreachable");
+  }
+}
+__name21(getExitSideFromRect, "getExitSideFromRect");
+function getPaddedExitPoints(exitPoint, exitSide, padding = 5) {
+  const paddedExitPoints = [];
+  switch (exitSide) {
+    case "top":
+      paddedExitPoints.push(
+        { x: exitPoint.x - padding, y: exitPoint.y + padding },
+        { x: exitPoint.x + padding, y: exitPoint.y + padding }
+      );
+      break;
+    case "bottom":
+      paddedExitPoints.push(
+        { x: exitPoint.x - padding, y: exitPoint.y - padding },
+        { x: exitPoint.x + padding, y: exitPoint.y - padding }
+      );
+      break;
+    case "left":
+      paddedExitPoints.push(
+        { x: exitPoint.x + padding, y: exitPoint.y - padding },
+        { x: exitPoint.x + padding, y: exitPoint.y + padding }
+      );
+      break;
+    case "right":
+      paddedExitPoints.push(
+        { x: exitPoint.x - padding, y: exitPoint.y - padding },
+        { x: exitPoint.x - padding, y: exitPoint.y + padding }
+      );
+      break;
+  }
+  return paddedExitPoints;
+}
+__name21(getPaddedExitPoints, "getPaddedExitPoints");
+function getPointsFromRect(rect) {
+  const { top, right, bottom, left } = rect;
+  return [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: bottom },
+    { x: left, y: bottom }
+  ];
+}
+__name21(getPointsFromRect, "getPointsFromRect");
+function isPointInPolygon2(point, polygon) {
+  const { x: x2, y: y2 } = point;
+  let inside = false;
+  for (let i = 0, j2 = polygon.length - 1; i < polygon.length; j2 = i++) {
+    const ii = polygon[i];
+    const jj = polygon[j2];
+    const xi = ii.x;
+    const yi = ii.y;
+    const xj = jj.x;
+    const yj = jj.y;
+    const intersect = yi > y2 !== yj > y2 && x2 < (xj - xi) * (y2 - yi) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+__name21(isPointInPolygon2, "isPointInPolygon");
+function getHull(points) {
+  const newPoints = points.slice();
+  newPoints.sort((a, b2) => {
+    if (a.x < b2.x) return -1;
+    else if (a.x > b2.x) return 1;
+    else if (a.y < b2.y) return -1;
+    else if (a.y > b2.y) return 1;
+    else return 0;
+  });
+  return getHullPresorted(newPoints);
+}
+__name21(getHull, "getHull");
+function getHullPresorted(points) {
+  if (points.length <= 1) return points.slice();
+  const upperHull = [];
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    while (upperHull.length >= 2) {
+      const q2 = upperHull[upperHull.length - 1];
+      const r2 = upperHull[upperHull.length - 2];
+      if ((q2.x - r2.x) * (p.y - r2.y) >= (q2.y - r2.y) * (p.x - r2.x)) upperHull.pop();
+      else break;
+    }
+    upperHull.push(p);
+  }
+  upperHull.pop();
+  const lowerHull = [];
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    while (lowerHull.length >= 2) {
+      const q2 = lowerHull[lowerHull.length - 1];
+      const r2 = lowerHull[lowerHull.length - 2];
+      if ((q2.x - r2.x) * (p.y - r2.y) >= (q2.y - r2.y) * (p.x - r2.x)) lowerHull.pop();
+      else break;
+    }
+    lowerHull.push(p);
+  }
+  lowerHull.pop();
+  if (upperHull.length === 1 && lowerHull.length === 1 && upperHull[0].x === lowerHull[0].x && upperHull[0].y === lowerHull[0].y) {
+    return upperHull;
+  } else {
+    return upperHull.concat(lowerHull);
+  }
+}
+__name21(getHullPresorted, "getHullPresorted");
+var Provider = TooltipProvider;
+var Root33 = Tooltip;
+var Trigger2 = TooltipTrigger;
+var Portal4 = TooltipPortal;
+var Content23 = TooltipContent;
+
+// ../maho_common/react/ui/tooltip.tsx
+var import_jsx_runtime22 = __toESM(require_jsx_runtime());
+var TooltipProvider2 = Provider;
+var Tooltip2 = Root33;
+var TooltipTrigger3 = Trigger2;
+var TooltipContent3 = React39.forwardRef(({ className, sideOffset = 4, ...props }, ref) => {
+  const container = document.getElementById("app") || void 0;
+  return /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Portal4, { container, children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(
+    Content23,
+    {
+      ref,
+      sideOffset,
+      className: cn(
+        "z-50 overflow-hidden rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        className
+      ),
+      ...props
+    }
+  ) });
+});
+TooltipContent3.displayName = Content23.displayName;
+
+// ../../../../website/node_modules/lucide-react/dist/esm/createLucideIcon.js
+var import_react9 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/shared/src/utils.js
+var toKebabCase = (string) => string.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+var mergeClasses = (...classes) => classes.filter((className, index2, array) => {
+  return Boolean(className) && className.trim() !== "" && array.indexOf(className) === index2;
+}).join(" ").trim();
+
+// ../../../../website/node_modules/lucide-react/dist/esm/Icon.js
+var import_react8 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/defaultAttributes.js
+var defaultAttributes = {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: 24,
+  height: 24,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round",
+  strokeLinejoin: "round"
+};
+
+// ../../../../website/node_modules/lucide-react/dist/esm/Icon.js
+var Icon = (0, import_react8.forwardRef)(
+  ({
+    color = "currentColor",
+    size: size4 = 24,
+    strokeWidth = 2,
+    absoluteStrokeWidth,
+    className = "",
+    children,
+    iconNode,
+    ...rest
+  }, ref) => {
+    return (0, import_react8.createElement)(
+      "svg",
+      {
+        ref,
+        ...defaultAttributes,
+        width: size4,
+        height: size4,
+        stroke: color,
+        strokeWidth: absoluteStrokeWidth ? Number(strokeWidth) * 24 / Number(size4) : strokeWidth,
+        className: mergeClasses("lucide", className),
+        ...rest
+      },
+      [
+        ...iconNode.map(([tag, attrs]) => (0, import_react8.createElement)(tag, attrs)),
+        ...Array.isArray(children) ? children : [children]
+      ]
     );
   }
 );
-DropdownMenuItem2.displayName = Item22.displayName;
+
+// ../../../../website/node_modules/lucide-react/dist/esm/createLucideIcon.js
+var createLucideIcon = (iconName, iconNode) => {
+  const Component2 = (0, import_react9.forwardRef)(
+    ({ className, ...props }, ref) => (0, import_react9.createElement)(Icon, {
+      ref,
+      iconNode,
+      className: mergeClasses(`lucide-${toKebabCase(iconName)}`, className),
+      ...props
+    })
+  );
+  Component2.displayName = `${iconName}`;
+  return Component2;
+};
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/check.js
+var __iconNode = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
+var Check = createLucideIcon("Check", __iconNode);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/chevron-down.js
+var __iconNode2 = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
+var ChevronDown = createLucideIcon("ChevronDown", __iconNode2);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/circle-alert.js
+var __iconNode3 = [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
+  ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
+];
+var CircleAlert = createLucideIcon("CircleAlert", __iconNode3);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/code.js
+var __iconNode4 = [
+  ["polyline", { points: "16 18 22 12 16 6", key: "z7tu5w" }],
+  ["polyline", { points: "8 6 2 12 8 18", key: "1eg1df" }]
+];
+var Code = createLucideIcon("Code", __iconNode4);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/copy.js
+var __iconNode5 = [
+  ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2", key: "17jyea" }],
+  ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2", key: "zix9uf" }]
+];
+var Copy = createLucideIcon("Copy", __iconNode5);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/database.js
+var __iconNode6 = [
+  ["ellipse", { cx: "12", cy: "5", rx: "9", ry: "3", key: "msslwz" }],
+  ["path", { d: "M3 5V19A9 3 0 0 0 21 19V5", key: "1wlel7" }],
+  ["path", { d: "M3 12A9 3 0 0 0 21 12", key: "mv7ke4" }]
+];
+var Database = createLucideIcon("Database", __iconNode6);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/folder-open.js
+var __iconNode7 = [
+  [
+    "path",
+    {
+      d: "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
+      key: "usdka0"
+    }
+  ]
+];
+var FolderOpen = createLucideIcon("FolderOpen", __iconNode7);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/globe.js
+var __iconNode8 = [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20", key: "13o1zl" }],
+  ["path", { d: "M2 12h20", key: "9i4pu4" }]
+];
+var Globe = createLucideIcon("Globe", __iconNode8);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/grid-3x3.js
+var __iconNode9 = [
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
+  ["path", { d: "M3 9h18", key: "1pudct" }],
+  ["path", { d: "M3 15h18", key: "5xshup" }],
+  ["path", { d: "M9 3v18", key: "fh3hqa" }],
+  ["path", { d: "M15 3v18", key: "14nvp0" }]
+];
+var Grid3x3 = createLucideIcon("Grid3x3", __iconNode9);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/key.js
+var __iconNode10 = [
+  ["path", { d: "m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4", key: "g0fldk" }],
+  ["path", { d: "m21 2-9.6 9.6", key: "1j0ho8" }],
+  ["circle", { cx: "7.5", cy: "15.5", r: "5.5", key: "yqb3hr" }]
+];
+var Key = createLucideIcon("Key", __iconNode10);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/mic-off.js
+var __iconNode11 = [
+  ["line", { x1: "2", x2: "22", y1: "2", y2: "22", key: "a6p6uj" }],
+  ["path", { d: "M18.89 13.23A7.12 7.12 0 0 0 19 12v-2", key: "80xlxr" }],
+  ["path", { d: "M5 10v2a7 7 0 0 0 12 5", key: "p2k8kg" }],
+  ["path", { d: "M15 9.34V5a3 3 0 0 0-5.68-1.33", key: "1gzdoj" }],
+  ["path", { d: "M9 9v3a3 3 0 0 0 5.12 2.12", key: "r2i35w" }],
+  ["line", { x1: "12", x2: "12", y1: "19", y2: "22", key: "x3vr5v" }]
+];
+var MicOff = createLucideIcon("MicOff", __iconNode11);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/mic.js
+var __iconNode12 = [
+  ["path", { d: "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z", key: "131961" }],
+  ["path", { d: "M19 10v2a7 7 0 0 1-14 0v-2", key: "1vc78b" }],
+  ["line", { x1: "12", x2: "12", y1: "19", y2: "22", key: "x3vr5v" }]
+];
+var Mic = createLucideIcon("Mic", __iconNode12);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/plus.js
+var __iconNode13 = [
+  ["path", { d: "M5 12h14", key: "1ays0h" }],
+  ["path", { d: "M12 5v14", key: "s699le" }]
+];
+var Plus = createLucideIcon("Plus", __iconNode13);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/refresh-cw.js
+var __iconNode14 = [
+  ["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", key: "v9h5vc" }],
+  ["path", { d: "M21 3v5h-5", key: "1q7to0" }],
+  ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", key: "3uifl3" }],
+  ["path", { d: "M8 16H3v5", key: "1cv678" }]
+];
+var RefreshCw = createLucideIcon("RefreshCw", __iconNode14);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/search.js
+var __iconNode15 = [
+  ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }],
+  ["path", { d: "m21 21-4.3-4.3", key: "1qie3q" }]
+];
+var Search = createLucideIcon("Search", __iconNode15);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/send.js
+var __iconNode16 = [
+  [
+    "path",
+    {
+      d: "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
+      key: "1ffxy3"
+    }
+  ],
+  ["path", { d: "m21.854 2.147-10.94 10.939", key: "12cjpa" }]
+];
+var Send = createLucideIcon("Send", __iconNode16);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/settings.js
+var __iconNode17 = [
+  [
+    "path",
+    {
+      d: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z",
+      key: "1qme2f"
+    }
+  ],
+  ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
+];
+var Settings = createLucideIcon("Settings", __iconNode17);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/shield-alert.js
+var __iconNode18 = [
+  [
+    "path",
+    {
+      d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+      key: "oel41y"
+    }
+  ],
+  ["path", { d: "M12 8v4", key: "1got3b" }],
+  ["path", { d: "M12 16h.01", key: "1drbdi" }]
+];
+var ShieldAlert = createLucideIcon("ShieldAlert", __iconNode18);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/sliders-vertical.js
+var __iconNode19 = [
+  ["line", { x1: "4", x2: "4", y1: "21", y2: "14", key: "1p332r" }],
+  ["line", { x1: "4", x2: "4", y1: "10", y2: "3", key: "gb41h5" }],
+  ["line", { x1: "12", x2: "12", y1: "21", y2: "12", key: "hf2csr" }],
+  ["line", { x1: "12", x2: "12", y1: "8", y2: "3", key: "1kfi7u" }],
+  ["line", { x1: "20", x2: "20", y1: "21", y2: "16", key: "1lhrwl" }],
+  ["line", { x1: "20", x2: "20", y1: "12", y2: "3", key: "16vvfq" }],
+  ["line", { x1: "2", x2: "6", y1: "14", y2: "14", key: "1uebub" }],
+  ["line", { x1: "10", x2: "14", y1: "8", y2: "8", key: "1yglbp" }],
+  ["line", { x1: "18", x2: "22", y1: "16", y2: "16", key: "1jxqpz" }]
+];
+var SlidersVertical = createLucideIcon("SlidersVertical", __iconNode19);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/square-pen.js
+var __iconNode20 = [
+  ["path", { d: "M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", key: "1m0v6g" }],
+  [
+    "path",
+    {
+      d: "M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z",
+      key: "ohrbg2"
+    }
+  ]
+];
+var SquarePen = createLucideIcon("SquarePen", __iconNode20);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/square.js
+var __iconNode21 = [
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }]
+];
+var Square = createLucideIcon("Square", __iconNode21);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/thumbs-down.js
+var __iconNode22 = [
+  ["path", { d: "M17 14V2", key: "8ymqnk" }],
+  [
+    "path",
+    {
+      d: "M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z",
+      key: "m61m77"
+    }
+  ]
+];
+var ThumbsDown = createLucideIcon("ThumbsDown", __iconNode22);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/thumbs-up.js
+var __iconNode23 = [
+  ["path", { d: "M7 10v12", key: "1qc93n" }],
+  [
+    "path",
+    {
+      d: "M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z",
+      key: "emmmcr"
+    }
+  ]
+];
+var ThumbsUp = createLucideIcon("ThumbsUp", __iconNode23);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/user.js
+var __iconNode24 = [
+  ["path", { d: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2", key: "975kel" }],
+  ["circle", { cx: "12", cy: "7", r: "4", key: "17ys0d" }]
+];
+var User = createLucideIcon("User", __iconNode24);
+
+// ../../../../website/node_modules/lucide-react/dist/esm/icons/x.js
+var __iconNode25 = [
+  ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
+  ["path", { d: "m6 6 12 12", key: "d8bk6v" }]
+];
+var X = createLucideIcon("X", __iconNode25);
+
+// react/hooks/use-app-state.ts
+var import_react10 = __toESM(require_react(), 1);
+function useAppState(store2) {
+  return (0, import_react10.useSyncExternalStore)(
+    (listener) => store2.subscribe(listener),
+    () => store2.getSnapshot()
+  );
+}
+
+// react/components/profile-switcher.tsx
+var import_jsx_runtime23 = __toESM(require_jsx_runtime(), 1);
+function ProfileSwitcher({ store: store2 }) {
+  const state = useAppState(store2);
+  const { profiles, activeProfileId, activeWorkspace } = state;
+  const activeProfile = profiles.find((p) => p.id === activeProfileId);
+  const handleSwitch = (profileId) => {
+    if (activeWorkspace) {
+      void store2.switchWorkspaceProfile(activeWorkspace.id, profileId);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(DropdownMenu2, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(DropdownMenuTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(Button, { variant: "ghost", size: "sm", className: "flex items-center gap-1 px-2 h-8 rounded-full border border-border/40 hover:bg-surface-hover text-xs font-medium", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(User, { className: "size-3.5 text-muted-foreground" }),
+      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "truncate max-w-[80px]", children: activeProfile ? activeProfile.name : "Select Profile" }),
+      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(ChevronDown, { className: "size-3 text-muted-foreground opacity-60" })
+    ] }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(DropdownMenuContent2, { align: "start", className: "w-[180px] p-1.5 rounded-xl shadow-[var(--shadow-raised)] border border-border/80 bg-popover", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider", children: "AI Agent Profile" }),
+      profiles.map((profile) => /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+        DropdownMenuItem2,
+        {
+          onSelect: () => handleSwitch(profile.id),
+          className: "flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs cursor-pointer hover:bg-surface-hover transition-colors",
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: profile.id === activeProfileId ? "font-semibold text-primary" : "text-foreground", children: profile.name }),
+            profile.id === activeProfileId && /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "size-1.5 rounded-full bg-primary" })
+          ]
+        },
+        profile.id
+      ))
+    ] })
+  ] });
+}
 
 // react/features/compact/compact-topbar.tsx
-var import_jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime24 = __toESM(require_jsx_runtime(), 1);
 function CompactTopbar({
+  store: store2,
   onClosePanel,
   onOpenSettings,
   onSetViewMode,
   onGetViewMode,
-  onStartSession
+  onStartSession,
+  onTidyTabs
 }) {
-  const [currentMode, setCurrentMode] = (0, import_react6.useState)(ViewMode.kSidebar);
-  (0, import_react6.useEffect)(() => {
+  const [currentMode, setCurrentMode] = (0, import_react11.useState)(ViewMode.kSidebar);
+  (0, import_react11.useEffect)(() => {
     onGetViewMode().then((mode) => {
       setCurrentMode(mode);
     }).catch((err) => {
@@ -28984,37 +35834,71 @@ function CompactTopbar({
     setCurrentMode(mode);
     onSetViewMode(mode);
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "compact-panel__topbar", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "compact-panel__topbar-left", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
-      IconButton,
-      {
-        ariaLabel: "Start new session",
-        symbol: "edit",
-        variant: "compact-icon-ghost",
-        onClick: onStartSession
-      }
-    ) }),
-    /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "compact-panel__topbar-right", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
-        IconButton,
-        {
-          ariaLabel: "Open settings",
-          symbol: "settingsGear",
-          variant: "compact-icon-ghost",
-          onClick: onOpenSettings
-        }
-      ),
-      /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(DropdownMenu2, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(DropdownMenuTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
-          IconButton,
+  const iconButtonClass = "rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground";
+  return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "flex items-center gap-2 px-1 py-1", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "flex items-center gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(ProfileSwitcher, { store: store2 }),
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Tooltip2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+          Button,
           {
-            ariaLabel: "View mode",
-            symbol: "viewModeToggle",
-            variant: "compact-icon-ghost"
+            "aria-label": "Start new session",
+            className: iconButtonClass,
+            size: "icon",
+            variant: "ghost",
+            onClick: onStartSession,
+            children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(SquarePen, { className: "size-4" })
           }
         ) }),
-        /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(DropdownMenuContent2, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipContent3, { children: "New session" })
+      ] })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "min-w-0 flex-1" }),
+    /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "flex items-center gap-1", children: [
+      onTidyTabs && /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Tooltip2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+          Button,
+          {
+            "aria-label": "Tidy tabs",
+            className: iconButtonClass,
+            size: "icon",
+            variant: "ghost",
+            onClick: onTidyTabs,
+            children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(FolderOpen, { className: "size-4" })
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipContent3, { children: "Tidy tabs" })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Tooltip2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+          Button,
+          {
+            "aria-label": "Open settings",
+            className: iconButtonClass,
+            size: "icon",
+            variant: "ghost",
+            onClick: onOpenSettings,
+            children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Settings, { className: "size-4" })
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipContent3, { children: "Settings" })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(DropdownMenu2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Tooltip2, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(DropdownMenuTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+            Button,
+            {
+              "aria-label": "View mode",
+              className: iconButtonClass,
+              size: "icon",
+              variant: "ghost",
+              children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Grid3x3, { className: "size-4" })
+            }
+          ) }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipContent3, { children: "View mode" })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(DropdownMenuContent2, { align: "end", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
             DropdownMenuItem2,
             {
               disabled: currentMode === ViewMode.kSidebar,
@@ -29025,7 +35909,7 @@ function CompactTopbar({
               ]
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(
+          /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
             DropdownMenuItem2,
             {
               disabled: currentMode === ViewMode.kFloating,
@@ -29038,35 +35922,1397 @@ function CompactTopbar({
           )
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
-        IconButton,
-        {
-          ariaLabel: "Close panel",
-          symbol: "xmark",
-          variant: "compact-icon-ghost",
-          onClick: onClosePanel
-        }
-      )
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Tooltip2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+          Button,
+          {
+            "aria-label": "Close panel",
+            className: iconButtonClass,
+            size: "icon",
+            variant: "ghost",
+            onClick: onClosePanel,
+            children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(X, { className: "size-4" })
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(TooltipContent3, { children: "Close" })
+      ] })
     ] })
   ] });
 }
 
 // react/features/compact/conversation-thread.tsx
-var import_react9 = __toESM(require_react(), 1);
+var import_react14 = __toESM(require_react(), 1);
 
 // react/hooks/use-auto-scroll.ts
-var import_react7 = __toESM(require_react(), 1);
+var import_react12 = __toESM(require_react(), 1);
+var AUTO_SCROLL_STICKY_PX = 96;
 function useAutoScroll(dependency) {
-  const ref = (0, import_react7.useRef)(null);
-  (0, import_react7.useEffect)(() => {
+  const ref = (0, import_react12.useRef)(null);
+  const rafHandle = (0, import_react12.useRef)(null);
+  const stickToBottom = (0, import_react12.useRef)(true);
+  (0, import_react12.useEffect)(() => {
     const element = ref.current;
     if (!element) {
       return;
     }
-    element.scrollTop = element.scrollHeight;
+    const handleScroll2 = () => {
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      stickToBottom.current = distanceFromBottom <= AUTO_SCROLL_STICKY_PX;
+    };
+    element.addEventListener("scroll", handleScroll2, { passive: true });
+    return () => element.removeEventListener("scroll", handleScroll2);
+  }, []);
+  (0, import_react12.useEffect)(() => {
+    if (!stickToBottom.current) {
+      return;
+    }
+    if (rafHandle.current !== null) {
+      return;
+    }
+    rafHandle.current = requestAnimationFrame(() => {
+      rafHandle.current = null;
+      const current = ref.current;
+      if (current) {
+        current.scrollTop = current.scrollHeight;
+      }
+    });
+    return () => {
+      if (rafHandle.current !== null) {
+        cancelAnimationFrame(rafHandle.current);
+        rafHandle.current = null;
+      }
+    };
   }, [dependency]);
   return ref;
 }
+
+// react/features/compact/conversation-message.tsx
+var import_react13 = __toESM(require_react(), 1);
+
+// react/components/markdown.tsx
+var React41 = __toESM(require_react(), 1);
+
+// ../../../../website/node_modules/marked/lib/marked.esm.js
+function M2() {
+  return { async: false, breaks: false, extensions: null, gfm: true, hooks: null, pedantic: false, renderer: null, silent: false, tokenizer: null, walkTokens: null };
+}
+var O = M2();
+function G(u3) {
+  O = u3;
+}
+var _ = { exec: () => null };
+function k(u3, e = "") {
+  let t = typeof u3 == "string" ? u3 : u3.source, n = { replace: (r2, i) => {
+    let s = typeof i == "string" ? i : i.source;
+    return s = s.replace(m.caret, "$1"), t = t.replace(r2, s), n;
+  }, getRegex: () => new RegExp(t, e) };
+  return n;
+}
+var be2 = (() => {
+  try {
+    return !!new RegExp("(?<=1)(?<!1)");
+  } catch {
+    return false;
+  }
+})();
+var m = { codeRemoveIndent: /^(?: {1,4}| {0,3}\t)/gm, outputLinkReplace: /\\([\[\]])/g, indentCodeCompensation: /^(\s+)(?:```)/, beginningSpace: /^\s+/, endingHash: /#$/, startingSpaceChar: /^ /, endingSpaceChar: / $/, nonSpaceChar: /[^ ]/, newLineCharGlobal: /\n/g, tabCharGlobal: /\t/g, multipleSpaceGlobal: /\s+/g, blankLine: /^[ \t]*$/, doubleBlankLine: /\n[ \t]*\n[ \t]*$/, blockquoteStart: /^ {0,3}>/, blockquoteSetextReplace: /\n {0,3}((?:=+|-+) *)(?=\n|$)/g, blockquoteSetextReplace2: /^ {0,3}>[ \t]?/gm, listReplaceNesting: /^ {1,4}(?=( {4})*[^ ])/g, listIsTask: /^\[[ xX]\] +\S/, listReplaceTask: /^\[[ xX]\] +/, listTaskCheckbox: /\[[ xX]\]/, anyLine: /\n.*\n/, hrefBrackets: /^<(.*)>$/, tableDelimiter: /[:|]/, tableAlignChars: /^\||\| *$/g, tableRowBlankLine: /\n[ \t]*$/, tableAlignRight: /^ *-+: *$/, tableAlignCenter: /^ *:-+: *$/, tableAlignLeft: /^ *:-+ *$/, startATag: /^<a /i, endATag: /^<\/a>/i, startPreScriptTag: /^<(pre|code|kbd|script)(\s|>)/i, endPreScriptTag: /^<\/(pre|code|kbd|script)(\s|>)/i, startAngleBracket: /^</, endAngleBracket: />$/, pedanticHrefTitle: /^([^'"]*[^\s])\s+(['"])(.*)\2/, unicodeAlphaNumeric: /[\p{L}\p{N}]/u, escapeTest: /[&<>"']/, escapeReplace: /[&<>"']/g, escapeTestNoEncode: /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/, escapeReplaceNoEncode: /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g, caret: /(^|[^\[])\^/g, percentDecode: /%25/g, findPipe: /\|/g, splitPipe: / \|/, slashPipe: /\\\|/g, carriageReturn: /\r\n|\r/g, spaceLine: /^ +$/gm, notSpaceStart: /^\S*/, endingNewline: /\n$/, listItemRegex: (u3) => new RegExp(`^( {0,3}${u3})((?:[	 ][^\\n]*)?(?:\\n|$))`), nextBulletRegex: (u3) => new RegExp(`^ {0,${Math.min(3, u3 - 1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`), hrRegex: (u3) => new RegExp(`^ {0,${Math.min(3, u3 - 1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`), fencesBeginRegex: (u3) => new RegExp(`^ {0,${Math.min(3, u3 - 1)}}(?:\`\`\`|~~~)`), headingBeginRegex: (u3) => new RegExp(`^ {0,${Math.min(3, u3 - 1)}}#`), htmlBeginRegex: (u3) => new RegExp(`^ {0,${Math.min(3, u3 - 1)}}<(?:[a-z].*>|!--)`, "i"), blockquoteBeginRegex: (u3) => new RegExp(`^ {0,${Math.min(3, u3 - 1)}}>`) };
+var Re = /^(?:[ \t]*(?:\n|$))+/;
+var Oe = /^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/;
+var Te2 = /^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/;
+var C = /^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/;
+var we2 = /^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/;
+var Q = / {0,3}(?:[*+-]|\d{1,9}[.)])/;
+var se2 = /^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/;
+var ie2 = k(se2).replace(/bull/g, Q).replace(/blockCode/g, /(?: {4}| {0,3}\t)/).replace(/fences/g, / {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g, / {0,3}>/).replace(/heading/g, / {0,3}#{1,6}/).replace(/html/g, / {0,3}<[^\n>]+>\n/).replace(/\|table/g, "").getRegex();
+var ye2 = k(se2).replace(/bull/g, Q).replace(/blockCode/g, /(?: {4}| {0,3}\t)/).replace(/fences/g, / {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g, / {0,3}>/).replace(/heading/g, / {0,3}#{1,6}/).replace(/html/g, / {0,3}<[^\n>]+>\n/).replace(/table/g, / {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex();
+var j = /^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/;
+var Pe = /^[^\n]+/;
+var F = /(?!\s*\])(?:\\[\s\S]|[^\[\]\\])+/;
+var Se = k(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label", F).replace("title", /(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex();
+var $e2 = k(/^(bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g, Q).getRegex();
+var v2 = "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
+var U = /<!--(?:-?>|[\s\S]*?(?:-->|$))/;
+var _e = k("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))", "i").replace("comment", U).replace("tag", v2).replace("attribute", / +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex();
+var oe2 = k(j).replace("hr", C).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("|lheading", "").replace("|table", "").replace("blockquote", " {0,3}>").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)])[ \\t]").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", v2).getRegex();
+var Le = k(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph", oe2).getRegex();
+var K = { blockquote: Le, code: Oe, def: Se, fences: Te2, heading: we2, hr: C, html: _e, lheading: ie2, list: $e2, newline: Re, paragraph: oe2, table: _, text: Pe };
+var ne2 = k("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr", C).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("blockquote", " {0,3}>").replace("code", "(?: {4}| {0,3}	)[^\\n]").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)])[ \\t]").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", v2).getRegex();
+var Me = { ...K, lheading: ye2, table: ne2, paragraph: k(j).replace("hr", C).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("|lheading", "").replace("table", ne2).replace("blockquote", " {0,3}>").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)])[ \\t]").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", v2).getRegex() };
+var ze = { ...K, html: k(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment", U).replace(/tag/g, "(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(), def: /^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/, heading: /^(#{1,6})(.*)(?:\n+|$)/, fences: _, lheading: /^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/, paragraph: k(j).replace("hr", C).replace("heading", ` *#{1,6} *[^
+]`).replace("lheading", ie2).replace("|table", "").replace("blockquote", " {0,3}>").replace("|fences", "").replace("|list", "").replace("|html", "").replace("|tag", "").getRegex() };
+var Ee = /^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/;
+var Ie = /^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/;
+var ae2 = /^( {2,}|\\)\n(?!\s*$)/;
+var Ae = /^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/;
+var z = /[\p{P}\p{S}]/u;
+var H = /[\s\p{P}\p{S}]/u;
+var W = /[^\s\p{P}\p{S}]/u;
+var Ce = k(/^((?![*_])punctSpace)/, "u").replace(/punctSpace/g, H).getRegex();
+var le2 = /(?!~)[\p{P}\p{S}]/u;
+var Be = /(?!~)[\s\p{P}\p{S}]/u;
+var De = /(?:[^\s\p{P}\p{S}]|~)/u;
+var qe = k(/link|precode-code|html/, "g").replace("link", /\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)/).replace("precode-", be2 ? "(?<!`)()" : "(^^|[^`])").replace("code", /(?<b>`+)[^`]+\k<b>(?!`)/).replace("html", /<(?! )[^<>]*?>/).getRegex();
+var ue2 = /^(?:\*+(?:((?!\*)punct)|([^\s*]))?)|^_+(?:((?!_)punct)|([^\s_]))?/;
+var ve2 = k(ue2, "u").replace(/punct/g, z).getRegex();
+var He = k(ue2, "u").replace(/punct/g, le2).getRegex();
+var pe2 = "^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)";
+var Ze = k(pe2, "gu").replace(/notPunctSpace/g, W).replace(/punctSpace/g, H).replace(/punct/g, z).getRegex();
+var Ge = k(pe2, "gu").replace(/notPunctSpace/g, De).replace(/punctSpace/g, Be).replace(/punct/g, le2).getRegex();
+var Ne = k("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)", "gu").replace(/notPunctSpace/g, W).replace(/punctSpace/g, H).replace(/punct/g, z).getRegex();
+var Qe = k(/^~~?(?:((?!~)punct)|[^\s~])/, "u").replace(/punct/g, z).getRegex();
+var je = "^[^~]+(?=[^~])|(?!~)punct(~~?)(?=[\\s]|$)|notPunctSpace(~~?)(?!~)(?=punctSpace|$)|(?!~)punctSpace(~~?)(?=notPunctSpace)|[\\s](~~?)(?!~)(?=punct)|(?!~)punct(~~?)(?!~)(?=punct)|notPunctSpace(~~?)(?=notPunctSpace)";
+var Fe = k(je, "gu").replace(/notPunctSpace/g, W).replace(/punctSpace/g, H).replace(/punct/g, z).getRegex();
+var Ue = k(/\\(punct)/, "gu").replace(/punct/g, z).getRegex();
+var Ke = k(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme", /[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email", /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex();
+var We = k(U).replace("(?:-->|$)", "-->").getRegex();
+var Xe = k("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment", We).replace("attribute", /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex();
+var q = /(?:\[(?:\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\])|[^\[\]\\`])*?/;
+var Je = k(/^!?\[(label)\]\(\s*(href)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(title))?\s*\)/).replace("label", q).replace("href", /<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]*/).replace("title", /"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex();
+var ce2 = k(/^!?\[(label)\]\[(ref)\]/).replace("label", q).replace("ref", F).getRegex();
+var he2 = k(/^!?\[(ref)\](?:\[\])?/).replace("ref", F).getRegex();
+var Ve = k("reflink|nolink(?!\\()", "g").replace("reflink", ce2).replace("nolink", he2).getRegex();
+var re2 = /[hH][tT][tT][pP][sS]?|[fF][tT][pP]/;
+var X2 = { _backpedal: _, anyPunctuation: Ue, autolink: Ke, blockSkip: qe, br: ae2, code: Ie, del: _, delLDelim: _, delRDelim: _, emStrongLDelim: ve2, emStrongRDelimAst: Ze, emStrongRDelimUnd: Ne, escape: Ee, link: Je, nolink: he2, punctuation: Ce, reflink: ce2, reflinkSearch: Ve, tag: Xe, text: Ae, url: _ };
+var Ye = { ...X2, link: k(/^!?\[(label)\]\((.*?)\)/).replace("label", q).getRegex(), reflink: k(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label", q).getRegex() };
+var N = { ...X2, emStrongRDelimAst: Ge, emStrongLDelim: He, delLDelim: Qe, delRDelim: Fe, url: k(/^((?:protocol):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/).replace("protocol", re2).replace("email", /[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(), _backpedal: /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/, del: /^(~~?)(?=[^\s~])((?:\\[\s\S]|[^\\])*?(?:\\[\s\S]|[^\s~\\]))\1(?=[^~]|$)/, text: k(/^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|protocol:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/).replace("protocol", re2).getRegex() };
+var et = { ...N, br: k(ae2).replace("{2,}", "*").getRegex(), text: k(N.text).replace("\\b_", "\\b_| {2,}\\n").replace(/\{2,\}/g, "*").getRegex() };
+var B = { normal: K, gfm: Me, pedantic: ze };
+var E2 = { normal: X2, gfm: N, breaks: et, pedantic: Ye };
+var tt2 = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+var ke = (u3) => tt2[u3];
+function T(u3, e) {
+  if (e) {
+    if (m.escapeTest.test(u3)) return u3.replace(m.escapeReplace, ke);
+  } else if (m.escapeTestNoEncode.test(u3)) return u3.replace(m.escapeReplaceNoEncode, ke);
+  return u3;
+}
+function J(u3) {
+  try {
+    u3 = encodeURI(u3).replace(m.percentDecode, "%");
+  } catch {
+    return null;
+  }
+  return u3;
+}
+function V(u3, e) {
+  let t = u3.replace(m.findPipe, (i, s, a) => {
+    let o2 = false, l = s;
+    for (; --l >= 0 && a[l] === "\\"; ) o2 = !o2;
+    return o2 ? "|" : " |";
+  }), n = t.split(m.splitPipe), r2 = 0;
+  if (n[0].trim() || n.shift(), n.length > 0 && !n.at(-1)?.trim() && n.pop(), e) if (n.length > e) n.splice(e);
+  else for (; n.length < e; ) n.push("");
+  for (; r2 < n.length; r2++) n[r2] = n[r2].trim().replace(m.slashPipe, "|");
+  return n;
+}
+function I(u3, e, t) {
+  let n = u3.length;
+  if (n === 0) return "";
+  let r2 = 0;
+  for (; r2 < n; ) {
+    let i = u3.charAt(n - r2 - 1);
+    if (i === e && !t) r2++;
+    else if (i !== e && t) r2++;
+    else break;
+  }
+  return u3.slice(0, n - r2);
+}
+function de2(u3, e) {
+  if (u3.indexOf(e[1]) === -1) return -1;
+  let t = 0;
+  for (let n = 0; n < u3.length; n++) if (u3[n] === "\\") n++;
+  else if (u3[n] === e[0]) t++;
+  else if (u3[n] === e[1] && (t--, t < 0)) return n;
+  return t > 0 ? -2 : -1;
+}
+function ge2(u3, e = 0) {
+  let t = e, n = "";
+  for (let r2 of u3) if (r2 === "	") {
+    let i = 4 - t % 4;
+    n += " ".repeat(i), t += i;
+  } else n += r2, t++;
+  return n;
+}
+function fe2(u3, e, t, n, r2) {
+  let i = e.href, s = e.title || null, a = u3[1].replace(r2.other.outputLinkReplace, "$1");
+  n.state.inLink = true;
+  let o2 = { type: u3[0].charAt(0) === "!" ? "image" : "link", raw: t, href: i, title: s, text: a, tokens: n.inlineTokens(a) };
+  return n.state.inLink = false, o2;
+}
+function nt(u3, e, t) {
+  let n = u3.match(t.other.indentCodeCompensation);
+  if (n === null) return e;
+  let r2 = n[1];
+  return e.split(`
+`).map((i) => {
+    let s = i.match(t.other.beginningSpace);
+    if (s === null) return i;
+    let [a] = s;
+    return a.length >= r2.length ? i.slice(r2.length) : i;
+  }).join(`
+`);
+}
+var w = class {
+  options;
+  rules;
+  lexer;
+  constructor(e) {
+    this.options = e || O;
+  }
+  space(e) {
+    let t = this.rules.block.newline.exec(e);
+    if (t && t[0].length > 0) return { type: "space", raw: t[0] };
+  }
+  code(e) {
+    let t = this.rules.block.code.exec(e);
+    if (t) {
+      let n = t[0].replace(this.rules.other.codeRemoveIndent, "");
+      return { type: "code", raw: t[0], codeBlockStyle: "indented", text: this.options.pedantic ? n : I(n, `
+`) };
+    }
+  }
+  fences(e) {
+    let t = this.rules.block.fences.exec(e);
+    if (t) {
+      let n = t[0], r2 = nt(n, t[3] || "", this.rules);
+      return { type: "code", raw: n, lang: t[2] ? t[2].trim().replace(this.rules.inline.anyPunctuation, "$1") : t[2], text: r2 };
+    }
+  }
+  heading(e) {
+    let t = this.rules.block.heading.exec(e);
+    if (t) {
+      let n = t[2].trim();
+      if (this.rules.other.endingHash.test(n)) {
+        let r2 = I(n, "#");
+        (this.options.pedantic || !r2 || this.rules.other.endingSpaceChar.test(r2)) && (n = r2.trim());
+      }
+      return { type: "heading", raw: t[0], depth: t[1].length, text: n, tokens: this.lexer.inline(n) };
+    }
+  }
+  hr(e) {
+    let t = this.rules.block.hr.exec(e);
+    if (t) return { type: "hr", raw: I(t[0], `
+`) };
+  }
+  blockquote(e) {
+    let t = this.rules.block.blockquote.exec(e);
+    if (t) {
+      let n = I(t[0], `
+`).split(`
+`), r2 = "", i = "", s = [];
+      for (; n.length > 0; ) {
+        let a = false, o2 = [], l;
+        for (l = 0; l < n.length; l++) if (this.rules.other.blockquoteStart.test(n[l])) o2.push(n[l]), a = true;
+        else if (!a) o2.push(n[l]);
+        else break;
+        n = n.slice(l);
+        let p = o2.join(`
+`), c = p.replace(this.rules.other.blockquoteSetextReplace, `
+    $1`).replace(this.rules.other.blockquoteSetextReplace2, "");
+        r2 = r2 ? `${r2}
+${p}` : p, i = i ? `${i}
+${c}` : c;
+        let d = this.lexer.state.top;
+        if (this.lexer.state.top = true, this.lexer.blockTokens(c, s, true), this.lexer.state.top = d, n.length === 0) break;
+        let h = s.at(-1);
+        if (h?.type === "code") break;
+        if (h?.type === "blockquote") {
+          let R = h, f = R.raw + `
+` + n.join(`
+`), S = this.blockquote(f);
+          s[s.length - 1] = S, r2 = r2.substring(0, r2.length - R.raw.length) + S.raw, i = i.substring(0, i.length - R.text.length) + S.text;
+          break;
+        } else if (h?.type === "list") {
+          let R = h, f = R.raw + `
+` + n.join(`
+`), S = this.list(f);
+          s[s.length - 1] = S, r2 = r2.substring(0, r2.length - h.raw.length) + S.raw, i = i.substring(0, i.length - R.raw.length) + S.raw, n = f.substring(s.at(-1).raw.length).split(`
+`);
+          continue;
+        }
+      }
+      return { type: "blockquote", raw: r2, tokens: s, text: i };
+    }
+  }
+  list(e) {
+    let t = this.rules.block.list.exec(e);
+    if (t) {
+      let n = t[1].trim(), r2 = n.length > 1, i = { type: "list", raw: "", ordered: r2, start: r2 ? +n.slice(0, -1) : "", loose: false, items: [] };
+      n = r2 ? `\\d{1,9}\\${n.slice(-1)}` : `\\${n}`, this.options.pedantic && (n = r2 ? n : "[*+-]");
+      let s = this.rules.other.listItemRegex(n), a = false;
+      for (; e; ) {
+        let l = false, p = "", c = "";
+        if (!(t = s.exec(e)) || this.rules.block.hr.test(e)) break;
+        p = t[0], e = e.substring(p.length);
+        let d = ge2(t[2].split(`
+`, 1)[0], t[1].length), h = e.split(`
+`, 1)[0], R = !d.trim(), f = 0;
+        if (this.options.pedantic ? (f = 2, c = d.trimStart()) : R ? f = t[1].length + 1 : (f = d.search(this.rules.other.nonSpaceChar), f = f > 4 ? 1 : f, c = d.slice(f), f += t[1].length), R && this.rules.other.blankLine.test(h) && (p += h + `
+`, e = e.substring(h.length + 1), l = true), !l) {
+          let S = this.rules.other.nextBulletRegex(f), Y = this.rules.other.hrRegex(f), ee2 = this.rules.other.fencesBeginRegex(f), te2 = this.rules.other.headingBeginRegex(f), me2 = this.rules.other.htmlBeginRegex(f), xe2 = this.rules.other.blockquoteBeginRegex(f);
+          for (; e; ) {
+            let Z = e.split(`
+`, 1)[0], A;
+            if (h = Z, this.options.pedantic ? (h = h.replace(this.rules.other.listReplaceNesting, "  "), A = h) : A = h.replace(this.rules.other.tabCharGlobal, "    "), ee2.test(h) || te2.test(h) || me2.test(h) || xe2.test(h) || S.test(h) || Y.test(h)) break;
+            if (A.search(this.rules.other.nonSpaceChar) >= f || !h.trim()) c += `
+` + A.slice(f);
+            else {
+              if (R || d.replace(this.rules.other.tabCharGlobal, "    ").search(this.rules.other.nonSpaceChar) >= 4 || ee2.test(d) || te2.test(d) || Y.test(d)) break;
+              c += `
+` + h;
+            }
+            R = !h.trim(), p += Z + `
+`, e = e.substring(Z.length + 1), d = A.slice(f);
+          }
+        }
+        i.loose || (a ? i.loose = true : this.rules.other.doubleBlankLine.test(p) && (a = true)), i.items.push({ type: "list_item", raw: p, task: !!this.options.gfm && this.rules.other.listIsTask.test(c), loose: false, text: c, tokens: [] }), i.raw += p;
+      }
+      let o2 = i.items.at(-1);
+      if (o2) o2.raw = o2.raw.trimEnd(), o2.text = o2.text.trimEnd();
+      else return;
+      i.raw = i.raw.trimEnd();
+      for (let l of i.items) {
+        if (this.lexer.state.top = false, l.tokens = this.lexer.blockTokens(l.text, []), l.task) {
+          if (l.text = l.text.replace(this.rules.other.listReplaceTask, ""), l.tokens[0]?.type === "text" || l.tokens[0]?.type === "paragraph") {
+            l.tokens[0].raw = l.tokens[0].raw.replace(this.rules.other.listReplaceTask, ""), l.tokens[0].text = l.tokens[0].text.replace(this.rules.other.listReplaceTask, "");
+            for (let c = this.lexer.inlineQueue.length - 1; c >= 0; c--) if (this.rules.other.listIsTask.test(this.lexer.inlineQueue[c].src)) {
+              this.lexer.inlineQueue[c].src = this.lexer.inlineQueue[c].src.replace(this.rules.other.listReplaceTask, "");
+              break;
+            }
+          }
+          let p = this.rules.other.listTaskCheckbox.exec(l.raw);
+          if (p) {
+            let c = { type: "checkbox", raw: p[0] + " ", checked: p[0] !== "[ ]" };
+            l.checked = c.checked, i.loose ? l.tokens[0] && ["paragraph", "text"].includes(l.tokens[0].type) && "tokens" in l.tokens[0] && l.tokens[0].tokens ? (l.tokens[0].raw = c.raw + l.tokens[0].raw, l.tokens[0].text = c.raw + l.tokens[0].text, l.tokens[0].tokens.unshift(c)) : l.tokens.unshift({ type: "paragraph", raw: c.raw, text: c.raw, tokens: [c] }) : l.tokens.unshift(c);
+          }
+        }
+        if (!i.loose) {
+          let p = l.tokens.filter((d) => d.type === "space"), c = p.length > 0 && p.some((d) => this.rules.other.anyLine.test(d.raw));
+          i.loose = c;
+        }
+      }
+      if (i.loose) for (let l of i.items) {
+        l.loose = true;
+        for (let p of l.tokens) p.type === "text" && (p.type = "paragraph");
+      }
+      return i;
+    }
+  }
+  html(e) {
+    let t = this.rules.block.html.exec(e);
+    if (t) return { type: "html", block: true, raw: t[0], pre: t[1] === "pre" || t[1] === "script" || t[1] === "style", text: t[0] };
+  }
+  def(e) {
+    let t = this.rules.block.def.exec(e);
+    if (t) {
+      let n = t[1].toLowerCase().replace(this.rules.other.multipleSpaceGlobal, " "), r2 = t[2] ? t[2].replace(this.rules.other.hrefBrackets, "$1").replace(this.rules.inline.anyPunctuation, "$1") : "", i = t[3] ? t[3].substring(1, t[3].length - 1).replace(this.rules.inline.anyPunctuation, "$1") : t[3];
+      return { type: "def", tag: n, raw: t[0], href: r2, title: i };
+    }
+  }
+  table(e) {
+    let t = this.rules.block.table.exec(e);
+    if (!t || !this.rules.other.tableDelimiter.test(t[2])) return;
+    let n = V(t[1]), r2 = t[2].replace(this.rules.other.tableAlignChars, "").split("|"), i = t[3]?.trim() ? t[3].replace(this.rules.other.tableRowBlankLine, "").split(`
+`) : [], s = { type: "table", raw: t[0], header: [], align: [], rows: [] };
+    if (n.length === r2.length) {
+      for (let a of r2) this.rules.other.tableAlignRight.test(a) ? s.align.push("right") : this.rules.other.tableAlignCenter.test(a) ? s.align.push("center") : this.rules.other.tableAlignLeft.test(a) ? s.align.push("left") : s.align.push(null);
+      for (let a = 0; a < n.length; a++) s.header.push({ text: n[a], tokens: this.lexer.inline(n[a]), header: true, align: s.align[a] });
+      for (let a of i) s.rows.push(V(a, s.header.length).map((o2, l) => ({ text: o2, tokens: this.lexer.inline(o2), header: false, align: s.align[l] })));
+      return s;
+    }
+  }
+  lheading(e) {
+    let t = this.rules.block.lheading.exec(e);
+    if (t) {
+      let n = t[1].trim();
+      return { type: "heading", raw: t[0], depth: t[2].charAt(0) === "=" ? 1 : 2, text: n, tokens: this.lexer.inline(n) };
+    }
+  }
+  paragraph(e) {
+    let t = this.rules.block.paragraph.exec(e);
+    if (t) {
+      let n = t[1].charAt(t[1].length - 1) === `
+` ? t[1].slice(0, -1) : t[1];
+      return { type: "paragraph", raw: t[0], text: n, tokens: this.lexer.inline(n) };
+    }
+  }
+  text(e) {
+    let t = this.rules.block.text.exec(e);
+    if (t) return { type: "text", raw: t[0], text: t[0], tokens: this.lexer.inline(t[0]) };
+  }
+  escape(e) {
+    let t = this.rules.inline.escape.exec(e);
+    if (t) return { type: "escape", raw: t[0], text: t[1] };
+  }
+  tag(e) {
+    let t = this.rules.inline.tag.exec(e);
+    if (t) return !this.lexer.state.inLink && this.rules.other.startATag.test(t[0]) ? this.lexer.state.inLink = true : this.lexer.state.inLink && this.rules.other.endATag.test(t[0]) && (this.lexer.state.inLink = false), !this.lexer.state.inRawBlock && this.rules.other.startPreScriptTag.test(t[0]) ? this.lexer.state.inRawBlock = true : this.lexer.state.inRawBlock && this.rules.other.endPreScriptTag.test(t[0]) && (this.lexer.state.inRawBlock = false), { type: "html", raw: t[0], inLink: this.lexer.state.inLink, inRawBlock: this.lexer.state.inRawBlock, block: false, text: t[0] };
+  }
+  link(e) {
+    let t = this.rules.inline.link.exec(e);
+    if (t) {
+      let n = t[2].trim();
+      if (!this.options.pedantic && this.rules.other.startAngleBracket.test(n)) {
+        if (!this.rules.other.endAngleBracket.test(n)) return;
+        let s = I(n.slice(0, -1), "\\");
+        if ((n.length - s.length) % 2 === 0) return;
+      } else {
+        let s = de2(t[2], "()");
+        if (s === -2) return;
+        if (s > -1) {
+          let o2 = (t[0].indexOf("!") === 0 ? 5 : 4) + t[1].length + s;
+          t[2] = t[2].substring(0, s), t[0] = t[0].substring(0, o2).trim(), t[3] = "";
+        }
+      }
+      let r2 = t[2], i = "";
+      if (this.options.pedantic) {
+        let s = this.rules.other.pedanticHrefTitle.exec(r2);
+        s && (r2 = s[1], i = s[3]);
+      } else i = t[3] ? t[3].slice(1, -1) : "";
+      return r2 = r2.trim(), this.rules.other.startAngleBracket.test(r2) && (this.options.pedantic && !this.rules.other.endAngleBracket.test(n) ? r2 = r2.slice(1) : r2 = r2.slice(1, -1)), fe2(t, { href: r2 && r2.replace(this.rules.inline.anyPunctuation, "$1"), title: i && i.replace(this.rules.inline.anyPunctuation, "$1") }, t[0], this.lexer, this.rules);
+    }
+  }
+  reflink(e, t) {
+    let n;
+    if ((n = this.rules.inline.reflink.exec(e)) || (n = this.rules.inline.nolink.exec(e))) {
+      let r2 = (n[2] || n[1]).replace(this.rules.other.multipleSpaceGlobal, " "), i = t[r2.toLowerCase()];
+      if (!i) {
+        let s = n[0].charAt(0);
+        return { type: "text", raw: s, text: s };
+      }
+      return fe2(n, i, n[0], this.lexer, this.rules);
+    }
+  }
+  emStrong(e, t, n = "") {
+    let r2 = this.rules.inline.emStrongLDelim.exec(e);
+    if (!r2 || !r2[1] && !r2[2] && !r2[3] && !r2[4] || r2[4] && n.match(this.rules.other.unicodeAlphaNumeric)) return;
+    if (!(r2[1] || r2[3] || "") || !n || this.rules.inline.punctuation.exec(n)) {
+      let s = [...r2[0]].length - 1, a, o2, l = s, p = 0, c = r2[0][0] === "*" ? this.rules.inline.emStrongRDelimAst : this.rules.inline.emStrongRDelimUnd;
+      for (c.lastIndex = 0, t = t.slice(-1 * e.length + s); (r2 = c.exec(t)) !== null; ) {
+        if (a = r2[1] || r2[2] || r2[3] || r2[4] || r2[5] || r2[6], !a) continue;
+        if (o2 = [...a].length, r2[3] || r2[4]) {
+          l += o2;
+          continue;
+        } else if ((r2[5] || r2[6]) && s % 3 && !((s + o2) % 3)) {
+          p += o2;
+          continue;
+        }
+        if (l -= o2, l > 0) continue;
+        o2 = Math.min(o2, o2 + l + p);
+        let d = [...r2[0]][0].length, h = e.slice(0, s + r2.index + d + o2);
+        if (Math.min(s, o2) % 2) {
+          let f = h.slice(1, -1);
+          return { type: "em", raw: h, text: f, tokens: this.lexer.inlineTokens(f) };
+        }
+        let R = h.slice(2, -2);
+        return { type: "strong", raw: h, text: R, tokens: this.lexer.inlineTokens(R) };
+      }
+    }
+  }
+  codespan(e) {
+    let t = this.rules.inline.code.exec(e);
+    if (t) {
+      let n = t[2].replace(this.rules.other.newLineCharGlobal, " "), r2 = this.rules.other.nonSpaceChar.test(n), i = this.rules.other.startingSpaceChar.test(n) && this.rules.other.endingSpaceChar.test(n);
+      return r2 && i && (n = n.substring(1, n.length - 1)), { type: "codespan", raw: t[0], text: n };
+    }
+  }
+  br(e) {
+    let t = this.rules.inline.br.exec(e);
+    if (t) return { type: "br", raw: t[0] };
+  }
+  del(e, t, n = "") {
+    let r2 = this.rules.inline.delLDelim.exec(e);
+    if (!r2) return;
+    if (!(r2[1] || "") || !n || this.rules.inline.punctuation.exec(n)) {
+      let s = [...r2[0]].length - 1, a, o2, l = s, p = this.rules.inline.delRDelim;
+      for (p.lastIndex = 0, t = t.slice(-1 * e.length + s); (r2 = p.exec(t)) !== null; ) {
+        if (a = r2[1] || r2[2] || r2[3] || r2[4] || r2[5] || r2[6], !a || (o2 = [...a].length, o2 !== s)) continue;
+        if (r2[3] || r2[4]) {
+          l += o2;
+          continue;
+        }
+        if (l -= o2, l > 0) continue;
+        o2 = Math.min(o2, o2 + l);
+        let c = [...r2[0]][0].length, d = e.slice(0, s + r2.index + c + o2), h = d.slice(s, -s);
+        return { type: "del", raw: d, text: h, tokens: this.lexer.inlineTokens(h) };
+      }
+    }
+  }
+  autolink(e) {
+    let t = this.rules.inline.autolink.exec(e);
+    if (t) {
+      let n, r2;
+      return t[2] === "@" ? (n = t[1], r2 = "mailto:" + n) : (n = t[1], r2 = n), { type: "link", raw: t[0], text: n, href: r2, tokens: [{ type: "text", raw: n, text: n }] };
+    }
+  }
+  url(e) {
+    let t;
+    if (t = this.rules.inline.url.exec(e)) {
+      let n, r2;
+      if (t[2] === "@") n = t[0], r2 = "mailto:" + n;
+      else {
+        let i;
+        do
+          i = t[0], t[0] = this.rules.inline._backpedal.exec(t[0])?.[0] ?? "";
+        while (i !== t[0]);
+        n = t[0], t[1] === "www." ? r2 = "http://" + t[0] : r2 = t[0];
+      }
+      return { type: "link", raw: t[0], text: n, href: r2, tokens: [{ type: "text", raw: n, text: n }] };
+    }
+  }
+  inlineText(e) {
+    let t = this.rules.inline.text.exec(e);
+    if (t) {
+      let n = this.lexer.state.inRawBlock;
+      return { type: "text", raw: t[0], text: t[0], escaped: n };
+    }
+  }
+};
+var x = class u {
+  tokens;
+  options;
+  state;
+  inlineQueue;
+  tokenizer;
+  constructor(e) {
+    this.tokens = [], this.tokens.links = /* @__PURE__ */ Object.create(null), this.options = e || O, this.options.tokenizer = this.options.tokenizer || new w(), this.tokenizer = this.options.tokenizer, this.tokenizer.options = this.options, this.tokenizer.lexer = this, this.inlineQueue = [], this.state = { inLink: false, inRawBlock: false, top: true };
+    let t = { other: m, block: B.normal, inline: E2.normal };
+    this.options.pedantic ? (t.block = B.pedantic, t.inline = E2.pedantic) : this.options.gfm && (t.block = B.gfm, this.options.breaks ? t.inline = E2.breaks : t.inline = E2.gfm), this.tokenizer.rules = t;
+  }
+  static get rules() {
+    return { block: B, inline: E2 };
+  }
+  static lex(e, t) {
+    return new u(t).lex(e);
+  }
+  static lexInline(e, t) {
+    return new u(t).inlineTokens(e);
+  }
+  lex(e) {
+    e = e.replace(m.carriageReturn, `
+`), this.blockTokens(e, this.tokens);
+    for (let t = 0; t < this.inlineQueue.length; t++) {
+      let n = this.inlineQueue[t];
+      this.inlineTokens(n.src, n.tokens);
+    }
+    return this.inlineQueue = [], this.tokens;
+  }
+  blockTokens(e, t = [], n = false) {
+    for (this.tokenizer.lexer = this, this.options.pedantic && (e = e.replace(m.tabCharGlobal, "    ").replace(m.spaceLine, "")); e; ) {
+      let r2;
+      if (this.options.extensions?.block?.some((s) => (r2 = s.call({ lexer: this }, e, t)) ? (e = e.substring(r2.raw.length), t.push(r2), true) : false)) continue;
+      if (r2 = this.tokenizer.space(e)) {
+        e = e.substring(r2.raw.length);
+        let s = t.at(-1);
+        r2.raw.length === 1 && s !== void 0 ? s.raw += `
+` : t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.code(e)) {
+        e = e.substring(r2.raw.length);
+        let s = t.at(-1);
+        s?.type === "paragraph" || s?.type === "text" ? (s.raw += (s.raw.endsWith(`
+`) ? "" : `
+`) + r2.raw, s.text += `
+` + r2.text, this.inlineQueue.at(-1).src = s.text) : t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.fences(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.heading(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.hr(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.blockquote(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.list(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.html(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.def(e)) {
+        e = e.substring(r2.raw.length);
+        let s = t.at(-1);
+        s?.type === "paragraph" || s?.type === "text" ? (s.raw += (s.raw.endsWith(`
+`) ? "" : `
+`) + r2.raw, s.text += `
+` + r2.raw, this.inlineQueue.at(-1).src = s.text) : this.tokens.links[r2.tag] || (this.tokens.links[r2.tag] = { href: r2.href, title: r2.title }, t.push(r2));
+        continue;
+      }
+      if (r2 = this.tokenizer.table(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      if (r2 = this.tokenizer.lheading(e)) {
+        e = e.substring(r2.raw.length), t.push(r2);
+        continue;
+      }
+      let i = e;
+      if (this.options.extensions?.startBlock) {
+        let s = 1 / 0, a = e.slice(1), o2;
+        this.options.extensions.startBlock.forEach((l) => {
+          o2 = l.call({ lexer: this }, a), typeof o2 == "number" && o2 >= 0 && (s = Math.min(s, o2));
+        }), s < 1 / 0 && s >= 0 && (i = e.substring(0, s + 1));
+      }
+      if (this.state.top && (r2 = this.tokenizer.paragraph(i))) {
+        let s = t.at(-1);
+        n && s?.type === "paragraph" ? (s.raw += (s.raw.endsWith(`
+`) ? "" : `
+`) + r2.raw, s.text += `
+` + r2.text, this.inlineQueue.pop(), this.inlineQueue.at(-1).src = s.text) : t.push(r2), n = i.length !== e.length, e = e.substring(r2.raw.length);
+        continue;
+      }
+      if (r2 = this.tokenizer.text(e)) {
+        e = e.substring(r2.raw.length);
+        let s = t.at(-1);
+        s?.type === "text" ? (s.raw += (s.raw.endsWith(`
+`) ? "" : `
+`) + r2.raw, s.text += `
+` + r2.text, this.inlineQueue.pop(), this.inlineQueue.at(-1).src = s.text) : t.push(r2);
+        continue;
+      }
+      if (e) {
+        let s = "Infinite loop on byte: " + e.charCodeAt(0);
+        if (this.options.silent) {
+          console.error(s);
+          break;
+        } else throw new Error(s);
+      }
+    }
+    return this.state.top = true, t;
+  }
+  inline(e, t = []) {
+    return this.inlineQueue.push({ src: e, tokens: t }), t;
+  }
+  inlineTokens(e, t = []) {
+    this.tokenizer.lexer = this;
+    let n = e, r2 = null;
+    if (this.tokens.links) {
+      let o2 = Object.keys(this.tokens.links);
+      if (o2.length > 0) for (; (r2 = this.tokenizer.rules.inline.reflinkSearch.exec(n)) !== null; ) o2.includes(r2[0].slice(r2[0].lastIndexOf("[") + 1, -1)) && (n = n.slice(0, r2.index) + "[" + "a".repeat(r2[0].length - 2) + "]" + n.slice(this.tokenizer.rules.inline.reflinkSearch.lastIndex));
+    }
+    for (; (r2 = this.tokenizer.rules.inline.anyPunctuation.exec(n)) !== null; ) n = n.slice(0, r2.index) + "++" + n.slice(this.tokenizer.rules.inline.anyPunctuation.lastIndex);
+    let i;
+    for (; (r2 = this.tokenizer.rules.inline.blockSkip.exec(n)) !== null; ) i = r2[2] ? r2[2].length : 0, n = n.slice(0, r2.index + i) + "[" + "a".repeat(r2[0].length - i - 2) + "]" + n.slice(this.tokenizer.rules.inline.blockSkip.lastIndex);
+    n = this.options.hooks?.emStrongMask?.call({ lexer: this }, n) ?? n;
+    let s = false, a = "";
+    for (; e; ) {
+      s || (a = ""), s = false;
+      let o2;
+      if (this.options.extensions?.inline?.some((p) => (o2 = p.call({ lexer: this }, e, t)) ? (e = e.substring(o2.raw.length), t.push(o2), true) : false)) continue;
+      if (o2 = this.tokenizer.escape(e)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.tag(e)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.link(e)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.reflink(e, this.tokens.links)) {
+        e = e.substring(o2.raw.length);
+        let p = t.at(-1);
+        o2.type === "text" && p?.type === "text" ? (p.raw += o2.raw, p.text += o2.text) : t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.emStrong(e, n, a)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.codespan(e)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.br(e)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.del(e, n, a)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (o2 = this.tokenizer.autolink(e)) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      if (!this.state.inLink && (o2 = this.tokenizer.url(e))) {
+        e = e.substring(o2.raw.length), t.push(o2);
+        continue;
+      }
+      let l = e;
+      if (this.options.extensions?.startInline) {
+        let p = 1 / 0, c = e.slice(1), d;
+        this.options.extensions.startInline.forEach((h) => {
+          d = h.call({ lexer: this }, c), typeof d == "number" && d >= 0 && (p = Math.min(p, d));
+        }), p < 1 / 0 && p >= 0 && (l = e.substring(0, p + 1));
+      }
+      if (o2 = this.tokenizer.inlineText(l)) {
+        e = e.substring(o2.raw.length), o2.raw.slice(-1) !== "_" && (a = o2.raw.slice(-1)), s = true;
+        let p = t.at(-1);
+        p?.type === "text" ? (p.raw += o2.raw, p.text += o2.text) : t.push(o2);
+        continue;
+      }
+      if (e) {
+        let p = "Infinite loop on byte: " + e.charCodeAt(0);
+        if (this.options.silent) {
+          console.error(p);
+          break;
+        } else throw new Error(p);
+      }
+    }
+    return t;
+  }
+};
+var y = class {
+  options;
+  parser;
+  constructor(e) {
+    this.options = e || O;
+  }
+  space(e) {
+    return "";
+  }
+  code({ text: e, lang: t, escaped: n }) {
+    let r2 = (t || "").match(m.notSpaceStart)?.[0], i = e.replace(m.endingNewline, "") + `
+`;
+    return r2 ? '<pre><code class="language-' + T(r2) + '">' + (n ? i : T(i, true)) + `</code></pre>
+` : "<pre><code>" + (n ? i : T(i, true)) + `</code></pre>
+`;
+  }
+  blockquote({ tokens: e }) {
+    return `<blockquote>
+${this.parser.parse(e)}</blockquote>
+`;
+  }
+  html({ text: e }) {
+    return e;
+  }
+  def(e) {
+    return "";
+  }
+  heading({ tokens: e, depth: t }) {
+    return `<h${t}>${this.parser.parseInline(e)}</h${t}>
+`;
+  }
+  hr(e) {
+    return `<hr>
+`;
+  }
+  list(e) {
+    let t = e.ordered, n = e.start, r2 = "";
+    for (let a = 0; a < e.items.length; a++) {
+      let o2 = e.items[a];
+      r2 += this.listitem(o2);
+    }
+    let i = t ? "ol" : "ul", s = t && n !== 1 ? ' start="' + n + '"' : "";
+    return "<" + i + s + `>
+` + r2 + "</" + i + `>
+`;
+  }
+  listitem(e) {
+    return `<li>${this.parser.parse(e.tokens)}</li>
+`;
+  }
+  checkbox({ checked: e }) {
+    return "<input " + (e ? 'checked="" ' : "") + 'disabled="" type="checkbox"> ';
+  }
+  paragraph({ tokens: e }) {
+    return `<p>${this.parser.parseInline(e)}</p>
+`;
+  }
+  table(e) {
+    let t = "", n = "";
+    for (let i = 0; i < e.header.length; i++) n += this.tablecell(e.header[i]);
+    t += this.tablerow({ text: n });
+    let r2 = "";
+    for (let i = 0; i < e.rows.length; i++) {
+      let s = e.rows[i];
+      n = "";
+      for (let a = 0; a < s.length; a++) n += this.tablecell(s[a]);
+      r2 += this.tablerow({ text: n });
+    }
+    return r2 && (r2 = `<tbody>${r2}</tbody>`), `<table>
+<thead>
+` + t + `</thead>
+` + r2 + `</table>
+`;
+  }
+  tablerow({ text: e }) {
+    return `<tr>
+${e}</tr>
+`;
+  }
+  tablecell(e) {
+    let t = this.parser.parseInline(e.tokens), n = e.header ? "th" : "td";
+    return (e.align ? `<${n} align="${e.align}">` : `<${n}>`) + t + `</${n}>
+`;
+  }
+  strong({ tokens: e }) {
+    return `<strong>${this.parser.parseInline(e)}</strong>`;
+  }
+  em({ tokens: e }) {
+    return `<em>${this.parser.parseInline(e)}</em>`;
+  }
+  codespan({ text: e }) {
+    return `<code>${T(e, true)}</code>`;
+  }
+  br(e) {
+    return "<br>";
+  }
+  del({ tokens: e }) {
+    return `<del>${this.parser.parseInline(e)}</del>`;
+  }
+  link({ href: e, title: t, tokens: n }) {
+    let r2 = this.parser.parseInline(n), i = J(e);
+    if (i === null) return r2;
+    e = i;
+    let s = '<a href="' + e + '"';
+    return t && (s += ' title="' + T(t) + '"'), s += ">" + r2 + "</a>", s;
+  }
+  image({ href: e, title: t, text: n, tokens: r2 }) {
+    r2 && (n = this.parser.parseInline(r2, this.parser.textRenderer));
+    let i = J(e);
+    if (i === null) return T(n);
+    e = i;
+    let s = `<img src="${e}" alt="${T(n)}"`;
+    return t && (s += ` title="${T(t)}"`), s += ">", s;
+  }
+  text(e) {
+    return "tokens" in e && e.tokens ? this.parser.parseInline(e.tokens) : "escaped" in e && e.escaped ? e.text : T(e.text);
+  }
+};
+var $ = class {
+  strong({ text: e }) {
+    return e;
+  }
+  em({ text: e }) {
+    return e;
+  }
+  codespan({ text: e }) {
+    return e;
+  }
+  del({ text: e }) {
+    return e;
+  }
+  html({ text: e }) {
+    return e;
+  }
+  text({ text: e }) {
+    return e;
+  }
+  link({ text: e }) {
+    return "" + e;
+  }
+  image({ text: e }) {
+    return "" + e;
+  }
+  br() {
+    return "";
+  }
+  checkbox({ raw: e }) {
+    return e;
+  }
+};
+var b = class u2 {
+  options;
+  renderer;
+  textRenderer;
+  constructor(e) {
+    this.options = e || O, this.options.renderer = this.options.renderer || new y(), this.renderer = this.options.renderer, this.renderer.options = this.options, this.renderer.parser = this, this.textRenderer = new $();
+  }
+  static parse(e, t) {
+    return new u2(t).parse(e);
+  }
+  static parseInline(e, t) {
+    return new u2(t).parseInline(e);
+  }
+  parse(e) {
+    this.renderer.parser = this;
+    let t = "";
+    for (let n = 0; n < e.length; n++) {
+      let r2 = e[n];
+      if (this.options.extensions?.renderers?.[r2.type]) {
+        let s = r2, a = this.options.extensions.renderers[s.type].call({ parser: this }, s);
+        if (a !== false || !["space", "hr", "heading", "code", "table", "blockquote", "list", "html", "def", "paragraph", "text"].includes(s.type)) {
+          t += a || "";
+          continue;
+        }
+      }
+      let i = r2;
+      switch (i.type) {
+        case "space": {
+          t += this.renderer.space(i);
+          break;
+        }
+        case "hr": {
+          t += this.renderer.hr(i);
+          break;
+        }
+        case "heading": {
+          t += this.renderer.heading(i);
+          break;
+        }
+        case "code": {
+          t += this.renderer.code(i);
+          break;
+        }
+        case "table": {
+          t += this.renderer.table(i);
+          break;
+        }
+        case "blockquote": {
+          t += this.renderer.blockquote(i);
+          break;
+        }
+        case "list": {
+          t += this.renderer.list(i);
+          break;
+        }
+        case "checkbox": {
+          t += this.renderer.checkbox(i);
+          break;
+        }
+        case "html": {
+          t += this.renderer.html(i);
+          break;
+        }
+        case "def": {
+          t += this.renderer.def(i);
+          break;
+        }
+        case "paragraph": {
+          t += this.renderer.paragraph(i);
+          break;
+        }
+        case "text": {
+          t += this.renderer.text(i);
+          break;
+        }
+        default: {
+          let s = 'Token with "' + i.type + '" type was not found.';
+          if (this.options.silent) return console.error(s), "";
+          throw new Error(s);
+        }
+      }
+    }
+    return t;
+  }
+  parseInline(e, t = this.renderer) {
+    this.renderer.parser = this;
+    let n = "";
+    for (let r2 = 0; r2 < e.length; r2++) {
+      let i = e[r2];
+      if (this.options.extensions?.renderers?.[i.type]) {
+        let a = this.options.extensions.renderers[i.type].call({ parser: this }, i);
+        if (a !== false || !["escape", "html", "link", "image", "strong", "em", "codespan", "br", "del", "text"].includes(i.type)) {
+          n += a || "";
+          continue;
+        }
+      }
+      let s = i;
+      switch (s.type) {
+        case "escape": {
+          n += t.text(s);
+          break;
+        }
+        case "html": {
+          n += t.html(s);
+          break;
+        }
+        case "link": {
+          n += t.link(s);
+          break;
+        }
+        case "image": {
+          n += t.image(s);
+          break;
+        }
+        case "checkbox": {
+          n += t.checkbox(s);
+          break;
+        }
+        case "strong": {
+          n += t.strong(s);
+          break;
+        }
+        case "em": {
+          n += t.em(s);
+          break;
+        }
+        case "codespan": {
+          n += t.codespan(s);
+          break;
+        }
+        case "br": {
+          n += t.br(s);
+          break;
+        }
+        case "del": {
+          n += t.del(s);
+          break;
+        }
+        case "text": {
+          n += t.text(s);
+          break;
+        }
+        default: {
+          let a = 'Token with "' + s.type + '" type was not found.';
+          if (this.options.silent) return console.error(a), "";
+          throw new Error(a);
+        }
+      }
+    }
+    return n;
+  }
+};
+var P = class {
+  options;
+  block;
+  constructor(e) {
+    this.options = e || O;
+  }
+  static passThroughHooks = /* @__PURE__ */ new Set(["preprocess", "postprocess", "processAllTokens", "emStrongMask"]);
+  static passThroughHooksRespectAsync = /* @__PURE__ */ new Set(["preprocess", "postprocess", "processAllTokens"]);
+  preprocess(e) {
+    return e;
+  }
+  postprocess(e) {
+    return e;
+  }
+  processAllTokens(e) {
+    return e;
+  }
+  emStrongMask(e) {
+    return e;
+  }
+  provideLexer(e = this.block) {
+    return e ? x.lex : x.lexInline;
+  }
+  provideParser(e = this.block) {
+    return e ? b.parse : b.parseInline;
+  }
+};
+var D = class {
+  defaults = M2();
+  options = this.setOptions;
+  parse = this.parseMarkdown(true);
+  parseInline = this.parseMarkdown(false);
+  Parser = b;
+  Renderer = y;
+  TextRenderer = $;
+  Lexer = x;
+  Tokenizer = w;
+  Hooks = P;
+  constructor(...e) {
+    this.use(...e);
+  }
+  walkTokens(e, t) {
+    let n = [];
+    for (let r2 of e) switch (n = n.concat(t.call(this, r2)), r2.type) {
+      case "table": {
+        let i = r2;
+        for (let s of i.header) n = n.concat(this.walkTokens(s.tokens, t));
+        for (let s of i.rows) for (let a of s) n = n.concat(this.walkTokens(a.tokens, t));
+        break;
+      }
+      case "list": {
+        let i = r2;
+        n = n.concat(this.walkTokens(i.items, t));
+        break;
+      }
+      default: {
+        let i = r2;
+        this.defaults.extensions?.childTokens?.[i.type] ? this.defaults.extensions.childTokens[i.type].forEach((s) => {
+          let a = i[s].flat(1 / 0);
+          n = n.concat(this.walkTokens(a, t));
+        }) : i.tokens && (n = n.concat(this.walkTokens(i.tokens, t)));
+      }
+    }
+    return n;
+  }
+  use(...e) {
+    let t = this.defaults.extensions || { renderers: {}, childTokens: {} };
+    return e.forEach((n) => {
+      let r2 = { ...n };
+      if (r2.async = this.defaults.async || r2.async || false, n.extensions && (n.extensions.forEach((i) => {
+        if (!i.name) throw new Error("extension name required");
+        if ("renderer" in i) {
+          let s = t.renderers[i.name];
+          s ? t.renderers[i.name] = function(...a) {
+            let o2 = i.renderer.apply(this, a);
+            return o2 === false && (o2 = s.apply(this, a)), o2;
+          } : t.renderers[i.name] = i.renderer;
+        }
+        if ("tokenizer" in i) {
+          if (!i.level || i.level !== "block" && i.level !== "inline") throw new Error("extension level must be 'block' or 'inline'");
+          let s = t[i.level];
+          s ? s.unshift(i.tokenizer) : t[i.level] = [i.tokenizer], i.start && (i.level === "block" ? t.startBlock ? t.startBlock.push(i.start) : t.startBlock = [i.start] : i.level === "inline" && (t.startInline ? t.startInline.push(i.start) : t.startInline = [i.start]));
+        }
+        "childTokens" in i && i.childTokens && (t.childTokens[i.name] = i.childTokens);
+      }), r2.extensions = t), n.renderer) {
+        let i = this.defaults.renderer || new y(this.defaults);
+        for (let s in n.renderer) {
+          if (!(s in i)) throw new Error(`renderer '${s}' does not exist`);
+          if (["options", "parser"].includes(s)) continue;
+          let a = s, o2 = n.renderer[a], l = i[a];
+          i[a] = (...p) => {
+            let c = o2.apply(i, p);
+            return c === false && (c = l.apply(i, p)), c || "";
+          };
+        }
+        r2.renderer = i;
+      }
+      if (n.tokenizer) {
+        let i = this.defaults.tokenizer || new w(this.defaults);
+        for (let s in n.tokenizer) {
+          if (!(s in i)) throw new Error(`tokenizer '${s}' does not exist`);
+          if (["options", "rules", "lexer"].includes(s)) continue;
+          let a = s, o2 = n.tokenizer[a], l = i[a];
+          i[a] = (...p) => {
+            let c = o2.apply(i, p);
+            return c === false && (c = l.apply(i, p)), c;
+          };
+        }
+        r2.tokenizer = i;
+      }
+      if (n.hooks) {
+        let i = this.defaults.hooks || new P();
+        for (let s in n.hooks) {
+          if (!(s in i)) throw new Error(`hook '${s}' does not exist`);
+          if (["options", "block"].includes(s)) continue;
+          let a = s, o2 = n.hooks[a], l = i[a];
+          P.passThroughHooks.has(s) ? i[a] = (p) => {
+            if (this.defaults.async && P.passThroughHooksRespectAsync.has(s)) return (async () => {
+              let d = await o2.call(i, p);
+              return l.call(i, d);
+            })();
+            let c = o2.call(i, p);
+            return l.call(i, c);
+          } : i[a] = (...p) => {
+            if (this.defaults.async) return (async () => {
+              let d = await o2.apply(i, p);
+              return d === false && (d = await l.apply(i, p)), d;
+            })();
+            let c = o2.apply(i, p);
+            return c === false && (c = l.apply(i, p)), c;
+          };
+        }
+        r2.hooks = i;
+      }
+      if (n.walkTokens) {
+        let i = this.defaults.walkTokens, s = n.walkTokens;
+        r2.walkTokens = function(a) {
+          let o2 = [];
+          return o2.push(s.call(this, a)), i && (o2 = o2.concat(i.call(this, a))), o2;
+        };
+      }
+      this.defaults = { ...this.defaults, ...r2 };
+    }), this;
+  }
+  setOptions(e) {
+    return this.defaults = { ...this.defaults, ...e }, this;
+  }
+  lexer(e, t) {
+    return x.lex(e, t ?? this.defaults);
+  }
+  parser(e, t) {
+    return b.parse(e, t ?? this.defaults);
+  }
+  parseMarkdown(e) {
+    return (n, r2) => {
+      let i = { ...r2 }, s = { ...this.defaults, ...i }, a = this.onError(!!s.silent, !!s.async);
+      if (this.defaults.async === true && i.async === false) return a(new Error("marked(): The async option was set to true by an extension. Remove async: false from the parse options object to return a Promise."));
+      if (typeof n > "u" || n === null) return a(new Error("marked(): input parameter is undefined or null"));
+      if (typeof n != "string") return a(new Error("marked(): input parameter is of type " + Object.prototype.toString.call(n) + ", string expected"));
+      if (s.hooks && (s.hooks.options = s, s.hooks.block = e), s.async) return (async () => {
+        let o2 = s.hooks ? await s.hooks.preprocess(n) : n, p = await (s.hooks ? await s.hooks.provideLexer(e) : e ? x.lex : x.lexInline)(o2, s), c = s.hooks ? await s.hooks.processAllTokens(p) : p;
+        s.walkTokens && await Promise.all(this.walkTokens(c, s.walkTokens));
+        let h = await (s.hooks ? await s.hooks.provideParser(e) : e ? b.parse : b.parseInline)(c, s);
+        return s.hooks ? await s.hooks.postprocess(h) : h;
+      })().catch(a);
+      try {
+        s.hooks && (n = s.hooks.preprocess(n));
+        let l = (s.hooks ? s.hooks.provideLexer(e) : e ? x.lex : x.lexInline)(n, s);
+        s.hooks && (l = s.hooks.processAllTokens(l)), s.walkTokens && this.walkTokens(l, s.walkTokens);
+        let c = (s.hooks ? s.hooks.provideParser(e) : e ? b.parse : b.parseInline)(l, s);
+        return s.hooks && (c = s.hooks.postprocess(c)), c;
+      } catch (o2) {
+        return a(o2);
+      }
+    };
+  }
+  onError(e, t) {
+    return (n) => {
+      if (n.message += `
+Please report this to https://github.com/markedjs/marked.`, e) {
+        let r2 = "<p>An error occurred:</p><pre>" + T(n.message + "", true) + "</pre>";
+        return t ? Promise.resolve(r2) : r2;
+      }
+      if (t) return Promise.reject(n);
+      throw n;
+    };
+  }
+};
+var L = new D();
+function g(u3, e) {
+  return L.parse(u3, e);
+}
+g.options = g.setOptions = function(u3) {
+  return L.setOptions(u3), g.defaults = L.defaults, G(g.defaults), g;
+};
+g.getDefaults = M2;
+g.defaults = O;
+g.use = function(...u3) {
+  return L.use(...u3), g.defaults = L.defaults, G(g.defaults), g;
+};
+g.walkTokens = function(u3, e) {
+  return L.walkTokens(u3, e);
+};
+g.parseInline = L.parseInline;
+g.Parser = b;
+g.parser = b.parse;
+g.Renderer = y;
+g.TextRenderer = $;
+g.Lexer = x;
+g.lexer = x.lex;
+g.Tokenizer = w;
+g.Hooks = P;
+g.parse = g;
+var Qt = g.options;
+var jt2 = g.setOptions;
+var Ft2 = g.use;
+var Ut = g.walkTokens;
+var Kt = g.parseInline;
+var Xt = b.parse;
+var Jt = x.lex;
+
+// react/components/markdown.tsx
+var import_jsx_runtime25 = __toESM(require_jsx_runtime(), 1);
+function escapeHtml(input) {
+  return input.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+var markdownParser = new D({
+  gfm: true,
+  breaks: true,
+  renderer: {
+    html({ raw }) {
+      return escapeHtml(raw);
+    }
+  }
+});
+function Markdown({ className, text }) {
+  const safeText = text ?? "";
+  const html = React41.useMemo(() => {
+    try {
+      const result = markdownParser.parse(safeText, { async: false });
+      return typeof result === "string" ? result : "";
+    } catch {
+      return escapeHtml(safeText);
+    }
+  }, [safeText]);
+  return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
+    "div",
+    {
+      className,
+      dangerouslySetInnerHTML: { __html: html }
+    }
+  );
+}
+
+// react/features/compact/conversation-message.tsx
+var import_jsx_runtime26 = __toESM(require_jsx_runtime(), 1);
+function AssistantActions() {
+  return /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)("div", { className: "flex gap-1 px-1 text-muted-foreground", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+      Button,
+      {
+        "aria-label": "Like response",
+        className: "h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground",
+        variant: "ghost",
+        size: "sm",
+        children: /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(ThumbsUp, { className: "size-4" })
+      }
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+      Button,
+      {
+        "aria-label": "Dislike response",
+        className: "h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground",
+        variant: "ghost",
+        size: "sm",
+        children: /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(ThumbsDown, { className: "size-4" })
+      }
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+      Button,
+      {
+        "aria-label": "Copy response",
+        className: "h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground",
+        variant: "ghost",
+        size: "sm",
+        children: /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(Copy, { className: "size-4" })
+      }
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+      Button,
+      {
+        "aria-label": "Regenerate response",
+        className: "h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground",
+        variant: "ghost",
+        size: "sm",
+        children: /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(RefreshCw, { className: "size-4" })
+      }
+    )
+  ] });
+}
+var markdownMessageClassName = cn(
+  "grid gap-3",
+  "[&_p]:m-0",
+  "[&_p:not(:last-child)]:mb-3",
+  "[&_h2]:m-0 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:tracking-tight",
+  "[&_h3]:m-0 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:tracking-tight",
+  "[&_h4]:m-0 [&_h4]:text-sm [&_h4]:font-semibold [&_h4]:uppercase [&_h4]:tracking-[0.08em]",
+  "[&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5",
+  "[&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5",
+  "[&_li+li]:mt-2",
+  "[&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/80 [&_pre]:p-3 [&_pre]:text-xs",
+  "[&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:p-0",
+  "[&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-secondary/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[0.85em]",
+  "[&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
+  "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-foreground"
+);
+var ConversationMessage = import_react13.default.memo(
+  function ConversationMessage2({ item }) {
+    const isUser = item.role === "user";
+    const messageClassName = cn(
+      "relative min-w-0 break-words text-sm leading-6",
+      isUser ? "max-w-[82%] rounded-2xl rounded-tr-md bg-secondary px-4 py-3 text-foreground" : "w-full max-w-full px-1 text-foreground",
+      item.markdown && markdownMessageClassName
+    );
+    return /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)("article", { className: cn(
+      "group/message grid w-full max-w-full gap-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none",
+      isUser ? "justify-items-end" : "justify-items-start"
+    ), children: [
+      item.markdown ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(Markdown, { className: messageClassName, text: item.text }) : /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("div", { className: messageClassName, children: item.text }),
+      isUser ? null : /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(AssistantActions, {})
+    ] });
+  },
+  (prev, next) => prev.item.key === next.item.key && prev.item.text === next.item.text && prev.item.role === next.item.role && prev.item.markdown === next.item.markdown && prev.item.timestamp === next.item.timestamp
+);
 
 // react/lib/format-timestamp.ts
 function formatTimestamp(timestamp) {
@@ -29076,268 +37322,23 @@ function formatTimestamp(timestamp) {
   });
 }
 
-// react/ui/markdown.tsx
-var import_react8 = __toESM(require_react(), 1);
-
-// standalone/parse_html_subset.js
-function sanitizeInnerHtml(html, { tags = [] } = {}) {
-  const allowedTags = new Set(tags.map((t) => t.toUpperCase()));
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  function sanitizeNode(node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return node.cloneNode(false);
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return null;
-    }
-    if (!allowedTags.has(node.tagName)) {
-      const frag = document.createDocumentFragment();
-      for (const child of Array.from(node.childNodes)) {
-        const sanitized = sanitizeNode(child);
-        if (sanitized) {
-          frag.appendChild(sanitized);
-        }
-      }
-      return frag;
-    }
-    const clone = document.createElement(node.tagName.toLowerCase());
-    for (const attr of Array.from(node.attributes)) {
-      if (attr.name === "href" || attr.name === "target" || attr.name === "rel") {
-        clone.setAttribute(attr.name, attr.value);
-      }
-    }
-    for (const child of Array.from(node.childNodes)) {
-      const sanitized = sanitizeNode(child);
-      if (sanitized) {
-        clone.appendChild(sanitized);
-      }
-    }
-    return clone;
-  }
-  const out = document.createElement("div");
-  for (const child of Array.from(doc.body.childNodes)) {
-    const sanitized = sanitizeNode(child);
-    if (sanitized) {
-      out.appendChild(sanitized);
-    }
-  }
-  return out.innerHTML;
-}
-
-// views/cards.ts
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-var kMarkdownTags = [
-  "a",
-  "blockquote",
-  "br",
-  "code",
-  "em",
-  "h2",
-  "h3",
-  "h4",
-  "li",
-  "ol",
-  "p",
-  "pre",
-  "strong",
-  "ul"
-];
-function renderInline(text) {
-  let html = escapeHtml(text);
-  const inlineCodeSegments = [];
-  html = html.replace(/`([^`]+)`/g, (_match, code) => {
-    const token = `__MAHO_INLINE_CODE_${inlineCodeSegments.length}__`;
-    inlineCodeSegments.push(`<code>${code}</code>`);
-    return token;
-  });
-  html = html.replace(
-    /\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
-  );
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  for (const [index2, segment] of inlineCodeSegments.entries()) {
-    html = html.replace(`__MAHO_INLINE_CODE_${index2}__`, () => segment);
-  }
-  return html;
-}
-function renderParagraph(lines) {
-  return `<p>${renderInline(lines.join("\n")).replace(/\n/g, "<br>")}</p>`;
-}
-function renderList(items, ordered) {
-  const tagName = ordered ? "ol" : "ul";
-  return `<${tagName}>${items.map((item) => `<li>${renderInline(item).replace(/\n/g, "<br>")}</li>`).join("")}</${tagName}>`;
-}
-function renderBlockquote(lines) {
-  const content = lines.join("\n").trim();
-  if (!content) {
-    return "<blockquote></blockquote>";
-  }
-  return `<blockquote>${content.split(/\n{2,}/).map((paragraph) => `<p>${renderInline(paragraph.trim()).replace(/\n/g, "<br>")}</p>`).join("")}</blockquote>`;
-}
-function renderBlocks(raw) {
-  const normalized = raw.replace(/\r\n?/g, "\n").trim();
-  if (!normalized) {
-    return "<p></p>";
-  }
-  const blocks = [];
-  const lines = normalized.split("\n");
-  let paragraphLines = [];
-  let quoteLines = [];
-  let listItems = [];
-  let listType = null;
-  const flushParagraph = () => {
-    if (!paragraphLines.length) {
-      return;
-    }
-    blocks.push(renderParagraph(paragraphLines));
-    paragraphLines = [];
-  };
-  const flushQuote = () => {
-    if (!quoteLines.length) {
-      return;
-    }
-    blocks.push(renderBlockquote(quoteLines));
-    quoteLines = [];
-  };
-  const flushList = () => {
-    if (!listItems.length || !listType) {
-      return;
-    }
-    blocks.push(renderList(listItems, listType === "ordered"));
-    listItems = [];
-    listType = null;
-  };
-  for (let index2 = 0; index2 < lines.length; index2++) {
-    const line = lines[index2];
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      continue;
-    }
-    if (trimmed.startsWith("```")) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      const codeLines = [];
-      while (++index2 < lines.length && !lines[index2].trim().startsWith("```")) {
-        codeLines.push(lines[index2]);
-      }
-      blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-      continue;
-    }
-    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
-    if (headingMatch) {
-      flushParagraph();
-      flushQuote();
-      flushList();
-      const headingLevel = Math.min(headingMatch[1].length + 1, 4);
-      blocks.push(`<h${headingLevel}>${renderInline(headingMatch[2])}</h${headingLevel}>`);
-      continue;
-    }
-    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
-    if (quoteMatch) {
-      flushParagraph();
-      flushList();
-      quoteLines.push(quoteMatch[1]);
-      continue;
-    }
-    const unorderedMatch = line.match(/^\s*[-*]\s+(.+)$/);
-    if (unorderedMatch) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== "unordered") {
-        flushList();
-      }
-      listType = "unordered";
-      listItems.push(unorderedMatch[1]);
-      continue;
-    }
-    const orderedMatch = line.match(/^\s*\d+\.\s+(.+)$/);
-    if (orderedMatch) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== "ordered") {
-        flushList();
-      }
-      listType = "ordered";
-      listItems.push(orderedMatch[1]);
-      continue;
-    }
-    paragraphLines.push(line);
-  }
-  flushParagraph();
-  flushQuote();
-  flushList();
-  return blocks.join("");
-}
-var kMarkdownAttrs = ["rel", "href", "target"];
-function renderTrustedMarkdown(raw) {
-  try {
-    return sanitizeInnerHtml(renderBlocks(raw), {
-      tags: kMarkdownTags,
-      attrs: kMarkdownAttrs
-    });
-  } catch (_primaryError) {
-    const fallback = `<p>\u26A0\uFE0F \uB80C\uB354 \uC2E4\uD328: \uC548\uC804\uD558\uC9C0 \uC54A\uC740 \uB9C8\uD06C\uC5C5\uC774 \uD3EC\uD568\uB418\uC5C8\uC2B5\uB2C8\uB2E4.</p><pre>${escapeHtml(raw)}</pre>`;
-    try {
-      return sanitizeInnerHtml(fallback, {
-        tags: ["p", "pre"],
-        attrs: []
-      });
-    } catch (_secondaryError) {
-      return "[Maho AI] \uB80C\uB354\uB9C1 \uC624\uB958\uAC00 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4.";
-    }
-  }
-}
-
-// react/ui/markdown.tsx
-var import_jsx_runtime21 = __toESM(require_jsx_runtime(), 1);
-function Markdown({ className, text }) {
-  const html = (0, import_react8.useMemo)(() => renderTrustedMarkdown(text), [text]);
-  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("div", { className, dangerouslySetInnerHTML: { __html: html } });
-}
-
-// react/features/compact/conversation-message.tsx
-var import_jsx_runtime22 = __toESM(require_jsx_runtime(), 1);
-function UserControls() {
-  const actions = [
-    { ariaLabel: "Edit your message", symbol: "edit" },
-    { ariaLabel: "Delete your message", symbol: "trash" }
-  ];
-  return /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: "compact-thread__hover-controls", children: actions.map((action) => /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(
-    Button,
-    {
-      "aria-label": action.ariaLabel,
-      variant: "thread-action",
-      children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Icon, { symbol: action.symbol })
-    },
-    action.ariaLabel
-  )) });
-}
-function ConversationMessage({ item, label }) {
-  const bubbleClassName = cn(
-    "compact-thread__bubble",
-    item.markdown && "compact-thread__bubble--markdown"
-  );
-  return /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("article", { className: `compact-thread__row compact-thread__row--${item.role}`, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { className: "compact-thread__meta", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("span", { className: "compact-thread__meta-label", children: label }),
-      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("span", { className: "compact-thread__meta-time", children: formatTimestamp(item.timestamp) })
-    ] }),
-    item.markdown ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Markdown, { className: bubbleClassName, text: item.text }) : /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: bubbleClassName, children: item.text }),
-    item.role === "user" ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(UserControls, {}) : null
-  ] });
-}
-
 // react/features/compact/conversation-system-item.tsx
-var import_jsx_runtime23 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime27 = __toESM(require_jsx_runtime(), 1);
+function chipClassName(tone) {
+  switch (tone) {
+    case "accent":
+      return "border-primary/40 bg-primary/10 text-primary";
+    case "success":
+      return "border-success/40 bg-success/10 text-success";
+    case "warning":
+      return "border-warning/40 bg-warning/10 text-warning";
+    case "danger":
+      return "border-destructive/40 bg-destructive/10 text-destructive";
+    case "neutral":
+    default:
+      return "border-border/70 bg-secondary/50 text-muted-foreground";
+  }
+}
 function ConversationSystemItem({
   item,
   onRespondToApproval,
@@ -29346,165 +37347,1913 @@ function ConversationSystemItem({
   const approval = item.approval;
   const isApproval = item.kind === "approval" && approval;
   const isPendingApproval = approval?.status === "pending";
-  const approvalTone = approval?.status === "approved" ? "success" : approval?.status === "denied" ? "danger" : "warning";
-  return /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("article", { className: cn(
-    "compact-thread__row",
-    "compact-thread__row--system",
-    isApproval && "compact-thread__row--approval"
-  ), children: /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
-    "div",
-    {
-      className: cn(
-        "compact-thread__system",
-        isApproval && "compact-thread__system--approval"
-      ),
-      "data-tone": isApproval ? approvalTone : item.tone,
-      children: [
-        /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__system-meta", children: [
-          isApproval ? /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__system-copy", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-label", children: "Approval" }),
-            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-text", children: item.text })
-          ] }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__system-copy", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-label", children: item.tone === "danger" ? "Issue" : "Activity" }),
-            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-text", children: item.text })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__meta-time", children: formatTimestamp(item.timestamp) })
-        ] }),
-        !isApproval && item.note ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__system-note", children: item.note }) : null,
-        isApproval ? /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(import_jsx_runtime23.Fragment, { children: [
-          approval.reason ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__system-note compact-thread__system-note--approval", children: approval.reason }) : null,
-          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__approval-actions", children: isPendingApproval ? /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(import_jsx_runtime23.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
-              Button,
-              {
-                disabled: readOnly,
-                variant: "approval-approve",
-                onClick: () => onRespondToApproval(approval.approvalId, true),
-                children: "Accept"
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
-              Button,
-              {
-                disabled: readOnly,
-                variant: "approval-deny",
-                onClick: () => onRespondToApproval(approval.approvalId, false),
-                children: "Reject"
-              }
-            )
-          ] }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__approval-state", children: approval.status === "approved" ? "Approved" : "Rejected" }) })
-        ] }) : null
-      ]
-    }
-  ) });
+  const toneClassName = isApproval ? approval.status === "approved" ? "border-success/60" : approval.status === "denied" ? "border-destructive/60" : "border-warning/60" : item.tone === "success" ? "border-success/60" : item.tone === "warning" ? "border-warning/60" : item.tone === "danger" ? "border-destructive/60" : "border-border/70";
+  return /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("article", { className: "w-full max-w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none", children: /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: cn(
+    "grid gap-3",
+    isApproval ? "rounded-2xl border border-border/80 bg-card/90 p-4 shadow-[var(--shadow-raised)]" : "border-l pl-4",
+    toneClassName
+  ), children: [
+    /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "flex flex-wrap items-start gap-3", children: [
+      isApproval ? /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "grid min-w-0 flex-1 gap-0.5", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground", children: "Approval" }),
+        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "text-sm leading-6 text-foreground", children: item.text })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "grid min-w-0 flex-1 gap-0.5", children: [
+        item.toolName ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "truncate font-mono text-[11px] font-semibold text-muted-foreground", children: item.toolName }) : /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground", children: item.tone === "danger" ? "Issue" : "Activity" }),
+        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "text-sm leading-6 text-foreground/90", children: item.text })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "ml-auto text-[11px] text-muted-foreground", children: formatTimestamp(item.timestamp) })
+    ] }),
+    !isApproval && item.note ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "text-xs leading-5 text-muted-foreground", children: item.note }) : null,
+    item.chips?.length ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "flex flex-wrap gap-1.5", children: item.chips.map((chip) => /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
+      "span",
+      {
+        className: cn(
+          "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+          chipClassName(chip.tone)
+        ),
+        children: chip.text
+      },
+      `${chip.tone}:${chip.text}`
+    )) }) : null,
+    isApproval ? /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)(import_jsx_runtime27.Fragment, { children: [
+      !item.chips?.length ? /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "flex flex-wrap items-center gap-1.5", children: [
+        approval.sensitivity ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "rounded-full border border-border/70 bg-secondary/45 px-2 py-0.5 text-[11px] font-medium text-muted-foreground", children: approval.sensitivity }) : null,
+        approval.approvalPolicy ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "rounded-full border border-border/70 bg-secondary/45 px-2 py-0.5 text-[11px] font-medium text-muted-foreground", children: approval.approvalPolicy }) : null,
+        approval.pageDerivedJustification ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "rounded-full border border-warning/45 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning-foreground", children: "Page-derived justification" }) : null
+      ] }) : null,
+      approval.reason ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "rounded-xl border border-border/80 bg-secondary/40 px-3 py-2 text-xs leading-5 text-muted-foreground", children: approval.reason }) : null,
+      /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "flex flex-wrap items-center gap-2", children: isPendingApproval ? /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)(import_jsx_runtime27.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
+          Button,
+          {
+            className: "bg-success text-foreground hover:bg-success/90",
+            disabled: readOnly,
+            size: "sm",
+            variant: "default",
+            onClick: () => onRespondToApproval(approval.approvalId, true),
+            children: "Accept"
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
+          Button,
+          {
+            disabled: readOnly,
+            size: "sm",
+            variant: "destructive",
+            onClick: () => onRespondToApproval(approval.approvalId, false),
+            children: "Reject"
+          }
+        )
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { className: "text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground", children: approval.status === "approved" ? "Approved" : "Rejected" }) })
+    ] }) : null
+  ] }) });
 }
 
 // react/features/compact/pending-thought.tsx
-var import_jsx_runtime24 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime28 = __toESM(require_jsx_runtime(), 1);
 function PendingThought({ label }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking", children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "compact-thread__pending", children: label }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("article", { className: "w-full motion-safe:animate-pulse motion-reduce:animate-none", children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "px-1 text-sm leading-6 text-muted-foreground", children: label }) });
 }
 
 // react/features/compact/conversation-thread.tsx
-var import_jsx_runtime25 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime29 = __toESM(require_jsx_runtime(), 1);
 function ThinkingBubble({ item }) {
-  const [expanded, setExpanded] = (0, import_react9.useState)(false);
+  const [expanded, setExpanded] = (0, import_react14.useState)(false);
   const preview = item.text.length > 80 && !expanded ? `${item.text.slice(0, 80).trimEnd()}\u2026` : item.text;
-  return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking-content", children: /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)(
-    "div",
+  return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("article", { className: "w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none", children: /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)(
+    "button",
     {
-      className: "compact-thread__bubble compact-thread__bubble--thinking",
+      type: "button",
+      className: "flex w-full items-start gap-3 rounded-xl px-1 py-1 text-left text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       onClick: () => setExpanded(!expanded),
-      role: "button",
-      tabIndex: 0,
-      onKeyDown: (e) => {
-        if (e.key === "Enter" || e.key === " ") setExpanded(!expanded);
-      },
       children: [
-        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { className: "compact-thread__thinking-label", children: "Thinking" }),
-        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { className: "compact-thread__thinking-text", children: preview }),
-        item.text.length > 80 ? /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { className: "compact-thread__thinking-chevron", "data-expanded": expanded, children: expanded ? "\u25BE" : "\u25B8" }) : null
+        /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("div", { className: "min-w-0 flex-1", children: /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { className: "block whitespace-pre-wrap text-xs italic leading-5 text-muted-foreground", children: preview }) }),
+        item.text.length > 80 ? /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(ChevronDown, { className: cn(
+          "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
+          expanded && "rotate-180"
+        ) }) : null
       ]
     }
   ) });
 }
 function ConversationThread({
+  bottomPadding,
   entries,
   onRespondToApproval,
   readOnly,
-  thinkingLabel
+  thinkingLabel,
+  topPadding
 }) {
-  const items = (0, import_react9.useMemo)(() => collectConversationItems(entries), [entries]);
-  const listRef = useAutoScroll(items);
-  return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("main", { className: "compact-thread", children: /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { ref: listRef, className: "compact-thread__list", children: [
-    items.map((item) => {
-      if (item.kind === "thinking") {
-        return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(ThinkingBubble, { item }, item.key);
-      }
-      if (item.role === "system") {
-        return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
-          ConversationSystemItem,
+  const items = (0, import_react14.useMemo)(() => collectConversationItems(entries), [entries]);
+  const autoScrollDependency = (0, import_react14.useMemo)(
+    () => ({ bottomPadding, items, thinkingLabel, topPadding }),
+    [bottomPadding, items, thinkingLabel, topPadding]
+  );
+  const listRef = useAutoScroll(autoScrollDependency);
+  return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("main", { className: "flex h-full min-h-0 flex-1 flex-col", children: /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)(
+    "div",
+    {
+      ref: listRef,
+      className: "flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-[520px]:gap-3 max-[520px]:px-3",
+      style: { paddingBottom: bottomPadding, paddingTop: topPadding },
+      children: [
+        items.map((item) => {
+          if (item.kind === "thinking") {
+            return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(ThinkingBubble, { item }, item.key);
+          }
+          if (item.role === "system") {
+            return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(
+              ConversationSystemItem,
+              {
+                item,
+                readOnly,
+                onRespondToApproval
+              },
+              item.key
+            );
+          }
+          return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(
+            ConversationMessage,
+            {
+              item
+            },
+            item.key
+          );
+        }),
+        thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(PendingThought, { label: thinkingLabel }) : null
+      ]
+    }
+  ) });
+}
+
+// react/features/trust-ceremony/trust-ceremony.tsx
+var import_react15 = __toESM(require_react(), 1);
+var import_jsx_runtime30 = __toESM(require_jsx_runtime(), 1);
+function TrustCeremony({ store: store2 }) {
+  const state = useAppState(store2);
+  const { mcpServers, activeWorkspace } = state;
+  const [showAdvanced, setShowAdvanced] = import_react15.default.useState(false);
+  const [customTools, setCustomTools] = import_react15.default.useState("");
+  const [submitting, setSubmitting] = import_react15.default.useState(false);
+  if (!activeWorkspace) {
+    return null;
+  }
+  const untrustedServer = mcpServers.find(
+    (s) => s.workspaceId === activeWorkspace.id && !s.trusted
+  );
+  if (!untrustedServer) {
+    return null;
+  }
+  const handleApproveAll = async () => {
+    setSubmitting(true);
+    try {
+      await store2.approveMcpServerTrust(activeWorkspace.id, untrustedServer.name, []);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  const handleApproveCustom = async () => {
+    const tools = customTools.split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+    if (tools.length === 0) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await store2.approveMcpServerTrust(activeWorkspace.id, untrustedServer.name, tools);
+      setCustomTools("");
+      setShowAdvanced(false);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  const handleDeny = async () => {
+    setSubmitting(true);
+    try {
+      await store2.removeMcpServer(activeWorkspace.id, untrustedServer.name);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("div", { className: "m-3 p-4 rounded-2xl border border-warning/30 bg-warning/5 shadow-[var(--shadow-raised)] animate-in fade-in slide-in-from-top-4 duration-300", children: /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "flex items-start gap-3", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("div", { className: "p-2 rounded-xl bg-warning/20 text-warning", children: /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(ShieldAlert, { className: "size-5" }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "flex-1 min-w-0", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("h4", { className: "text-sm font-semibold text-foreground flex items-center gap-1.5", children: "Security: Trust MCP Server?" }),
+      /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("p", { className: "mt-1 text-xs text-muted-foreground leading-normal", children: [
+        "MCP Server ",
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("code", { className: "bg-muted px-1 py-0.5 rounded text-[11px] font-mono", children: untrustedServer.name }),
+        " is requesting integration. Trusting grants this server permission to run its tools without a per-call prompt. Sensitive tools always prompt regardless."
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "mt-3 flex items-center gap-1.5 bg-muted/50 border border-border/40 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-muted-foreground w-fit", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Key, { className: "size-3.5 text-warning/80" }),
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Keychain ID:" }),
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { className: "font-semibold text-foreground select-all", children: untrustedServer.authKeychainId || "none (default)" })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "mt-4 flex items-center gap-2 flex-wrap", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)(
+          Button,
           {
-            item,
-            readOnly,
-            onRespondToApproval
-          },
-          item.key
-        );
-      }
-      return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
-        ConversationMessage,
-        {
-          item,
-          label: item.role === "user" ? "You" : "Maho"
-        },
-        item.key
-      );
-    }),
-    thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(PendingThought, { label: thinkingLabel }) : null
+            size: "sm",
+            variant: "default",
+            onClick: handleApproveAll,
+            disabled: submitting,
+            className: "flex items-center gap-1 h-8 px-3 rounded-lg text-xs font-medium bg-warning text-warning-foreground hover:bg-warning/90",
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Check, { className: "size-3.5" }),
+              /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Trust All Tools" })
+            ]
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)(
+          Button,
+          {
+            size: "sm",
+            variant: "outline",
+            onClick: () => setShowAdvanced((v3) => !v3),
+            disabled: submitting,
+            className: "flex items-center gap-1 h-8 px-3 rounded-lg text-xs font-medium border-border/60",
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(SlidersVertical, { className: "size-3.5" }),
+              /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: showAdvanced ? "Hide" : "Customize" })
+            ]
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)(
+          Button,
+          {
+            size: "sm",
+            variant: "outline",
+            onClick: handleDeny,
+            disabled: submitting,
+            className: "flex items-center gap-1 h-8 px-3 rounded-lg text-xs font-medium border-border/60 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30",
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(X, { className: "size-3.5" }),
+              /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Deny / Block" })
+            ]
+          }
+        )
+      ] }),
+      showAdvanced ? /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "mt-3 p-3 rounded-lg border border-border/40 bg-background/50 space-y-2", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("label", { className: "text-[11px] font-medium text-foreground block", children: [
+          "Trust only these tools ",
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { className: "text-muted-foreground", children: "(comma-separated names)" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(
+            "input",
+            {
+              type: "text",
+              value: customTools,
+              onChange: (e) => setCustomTools(e.target.value),
+              placeholder: "e.g. read_file, list_directory",
+              disabled: submitting,
+              className: "mt-1 w-full h-8 px-2 rounded-md border border-border/60 bg-background text-xs font-mono focus:outline-none focus:ring-1 focus:ring-warning/50"
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "flex items-center gap-2", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(
+            Button,
+            {
+              size: "sm",
+              variant: "default",
+              onClick: handleApproveCustom,
+              disabled: submitting || customTools.trim().length === 0,
+              className: "h-7 px-3 rounded-md text-xs",
+              children: "Approve Selected"
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { className: "text-[10px] text-muted-foreground", children: "Tools not in this list will always prompt." })
+        ] })
+      ] }) : null
+    ] })
   ] }) });
 }
 
 // react/features/compact/compact-shell.tsx
-var import_jsx_runtime26 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime31 = __toESM(require_jsx_runtime(), 1);
 function CompactShell({
+  store: store2,
+  bottomPadding = 0,
   entries,
   hasMessages,
   onClosePanel,
+  onConnect,
   onGetViewMode,
   onOpenSettings,
   onRespondToApproval,
   onSetViewMode,
   onStartSession,
+  onTidyTabs,
   readOnly,
-  state,
-  thinkingLabel
+  thinkingLabel,
+  topOverlayRef,
+  topPadding = 0
 }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)(import_jsx_runtime26.Fragment, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+  if (hasMessages || thinkingLabel) {
+    return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "relative h-full min-h-0", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(
+        "div",
+        {
+          ref: topOverlayRef,
+          className: "absolute inset-x-0 top-0 z-20 grid gap-3 bg-background px-3 pb-6 pt-3 after:pointer-events-none after:absolute after:inset-x-0 after:bottom-[-1.5rem] after:h-6 after:bg-gradient-to-b after:from-background after:to-transparent max-[520px]:gap-2 max-[520px]:px-2 max-[520px]:pb-5 max-[520px]:pt-2",
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
+              CompactTopbar,
+              {
+                store: store2,
+                onClosePanel,
+                onGetViewMode,
+                onOpenSettings,
+                onSetViewMode,
+                onStartSession,
+                onTidyTabs
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(TrustCeremony, { store: store2 })
+          ]
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
+        ConversationThread,
+        {
+          bottomPadding,
+          entries,
+          onRespondToApproval,
+          readOnly,
+          thinkingLabel,
+          topPadding
+        }
+      )
+    ] });
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "flex h-full min-h-0 flex-col gap-3 max-[520px]:gap-2", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
       CompactTopbar,
       {
+        store: store2,
         onClosePanel,
         onGetViewMode,
         onOpenSettings,
         onSetViewMode,
-        onStartSession
+        onStartSession,
+        onTidyTabs
       }
     ),
-    hasMessages || thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
-      ConversationThread,
-      {
-        entries,
-        onRespondToApproval,
-        readOnly,
-        thinkingLabel
-      }
-    ) : /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(CompactStage, { state })
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(TrustCeremony, { store: store2 }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(CompactStage, { onConnect })
   ] });
 }
 
-// react/ui/textarea.tsx
-var import_react10 = __toESM(require_react(), 1);
+// react/features/compact/tab-tidy-modal.tsx
+var import_react16 = __toESM(require_react(), 1);
+
+// ../maho_common/react/ui/dialog.tsx
+var React45 = __toESM(require_react());
+
+// ../../../../website/node_modules/@radix-ui/react-dialog/dist/index.mjs
+var React44 = __toESM(require_react(), 1);
+var import_jsx_runtime32 = __toESM(require_jsx_runtime(), 1);
+var __defProp23 = Object.defineProperty;
+var __name22 = (target, value) => __defProp23(target, "name", { value, configurable: true });
+var DIALOG_NAME = "Dialog";
+var [createDialogContext, createDialogScope] = createContextScope(DIALOG_NAME);
+var [DialogProvider, useDialogContext] = createDialogContext(DIALOG_NAME);
+var Dialog = /* @__PURE__ */ __name22((props) => {
+  const {
+    __scopeDialog,
+    children,
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+    modal = true
+  } = props;
+  const triggerRef = React44.useRef(null);
+  const contentRef = React44.useRef(null);
+  const [open, setOpen] = useControllableState({
+    prop: openProp,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+    caller: DIALOG_NAME
+  });
+  const [titleCount, setTitleCount] = React44.useState(0);
+  const [descriptionCount, setDescriptionCount] = React44.useState(0);
+  return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+    DialogProvider,
+    {
+      scope: __scopeDialog,
+      triggerRef,
+      contentRef,
+      contentId: useId(),
+      titleId: useId(),
+      descriptionId: useId(),
+      titlePresent: titleCount > 0,
+      descriptionPresent: descriptionCount > 0,
+      setTitleCount,
+      setDescriptionCount,
+      open,
+      onOpenChange: setOpen,
+      onOpenToggle: React44.useCallback(() => setOpen((prevOpen) => !prevOpen), [setOpen]),
+      modal,
+      children
+    }
+  );
+}, "Dialog");
+var PORTAL_NAME4 = "DialogPortal";
+var [PortalProvider3, usePortalContext3] = createDialogContext(PORTAL_NAME4, {
+  forceMount: void 0
+});
+var DialogPortal = /* @__PURE__ */ __name22((props) => {
+  const { __scopeDialog, forceMount, children, container } = props;
+  const context = useDialogContext(PORTAL_NAME4, __scopeDialog);
+  return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(PortalProvider3, { scope: __scopeDialog, forceMount, children: React44.Children.map(children, (child) => /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Portal, { asChild: true, container, children: child }) })) });
+}, "DialogPortal");
+var OVERLAY_NAME = "DialogOverlay";
+var DialogOverlay = /* @__PURE__ */ React44.forwardRef(
+  /* @__PURE__ */ __name22(function DialogOverlay2(props, forwardedRef) {
+    const portalContext = usePortalContext3(OVERLAY_NAME, props.__scopeDialog);
+    const { forceMount = portalContext.forceMount, ...overlayProps } = props;
+    const context = useDialogContext(OVERLAY_NAME, props.__scopeDialog);
+    return context.modal ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(DialogOverlayImpl, { ...overlayProps, ref: forwardedRef }) }) : null;
+  }, "DialogOverlay")
+);
+var Slot3 = createSlot("DialogOverlay.RemoveScroll");
+var DialogOverlayImpl = /* @__PURE__ */ React44.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name22(function DialogOverlayImpl2(props, forwardedRef) {
+    const { __scopeDialog, ...overlayProps } = props;
+    const context = useDialogContext(OVERLAY_NAME, __scopeDialog);
+    const registerDismissableSurface = useDismissableLayerSurface();
+    const composedRefs = useComposedRefs(forwardedRef, registerDismissableSurface);
+    return (
+      // Make sure `Content` is scrollable even when it doesn't live inside `RemoveScroll`
+      // ie. when `Overlay` and `Content` are siblings
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Combination_default, { as: Slot3, allowPinchZoom: true, shards: [context.contentRef], children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        Primitive.div,
+        {
+          "data-state": getState(context.open),
+          ...overlayProps,
+          ref: composedRefs,
+          style: { pointerEvents: "auto", ...overlayProps.style }
+        }
+      ) })
+    );
+  }, "DialogOverlayImpl")
+);
+var CONTENT_NAME5 = "DialogContent";
+var DialogContent = /* @__PURE__ */ React44.forwardRef(
+  /* @__PURE__ */ __name22(function DialogContent2(props, forwardedRef) {
+    const portalContext = usePortalContext3(CONTENT_NAME5, props.__scopeDialog);
+    const { forceMount = portalContext.forceMount, ...contentProps } = props;
+    const context = useDialogContext(CONTENT_NAME5, props.__scopeDialog);
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Presence, { present: forceMount || context.open, children: context.modal ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(DialogContentModal, { ...contentProps, ref: forwardedRef }) : /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(DialogContentNonModal, { ...contentProps, ref: forwardedRef }) });
+  }, "DialogContent")
+);
+var DialogContentModal = /* @__PURE__ */ React44.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name22(function DialogContentModal2(props, forwardedRef) {
+    const context = useDialogContext(CONTENT_NAME5, props.__scopeDialog);
+    const contentRef = React44.useRef(null);
+    const composedRefs = useComposedRefs(forwardedRef, context.contentRef, contentRef);
+    React44.useEffect(() => {
+      const content = contentRef.current;
+      if (content) return hideOthers(content);
+    }, []);
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+      DialogContentImpl,
+      {
+        ...props,
+        ref: composedRefs,
+        trapFocus: context.open,
+        disableOutsidePointerEvents: context.open,
+        onCloseAutoFocus: composeEventHandlers(props.onCloseAutoFocus, (event) => {
+          event.preventDefault();
+          context.triggerRef.current?.focus();
+        }),
+        onPointerDownOutside: composeEventHandlers(props.onPointerDownOutside, (event) => {
+          const originalEvent = event.detail.originalEvent;
+          const ctrlLeftClick = originalEvent.button === 0 && originalEvent.ctrlKey === true;
+          const isRightClick = originalEvent.button === 2 || ctrlLeftClick;
+          if (isRightClick) event.preventDefault();
+        }),
+        onFocusOutside: composeEventHandlers(
+          props.onFocusOutside,
+          (event) => event.preventDefault()
+        )
+      }
+    );
+  }, "DialogContentModal")
+);
+var DialogContentNonModal = /* @__PURE__ */ React44.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name22(function DialogContentNonModal2(props, forwardedRef) {
+    const context = useDialogContext(CONTENT_NAME5, props.__scopeDialog);
+    const hasInteractedOutsideRef = React44.useRef(false);
+    const hasPointerDownOutsideRef = React44.useRef(false);
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+      DialogContentImpl,
+      {
+        ...props,
+        ref: forwardedRef,
+        trapFocus: false,
+        disableOutsidePointerEvents: false,
+        onCloseAutoFocus: (event) => {
+          props.onCloseAutoFocus?.(event);
+          if (!event.defaultPrevented) {
+            if (!hasInteractedOutsideRef.current) context.triggerRef.current?.focus();
+            event.preventDefault();
+          }
+          hasInteractedOutsideRef.current = false;
+          hasPointerDownOutsideRef.current = false;
+        },
+        onInteractOutside: (event) => {
+          props.onInteractOutside?.(event);
+          if (!event.defaultPrevented) {
+            hasInteractedOutsideRef.current = true;
+            if (event.detail.originalEvent.type === "pointerdown") {
+              hasPointerDownOutsideRef.current = true;
+            }
+          }
+          const target = event.target;
+          const targetIsTrigger = context.triggerRef.current?.contains(target);
+          if (targetIsTrigger) event.preventDefault();
+          if (event.detail.originalEvent.type === "focusin" && hasPointerDownOutsideRef.current) {
+            event.preventDefault();
+          }
+        }
+      }
+    );
+  }, "DialogContentNonModal")
+);
+var DialogContentImpl = /* @__PURE__ */ React44.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name22(function DialogContentImpl2(props, forwardedRef) {
+    const { __scopeDialog, trapFocus, onOpenAutoFocus, onCloseAutoFocus, ...contentProps } = props;
+    const context = useDialogContext(CONTENT_NAME5, __scopeDialog);
+    useFocusGuards();
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(import_jsx_runtime32.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+      FocusScope,
+      {
+        asChild: true,
+        loop: true,
+        trapped: trapFocus,
+        onMountAutoFocus: onOpenAutoFocus,
+        onUnmountAutoFocus: onCloseAutoFocus,
+        children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+          DismissableLayer,
+          {
+            role: "dialog",
+            id: context.contentId,
+            "aria-describedby": context.descriptionPresent ? context.descriptionId : void 0,
+            "aria-labelledby": context.titlePresent ? context.titleId : void 0,
+            "data-state": getState(context.open),
+            ...contentProps,
+            ref: forwardedRef,
+            deferPointerDownOutside: true,
+            onDismiss: () => context.onOpenChange(false)
+          }
+        )
+      }
+    ) });
+  }, "DialogContentImpl")
+);
+var TITLE_NAME = "DialogTitle";
+var DialogTitle = /* @__PURE__ */ React44.forwardRef(
+  /* @__PURE__ */ __name22(function DialogTitle2(props, forwardedRef) {
+    const { __scopeDialog, ...titleProps } = props;
+    const context = useDialogContext(TITLE_NAME, __scopeDialog);
+    const { setTitleCount } = context;
+    useLayoutEffect2(() => {
+      setTitleCount((count3) => count3 + 1);
+      return () => setTitleCount((count3) => count3 - 1);
+    }, [setTitleCount]);
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Primitive.h2, { id: context.titleId, ...titleProps, ref: forwardedRef });
+  }, "DialogTitle")
+);
+var DESCRIPTION_NAME = "DialogDescription";
+var DialogDescription = /* @__PURE__ */ React44.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name22(function DialogDescription2(props, forwardedRef) {
+    const { __scopeDialog, ...descriptionProps } = props;
+    const context = useDialogContext(DESCRIPTION_NAME, __scopeDialog);
+    const { setDescriptionCount } = context;
+    useLayoutEffect2(() => {
+      setDescriptionCount((count3) => count3 + 1);
+      return () => setDescriptionCount((count3) => count3 - 1);
+    }, [setDescriptionCount]);
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Primitive.p, { id: context.descriptionId, ...descriptionProps, ref: forwardedRef });
+  }, "DialogDescription")
+);
+var CLOSE_NAME = "DialogClose";
+var DialogClose = /* @__PURE__ */ React44.forwardRef(
+  /* @__PURE__ */ __name22(function DialogClose2(props, forwardedRef) {
+    const { __scopeDialog, ...closeProps } = props;
+    const context = useDialogContext(CLOSE_NAME, __scopeDialog);
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+      Primitive.button,
+      {
+        type: "button",
+        ...closeProps,
+        ref: forwardedRef,
+        onClick: composeEventHandlers(props.onClick, () => context.onOpenChange(false))
+      }
+    );
+  }, "DialogClose")
+);
+function getState(open) {
+  return open ? "open" : "closed";
+}
+__name22(getState, "getState");
+
+// ../maho_common/react/ui/dialog.tsx
+var import_jsx_runtime33 = __toESM(require_jsx_runtime());
+var Dialog2 = Dialog;
+var DialogOverlay3 = React45.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+  DialogOverlay,
+  {
+    ref,
+    className: cn(
+      "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      className
+    ),
+    ...props
+  }
+));
+DialogOverlay3.displayName = DialogOverlay.displayName;
+var DialogContent3 = React45.forwardRef(({ className, children, ...props }, ref) => {
+  const container = document.getElementById("app") || void 0;
+  return /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(DialogPortal, { container, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(DialogOverlay3, {}),
+    /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(
+      DialogContent,
+      {
+        ref,
+        className: cn(
+          "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-1/2 data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-1/2 rounded-lg",
+          className
+        ),
+        ...props,
+        children: [
+          children,
+          /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(DialogClose, { className: "absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(X, { className: "h-4 w-4" }),
+            /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("span", { className: "sr-only", children: "Close" })
+          ] })
+        ]
+      }
+    )
+  ] });
+});
+DialogContent3.displayName = DialogContent.displayName;
+var DialogHeader = ({
+  className,
+  ...props
+}) => /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+  "div",
+  {
+    className: cn(
+      "flex flex-col space-y-1.5 text-center sm:text-left",
+      className
+    ),
+    ...props
+  }
+);
+DialogHeader.displayName = "DialogHeader";
+var DialogFooter = ({
+  className,
+  ...props
+}) => /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+  "div",
+  {
+    className: cn(
+      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+      className
+    ),
+    ...props
+  }
+);
+DialogFooter.displayName = "DialogFooter";
+var DialogTitle3 = React45.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+  DialogTitle,
+  {
+    ref,
+    className: cn(
+      "text-lg font-semibold leading-none tracking-tight",
+      className
+    ),
+    ...props
+  }
+));
+DialogTitle3.displayName = DialogTitle.displayName;
+var DialogDescription3 = React45.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+  DialogDescription,
+  {
+    ref,
+    className: cn("text-sm text-muted-foreground", className),
+    ...props
+  }
+));
+DialogDescription3.displayName = DialogDescription.displayName;
+
+// ../maho_common/react/ui/checkbox.tsx
+var React47 = __toESM(require_react());
+
+// ../../../../website/node_modules/@radix-ui/react-checkbox/dist/index.mjs
+var React46 = __toESM(require_react(), 1);
+var import_jsx_runtime34 = __toESM(require_jsx_runtime(), 1);
+var __defProp24 = Object.defineProperty;
+var __name23 = (target, value) => __defProp24(target, "name", { value, configurable: true });
+var CHECKBOX_NAME = "Checkbox";
+var [createCheckboxContext, createCheckboxScope] = createContextScope(CHECKBOX_NAME);
+var [CheckboxProviderImpl, useCheckboxContext] = createCheckboxContext(CHECKBOX_NAME);
+function CheckboxProvider(props) {
+  const {
+    __scopeCheckbox,
+    checked: checkedProp,
+    children,
+    defaultChecked,
+    disabled,
+    form,
+    name,
+    onCheckedChange,
+    required,
+    value = "on",
+    // @ts-expect-error
+    internal_do_not_use_render
+  } = props;
+  const [checked, setChecked] = useControllableState({
+    prop: checkedProp,
+    defaultProp: defaultChecked ?? false,
+    onChange: onCheckedChange,
+    caller: CHECKBOX_NAME
+  });
+  const [control, setControl] = React46.useState(null);
+  const [bubbleInput, setBubbleInput] = React46.useState(null);
+  const hasConsumerStoppedPropagationRef = React46.useRef(false);
+  const [userInteractionCount, onUserInteraction] = React46.useReducer(
+    (count3) => count3 + 1,
+    0
+  );
+  const isFormControl = control ? !!form || !!control.closest("form") : (
+    // We set this to true by default so that events bubble to forms without JS (SSR)
+    true
+  );
+  const context = {
+    checked,
+    disabled,
+    setChecked,
+    control,
+    setControl,
+    name,
+    form,
+    value,
+    hasConsumerStoppedPropagationRef,
+    userInteractionCount,
+    onUserInteraction,
+    required,
+    defaultChecked: isIndeterminate2(defaultChecked) ? false : defaultChecked,
+    isFormControl,
+    bubbleInput,
+    setBubbleInput
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+    CheckboxProviderImpl,
+    {
+      scope: __scopeCheckbox,
+      ...context,
+      children: isFunction2(internal_do_not_use_render) ? internal_do_not_use_render(context) : children
+    }
+  );
+}
+__name23(CheckboxProvider, "CheckboxProvider");
+var TRIGGER_NAME3 = "CheckboxTrigger";
+var CheckboxTrigger = /* @__PURE__ */ React46.forwardRef(
+  /* @__PURE__ */ __name23(function CheckboxTrigger2({ __scopeCheckbox, onKeyDown, onClick, ...checkboxProps }, forwardedRef) {
+    const {
+      control,
+      value,
+      disabled,
+      checked,
+      required,
+      setControl,
+      setChecked,
+      hasConsumerStoppedPropagationRef,
+      onUserInteraction,
+      isFormControl,
+      bubbleInput
+    } = useCheckboxContext(TRIGGER_NAME3, __scopeCheckbox);
+    const composedRefs = useComposedRefs(forwardedRef, setControl);
+    const initialCheckedStateRef = React46.useRef(checked);
+    React46.useEffect(() => {
+      const form = control?.form;
+      if (form) {
+        const reset = /* @__PURE__ */ __name23(() => setChecked(initialCheckedStateRef.current), "reset");
+        form.addEventListener("reset", reset);
+        return () => form.removeEventListener("reset", reset);
+      }
+    }, [control, setChecked]);
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+      Primitive.button,
+      {
+        type: "button",
+        role: "checkbox",
+        "aria-checked": isIndeterminate2(checked) ? "mixed" : checked,
+        "aria-required": required,
+        "data-state": getState2(checked),
+        "data-disabled": disabled ? "" : void 0,
+        disabled,
+        value,
+        ...checkboxProps,
+        ref: composedRefs,
+        onKeyDown: composeEventHandlers(onKeyDown, (event) => {
+          if (event.key === "Enter") event.preventDefault();
+        }),
+        onClick: composeEventHandlers(onClick, (event) => {
+          onUserInteraction();
+          setChecked((prevChecked) => isIndeterminate2(prevChecked) ? true : !prevChecked);
+          if (bubbleInput && isFormControl) {
+            hasConsumerStoppedPropagationRef.current = event.isPropagationStopped();
+            if (!hasConsumerStoppedPropagationRef.current) event.stopPropagation();
+          }
+        })
+      }
+    );
+  }, "CheckboxTrigger")
+);
+var Checkbox = /* @__PURE__ */ React46.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name23(function Checkbox2(props, forwardedRef) {
+    const {
+      __scopeCheckbox,
+      name,
+      checked,
+      defaultChecked,
+      required,
+      disabled,
+      value,
+      onCheckedChange,
+      form,
+      ...checkboxProps
+    } = props;
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+      CheckboxProvider,
+      {
+        __scopeCheckbox,
+        checked,
+        defaultChecked,
+        disabled,
+        required,
+        onCheckedChange,
+        name,
+        form,
+        value,
+        internal_do_not_use_render: ({ isFormControl }) => /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)(import_jsx_runtime34.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+            CheckboxTrigger,
+            {
+              ...checkboxProps,
+              ref: forwardedRef,
+              __scopeCheckbox
+            }
+          ),
+          isFormControl && /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+            CheckboxBubbleInput,
+            {
+              __scopeCheckbox
+            }
+          )
+        ] })
+      }
+    );
+  }, "Checkbox")
+);
+var INDICATOR_NAME2 = "CheckboxIndicator";
+var CheckboxIndicator = /* @__PURE__ */ React46.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name23(function CheckboxIndicator2(props, forwardedRef) {
+    const { __scopeCheckbox, forceMount, ...indicatorProps } = props;
+    const context = useCheckboxContext(INDICATOR_NAME2, __scopeCheckbox);
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+      Presence,
+      {
+        present: forceMount || isIndeterminate2(context.checked) || context.checked === true,
+        children: /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+          Primitive.span,
+          {
+            "data-state": getState2(context.checked),
+            "data-disabled": context.disabled ? "" : void 0,
+            ...indicatorProps,
+            ref: forwardedRef,
+            style: { pointerEvents: "none", ...props.style }
+          }
+        )
+      }
+    );
+  }, "CheckboxIndicator")
+);
+var BUBBLE_INPUT_NAME = "CheckboxBubbleInput";
+var CheckboxBubbleInput = /* @__PURE__ */ React46.forwardRef(
+  // blank line to reduce diff noise
+  /* @__PURE__ */ __name23(function CheckboxBubbleInput2({ __scopeCheckbox, onClick, ...props }, forwardedRef) {
+    const {
+      control,
+      hasConsumerStoppedPropagationRef,
+      userInteractionCount,
+      checked,
+      defaultChecked,
+      required,
+      disabled,
+      name,
+      value,
+      form,
+      bubbleInput,
+      setBubbleInput
+    } = useCheckboxContext(BUBBLE_INPUT_NAME, __scopeCheckbox);
+    const composedRefs = useComposedRefs(forwardedRef, setBubbleInput);
+    const controlSize = useSize(control);
+    const shouldStopClickPropagationRef = React46.useRef(false);
+    const prevCheckedRef = React46.useRef(checked);
+    const prevUserInteractionCountRef = React46.useRef(userInteractionCount);
+    React46.useEffect(() => {
+      const input = bubbleInput;
+      if (!input) return;
+      const inputProto = window.HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(
+        inputProto,
+        "checked"
+      );
+      const setChecked = descriptor.set;
+      const isUserInteraction = userInteractionCount !== prevUserInteractionCountRef.current;
+      prevUserInteractionCountRef.current = userInteractionCount;
+      const checkedChanged = prevCheckedRef.current !== checked;
+      prevCheckedRef.current = checked;
+      const bubbles = !(isUserInteraction && hasConsumerStoppedPropagationRef.current);
+      if (checkedChanged && setChecked) {
+        shouldStopClickPropagationRef.current = !isUserInteraction;
+        const event = new Event("click", { bubbles });
+        input.indeterminate = isIndeterminate2(checked);
+        setChecked.call(input, isIndeterminate2(checked) ? false : checked);
+        input.dispatchEvent(event);
+        shouldStopClickPropagationRef.current = false;
+      }
+    }, [bubbleInput, checked, hasConsumerStoppedPropagationRef, userInteractionCount]);
+    const defaultCheckedRef = React46.useRef(isIndeterminate2(checked) ? false : checked);
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+      Primitive.input,
+      {
+        type: "checkbox",
+        "aria-hidden": true,
+        defaultChecked: defaultChecked ?? defaultCheckedRef.current,
+        required,
+        disabled,
+        name,
+        value,
+        form,
+        ...props,
+        tabIndex: -1,
+        ref: composedRefs,
+        onClick: composeEventHandlers(onClick, (event) => {
+          if (shouldStopClickPropagationRef.current) {
+            event.stopPropagation();
+          }
+        }),
+        style: {
+          ...props.style,
+          ...controlSize,
+          position: "absolute",
+          pointerEvents: "none",
+          opacity: 0,
+          margin: 0,
+          // We transform because the input is absolutely positioned but we have
+          // rendered it **after** the button. This pulls it back to sit on top
+          // of the button.
+          transform: "translateX(-100%)"
+        }
+      }
+    );
+  }, "CheckboxBubbleInput")
+);
+function isFunction2(value) {
+  return typeof value === "function";
+}
+__name23(isFunction2, "isFunction");
+function isIndeterminate2(checked) {
+  return checked === "indeterminate";
+}
+__name23(isIndeterminate2, "isIndeterminate");
+function getState2(checked) {
+  return isIndeterminate2(checked) ? "indeterminate" : checked ? "checked" : "unchecked";
+}
+__name23(getState2, "getState");
+
+// ../maho_common/react/ui/checkbox.tsx
+var import_jsx_runtime35 = __toESM(require_jsx_runtime());
+var Checkbox3 = React47.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(
+  Checkbox,
+  {
+    ref,
+    className: cn(
+      "peer h-4 w-4 shrink-0 rounded-sm border border-primary shadow focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
+      className
+    ),
+    ...props,
+    children: /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(
+      CheckboxIndicator,
+      {
+        className: cn("flex items-center justify-center text-current"),
+        children: /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Check, { className: "h-3 w-3" })
+      }
+    )
+  }
+));
+Checkbox3.displayName = Checkbox.displayName;
+
+// react/features/compact/tab-tidy-modal.tsx
+var import_jsx_runtime36 = __toESM(require_jsx_runtime(), 1);
+function TabTidyModal({ folders, onApply, onDismiss }) {
+  const [checked, setChecked] = (0, import_react16.useState)(() => new Set(folders.map((_2, i) => i)));
+  function toggle(index2) {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(index2)) {
+        next.delete(index2);
+      } else {
+        next.add(index2);
+      }
+      return next;
+    });
+  }
+  function handleApply() {
+    onApply(folders.filter((_2, i) => checked.has(i)));
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Dialog2, { open: true, onOpenChange: (open) => {
+    if (!open) onDismiss();
+  }, children: /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(DialogContent3, { className: "sm:max-w-[425px] glass-strong", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(DialogHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(DialogTitle3, { children: "Tab Tidy Suggestions" }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("p", { className: "text-sm text-muted-foreground", children: "Select folders to create:" }),
+    /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("ul", { className: "flex flex-col gap-2 max-h-60 overflow-y-auto py-2", children: folders.map((folder, i) => /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { className: "flex items-center space-x-2 p-2 border rounded hover:bg-surface-hover cursor-pointer", onClick: () => toggle(i), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
+        Checkbox3,
+        {
+          checked: checked.has(i),
+          onCheckedChange: () => toggle(i)
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("span", { className: "flex-1 text-sm font-medium", children: folder.name }),
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("span", { className: "text-xs text-muted-foreground", children: [
+        folder.tabIds.length,
+        " tab",
+        folder.tabIds.length !== 1 ? "s" : ""
+      ] })
+    ] }, i)) }),
+    /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(DialogFooter, { className: "gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { variant: "outline", onClick: onDismiss, children: "Cancel" }),
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
+        Button,
+        {
+          variant: "default",
+          onClick: handleApply,
+          disabled: checked.size === 0,
+          children: "Apply"
+        }
+      )
+    ] })
+  ] }) });
+}
+
+// react/features/compact/voice-input-modal.tsx
+var import_jsx_runtime37 = __toESM(require_jsx_runtime(), 1);
+var WAVEFORM_WEIGHTS = [1, 0.94, 0.88, 0.8, 0.72, 0.64, 0.56, 0.48, 0.42, 0.36, 0.3, 0.25, 0.2, 0.16];
+var WAVEFORM_HEIGHT_CLASSES = [
+  "h-2",
+  "h-3",
+  "h-4",
+  "h-5",
+  "h-6",
+  "h-7",
+  "h-8",
+  "h-9",
+  "h-10"
+];
+function getPortalContainer() {
+  if (typeof document === "undefined") {
+    return void 0;
+  }
+  return document.getElementById("app") || void 0;
+}
+function getWaveformHeightClass(level, weight) {
+  if (level <= 0.03) {
+    return "h-1";
+  }
+  const bucket = Math.min(
+    WAVEFORM_HEIGHT_CLASSES.length - 1,
+    Math.max(0, Math.round(level * weight * (WAVEFORM_HEIGHT_CLASSES.length - 1)))
+  );
+  return WAVEFORM_HEIGHT_CLASSES[bucket] || "h-2";
+}
+function VoiceStatusIndicator({ listening }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: cn(
+    "grid size-24 place-items-center rounded-full border border-border bg-secondary text-muted-foreground shadow-[var(--shadow-raised)]",
+    listening && "bg-primary/10 text-primary"
+  ), children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Mic, { className: "size-9" }) });
+}
+function VoiceWaveform({ level, listening }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: "mx-auto flex h-14 w-[min(17rem,78vw)] items-center justify-center gap-2 rounded-full border border-border bg-secondary/70 px-5 shadow-[var(--shadow-raised)]", children: WAVEFORM_WEIGHTS.map((weight, index2) => /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
+    "span",
+    {
+      "aria-hidden": "true",
+      className: cn(
+        "shrink-0 rounded-full bg-foreground/80 transition-[height,opacity] duration-150 ease-out",
+        listening ? `w-1.5 ${getWaveformHeightClass(level, weight)}` : "size-1 opacity-70"
+      )
+    },
+    `voice-wave-${index2}`
+  )) });
+}
+function VoiceInputModal({ onClose, onRetry, state }) {
+  const voice = state.voice;
+  const transcript = voice.transcript.trim();
+  const listening = voice.status === "listening";
+  const hasError = voice.status === "error" || voice.status === "unsupported";
+  const headline = listening && transcript ? transcript : "Hi! How can I help?";
+  const errorMessage = voice.error || (voice.status === "unsupported" ? "Voice input is not supported in this WebUI host." : "Voice input stopped unexpectedly.");
+  return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Dialog, { open: voice.active, onOpenChange: (open) => {
+    if (!open) onClose();
+  }, children: /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(DialogPortal, { container: getPortalContainer(), children: [
+    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(DialogOverlay, { className: "fixed inset-0 z-40 bg-background/80 data-[state=closed]:animate-voice-fade-out data-[state=open]:animate-voice-fade-in" }),
+    /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(
+      DialogContent,
+      {
+        "aria-describedby": "voice-input-description",
+        className: "fixed inset-0 z-50 grid min-h-0 overflow-hidden outline-none data-[state=closed]:animate-voice-fade-out data-[state=open]:animate-voice-fade-in",
+        onOpenAutoFocus: (event) => event.preventDefault(),
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(DialogClose, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
+            Button,
+            {
+              "aria-label": "Close voice input",
+              className: "absolute right-4 top-4 z-20 rounded-full border-border bg-secondary text-muted-foreground shadow-none hover:bg-surface-hover hover:text-foreground",
+              size: "icon",
+              variant: "outline",
+              children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(X, { className: "size-4" })
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("section", { className: "relative z-10 grid min-h-0 grid-rows-[1fr_auto] px-6 py-7 text-center text-foreground max-[520px]:px-4", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: "flex min-h-0 flex-col items-center justify-center gap-7", children: hasError ? /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "grid max-w-sm gap-5 rounded-[2rem] border border-border bg-card p-6 shadow-[var(--shadow-overlay)]", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: "mx-auto grid size-16 place-items-center rounded-full bg-secondary text-muted-foreground", children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(MicOff, { className: "size-7" }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "grid gap-2", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(DialogTitle, { className: "text-2xl font-semibold tracking-tight text-foreground", children: "Voice needs attention" }),
+                /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(DialogDescription, { id: "voice-input-description", className: "text-sm leading-6 text-muted-foreground", children: errorMessage })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "grid grid-cols-2 gap-2", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Button, { className: "rounded-full", type: "button", variant: "secondary", onClick: onRetry, children: "Retry" }),
+                /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Button, { className: "rounded-full", type: "button", variant: "outline", onClick: onClose, children: "Close" })
+              ] })
+            ] }) : /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(import_jsx_runtime37.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(VoiceStatusIndicator, { listening }),
+              /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "grid w-full max-w-xl gap-3", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(DialogTitle, { className: "mx-auto max-h-36 max-w-full overflow-y-auto text-balance break-words text-4xl font-semibold leading-tight tracking-[-0.04em] text-foreground max-[520px]:text-3xl", children: headline }),
+                /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(DialogDescription, { id: "voice-input-description", className: "text-sm font-medium text-muted-foreground", children: listening ? "Listening\u2026 speak naturally." : "Opening microphone\u2026" })
+              ] })
+            ] }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(VoiceWaveform, { level: voice.level, listening: listening && !hasError })
+          ] })
+        ]
+      }
+    )
+  ] }) });
+}
+
+// react/features/compact/slash-editors.tsx
+var import_react17 = __toESM(require_react(), 1);
+
+// ../maho_common/react/ui/input.tsx
+var React49 = __toESM(require_react());
+var import_jsx_runtime38 = __toESM(require_jsx_runtime());
+var Input = React49.forwardRef(
+  ({ className, type, ...props }, ref) => {
+    return /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(
+      "input",
+      {
+        type,
+        className: cn(
+          "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+          className
+        ),
+        ref,
+        ...props
+      }
+    );
+  }
+);
+Input.displayName = "Input";
+
+// react/features/compact/slash-editors.tsx
+var import_jsx_runtime39 = __toESM(require_jsx_runtime(), 1);
+function SlashEditors({ store: store2 }) {
+  const state = useAppState(store2);
+  const { activeSlashEditor, activeWorkspace } = state;
+  if (!activeSlashEditor || !activeWorkspace) {
+    return null;
+  }
+  const handleClose = () => {
+    store2.setActiveSlashEditor(null);
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "mx-3 my-2 p-4 rounded-2xl glass relative animate-in fade-in zoom-in-95 duration-200", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+      Button,
+      {
+        variant: "ghost",
+        size: "icon",
+        onClick: handleClose,
+        className: "absolute top-2 right-2 rounded-full size-6 text-muted-foreground hover:text-foreground hover:bg-surface-hover",
+        children: /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(X, { className: "size-3.5" })
+      }
+    ),
+    activeSlashEditor === "agent-new" && /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(AgentNewForm, { store: store2, onClose: handleClose }),
+    activeSlashEditor === "mcp-add" && /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(McpAddForm, { store: store2, workspaceId: activeWorkspace.id, onClose: handleClose }),
+    activeSlashEditor === "cli-add" && /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(CliAddForm, { store: store2, workspaceId: activeWorkspace.id, onClose: handleClose })
+  ] });
+}
+function AgentNewForm({ store: store2, onClose }) {
+  const [name, setName] = (0, import_react17.useState)("");
+  const [prompt, setPrompt] = (0, import_react17.useState)("");
+  const [model, setModel] = (0, import_react17.useState)("");
+  const [loading, setLoading] = (0, import_react17.useState)(false);
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setLoading(true);
+    try {
+      const success = await store2.createAiProfile(
+        name.trim(),
+        prompt.trim(),
+        model.trim() || null
+      );
+      if (success) {
+        onClose();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("form", { onSubmit: handleSave, className: "flex flex-col gap-3", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex items-center gap-2 text-primary font-semibold text-xs uppercase tracking-wider", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(User, { className: "size-4" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { children: "Create AI Agent Profile" })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Profile Name" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "e.g. Code Reviewer",
+          value: name,
+          onChange: (e) => setName(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "System Instruction Prompt" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        "textarea",
+        {
+          placeholder: "You are an expert developer...",
+          value: prompt,
+          onChange: (e) => setPrompt(e.target.value),
+          className: "min-h-[80px] max-h-40 p-2 text-xs rounded-lg border border-input bg-background resize-y focus-visible:ring-1 focus-visible:ring-ring outline-none"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Preferred Model (Optional)" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "gemini-2.5-pro",
+          value: model,
+          onChange: (e) => setModel(e.target.value),
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex justify-end gap-2 mt-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Button, { type: "button", variant: "ghost", size: "sm", onClick: onClose, className: "h-8 text-xs rounded-lg", children: "Cancel" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)(Button, { type: "submit", disabled: loading, size: "sm", className: "h-8 text-xs rounded-lg gap-1.5", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Check, { className: "size-3.5" }),
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { children: "Save Profile" })
+      ] })
+    ] })
+  ] });
+}
+function McpAddForm({
+  store: store2,
+  workspaceId,
+  onClose
+}) {
+  const [name, setName] = (0, import_react17.useState)("");
+  const [transport, setTransport] = (0, import_react17.useState)("stdio");
+  const [command, setCommand] = (0, import_react17.useState)("");
+  const [url, setUrl] = (0, import_react17.useState)("");
+  const [authKeychainId, setAuthKeychainId] = (0, import_react17.useState)("");
+  const [loading, setLoading] = (0, import_react17.useState)(false);
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setLoading(true);
+    try {
+      const config = {
+        id: "",
+        // Will be generated in backend
+        workspaceId,
+        name: name.trim(),
+        transport: transport === "stdio" ? 0 : 1,
+        // Mojom Enum
+        command: transport === "stdio" ? command.trim() : null,
+        url: transport === "http" ? url.trim() : null,
+        authKeychainId: authKeychainId.trim() || null,
+        trusted: false,
+        // Must start untrusted
+        trustedTools: null,
+        timeoutMs: 1e4,
+        outputCapBytes: 1048576,
+        createdAt: "",
+        updatedAt: ""
+      };
+      const success = await store2.registerMcpServer(workspaceId, JSON.stringify(config));
+      if (success) {
+        onClose();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("form", { onSubmit: handleSave, className: "flex flex-col gap-3", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex items-center gap-2 text-primary font-semibold text-xs uppercase tracking-wider", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Database, { className: "size-4" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { children: "Add MCP Client Server" })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Server Name" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "e.g. filesystem",
+          value: name,
+          onChange: (e) => setName(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Transport Protocol" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex gap-2", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+          Button,
+          {
+            type: "button",
+            variant: transport === "stdio" ? "default" : "outline",
+            size: "sm",
+            onClick: () => setTransport("stdio"),
+            className: "flex-1 h-8 text-xs rounded-lg",
+            children: "Stdio (Local Command)"
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+          Button,
+          {
+            type: "button",
+            variant: transport === "http" ? "default" : "outline",
+            size: "sm",
+            onClick: () => setTransport("http"),
+            className: "flex-1 h-8 text-xs rounded-lg",
+            children: "HTTP / SSE"
+          }
+        )
+      ] })
+    ] }),
+    transport === "stdio" ? /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Shell Command / JSON Array" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "npx -y @modelcontextprotocol/server-filesystem /path",
+          value: command,
+          onChange: (e) => setCommand(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg font-mono"
+        }
+      )
+    ] }) : /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "SSE Server URL" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "http://localhost:3001/sse",
+          value: url,
+          onChange: (e) => setUrl(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg font-mono"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Auth Keychain ID (Optional)" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "e.g. github_token",
+          value: authKeychainId,
+          onChange: (e) => setAuthKeychainId(e.target.value),
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex justify-end gap-2 mt-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Button, { type: "button", variant: "ghost", size: "sm", onClick: onClose, className: "h-8 text-xs rounded-lg", children: "Cancel" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)(Button, { type: "submit", disabled: loading, size: "sm", className: "h-8 text-xs rounded-lg gap-1.5", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Check, { className: "size-3.5" }),
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { children: "Add Server" })
+      ] })
+    ] })
+  ] });
+}
+function CliAddForm({
+  store: store2,
+  workspaceId,
+  onClose
+}) {
+  const [name, setName] = (0, import_react17.useState)("");
+  const [description, setDescription] = (0, import_react17.useState)("");
+  const [commandTemplate, setCommandTemplate] = (0, import_react17.useState)("");
+  const [workingDir, setWorkingDir] = (0, import_react17.useState)("");
+  const [loading, setLoading] = (0, import_react17.useState)(false);
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!name.trim() || !commandTemplate.trim()) return;
+    setLoading(true);
+    try {
+      const tool = {
+        id: "",
+        // Will be generated in backend
+        workspaceId,
+        name: name.trim(),
+        description: description.trim(),
+        commandTemplate: commandTemplate.trim(),
+        parametersSchema: {
+          type: "object",
+          properties: {},
+          required: []
+        },
+        sensitive: true,
+        // Always sensitive by default
+        timeoutMs: 1e4,
+        outputCapBytes: 1048576,
+        workingDirectory: workingDir.trim() || null,
+        createdAt: "",
+        updatedAt: ""
+      };
+      const success = await store2.registerCliTool(workspaceId, JSON.stringify(tool));
+      if (success) {
+        onClose();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("form", { onSubmit: handleSave, className: "flex flex-col gap-3", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex items-center gap-2 text-primary font-semibold text-xs uppercase tracking-wider", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Code, { className: "size-4" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { children: "Add CLI Tool" })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Tool Name" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "e.g. git_diff",
+          value: name,
+          onChange: (e) => setName(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Description (for LLM discovery)" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "Retrieve git diff in the current workspace",
+          value: description,
+          onChange: (e) => setDescription(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Command Template" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "git diff HEAD",
+          value: commandTemplate,
+          onChange: (e) => setCommandTemplate(e.target.value),
+          required: true,
+          className: "h-8 text-xs rounded-lg font-mono"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("label", { className: "text-[10px] font-medium text-muted-foreground", children: "Working Directory (Optional)" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(
+        Input,
+        {
+          placeholder: "/Users/example/project",
+          value: workingDir,
+          onChange: (e) => setWorkingDir(e.target.value),
+          className: "h-8 text-xs rounded-lg"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "flex justify-end gap-2 mt-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Button, { type: "button", variant: "ghost", size: "sm", onClick: onClose, className: "h-8 text-xs rounded-lg", children: "Cancel" }),
+      /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)(Button, { type: "submit", disabled: loading, size: "sm", className: "h-8 text-xs rounded-lg gap-1.5", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Check, { className: "size-3.5" }),
+        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { children: "Add Tool" })
+      ] })
+    ] })
+  ] });
+}
+
+// react/features/compact/composer.tsx
+var import_react19 = __toESM(require_react(), 1);
+
+// ../maho_common/react/ui/popover.tsx
+var React52 = __toESM(require_react());
+
+// ../../../../website/node_modules/@radix-ui/react-popover/dist/index.mjs
+var React51 = __toESM(require_react(), 1);
+var import_jsx_runtime40 = __toESM(require_jsx_runtime(), 1);
+var POPOVER_NAME = "Popover";
+var [createPopoverContext, createPopoverScope] = createContextScope(POPOVER_NAME, [
+  createPopperScope
+]);
+var usePopperScope3 = createPopperScope();
+var [PopoverProvider, usePopoverContext] = createPopoverContext(POPOVER_NAME);
+var Popover = (props) => {
+  const {
+    __scopePopover,
+    children,
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+    modal = false
+  } = props;
+  const popperScope = usePopperScope3(__scopePopover);
+  const triggerRef = React51.useRef(null);
+  const [hasCustomAnchor, setHasCustomAnchor] = React51.useState(false);
+  const [open, setOpen] = useControllableState({
+    prop: openProp,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+    caller: POPOVER_NAME
+  });
+  return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+    PopoverProvider,
+    {
+      scope: __scopePopover,
+      contentId: useId(),
+      triggerRef,
+      open,
+      onOpenChange: setOpen,
+      onOpenToggle: React51.useCallback(() => setOpen((prevOpen) => !prevOpen), [setOpen]),
+      hasCustomAnchor,
+      onCustomAnchorAdd: React51.useCallback(() => setHasCustomAnchor(true), []),
+      onCustomAnchorRemove: React51.useCallback(() => setHasCustomAnchor(false), []),
+      modal,
+      children
+    }
+  ) });
+};
+Popover.displayName = POPOVER_NAME;
+var ANCHOR_NAME3 = "PopoverAnchor";
+var PopoverAnchor = React51.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopePopover, ...anchorProps } = props;
+    const context = usePopoverContext(ANCHOR_NAME3, __scopePopover);
+    const popperScope = usePopperScope3(__scopePopover);
+    const { onCustomAnchorAdd, onCustomAnchorRemove } = context;
+    React51.useEffect(() => {
+      onCustomAnchorAdd();
+      return () => onCustomAnchorRemove();
+    }, [onCustomAnchorAdd, onCustomAnchorRemove]);
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Anchor, { ...popperScope, ...anchorProps, ref: forwardedRef });
+  }
+);
+PopoverAnchor.displayName = ANCHOR_NAME3;
+var TRIGGER_NAME4 = "PopoverTrigger";
+var PopoverTrigger = React51.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopePopover, ...triggerProps } = props;
+    const context = usePopoverContext(TRIGGER_NAME4, __scopePopover);
+    const popperScope = usePopperScope3(__scopePopover);
+    const composedTriggerRef = useComposedRefs(forwardedRef, context.triggerRef);
+    const trigger = /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+      Primitive.button,
+      {
+        type: "button",
+        "aria-haspopup": "dialog",
+        "aria-expanded": context.open,
+        "aria-controls": context.open ? context.contentId : void 0,
+        "data-state": getState3(context.open),
+        ...triggerProps,
+        ref: composedTriggerRef,
+        onClick: composeEventHandlers(props.onClick, context.onOpenToggle)
+      }
+    );
+    return context.hasCustomAnchor ? trigger : /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Anchor, { asChild: true, ...popperScope, children: trigger });
+  }
+);
+PopoverTrigger.displayName = TRIGGER_NAME4;
+var PORTAL_NAME5 = "PopoverPortal";
+var [PortalProvider4, usePortalContext4] = createPopoverContext(PORTAL_NAME5, {
+  forceMount: void 0
+});
+var PopoverPortal = (props) => {
+  const { __scopePopover, forceMount, children, container } = props;
+  const context = usePopoverContext(PORTAL_NAME5, __scopePopover);
+  return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(PortalProvider4, { scope: __scopePopover, forceMount, children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Portal, { asChild: true, container, children }) }) });
+};
+PopoverPortal.displayName = PORTAL_NAME5;
+var CONTENT_NAME6 = "PopoverContent";
+var PopoverContent = React51.forwardRef(
+  (props, forwardedRef) => {
+    const portalContext = usePortalContext4(CONTENT_NAME6, props.__scopePopover);
+    const { forceMount = portalContext.forceMount, ...contentProps } = props;
+    const context = usePopoverContext(CONTENT_NAME6, props.__scopePopover);
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Presence, { present: forceMount || context.open, children: context.modal ? /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(PopoverContentModal, { ...contentProps, ref: forwardedRef }) : /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(PopoverContentNonModal, { ...contentProps, ref: forwardedRef }) });
+  }
+);
+PopoverContent.displayName = CONTENT_NAME6;
+var Slot4 = createSlot("PopoverContent.RemoveScroll");
+var PopoverContentModal = React51.forwardRef(
+  (props, forwardedRef) => {
+    const context = usePopoverContext(CONTENT_NAME6, props.__scopePopover);
+    const contentRef = React51.useRef(null);
+    const composedRefs = useComposedRefs(forwardedRef, contentRef);
+    const isRightClickOutsideRef = React51.useRef(false);
+    React51.useEffect(() => {
+      const content = contentRef.current;
+      if (content) return hideOthers(content);
+    }, []);
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Combination_default, { as: Slot4, allowPinchZoom: true, children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+      PopoverContentImpl,
+      {
+        ...props,
+        ref: composedRefs,
+        trapFocus: context.open,
+        disableOutsidePointerEvents: true,
+        onCloseAutoFocus: composeEventHandlers(props.onCloseAutoFocus, (event) => {
+          event.preventDefault();
+          if (!isRightClickOutsideRef.current) context.triggerRef.current?.focus();
+        }),
+        onPointerDownOutside: composeEventHandlers(
+          props.onPointerDownOutside,
+          (event) => {
+            const originalEvent = event.detail.originalEvent;
+            const ctrlLeftClick = originalEvent.button === 0 && originalEvent.ctrlKey === true;
+            const isRightClick = originalEvent.button === 2 || ctrlLeftClick;
+            isRightClickOutsideRef.current = isRightClick;
+          },
+          { checkForDefaultPrevented: false }
+        ),
+        onFocusOutside: composeEventHandlers(
+          props.onFocusOutside,
+          (event) => event.preventDefault(),
+          { checkForDefaultPrevented: false }
+        )
+      }
+    ) });
+  }
+);
+var PopoverContentNonModal = React51.forwardRef(
+  (props, forwardedRef) => {
+    const context = usePopoverContext(CONTENT_NAME6, props.__scopePopover);
+    const hasInteractedOutsideRef = React51.useRef(false);
+    const hasPointerDownOutsideRef = React51.useRef(false);
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+      PopoverContentImpl,
+      {
+        ...props,
+        ref: forwardedRef,
+        trapFocus: false,
+        disableOutsidePointerEvents: false,
+        onCloseAutoFocus: (event) => {
+          props.onCloseAutoFocus?.(event);
+          if (!event.defaultPrevented) {
+            if (!hasInteractedOutsideRef.current) context.triggerRef.current?.focus();
+            event.preventDefault();
+          }
+          hasInteractedOutsideRef.current = false;
+          hasPointerDownOutsideRef.current = false;
+        },
+        onInteractOutside: (event) => {
+          props.onInteractOutside?.(event);
+          if (!event.defaultPrevented) {
+            hasInteractedOutsideRef.current = true;
+            if (event.detail.originalEvent.type === "pointerdown") {
+              hasPointerDownOutsideRef.current = true;
+            }
+          }
+          const target = event.target;
+          const targetIsTrigger = context.triggerRef.current?.contains(target);
+          if (targetIsTrigger) event.preventDefault();
+          if (event.detail.originalEvent.type === "focusin" && hasPointerDownOutsideRef.current) {
+            event.preventDefault();
+          }
+        }
+      }
+    );
+  }
+);
+var PopoverContentImpl = React51.forwardRef(
+  (props, forwardedRef) => {
+    const {
+      __scopePopover,
+      trapFocus,
+      onOpenAutoFocus,
+      onCloseAutoFocus,
+      disableOutsidePointerEvents,
+      onEscapeKeyDown,
+      onPointerDownOutside,
+      onFocusOutside,
+      onInteractOutside,
+      ...contentProps
+    } = props;
+    const context = usePopoverContext(CONTENT_NAME6, __scopePopover);
+    const popperScope = usePopperScope3(__scopePopover);
+    useFocusGuards();
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+      FocusScope,
+      {
+        asChild: true,
+        loop: true,
+        trapped: trapFocus,
+        onMountAutoFocus: onOpenAutoFocus,
+        onUnmountAutoFocus: onCloseAutoFocus,
+        children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+          DismissableLayer,
+          {
+            asChild: true,
+            disableOutsidePointerEvents,
+            onInteractOutside,
+            onEscapeKeyDown,
+            onPointerDownOutside,
+            onFocusOutside,
+            onDismiss: () => context.onOpenChange(false),
+            deferPointerDownOutside: true,
+            children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+              Content,
+              {
+                "data-state": getState3(context.open),
+                role: "dialog",
+                id: context.contentId,
+                ...popperScope,
+                ...contentProps,
+                ref: forwardedRef,
+                style: {
+                  ...contentProps.style,
+                  // re-namespace exposed content custom properties
+                  ...{
+                    "--radix-popover-content-transform-origin": "var(--radix-popper-transform-origin)",
+                    "--radix-popover-content-available-width": "var(--radix-popper-available-width)",
+                    "--radix-popover-content-available-height": "var(--radix-popper-available-height)",
+                    "--radix-popover-trigger-width": "var(--radix-popper-anchor-width)",
+                    "--radix-popover-trigger-height": "var(--radix-popper-anchor-height)"
+                  }
+                }
+              }
+            )
+          }
+        )
+      }
+    );
+  }
+);
+var CLOSE_NAME2 = "PopoverClose";
+var PopoverClose = React51.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopePopover, ...closeProps } = props;
+    const context = usePopoverContext(CLOSE_NAME2, __scopePopover);
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(
+      Primitive.button,
+      {
+        type: "button",
+        ...closeProps,
+        ref: forwardedRef,
+        onClick: composeEventHandlers(props.onClick, () => context.onOpenChange(false))
+      }
+    );
+  }
+);
+PopoverClose.displayName = CLOSE_NAME2;
+var ARROW_NAME4 = "PopoverArrow";
+var PopoverArrow = React51.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopePopover, ...arrowProps } = props;
+    const popperScope = usePopperScope3(__scopePopover);
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Arrow3, { ...popperScope, ...arrowProps, ref: forwardedRef });
+  }
+);
+PopoverArrow.displayName = ARROW_NAME4;
+function getState3(open) {
+  return open ? "open" : "closed";
+}
+var Root23 = Popover;
+var Trigger3 = PopoverTrigger;
+var Portal5 = PopoverPortal;
+var Content24 = PopoverContent;
+
+// ../maho_common/react/ui/popover.tsx
+var import_jsx_runtime41 = __toESM(require_jsx_runtime());
+var Popover2 = Root23;
+var PopoverTrigger2 = Trigger3;
+var PopoverContent2 = React52.forwardRef(({ className, align = "center", sideOffset = 4, ...props }, ref) => {
+  const container = document.getElementById("app") || void 0;
+  return /* @__PURE__ */ (0, import_jsx_runtime41.jsx)(Portal5, { container, children: /* @__PURE__ */ (0, import_jsx_runtime41.jsx)(
+    Content24,
+    {
+      ref,
+      align,
+      sideOffset,
+      className: cn(
+        "z-50 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        className
+      ),
+      ...props
+    }
+  ) });
+});
+PopoverContent2.displayName = Content24.displayName;
+
+// ../maho_common/react/ui/alert.tsx
+var React53 = __toESM(require_react());
+var import_jsx_runtime42 = __toESM(require_jsx_runtime());
+var alertVariants = cva(
+  "relative w-full rounded-lg border px-4 py-3 text-sm [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground [&>svg~*]:pl-7",
+  {
+    variants: {
+      variant: {
+        default: "bg-background text-foreground",
+        destructive: "border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive",
+        warning: "border-warning/50 text-warning dark:border-warning [&>svg]:text-warning",
+        success: "border-success/50 text-success dark:border-success [&>svg]:text-success"
+      }
+    },
+    defaultVariants: {
+      variant: "default"
+    }
+  }
+);
+var Alert = React53.forwardRef(({ className, variant, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime42.jsx)(
+  "div",
+  {
+    ref,
+    role: "alert",
+    className: cn(alertVariants({ variant }), className),
+    ...props
+  }
+));
+Alert.displayName = "Alert";
+var AlertTitle = React53.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime42.jsx)(
+  "h5",
+  {
+    ref,
+    className: cn("mb-1 font-medium leading-none tracking-tight", className),
+    ...props
+  }
+));
+AlertTitle.displayName = "AlertTitle";
+var AlertDescription = React53.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime42.jsx)(
+  "div",
+  {
+    ref,
+    className: cn("text-xs [&_p]:leading-relaxed", className),
+    ...props
+  }
+));
+AlertDescription.displayName = "AlertDescription";
+
+// react/components/composer-textarea.tsx
+var import_react18 = __toESM(require_react(), 1);
 
 // react/lib/editable-snapshot.ts
 function captureEditableState(editable) {
@@ -29532,10 +39281,32 @@ function restoreEditableState(editable, snapshot, restoreFocus) {
   editable.scrollTop = snapshot.scrollTop;
 }
 
-// react/ui/textarea.tsx
-var import_jsx_runtime27 = __toESM(require_jsx_runtime(), 1);
+// ../maho_common/react/ui/textarea.tsx
+var React54 = __toESM(require_react());
+var import_jsx_runtime43 = __toESM(require_jsx_runtime());
+var Textarea = React54.forwardRef(
+  ({ className, ...props }, ref) => {
+    return /* @__PURE__ */ (0, import_jsx_runtime43.jsx)(
+      "textarea",
+      {
+        className: cn(
+          "flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+          className
+        ),
+        ref,
+        ...props
+      }
+    );
+  }
+);
+Textarea.displayName = "Textarea";
+
+// react/components/composer-textarea.tsx
+var import_jsx_runtime44 = __toESM(require_jsx_runtime(), 1);
 function ComposerTextarea({
-  className = "compact-composer__input",
+  className,
+  focusRequest,
+  onPasteFiles,
   onSubmit,
   onValueChange,
   placeholder,
@@ -29543,11 +39314,19 @@ function ComposerTextarea({
   rows,
   value
 }) {
-  const textareaRef = (0, import_react10.useRef)(null);
-  const compositionActiveRef = (0, import_react10.useRef)(false);
-  const pendingSnapshotRef = (0, import_react10.useRef)(null);
-  const pendingValueRef = (0, import_react10.useRef)(null);
-  (0, import_react10.useLayoutEffect)(() => {
+  const textareaRef = (0, import_react18.useRef)(null);
+  const lastFocusRequestRef = (0, import_react18.useRef)(focusRequest);
+  const compositionActiveRef = (0, import_react18.useRef)(false);
+  const pendingSnapshotRef = (0, import_react18.useRef)(null);
+  const pendingValueRef = (0, import_react18.useRef)(null);
+  (0, import_react18.useLayoutEffect)(() => {
+    if (lastFocusRequestRef.current === focusRequest) {
+      return;
+    }
+    lastFocusRequestRef.current = focusRequest;
+    textareaRef.current?.focus({ preventScroll: true });
+  }, [focusRequest]);
+  (0, import_react18.useLayoutEffect)(() => {
     const textarea = textareaRef.current;
     if (!textarea || textarea.value === value) {
       return;
@@ -29562,7 +39341,7 @@ function ComposerTextarea({
     textarea.value = value;
     restoreEditableState(textarea, snapshot, restoreFocus);
   }, [value]);
-  const commitPendingValue = (0, import_react10.useCallback)(() => {
+  const commitPendingValue = (0, import_react18.useCallback)(() => {
     const textarea = textareaRef.current;
     if (!textarea || pendingValueRef.current === null) {
       return;
@@ -29573,8 +39352,8 @@ function ComposerTextarea({
     pendingSnapshotRef.current = null;
     pendingValueRef.current = null;
   }, []);
-  return /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
-    "textarea",
+  return /* @__PURE__ */ (0, import_jsx_runtime44.jsx)(
+    Textarea,
     {
       ref: textareaRef,
       "aria-label": "Message Maho AI",
@@ -29592,6 +39371,14 @@ function ComposerTextarea({
         compositionActiveRef.current = true;
       },
       onInput: (event) => onValueChange(event.currentTarget.value),
+      onPaste: (event) => {
+        const files = Array.from(event.clipboardData?.files || []);
+        if (!files.length || !onPasteFiles) {
+          return;
+        }
+        event.preventDefault();
+        onPasteFiles(files);
+      },
       onKeyDown: (event) => {
         if (readOnly) {
           return;
@@ -29610,129 +39397,874 @@ function ComposerTextarea({
 }
 
 // react/features/compact/composer.tsx
-var import_jsx_runtime28 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime45 = __toESM(require_jsx_runtime(), 1);
+var pickerRowClassName = "group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors outline-none hover:bg-surface-hover focus-visible:bg-surface-selected focus-visible:ring-1 focus-visible:ring-ring data-[focused=true]:bg-surface-selected disabled:cursor-default disabled:opacity-40";
+var pickerStatusClassName = "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground";
+var pickerSectionClassName = "grid gap-1.5";
+var pickerSectionLabelClassName = "px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground";
+function Favicon({ pageUrl }) {
+  if (!pageUrl) return null;
+  let src = "";
+  try {
+    const url = new URL("chrome://favicon2/");
+    url.searchParams.set("pageUrl", pageUrl);
+    url.searchParams.set("size", "16");
+    url.searchParams.set("allowGoogleServerFallback", "0");
+    src = url.toString();
+  } catch {
+    return null;
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+    "img",
+    {
+      alt: "",
+      "aria-hidden": "true",
+      className: "size-4 rounded-[3px]",
+      height: 16,
+      src,
+      width: 16
+    }
+  );
+}
+function PickerStatus({
+  title
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: pickerStatusClassName, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "flex size-4 items-center justify-center text-muted-foreground", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Globe, { className: "size-4" }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "truncate text-sm text-inherit", children: title })
+  ] });
+}
+function PickerOptionRow({
+  active,
+  disabled,
+  faviconUrl,
+  metaLabel,
+  onClick,
+  title
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+    "button",
+    {
+      "aria-pressed": active,
+      "data-picker-row": "true",
+      className: cn(
+        pickerRowClassName,
+        active && "bg-surface-selected text-foreground",
+        disabled && "opacity-40"
+      ),
+      disabled,
+      type: "button",
+      onClick,
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "flex size-4 items-center justify-center text-muted-foreground", children: faviconUrl ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Favicon, { pageUrl: faviconUrl }) : /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Globe, { className: "size-4" }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "truncate text-sm font-medium text-inherit", children: title }),
+        metaLabel ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "inline-flex h-5 items-center rounded-full bg-secondary px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground", children: metaLabel }) : null
+      ]
+    }
+  );
+}
+function TabsSection({
+  handlers,
+  openTabs,
+  readOnly,
+  selectedAttachments,
+  searchQuery
+}) {
+  const selectedIds = new Set(selectedAttachments.filter(isTabAttachment).map((item) => item.id));
+  const filteredItems = searchQuery ? openTabs.items.filter(
+    (tab) => tab.title.toLowerCase().includes(searchQuery.toLowerCase()) || tab.url.toLowerCase().includes(searchQuery.toLowerCase())
+  ) : openTabs.items;
+  const renderTabRow = (tab) => {
+    const attachment = createTabAttachment(tab);
+    const attached = selectedIds.has(attachment.id);
+    return /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+      PickerOptionRow,
+      {
+        active: attached,
+        disabled: readOnly,
+        faviconUrl: tab.url,
+        metaLabel: tab.isActive ? "Active" : void 0,
+        title: getOpenTabTitle(tab),
+        onClick: () => handlers.onToggleTabAttachment(attachment)
+      },
+      attachment.id
+    );
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: pickerSectionClassName, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "flex items-center justify-between gap-2 px-1", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: pickerSectionLabelClassName, children: "Open tabs" }) }),
+    openTabs.loading ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Loading open tabs\u2026" }) : null,
+    openTabs.error ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Couldn\u2019t load tabs" }) : null,
+    !openTabs.loaded && !openTabs.loading && !openTabs.error ? /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+      "button",
+      {
+        "aria-label": "Load open tabs",
+        className: pickerRowClassName,
+        "data-picker-row": "true",
+        disabled: readOnly,
+        type: "button",
+        onClick: handlers.onLoadOpenTabs,
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "flex size-4 items-center justify-center text-muted-foreground", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Globe, { className: "size-4" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "truncate text-sm font-medium", children: "Load open tabs" })
+        ]
+      }
+    ) : null,
+    openTabs.loaded && !openTabs.loading && !openTabs.error && filteredItems.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: searchQuery ? "No tab matches" : "No open tabs" }) : null,
+    filteredItems.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "grid max-h-[min(240px,36vh)] gap-1 overflow-y-auto pr-1", children: filteredItems.map(renderTabRow) }) : null
+  ] });
+}
+function HistorySection({
+  handlers,
+  hasQuery,
+  historySearch,
+  readOnly,
+  selectedAttachments
+}) {
+  const selectedIds = new Set(selectedAttachments.filter(isHistoryAttachment).map((item) => item.id));
+  const renderHistoryRow = (item) => {
+    const attachment = createHistoryAttachment(item);
+    const attached = selectedIds.has(attachment.id);
+    return /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+      PickerOptionRow,
+      {
+        active: attached,
+        disabled: readOnly,
+        faviconUrl: item.url,
+        title: getHistoryItemTitle(item),
+        onClick: () => handlers.onToggleHistoryAttachment(attachment)
+      },
+      attachment.id
+    );
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: pickerSectionClassName, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "flex items-center justify-between gap-2 px-1", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: pickerSectionLabelClassName, children: hasQuery ? "History results" : "History" }) }),
+    historySearch.loading ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Searching history\u2026" }) : null,
+    historySearch.error ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Couldn\u2019t search history" }) : null,
+    !hasQuery && !historySearch.loading && !historySearch.error ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Search to find history" }) : null,
+    hasQuery && !historySearch.loading && !historySearch.error && historySearch.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "No history matches" }) : null,
+    historySearch.items.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "grid max-h-[min(240px,36vh)] gap-1 overflow-y-auto pr-1", children: historySearch.items.map(renderHistoryRow) }) : null
+  ] });
+}
+function PinnedTabsSection({
+  handlers,
+  openTabs,
+  readOnly,
+  selectedAttachments
+}) {
+  const selectedIds = new Set(selectedAttachments.filter(isTabAttachment).map((item) => item.id));
+  const pinnedItems = openTabs.items.filter((tab) => tab.isPinned);
+  const renderPinnedRow = (tab) => {
+    const attachment = createTabAttachment(tab);
+    const attached = selectedIds.has(attachment.id);
+    return /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+      PickerOptionRow,
+      {
+        active: attached,
+        disabled: readOnly,
+        faviconUrl: tab.url,
+        metaLabel: tab.isActive ? "Active" : void 0,
+        title: getOpenTabTitle(tab),
+        onClick: () => handlers.onToggleTabAttachment(attachment)
+      },
+      attachment.id
+    );
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: pickerSectionClassName, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "flex items-center justify-between gap-2 px-1", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: pickerSectionLabelClassName, children: "Pinned tabs" }) }),
+    openTabs.loading ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Loading pinned tabs\u2026" }) : null,
+    openTabs.error ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "Couldn\u2019t load pinned tabs" }) : null,
+    openTabs.loaded && !openTabs.loading && !openTabs.error && pinnedItems.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PickerStatus, { title: "No pinned tabs" }) : null,
+    pinnedItems.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "grid max-h-[min(240px,36vh)] gap-1 overflow-y-auto pr-1", children: pinnedItems.map(renderPinnedRow) }) : null
+  ] });
+}
 function Composer({ handlers, state }) {
+  const [pickerOpen, setPickerOpen] = (0, import_react19.useState)(false);
+  const [draftSearchQuery, setDraftSearchQuery] = (0, import_react19.useState)(state.historySearch.query);
+  const [focusedRowIndex, setFocusedRowIndex] = (0, import_react19.useState)(0);
+  const pickerRef = (0, import_react19.useRef)(null);
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const readOnly = isSessionReadOnly(session);
+  const currentPageAttached = hasCurrentPageAttachment(state.composer.attachments);
+  const canToggleCurrentPage = !readOnly || currentPageAttached;
   const canCancel = !readOnly && !!state.currentSessionId && !!state.turnPendingBySessionId[state.currentSessionId];
-  return /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("section", { className: cn(
-    "compact-composer",
-    "compact-composer--docked",
-    readOnly && "compact-composer--read-only"
+  const submitDisabled = readOnly || !state.composer.prompt.trim();
+  const voiceHidden = readOnly || state.voice.status === "unsupported";
+  const searchQuery = state.historySearch.query.trim();
+  const trimmedDraftSearchQuery = draftSearchQuery.trim();
+  const hasSearchQuery = searchQuery.length > 0;
+  const canSubmitSearch = !!trimmedDraftSearchQuery && trimmedDraftSearchQuery !== searchQuery;
+  (0, import_react19.useEffect)(() => {
+    setDraftSearchQuery(state.historySearch.query);
+  }, [state.historySearch.query]);
+  (0, import_react19.useEffect)(() => {
+    if (!pickerOpen) {
+      return;
+    }
+    setFocusedRowIndex(0);
+  }, [pickerOpen, hasSearchQuery, state.openTabs.items.length, state.historySearch.items.length]);
+  (0, import_react19.useEffect)(() => {
+    if (!pickerOpen || !pickerRef.current) {
+      return;
+    }
+    const rows = pickerRef.current.querySelectorAll(
+      '[data-picker-row="true"]:not([disabled])'
+    );
+    rows.forEach((row, index2) => {
+      if (index2 === focusedRowIndex) {
+        row.setAttribute("data-focused", "true");
+        row.scrollIntoView({ block: "nearest" });
+      } else {
+        row.removeAttribute("data-focused");
+      }
+    });
+  });
+  const handlePickerKeyDown = (event) => {
+    if (!pickerRef.current) {
+      return;
+    }
+    const rows = pickerRef.current.querySelectorAll(
+      '[data-picker-row="true"]:not([disabled])'
+    );
+    if (rows.length === 0) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+    } else if (event.key === "Enter" && event.target?.tagName !== "BUTTON") {
+      const target = rows[focusedRowIndex];
+      if (target) {
+        event.preventDefault();
+        target.click();
+      }
+    }
+  };
+  const handleSearchSubmit = (event) => {
+    event.preventDefault();
+    if (!trimmedDraftSearchQuery) {
+      if (searchQuery) {
+        handlers.onResetHistorySearch();
+      }
+      return;
+    }
+    handlers.onSearchHistory(trimmedDraftSearchQuery);
+  };
+  const quotaExhausted = state.chatBlockedReason === "quota-exhausted";
+  return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("section", { className: cn(
+    "grid gap-2 rounded-[1.35rem] glass p-2 shadow-[var(--shadow-overlay)]",
+    readOnly && "opacity-90"
   ), children: [
-    /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "compact-composer__body", children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
+    quotaExhausted && /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(Alert, { variant: "warning", className: "mb-0 rounded-xl border-warning/40 bg-warning/10 py-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(CircleAlert, { className: "h-4 w-4 text-warning" }),
+      /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(AlertDescription, { className: "flex items-center gap-2 text-xs", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { children: "Out of credits." }),
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+          Button,
+          {
+            variant: "link",
+            size: "sm",
+            className: "h-auto p-0 text-xs text-current underline",
+            onClick: () => window.open("chrome://maho-settings?pane=billing", "_blank"),
+            children: "Manage in Settings"
+          }
+        )
+      ] })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "min-h-0", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
       ComposerTextarea,
       {
+        className: "min-h-[72px] max-h-80 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 shadow-none focus-visible:ring-0",
+        focusRequest: state.composer.focusRequest,
+        onPasteFiles: (files) => handlers.onAttachFiles(files),
         onSubmit: handlers.onSubmit,
         onValueChange: handlers.onPromptChange,
-        placeholder: readOnly ? "This archived session is view-only. Start a new live session to continue." : "Ask anything about this page\u2026",
+        placeholder: readOnly ? "This archived session is view-only. Start a new live session to continue." : "Ask a question about this page...",
         readOnly,
-        rows: 3,
+        rows: 1,
         value: state.composer.prompt
       }
     ) }),
-    /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "compact-composer__footer", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "compact-composer__footer-actions", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
-          IconButton,
-          {
-            ariaLabel: "Start new session",
-            symbol: "plus",
-            variant: "composer-icon",
-            onClick: handlers.onStartSession
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
-          IconButton,
-          {
-            ariaLabel: "Cancel current turn",
-            disabled: !canCancel,
-            symbol: "stop",
-            variant: "composer-icon",
-            onClick: handlers.onCancel
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
-          IconButton,
-          {
-            ariaLabel: state.composer.attachBrowserContext ? "Page context on \u2014 click to disable" : "Page context off \u2014 click to enable",
-            className: cn(
-              state.composer.attachBrowserContext && "compact-composer__icon-button--context-on"
-            ),
-            disabled: readOnly,
-            symbol: "globe",
-            variant: "composer-icon",
-            onClick: handlers.onToggleBrowserContext
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "compact-composer__hint", children: readOnly ? "Start a new live session to continue" : state.currentSessionId ? "Enter send \xB7 Shift+Enter newline" : "Enter start \xB7 Shift+Enter newline" })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)(
-        Button,
+    /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: "flex min-w-0 items-center gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+        Popover2,
         {
-          "aria-label": state.currentSessionId ? "Send prompt" : "Start session",
-          disabled: readOnly || !state.composer.prompt.trim(),
-          variant: "composer-send",
-          onClick: handlers.onSubmit,
+          open: pickerOpen,
+          onOpenChange: (open) => {
+            setPickerOpen(open);
+            if (open && !state.openTabs.loaded && !state.openTabs.loading) {
+              handlers.onLoadOpenTabs();
+            }
+          },
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "compact-composer__send-icon", children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Icon, { symbol: "composerSpark" }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "compact-composer__send-label", children: state.currentSessionId ? "Send" : "Start" })
+            /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(Tooltip2, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(PopoverTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                Button,
+                {
+                  "aria-label": "Add context or start a new session",
+                  variant: "ghost",
+                  size: "icon",
+                  className: "h-8 w-8 shrink-0 rounded-full",
+                  children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Plus, { className: "size-4" })
+                }
+              ) }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(TooltipContent3, { children: "Add context" })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+              PopoverContent2,
+              {
+                align: "start",
+                className: "w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border-border bg-popover p-2 shadow-[var(--shadow-overlay)]",
+                side: "top",
+                children: /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+                  "section",
+                  {
+                    ref: pickerRef,
+                    "aria-label": "Context picker",
+                    className: "grid gap-2",
+                    onKeyDown: handlePickerKeyDown,
+                    children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "grid gap-2 p-1", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("form", { className: "relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2", onSubmit: handleSearchSubmit, children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { "aria-hidden": "true", className: "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Search, { className: "size-3.5" }) }),
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                          Input,
+                          {
+                            className: "h-9 border-border bg-input/90 pl-9 pr-3 text-sm shadow-none focus-visible:ring-1",
+                            disabled: readOnly,
+                            placeholder: "Search tabs and history",
+                            type: "search",
+                            value: draftSearchQuery,
+                            onChange: (event) => {
+                              const nextValue = event.currentTarget.value;
+                              setDraftSearchQuery(nextValue);
+                              if (!nextValue.trim() && searchQuery) {
+                                handlers.onResetHistorySearch();
+                              }
+                            }
+                          }
+                        ),
+                        canSubmitSearch ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                          Button,
+                          {
+                            className: "h-9 rounded-xl px-3 text-xs font-semibold",
+                            disabled: readOnly || state.historySearch.loading,
+                            type: "submit",
+                            variant: "ghost",
+                            size: "sm",
+                            children: "Search"
+                          }
+                        ) : hasSearchQuery || trimmedDraftSearchQuery ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                          Button,
+                          {
+                            className: "h-9 rounded-xl px-3 text-xs font-semibold",
+                            disabled: readOnly,
+                            type: "button",
+                            variant: "ghost",
+                            size: "sm",
+                            onClick: () => {
+                              setDraftSearchQuery("");
+                              handlers.onResetHistorySearch();
+                            },
+                            children: "Clear"
+                          }
+                        ) : null
+                      ] }) }),
+                      /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: "grid gap-2", children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                          HistorySection,
+                          {
+                            handlers,
+                            hasQuery: hasSearchQuery,
+                            historySearch: state.historySearch,
+                            readOnly,
+                            selectedAttachments: state.composer.attachments
+                          }
+                        ),
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                          PinnedTabsSection,
+                          {
+                            handlers,
+                            openTabs: state.openTabs,
+                            readOnly,
+                            selectedAttachments: state.composer.attachments
+                          }
+                        ),
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: pickerSectionClassName, children: [
+                          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "flex items-center justify-between gap-2 px-1", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: pickerSectionLabelClassName, children: "Current page" }) }),
+                          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                            PickerOptionRow,
+                            {
+                              active: currentPageAttached,
+                              disabled: !canToggleCurrentPage,
+                              title: "Current page",
+                              onClick: handlers.onToggleBrowserContext
+                            }
+                          )
+                        ] }),
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                          TabsSection,
+                          {
+                            handlers,
+                            openTabs: state.openTabs,
+                            readOnly,
+                            selectedAttachments: state.composer.attachments,
+                            searchQuery
+                          }
+                        ),
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("div", { className: pickerSectionClassName, children: [
+                          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: "flex items-center justify-between gap-2 px-1", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("div", { className: pickerSectionLabelClassName, children: "Files" }) }),
+                          /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+                            "button",
+                            {
+                              className: cn(
+                                pickerRowClassName,
+                                readOnly && "opacity-40"
+                              ),
+                              "data-picker-row": "true",
+                              disabled: readOnly,
+                              type: "button",
+                              onClick: () => {
+                                setPickerOpen(false);
+                                handlers.onRequestFileChooser();
+                              },
+                              children: [
+                                /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "flex size-4 items-center justify-center text-muted-foreground", children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Plus, { className: "size-4" }) }),
+                                /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "truncate text-sm font-medium", children: "Upload file from computer" })
+                              ]
+                            }
+                          )
+                        ] })
+                      ] })
+                    ]
+                  }
+                )
+              }
+            )
           ]
         }
-      )
+      ),
+      state.composer.attachments.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+        "section",
+        {
+          "aria-label": "Attached context",
+          className: "flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-0.5",
+          children: state.composer.attachments.map((attachment) => {
+            const isImage2 = attachment.kind === "file" && !!attachment.mimeType?.startsWith("image/") && !!attachment.dataUrl;
+            return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+              "span",
+              {
+                className: cn(
+                  "inline-flex h-6 max-w-[min(100%,220px)] items-center gap-1 rounded-full bg-secondary/80 px-2 text-xs text-foreground shadow-sm",
+                  isImage2 && "h-8 pl-0.5 pr-2"
+                ),
+                title: attachment.detail || attachment.label,
+                children: [
+                  isImage2 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                    "img",
+                    {
+                      alt: "",
+                      "aria-hidden": "true",
+                      className: "size-7 rounded-md object-cover",
+                      src: attachment.dataUrl
+                    }
+                  ) : null,
+                  /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "truncate font-medium text-inherit", children: attachment.label }),
+                  /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+                    "button",
+                    {
+                      "aria-label": `Remove ${attachment.label}`,
+                      className: "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:bg-background/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                      type: "button",
+                      onClick: () => handlers.onRemoveAttachment(attachment),
+                      children: /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)("svg", { "aria-hidden": "true", fill: "none", focusable: "false", height: "10", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", viewBox: "0 0 24 24", width: "10", xmlns: "http://www.w3.org/2000/svg", children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("line", { x1: "18", y1: "6", x2: "6", y2: "18" }),
+                        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("line", { x1: "6", y1: "6", x2: "18", y2: "18" })
+                      ] })
+                    }
+                  )
+                ]
+              },
+              attachment.id
+            );
+          })
+        }
+      ) : null,
+      (() => {
+        const aiSettings = state.aiSettings;
+        const allProviders = state.aiProviders || [];
+        const activeProvider = allProviders.find((p) => p.id === aiSettings?.activeProviderId);
+        const providers = activeProvider ? [activeProvider] : [];
+        const activeModel = aiSettings?.activeModelId;
+        return /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(DropdownMenu2, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(DropdownMenuTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+            Button,
+            {
+              type: "button",
+              "aria-label": "Select model",
+              className: "ml-auto h-8 max-w-40 shrink-0 rounded-full border-border bg-secondary/70 px-3 text-xs font-medium text-muted-foreground shadow-none hover:bg-surface-hover hover:text-foreground",
+              size: "sm",
+              variant: "outline",
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "truncate", children: activeModel ? activeModel.split("/").pop() : "Model" }),
+                /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "shrink-0 text-[10px] text-muted-foreground", children: "\u25BE" })
+              ]
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(DropdownMenuContent2, { align: "end", side: "top", children: providers.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(import_jsx_runtime45.Fragment, { children: [
+            activeModel ? /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(DropdownMenuLabel2, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "text-muted-foreground", children: "Current: " }),
+              activeModel.split("/").pop() || activeModel
+            ] }) : null,
+            /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+              DropdownMenuItem2,
+              {
+                onSelect: () => handlers.onOpenSettings(),
+                children: "Configure in Settings \u2192"
+              }
+            )
+          ] }) : providers.map((provider, providerIdx) => /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(import_react19.default.Fragment, { children: [
+            providerIdx > 0 && /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(DropdownMenuSeparator2, {}),
+            /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(DropdownMenuLabel2, { children: provider.displayName }),
+            provider.models.map((model) => /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(
+              DropdownMenuItem2,
+              {
+                disabled: aiSettings?.activeProviderId === provider.id && aiSettings?.activeModelId === model,
+                onSelect: () => handlers.onSetActiveAI(provider.id, model),
+                children: [
+                  model.split("/").pop() || model,
+                  aiSettings?.activeProviderId === provider.id && aiSettings?.activeModelId === model && " \u2713"
+                ]
+              },
+              model
+            ))
+          ] }, provider.id)) })
+        ] });
+      })(),
+      !voiceHidden ? /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(Tooltip2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+          Button,
+          {
+            "aria-label": "Start voice input",
+            variant: "ghost",
+            size: "icon",
+            className: "h-8 w-8 shrink-0 rounded-full",
+            disabled: canCancel || state.voice.active,
+            onClick: handlers.onOpenVoice,
+            children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Mic, { className: "size-4" })
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(TooltipContent3, { children: "Voice input" })
+      ] }) : null,
+      /* @__PURE__ */ (0, import_jsx_runtime45.jsxs)(Tooltip2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(TooltipTrigger3, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(
+          Button,
+          {
+            "aria-label": canCancel ? "Stop current turn" : state.currentSessionId ? "Send prompt" : "Start session",
+            className: cn(
+              "size-9 shrink-0 rounded-full shadow-sm transition-transform active:scale-95",
+              canCancel && "border border-warning/40 bg-warning/15 text-warning hover:bg-warning/25 hover:text-warning"
+            ),
+            disabled: canCancel ? false : submitDisabled,
+            variant: "default",
+            size: "icon",
+            onClick: canCancel ? handlers.onCancel : handlers.onSubmit,
+            children: /* @__PURE__ */ (0, import_jsx_runtime45.jsx)("span", { className: "inline-flex items-center justify-center", children: canCancel ? /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Square, { className: "size-3 fill-current" }) : /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(Send, { className: "size-4" }) })
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime45.jsx)(TooltipContent3, { children: canCancel ? "Stop" : state.currentSessionId ? "Send" : "Start session" })
+      ] })
     ] })
   ] });
 }
 
-// react/ui/pill.tsx
-var import_jsx_runtime29 = __toESM(require_jsx_runtime(), 1);
-var pillVariants = cva("console-pill", {
-  variants: {
-    tone: {
-      accent: "console-pill--accent",
-      danger: "console-pill--danger",
-      neutral: "console-pill--neutral",
-      success: "console-pill--success",
-      warning: "console-pill--warning"
+// ../maho_common/react/ui/badge.tsx
+var React56 = __toESM(require_react());
+var import_jsx_runtime46 = __toESM(require_jsx_runtime());
+var badgeVariants = cva(
+  "inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  {
+    variants: {
+      variant: {
+        default: "border-transparent bg-primary text-primary-foreground shadow hover:bg-primary/80",
+        secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        destructive: "border-transparent bg-destructive text-destructive-foreground shadow hover:bg-destructive/80",
+        outline: "text-foreground",
+        success: "border-transparent bg-success text-foreground hover:bg-success/80",
+        warning: "border-transparent bg-warning text-foreground hover:bg-warning/80"
+      }
+    },
+    defaultVariants: {
+      variant: "default"
     }
-  },
-  defaultVariants: {
-    tone: "neutral"
   }
-});
-function Pill({ className, text, tone }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { className: cn(pillVariants({ tone }), className), children: text });
-}
+);
+var Badge = React56.forwardRef(
+  ({ className, variant, ...props }, ref) => {
+    return /* @__PURE__ */ (0, import_jsx_runtime46.jsx)("div", { ref, className: cn(badgeVariants({ variant }), className), ...props });
+  }
+);
+Badge.displayName = "Badge";
 
-// react/ui/empty-state.tsx
-var import_jsx_runtime30 = __toESM(require_jsx_runtime(), 1);
+// react/components/empty-state.tsx
+var import_jsx_runtime47 = __toESM(require_jsx_runtime(), 1);
 function EmptyState({ className, description, title }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("section", { className: cn("empty-panel", className), children: [
-    /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("h2", { children: title }),
-    /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("p", { children: description })
+  return /* @__PURE__ */ (0, import_jsx_runtime47.jsxs)("section", { className: cn("flex flex-col items-center justify-center text-center p-8 max-w-sm mx-auto my-auto gap-2", className), children: [
+    /* @__PURE__ */ (0, import_jsx_runtime47.jsx)("h2", { className: "text-lg font-semibold tracking-tight", children: title }),
+    /* @__PURE__ */ (0, import_jsx_runtime47.jsx)("p", { className: "text-sm text-muted-foreground", children: description })
   ] });
 }
+
+// ../maho_common/react/ui/tabs.tsx
+var React58 = __toESM(require_react());
+
+// ../../../../website/node_modules/@radix-ui/react-tabs/dist/index.mjs
+var React57 = __toESM(require_react(), 1);
+var import_jsx_runtime48 = __toESM(require_jsx_runtime(), 1);
+var TABS_NAME = "Tabs";
+var [createTabsContext, createTabsScope] = createContextScope(TABS_NAME, [
+  createRovingFocusGroupScope
+]);
+var useRovingFocusGroupScope2 = createRovingFocusGroupScope();
+var [TabsProvider, useTabsContext] = createTabsContext(TABS_NAME);
+var Tabs = React57.forwardRef(
+  (props, forwardedRef) => {
+    const {
+      __scopeTabs,
+      value: valueProp,
+      onValueChange,
+      defaultValue,
+      orientation = "horizontal",
+      dir,
+      activationMode = "automatic",
+      ...tabsProps
+    } = props;
+    const direction = useDirection(dir);
+    const [value, setValue] = useControllableState({
+      prop: valueProp,
+      onChange: onValueChange,
+      defaultProp: defaultValue ?? "",
+      caller: TABS_NAME
+    });
+    return /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+      TabsProvider,
+      {
+        scope: __scopeTabs,
+        baseId: useId(),
+        value,
+        onValueChange: setValue,
+        orientation,
+        dir: direction,
+        activationMode,
+        children: /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+          Primitive.div,
+          {
+            dir: direction,
+            "data-orientation": orientation,
+            ...tabsProps,
+            ref: forwardedRef
+          }
+        )
+      }
+    );
+  }
+);
+Tabs.displayName = TABS_NAME;
+var TAB_LIST_NAME = "TabsList";
+var TabsList = React57.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopeTabs, loop = true, ...listProps } = props;
+    const context = useTabsContext(TAB_LIST_NAME, __scopeTabs);
+    const rovingFocusGroupScope = useRovingFocusGroupScope2(__scopeTabs);
+    return /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+      Root3,
+      {
+        asChild: true,
+        ...rovingFocusGroupScope,
+        orientation: context.orientation,
+        dir: context.dir,
+        loop,
+        children: /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+          Primitive.div,
+          {
+            role: "tablist",
+            "aria-orientation": context.orientation,
+            ...listProps,
+            ref: forwardedRef
+          }
+        )
+      }
+    );
+  }
+);
+TabsList.displayName = TAB_LIST_NAME;
+var TRIGGER_NAME5 = "TabsTrigger";
+var TabsTrigger = React57.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopeTabs, value, disabled = false, ...triggerProps } = props;
+    const context = useTabsContext(TRIGGER_NAME5, __scopeTabs);
+    const rovingFocusGroupScope = useRovingFocusGroupScope2(__scopeTabs);
+    const triggerId = makeTriggerId(context.baseId, value);
+    const contentId = makeContentId(context.baseId, value);
+    const isSelected = value === context.value;
+    return /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+      Item,
+      {
+        asChild: true,
+        ...rovingFocusGroupScope,
+        focusable: !disabled,
+        active: isSelected,
+        children: /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+          Primitive.button,
+          {
+            type: "button",
+            role: "tab",
+            "aria-selected": isSelected,
+            "aria-controls": contentId,
+            "data-state": isSelected ? "active" : "inactive",
+            "data-disabled": disabled ? "" : void 0,
+            disabled,
+            id: triggerId,
+            ...triggerProps,
+            ref: forwardedRef,
+            onMouseDown: composeEventHandlers(props.onMouseDown, (event) => {
+              if (!disabled && event.button === 0 && event.ctrlKey === false) {
+                context.onValueChange(value);
+              } else {
+                event.preventDefault();
+              }
+            }),
+            onKeyDown: composeEventHandlers(props.onKeyDown, (event) => {
+              if ([" ", "Enter"].includes(event.key)) context.onValueChange(value);
+            }),
+            onFocus: composeEventHandlers(props.onFocus, () => {
+              const isAutomaticActivation = context.activationMode !== "manual";
+              if (!isSelected && !disabled && isAutomaticActivation) {
+                context.onValueChange(value);
+              }
+            })
+          }
+        )
+      }
+    );
+  }
+);
+TabsTrigger.displayName = TRIGGER_NAME5;
+var CONTENT_NAME7 = "TabsContent";
+var TabsContent = React57.forwardRef(
+  (props, forwardedRef) => {
+    const { __scopeTabs, value, forceMount, children, ...contentProps } = props;
+    const context = useTabsContext(CONTENT_NAME7, __scopeTabs);
+    const triggerId = makeTriggerId(context.baseId, value);
+    const contentId = makeContentId(context.baseId, value);
+    const isSelected = value === context.value;
+    const isMountAnimationPreventedRef = React57.useRef(isSelected);
+    React57.useEffect(() => {
+      const rAF = requestAnimationFrame(() => isMountAnimationPreventedRef.current = false);
+      return () => cancelAnimationFrame(rAF);
+    }, []);
+    return /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(Presence, { present: forceMount || isSelected, children: ({ present }) => /* @__PURE__ */ (0, import_jsx_runtime48.jsx)(
+      Primitive.div,
+      {
+        "data-state": isSelected ? "active" : "inactive",
+        "data-orientation": context.orientation,
+        role: "tabpanel",
+        "aria-labelledby": triggerId,
+        hidden: !present,
+        id: contentId,
+        tabIndex: 0,
+        ...contentProps,
+        ref: forwardedRef,
+        style: {
+          ...props.style,
+          animationDuration: isMountAnimationPreventedRef.current ? "0s" : void 0
+        },
+        children: present && children
+      }
+    ) });
+  }
+);
+TabsContent.displayName = CONTENT_NAME7;
+function makeTriggerId(baseId, value) {
+  return `${baseId}-trigger-${value}`;
+}
+function makeContentId(baseId, value) {
+  return `${baseId}-content-${value}`;
+}
+var Root24 = Tabs;
+var List = TabsList;
+var Trigger4 = TabsTrigger;
+var Content3 = TabsContent;
+
+// ../maho_common/react/ui/tabs.tsx
+var import_jsx_runtime49 = __toESM(require_jsx_runtime());
+var Tabs2 = Root24;
+var TabsList2 = React58.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime49.jsx)(
+  List,
+  {
+    ref,
+    className: cn(
+      "inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground",
+      className
+    ),
+    ...props
+  }
+));
+TabsList2.displayName = List.displayName;
+var TabsTrigger2 = React58.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime49.jsx)(
+  Trigger4,
+  {
+    ref,
+    className: cn(
+      "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow",
+      className
+    ),
+    ...props
+  }
+));
+TabsTrigger2.displayName = Trigger4.displayName;
+var TabsContent2 = React58.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_runtime49.jsx)(
+  Content3,
+  {
+    ref,
+    className: cn(
+      "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      className
+    ),
+    ...props
+  }
+));
+TabsContent2.displayName = Content3.displayName;
 
 // react/features/developer/inspector.tsx
-var import_jsx_runtime31 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime50 = __toESM(require_jsx_runtime(), 1);
+var mapToneToVariant = (tone) => {
+  if (tone === "danger") return "destructive";
+  if (tone === "neutral") return "secondary";
+  return tone;
+};
 function SectionLabel({ text }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "console-section-label", children: text });
+  return /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("div", { className: "text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground", children: text });
 }
 function KeyValueRow({ label, value }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "inspector-row", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("span", { className: "inspector-row__label", children: label }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("span", { className: "inspector-row__value", children: value })
+  return /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)("div", { className: "flex flex-col gap-1 border-t border-border/70 pt-3 first:border-t-0 first:pt-0 max-[1160px]:items-start min-[1161px]:flex-row min-[1161px]:items-start min-[1161px]:justify-between min-[1161px]:gap-4", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("span", { className: "text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground", children: label }),
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("span", { className: "text-sm leading-6 text-muted-foreground min-[1161px]:text-right whitespace-pre-wrap break-words", children: value })
   ] });
 }
+function InspectorCard({ children }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("section", { className: "grid gap-3 rounded-2xl border border-border/80 bg-secondary/35 p-4 shadow-[var(--shadow-raised)]", children });
+}
 function SessionSummaryCard({ session }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Session" }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Status", value: getStatusLabel(session.status) }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Adapter", value: session.adapterName }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Events", value: String(session.eventCount) }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Tools", value: String(session.toolCallCount) }),
-    isSessionReadOnly(session) ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Pill, { text: "Historical session", tone: "warning" }) : null
+  return /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(InspectorCard, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(SectionLabel, { text: "Session" }),
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Status", value: getStatusLabel(session.status) }),
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Adapter", value: session.adapterName }),
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Events", value: String(session.eventCount) }),
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Tools", value: String(session.toolCallCount) }),
+    isSessionReadOnly(session) ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(Badge, { variant: "warning", children: "Historical session" }) : null
   ] });
 }
 function Inspector({
@@ -29744,171 +40276,192 @@ function Inspector({
   const session = currentSessionId ? state.sessionsById[currentSessionId] : null;
   const readOnly = isSessionReadOnly(session);
   const tabDefs = ["session", "context", "tool", "approval"];
-  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("aside", { className: "console-inspector", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "console-panel-header", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("h2", { children: "Inspector" }),
-      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("p", { children: "Session, context, tool, and approval details." })
+  return /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)("aside", { className: "grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)]", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)("div", { className: "grid gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("h2", { className: "text-lg font-semibold tracking-tight text-foreground", children: "Inspector" }),
+      /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("p", { className: "text-sm leading-6 text-muted-foreground", children: "Session, context, tool, and approval details." })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "inspector-tabs", children: tabDefs.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-      Button,
+    /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(
+      Tabs2,
       {
-        className: cn(state.selectedInspector.kind === kind && "is-active"),
-        variant: "inspector-tab",
-        onClick: () => onSelectInspector(kind, state.selectedInspector.id),
-        children: kind[0].toUpperCase() + kind.slice(1)
-      },
-      kind
-    )) }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "inspector-body", children: !session || !currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-      EmptyState,
-      {
-        description: "Start a session to inspect runtime state.",
-        title: "Nothing selected"
-      }
-    ) : state.selectedInspector.kind === "session" ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SessionSummaryCard, { session }),
-      /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Context" }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Session", value: getSessionTitle(session) }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          KeyValueRow,
-          {
-            label: "Runtime session",
-            value: session.runtimeSessionId || "Pending assignment"
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          KeyValueRow,
-          {
-            label: "Last runtime state",
-            value: getRuntimeStateLabel(session.lastRuntimeState)
-          }
-        )
-      ] })
-    ] }) : state.selectedInspector.kind === "context" ? (() => {
-      const lastContext = state.lastContextBySessionId[currentSessionId];
-      return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("section", { className: "inspector-card", children: lastContext ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Injected context" }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          Pill,
-          {
-            text: getBrowserContextStatusLabel(lastContext.status),
-            tone: getBrowserContextStatusTone(lastContext.status)
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "URL", value: lastContext.url }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Title", value: lastContext.title }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          KeyValueRow,
-          {
-            label: "Content size",
-            value: `${lastContext.contentLength.toLocaleString()} chars`
-          }
-        ),
-        lastContext.contentSnippet ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("pre", { className: "inspector-pre", children: lastContext.contentSnippet }) : null,
-        lastContext.warnings.length ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Warnings", value: lastContext.warnings.join("\n") }) : null
-      ] }) : /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Attached context" }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          KeyValueRow,
-          {
-            label: "Page context",
-            value: readOnly ? "Historical snapshot only" : state.composer.attachBrowserContext ? "On \u2014 injected at send time" : "Off"
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Composer mode", value: state.composer.modeLabel }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          KeyValueRow,
-          {
-            label: "Pending turn",
-            value: state.turnPendingBySessionId[currentSessionId] ? "Yes" : "No"
-          }
-        ),
-        !readOnly ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("p", { className: "inspector-note", children: "Page context (URL, title, content) is assembled and injected by the browser runtime at send time. The actual payload will appear here after the first submission." }) : null
-      ] }) });
-    })() : state.selectedInspector.kind === "tool" ? (() => {
-      const toolId = state.selectedInspector.id || Object.keys(state.toolCallsById).at(-1);
-      const tool = toolId ? state.toolCallsById[toolId] : null;
-      const result = toolId ? state.toolResultsByCallId[toolId] : null;
-      if (!tool && !result) {
-        return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          EmptyState,
-          {
-            description: "Tool requests and results will appear here.",
-            title: "No tool selected"
-          }
-        );
-      }
-      return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Tool details" }),
-        tool ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Tool", value: tool.toolName }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Call ID", value: tool.callId }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Arguments", value: tool.argumentsJson || "{}" })
-        ] }) : null,
-        result ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Pill, { text: result.success ? "Success" : "Failure", tone: result.success ? "success" : "danger" }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("pre", { className: "inspector-pre", children: result.errorMessage || result.output || "No output" })
-        ] }) : null
-      ] });
-    })() : (() => {
-      const approvalId = state.selectedInspector.id || Object.keys(state.approvalsById).at(-1);
-      const approval = approvalId ? state.approvalsById[approvalId] : null;
-      const result = approvalId ? state.approvalResultsById[approvalId] : null;
-      if (!approval) {
-        return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-          EmptyState,
-          {
-            description: "Approval requests will appear here when the runtime pauses.",
-            title: "No approval selected"
-          }
-        );
-      }
-      return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Approval request" }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Approval ID", value: approval.approvalId }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Description", value: approval.description }),
-        approval.relatedToolCall ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Related tool", value: approval.relatedToolCall.toolName }) : null,
-        result ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Pill, { text: result.approved ? "Approved" : "Denied", tone: result.approved ? "success" : "danger" }),
-          result.reason ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Reason", value: result.reason }) : null
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "inspector-actions", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-              Button,
-              {
-                disabled: readOnly,
-                variant: "console-primary",
-                onClick: () => onRespondToApproval(approval.approvalId, true),
-                children: "Approve"
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
-              Button,
-              {
-                disabled: readOnly,
-                variant: "console-default",
-                onClick: () => onRespondToApproval(approval.approvalId, false),
-                children: "Deny"
-              }
-            )
-          ] }),
-          readOnly ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
+        value: state.selectedInspector.kind,
+        onValueChange: (value) => onSelectInspector(value, state.selectedInspector.id),
+        className: "grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3",
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(TabsList2, { className: "grid h-auto w-full grid-cols-4 rounded-xl bg-secondary/60 p-1", children: tabDefs.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(TabsTrigger2, { value: kind, className: "px-2 py-1.5 text-xs font-semibold uppercase tracking-[0.08em]", children: kind[0].toUpperCase() + kind.slice(1) }, kind)) }),
+          /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("div", { className: "min-h-0 overflow-y-auto pr-1", children: !session || !currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
             EmptyState,
             {
-              description: "This approval is shown from stored session history only and can no longer be answered from this view.",
-              title: "Historical approval"
+              description: "Start a session to inspect runtime state.",
+              title: "Nothing selected"
             }
-          ) : null
-        ] })
-      ] });
-    })() })
+          ) : /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(import_jsx_runtime50.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(TabsContent2, { value: "session", className: "mt-0 grid gap-3", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(SessionSummaryCard, { session }),
+              /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(InspectorCard, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(SectionLabel, { text: "Context" }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Session", value: getSessionTitle(session) }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                  KeyValueRow,
+                  {
+                    label: "Runtime session",
+                    value: session.runtimeSessionId || "Pending assignment"
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                  KeyValueRow,
+                  {
+                    label: "Last runtime state",
+                    value: getRuntimeStateLabel(session.lastRuntimeState)
+                  }
+                )
+              ] })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(TabsContent2, { value: "context", className: "mt-0", children: (() => {
+              const payloads = state.contextsBySessionId[currentSessionId] || [];
+              return /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(InspectorCard, { children: payloads.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(import_jsx_runtime50.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(SectionLabel, { text: `Injected context (${payloads.length})` }),
+                payloads.map((ctx, idx) => /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)("div", { className: "grid gap-2 rounded-xl border border-border/70 bg-background/40 p-3", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                    KeyValueRow,
+                    {
+                      label: `#${idx + 1}`,
+                      value: ctx.label || `Attachment ${idx + 1}`
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(Badge, { variant: mapToneToVariant(getBrowserContextStatusTone(ctx.status)), children: getBrowserContextStatusLabel(ctx.status) }),
+                  ctx.url ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "URL", value: redactUrlForDisplay(ctx.url) }) : null,
+                  ctx.title ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Title", value: ctx.title }) : null,
+                  ctx.contentLength > 0 ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                    KeyValueRow,
+                    {
+                      label: "Content size",
+                      value: `${ctx.contentLength.toLocaleString()} chars`
+                    }
+                  ) : null
+                ] }, idx))
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                EmptyState,
+                {
+                  description: "No context has been injected into this session.",
+                  title: "No context"
+                }
+              ) });
+            })() }),
+            /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(TabsContent2, { value: "tool", className: "mt-0", children: (() => {
+              const toolId = state.selectedInspector.id || Object.keys(state.toolCallsById).at(-1);
+              const tool = toolId ? state.toolCallsById[toolId] : null;
+              const result = toolId ? state.toolResultsByCallId[toolId] : null;
+              if (!tool) {
+                return /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                  EmptyState,
+                  {
+                    description: "Tool executions will appear here when they run.",
+                    title: "No tool selected"
+                  }
+                );
+              }
+              return /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(InspectorCard, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(SectionLabel, { text: "Tool details" }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Tool", value: tool.toolName }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Call ID", value: tool.callId }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Arguments", value: tool.argumentsJson || "{}" }),
+                result ? /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(import_jsx_runtime50.Fragment, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(Badge, { variant: result.success ? "success" : "destructive", children: result.success ? "Success" : "Failure" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)("pre", { className: "m-0 whitespace-pre-wrap break-words rounded-xl border border-border/70 bg-background/60 p-3 text-xs leading-5 text-muted-foreground", children: result.errorMessage || result.output || "No output" })
+                ] }) : null
+              ] });
+            })() }),
+            /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(TabsContent2, { value: "approval", className: "mt-0", children: (() => {
+              const approvalId = state.selectedInspector.id || Object.keys(state.approvalsById).at(-1);
+              const approval = approvalId ? state.approvalsById[approvalId] : null;
+              const result = approvalId ? state.approvalResultsById[approvalId] : null;
+              if (!approval) {
+                return /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                  EmptyState,
+                  {
+                    description: "Approval requests will appear here when the runtime pauses.",
+                    title: "No approval selected"
+                  }
+                );
+              }
+              return /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(InspectorCard, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(SectionLabel, { text: "Approval request" }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Approval ID", value: approval.approvalId }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Description", value: approval.description }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Policy", value: getApprovalPolicyLabel(approval.approvalPolicy) }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Sensitivity", value: getApprovalSensitivityLabel(approval.sensitivity) }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "State", value: getApprovalStateLabel(approval.state) }),
+                /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                  KeyValueRow,
+                  {
+                    label: "Justification source",
+                    value: approval.pageDerivedJustification ? "Page-derived" : "User/runtime"
+                  }
+                ),
+                approval.relatedToolCall ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Related tool", value: approval.relatedToolCall.toolName }) : null,
+                result ? /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(import_jsx_runtime50.Fragment, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(Badge, { variant: result.approved ? "success" : "destructive", children: result.approved ? "Approved" : "Denied" }),
+                  result.reason ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Reason", value: result.reason }) : null,
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Decision policy", value: getApprovalPolicyLabel(result.approvalPolicy) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Decision sensitivity", value: getApprovalSensitivityLabel(result.sensitivity) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "Decision", value: getApprovalDecisionLabel(result.decision) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(KeyValueRow, { label: "State", value: getApprovalStateLabel(result.state) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                    KeyValueRow,
+                    {
+                      label: "Decision source",
+                      value: result.pageDerivedJustification ? "Page-derived" : "User/runtime"
+                    }
+                  )
+                ] }) : /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)(import_jsx_runtime50.Fragment, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime50.jsxs)("div", { className: "flex flex-wrap items-center gap-2", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                      Button,
+                      {
+                        disabled: readOnly,
+                        size: "sm",
+                        variant: "default",
+                        onClick: () => onRespondToApproval(approval.approvalId, true),
+                        children: "Approve"
+                      }
+                    ),
+                    /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                      Button,
+                      {
+                        disabled: readOnly,
+                        size: "sm",
+                        variant: "outline",
+                        onClick: () => onRespondToApproval(approval.approvalId, false),
+                        children: "Deny"
+                      }
+                    )
+                  ] }),
+                  readOnly ? /* @__PURE__ */ (0, import_jsx_runtime50.jsx)(
+                    EmptyState,
+                    {
+                      description: "This approval is shown from stored session history only and can no longer be answered from this view.",
+                      title: "Historical approval"
+                    }
+                  ) : null
+                ] })
+              ] });
+            })() })
+          ] }) })
+        ]
+      }
+    )
   ] });
 }
 
 // react/features/developer/left-rail.tsx
-var import_jsx_runtime32 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime51 = __toESM(require_jsx_runtime(), 1);
+var mapToneToVariant2 = (tone) => {
+  if (tone === "danger") return "destructive";
+  if (tone === "neutral") return "secondary";
+  return tone;
+};
 function LeftRail({
   onNewSession,
   onResumeSession,
@@ -29926,42 +40479,39 @@ function LeftRail({
     }
     return [{ sessionId, session }];
   });
-  return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("aside", { className: "console-left-rail", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "console-left-rail__top", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("h1", { className: "console-app-title", children: "Maho AI Console" }),
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "runtime-status", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: getConnectionStateLabel(state.connectionState), tone: getConnectionStateTone(state.connectionState) }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: state.activeAdapterName || "OpenCode", tone: "neutral" })
+  return /* @__PURE__ */ (0, import_jsx_runtime51.jsxs)("aside", { className: "flex min-h-0 w-[280px] shrink-0 flex-col gap-4 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)] max-[1160px]:w-full max-[1160px]:max-h-[280px]", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime51.jsxs)("div", { className: "grid gap-3", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("h1", { className: "text-lg font-semibold tracking-tight text-foreground", children: "Maho AI Console" }),
+      /* @__PURE__ */ (0, import_jsx_runtime51.jsxs)("div", { className: "flex flex-wrap gap-1.5", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime51.jsx)(Badge, { variant: mapToneToVariant2(getConnectionStateTone(state.connectionState)), children: getConnectionStateLabel(state.connectionState) }),
+        /* @__PURE__ */ (0, import_jsx_runtime51.jsx)(Badge, { variant: "secondary", children: state.activeAdapterName || "OpenCode" })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { variant: "console-primary", onClick: onNewSession, children: "New session" }),
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "console-section-label", children: "Sessions" }),
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
-        "input",
+      /* @__PURE__ */ (0, import_jsx_runtime51.jsx)(Button, { className: "w-full", variant: "default", onClick: onNewSession, children: "New session" }),
+      /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("div", { className: "text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground", children: "Sessions" }),
+      /* @__PURE__ */ (0, import_jsx_runtime51.jsx)(
+        Input,
         {
-          className: "console-input",
+          className: "border-border bg-input/90 shadow-none",
           placeholder: "Search sessions",
           value: state.sessionSearchQuery,
           onChange: (event) => onSearch(event.currentTarget.value)
         }
       )
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list", children: !filteredSessions.length ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("p", { className: "session-list__empty", children: "No sessions yet. Start a task to create one." }) : filteredSessions.map(({ sessionId, session }) => /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(
+    /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("div", { className: "flex min-h-0 flex-col gap-2 overflow-y-auto pr-1", children: !filteredSessions.length ? /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("p", { className: "text-sm leading-6 text-muted-foreground", children: "No sessions yet. Start a task to create one." }) : filteredSessions.map(({ sessionId, session }) => /* @__PURE__ */ (0, import_jsx_runtime51.jsxs)(
       Button,
       {
-        className: cn(sessionId === state.currentSessionId && "is-active"),
-        variant: "session-list-item",
+        className: cn(
+          "h-auto w-full items-start justify-start gap-2 rounded-xl border border-border/80 bg-secondary/35 px-3 py-3 text-left text-foreground shadow-none hover:-translate-y-px hover:border-border hover:bg-surface-hover",
+          sessionId === state.currentSessionId && "border-primary/30 bg-primary/10 text-foreground"
+        ),
+        variant: "ghost",
         onClick: () => onResumeSession(sessionId),
         children: [
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__title", children: getSessionTitle(session) }),
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__summary", children: getSessionSubtitle(session) }),
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__meta", children: `${getStatusLabel(session.status)} \u2022 ${session.eventCount} events \u2022 ${session.toolCallCount} tools` }),
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__access", children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
-            Pill,
-            {
-              text: getSessionAccessLabel(session),
-              tone: isSessionReadOnly(session) ? "warning" : "success"
-            }
-          ) })
+          /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("div", { className: "text-sm font-semibold", children: getSessionTitle(session) }),
+          /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("div", { className: "text-xs text-muted-foreground", children: getSessionSubtitle(session) }),
+          /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("div", { className: "text-[10px] text-muted-foreground", children: `${getStatusLabel(session.status)} \u2022 ${session.eventCount} events \u2022 ${session.toolCallCount} tools` }),
+          /* @__PURE__ */ (0, import_jsx_runtime51.jsx)("div", { className: "mt-1 flex flex-wrap gap-2", children: /* @__PURE__ */ (0, import_jsx_runtime51.jsx)(Badge, { variant: isSessionReadOnly(session) ? "warning" : "success", children: getSessionAccessLabel(session) }) })
         ]
       },
       sessionId
@@ -29970,174 +40520,210 @@ function LeftRail({
 }
 
 // react/features/developer/mode-toggle.tsx
-var import_jsx_runtime33 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime52 = __toESM(require_jsx_runtime(), 1);
 function ModeToggle({
   developerMode,
   onSetDeveloperMode
 }) {
-  const renderButton = (label, enabled) => {
-    const active = developerMode === enabled;
-    return /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
-      Button,
-      {
-        "aria-pressed": active,
-        "aria-selected": active,
-        className: cn(active && "is-active"),
-        role: "tab",
-        variant: "mode-toggle",
-        onClick: () => onSetDeveloperMode(enabled),
-        children: label
-      }
-    );
-  };
-  return /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { "aria-label": "AI surface mode", className: "mode-toggle", role: "tablist", children: [
-    renderButton("Assistant", false),
-    renderButton("Developer", true)
-  ] });
+  return /* @__PURE__ */ (0, import_jsx_runtime52.jsx)(
+    Tabs2,
+    {
+      value: developerMode ? "developer" : "assistant",
+      onValueChange: (val) => onSetDeveloperMode(val === "developer"),
+      className: "w-full",
+      children: /* @__PURE__ */ (0, import_jsx_runtime52.jsxs)(TabsList2, { className: "grid w-full grid-cols-2", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime52.jsx)(TabsTrigger2, { value: "assistant", children: "Assistant" }),
+        /* @__PURE__ */ (0, import_jsx_runtime52.jsx)(TabsTrigger2, { value: "developer", children: "Developer" })
+      ] })
+    }
+  );
 }
 
 // react/features/developer/event-card.tsx
-var import_jsx_runtime34 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime53 = __toESM(require_jsx_runtime(), 1);
+function EventShell({
+  badge,
+  body,
+  meta,
+  title
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("article", { className: "grid gap-3 rounded-2xl border border-border/80 bg-secondary/35 p-4 shadow-sm", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("div", { className: "flex flex-wrap items-start justify-between gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground", children: title }),
+      /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("div", { className: "flex flex-wrap items-center gap-2", children: [
+        badge,
+        /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-[11px] text-muted-foreground", children: meta })
+      ] })
+    ] }),
+    body
+  ] });
+}
+var markdownBodyClassName = "text-sm leading-6 text-muted-foreground [&_p]:m-0 [&_p:not(:last-child)]:mb-3 [&_h2]:m-0 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:m-0 [&_h3]:text-sm [&_h3]:font-semibold [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/70 [&_pre]:p-3 [&_pre]:text-xs";
 function EventCard({ event }) {
   const meta = formatTimestamp(event.timestamp);
   if (event.kind === RuntimeEventKind.kUserPrompt) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "user", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "User prompt" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Markdown, { className: markdownBodyClassName, text: getEventText(event) }),
+        meta,
+        title: "User prompt"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kSessionStatus) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "session", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Session status" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: getRuntimeStateLabel(getEventText(event)) })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-sm leading-6 text-muted-foreground", children: getRuntimeStateLabel(getEventText(event)) }),
+        meta,
+        title: "Session status"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kAssistantToken) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "assistant", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Assistant streaming" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Markdown, { className: markdownBodyClassName, text: getEventText(event) }),
+        meta,
+        title: "Assistant streaming"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kTurnComplete) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "assistant-final", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Assistant response" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Markdown, { className: markdownBodyClassName, text: getEventText(event) }),
+        meta,
+        title: "Assistant response"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kToolRequest) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "tool", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: event.toolCall?.toolName || "Tool request" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: event.toolCall?.status !== void 0 ? ["Pending", "Running", "Completed", "Failed", "Cancelled"][event.toolCall.status] || "Pending" : "Pending", tone: "accent" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.toolCall?.argumentsJson || "Waiting for tool arguments" })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        badge: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "secondary", children: event.toolCall?.status !== void 0 ? ["Pending", "Running", "Completed", "Failed", "Cancelled"][event.toolCall.status] || "Pending" : "Pending" }),
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-sm leading-6 text-muted-foreground break-words", children: event.toolCall?.argumentsJson || "Waiting for tool arguments" }),
+        meta,
+        title: event.toolCall?.toolName || "Tool request"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kToolResult) {
     const success = !!event.toolResult?.success;
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "tool-result", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Tool result" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: success ? "Success" : "Error", tone: success ? "success" : "danger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.toolResult?.errorMessage || event.toolResult?.output || "No tool output" })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        badge: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: success ? "success" : "destructive", children: success ? "Success" : "Error" }),
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-sm leading-6 text-muted-foreground break-words", children: event.toolResult?.errorMessage || event.toolResult?.output || "No tool output" }),
+        meta,
+        title: "Tool result"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kApprovalRequest) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "approval", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Approval required" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: "Pending", tone: "warning" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.approvalRequest?.description || "The runtime is waiting for approval." })
-    ] });
+    const approval = event.approvalRequest;
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        badge: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "warning", children: "Pending" }),
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("div", { className: "grid gap-2 text-sm leading-6 text-muted-foreground break-words", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { children: approval?.description || "The runtime is waiting for approval." }),
+          /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("div", { className: "flex flex-wrap gap-1.5 text-[11px] leading-4", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "secondary", children: getApprovalSensitivityLabel(approval?.sensitivity) }),
+            /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "secondary", children: getApprovalPolicyLabel(approval?.approvalPolicy) }),
+            approval?.pageDerivedJustification ? /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "warning", children: "Page-derived" }) : null
+          ] })
+        ] }),
+        meta,
+        title: "Approval required"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kApprovalResult) {
     const approved = !!event.approvalResult?.approved;
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "approval-result", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Approval decision" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: approved ? "Approved" : "Denied", tone: approved ? "success" : "danger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.approvalResult?.reason || "Approval response recorded" })
-    ] });
+    const result = event.approvalResult;
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        badge: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: approved ? "success" : "destructive", children: approved ? "Approved" : "Denied" }),
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("div", { className: "grid gap-2 text-sm leading-6 text-muted-foreground break-words", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { children: result?.reason || getApprovalDecisionLabel(result?.decision) }),
+          /* @__PURE__ */ (0, import_jsx_runtime53.jsxs)("div", { className: "flex flex-wrap gap-1.5 text-[11px] leading-4", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "secondary", children: getApprovalSensitivityLabel(result?.sensitivity) }),
+            /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "secondary", children: getApprovalPolicyLabel(result?.approvalPolicy) }),
+            result?.pageDerivedJustification ? /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "warning", children: "Page-derived" }) : null
+          ] })
+        ] }),
+        meta,
+        title: "Approval decision"
+      }
+    );
   }
   if (event.kind === RuntimeEventKind.kError) {
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "error", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Runtime error" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: "Error", tone: "danger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: getEventText(event) || "The runtime reported an error." })
-    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+      EventShell,
+      {
+        badge: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(Badge, { variant: "destructive", children: "Error" }),
+        body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-sm leading-6 text-muted-foreground break-words", children: getEventText(event) || "The runtime reported an error." }),
+        meta,
+        title: "Runtime error"
+      }
+    );
   }
-  return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "connection", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Connection state" }),
-      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
-    ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: getRuntimeStateLabel(event.text) })
-  ] });
+  return /* @__PURE__ */ (0, import_jsx_runtime53.jsx)(
+    EventShell,
+    {
+      body: /* @__PURE__ */ (0, import_jsx_runtime53.jsx)("div", { className: "text-sm leading-6 text-muted-foreground", children: getRuntimeStateLabel(event.text) }),
+      meta,
+      title: "Connection state"
+    }
+  );
 }
 
 // react/features/developer/timeline.tsx
-var import_jsx_runtime35 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime54 = __toESM(require_jsx_runtime(), 1);
 function Timeline({ state }) {
   const events = state.currentSessionId ? state.eventsBySessionId[state.currentSessionId] || [] : [];
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const streamRef = useAutoScroll(events);
-  return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("main", { className: "console-timeline", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "console-panel-header", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h2", { children: "Timeline" }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("p", { children: state.currentSessionId ? "Live runtime events, tool activity, and approval flow." : "Create or resume a session to begin streaming runtime activity." })
+  return /* @__PURE__ */ (0, import_jsx_runtime54.jsxs)("main", { className: "grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)]", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime54.jsxs)("div", { className: "grid gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime54.jsx)("h2", { className: "text-lg font-semibold tracking-tight text-foreground", children: "Timeline" }),
+      /* @__PURE__ */ (0, import_jsx_runtime54.jsx)("p", { className: "text-sm leading-6 text-muted-foreground", children: state.currentSessionId ? "Live runtime events, tool activity, and approval flow." : "Create or resume a session to begin streaming runtime activity." })
     ] }),
-    !state.currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(
+    !state.currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime54.jsx)(
       EmptyState,
       {
         description: "Use the left rail to start a session or reopen recent work.",
         title: "No active session"
       }
-    ) : /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)(import_jsx_runtime35.Fragment, { children: [
-      session ? /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "console-panel-status-row", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: "Session state" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: getStatusLabel(session.status) }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: getSessionAccessLabel(session) })
+    ) : /* @__PURE__ */ (0, import_jsx_runtime54.jsxs)("div", { ref: streamRef, className: "flex min-h-0 flex-col gap-3 overflow-y-auto pr-1", children: [
+      session ? /* @__PURE__ */ (0, import_jsx_runtime54.jsxs)("div", { className: "flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime54.jsx)("span", { className: "rounded-full bg-secondary px-3 py-1 text-secondary-foreground", children: "Session state" }),
+        /* @__PURE__ */ (0, import_jsx_runtime54.jsx)("span", { className: "rounded-full bg-secondary px-3 py-1 text-secondary-foreground", children: getStatusLabel(session.status) }),
+        /* @__PURE__ */ (0, import_jsx_runtime54.jsx)("span", { className: "rounded-full bg-secondary px-3 py-1 text-secondary-foreground", children: getSessionAccessLabel(session) })
       ] }) : null,
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { ref: streamRef, className: "timeline-stream", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: "Event stream" }),
-        !events.length ? (() => {
-          const history = state.currentSessionId ? state.historiesBySessionId[state.currentSessionId] : null;
-          const isReadOnlySession = isSessionReadOnly(session);
-          const title = history?.loaded ? isReadOnlySession ? "No historical events stored" : "No runtime events yet" : isReadOnlySession ? "Loading historical session" : "Connecting to session stream";
-          const description = history?.loaded ? isReadOnlySession ? "This session is available as stored history only. The runtime did not return any persisted events." : "The session exists, but the runtime has not emitted any renderable events yet." : isReadOnlySession ? "Fetching persisted events for this read-only session." : "Waiting for replayed history or live runtime events.";
-          return /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(EmptyState, { description, title });
-        })() : events.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(EventCard, { event: entry.event }, `${entry.event.sequence}-${entry.event.timestamp}`))
-      ] })
+      /* @__PURE__ */ (0, import_jsx_runtime54.jsx)("div", { className: "text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground", children: "Event stream" }),
+      !events.length ? (() => {
+        const history = state.currentSessionId ? state.historiesBySessionId[state.currentSessionId] : null;
+        const isReadOnlySession = isSessionReadOnly(session);
+        const title = history?.loaded ? isReadOnlySession ? "No historical events stored" : "No runtime events yet" : isReadOnlySession ? "Loading historical session" : "Connecting to session stream";
+        const description = history?.loaded ? isReadOnlySession ? "This session is available as stored history only. The runtime did not return any persisted events." : "The session exists, but the runtime has not emitted any renderable events yet." : isReadOnlySession ? "Fetching persisted events for this read-only session." : "Waiting for replayed history or live runtime events.";
+        return /* @__PURE__ */ (0, import_jsx_runtime54.jsx)(EmptyState, { description, title });
+      })() : events.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime54.jsx)(EventCard, { event: entry.event }, `${entry.event.sequence}-${entry.event.timestamp}`))
     ] })
   ] });
 }
 
 // react/features/developer/developer-workspace.tsx
-var import_jsx_runtime36 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime55 = __toESM(require_jsx_runtime(), 1);
 function DeveloperWorkspace({
   onNewSession,
+  onConnect,
   onRespondToApproval,
   onResumeSession,
   onSearch,
@@ -30146,32 +40732,33 @@ function DeveloperWorkspace({
   state
 }) {
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
-  return /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("header", { className: "developer-console__topbar", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__summary", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__brand", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("h1", { className: "developer-console__title", children: "Maho AI Console" }),
-          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("p", { className: "developer-console__subtitle", children: state.currentSessionId ? "Console views for sessions, event flow, and runtime inspection." : "Switch back to Assistant for the compact single-thread surface." })
+  return /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("div", { className: "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("header", { className: "flex flex-wrap items-center justify-between gap-4 rounded-[1.5rem] border border-border/80 bg-card p-4 shadow-[var(--shadow-raised)]", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("div", { className: "min-w-0 flex-1", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("div", { className: "grid gap-1", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime55.jsx)("h1", { className: "text-lg font-semibold tracking-tight text-foreground", children: "Maho AI Console" }),
+          /* @__PURE__ */ (0, import_jsx_runtime55.jsx)("p", { className: "text-sm leading-6 text-muted-foreground", children: state.currentSessionId ? "Console views for sessions, event flow, and runtime inspection." : "Switch back to Assistant for the compact single-thread surface." })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__pills", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Pill, { text: getConnectionStateLabel(state.connectionState), tone: "neutral" }),
-          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Pill, { text: state.activeAdapterName || "OpenCode", tone: "accent" }),
-          session ? /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Pill, { text: getStatusLabel(session.status), tone: "success" }) : null
-        ] })
+        /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("div", { className: "mt-3 flex flex-wrap gap-1.5", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(Badge, { variant: "secondary", children: getConnectionStateLabel(state.connectionState) }),
+          /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(Badge, { variant: "secondary", children: state.activeAdapterName || "OpenCode" }),
+          session ? /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(Badge, { variant: "success", children: getStatusLabel(session.status) }) : null
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(DismissibleMcpGuidanceCard, { className: "mt-3", onConnect })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__actions", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
+      /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("div", { className: "flex flex-wrap items-center gap-3", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(
           ModeToggle,
           {
             developerMode: state.developerMode,
             onSetDeveloperMode
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { variant: "console-primary", onClick: onNewSession, children: "New session" })
+        /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(Button, { variant: "default", onClick: onNewSession, children: "New session" })
       ] })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__workspace", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime55.jsxs)("div", { className: "flex min-h-0 gap-3 max-[1160px]:flex-col", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(
         LeftRail,
         {
           onNewSession,
@@ -30180,8 +40767,8 @@ function DeveloperWorkspace({
           state
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Timeline, { state }),
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
+      /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(Timeline, { state }),
+      /* @__PURE__ */ (0, import_jsx_runtime55.jsx)(
         Inspector,
         {
           onRespondToApproval,
@@ -30193,17 +40780,310 @@ function DeveloperWorkspace({
   ] });
 }
 
-// react/hooks/use-app-state.ts
-var import_react11 = __toESM(require_react(), 1);
-function useAppState(store2) {
-  return (0, import_react11.useSyncExternalStore)(
-    (listener) => store2.subscribe(listener),
-    () => store2.getSnapshot()
+// react/hooks/use-voice-input.ts
+var import_react20 = __toESM(require_react(), 1);
+var WORKLET_NAME = "maho-voice-capture";
+var RMS_GAIN = 5.5;
+var VOICE_WORKLET_SOURCE = `
+const TARGET_SAMPLE_RATE = 16000;
+const MESSAGE_FRAME_TARGET = 1600;
+
+class MahoVoiceCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.inputBuffer = [];
+    this.outputBuffer = [];
+    this.cursor = 0;
+    this.ratio = sampleRate / TARGET_SAMPLE_RATE;
+  }
+
+  process(inputs) {
+    const input = inputs[0];
+    const channel = input && input[0];
+    if (!channel) {
+      return true;
+    }
+
+    for (let index = 0; index < channel.length; index += 1) {
+      this.inputBuffer.push(channel[index]);
+    }
+
+    while (this.cursor + this.ratio <= this.inputBuffer.length) {
+      const start = Math.floor(this.cursor);
+      const end = Math.max(start + 1, Math.floor(this.cursor + this.ratio));
+      let sum = 0;
+      let count = 0;
+      for (let index = start; index < end && index < this.inputBuffer.length; index += 1) {
+        sum += this.inputBuffer[index];
+        count += 1;
+      }
+      this.outputBuffer.push(count > 0 ? sum / count : 0);
+      this.cursor += this.ratio;
+    }
+
+    const consumed = Math.floor(this.cursor);
+    if (consumed > 0) {
+      this.inputBuffer = this.inputBuffer.slice(consumed);
+      this.cursor -= consumed;
+    }
+
+    if (this.outputBuffer.length >= MESSAGE_FRAME_TARGET) {
+      const chunk = new Float32Array(this.outputBuffer);
+      this.port.postMessage(chunk, [chunk.buffer]);
+      this.outputBuffer = [];
+    }
+
+    return true;
+  }
+}
+
+registerProcessor('${WORKLET_NAME}', MahoVoiceCaptureProcessor);
+`;
+var voiceMojo = bindMojoPageHandler(
+  PageCallbackRouter,
+  PageHandlerRemote,
+  PageHandlerFactory
+);
+function hasVoiceCaptureSupport() {
+  return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function" && typeof AudioContext !== "undefined" && typeof AudioWorkletNode !== "undefined";
+}
+function getVoiceCaptureErrorMessage(error) {
+  if (error instanceof DOMException) {
+    switch (error.name) {
+      case "NotAllowedError":
+      case "SecurityError":
+        return "Microphone permission was denied.";
+      case "NotFoundError":
+        return "No microphone was found.";
+      case "NotReadableError":
+        return "Microphone is already in use.";
+    }
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+function createWorkletUrl() {
+  return URL.createObjectURL(new Blob([VOICE_WORKLET_SOURCE], { type: "text/javascript" }));
+}
+function useVoiceInput({ store: store2, onFinalTranscript }) {
+  const storeRef = (0, import_react20.useRef)(store2);
+  const onFinalTranscriptRef = (0, import_react20.useRef)(onFinalTranscript);
+  const audioContextRef = (0, import_react20.useRef)(null);
+  const analyserRef = (0, import_react20.useRef)(null);
+  const sourceRef = (0, import_react20.useRef)(null);
+  const workletRef = (0, import_react20.useRef)(null);
+  const muteRef = (0, import_react20.useRef)(null);
+  const streamRef = (0, import_react20.useRef)(null);
+  const animationFrameRef = (0, import_react20.useRef)(null);
+  const workletUrlRef = (0, import_react20.useRef)(null);
+  const listenerIdsRef = (0, import_react20.useRef)(null);
+  (0, import_react20.useEffect)(() => {
+    storeRef.current = store2;
+  }, [store2]);
+  (0, import_react20.useEffect)(() => {
+    onFinalTranscriptRef.current = onFinalTranscript;
+  }, [onFinalTranscript]);
+  const unbindVoiceListeners = (0, import_react20.useCallback)(() => {
+    const listenerIds = listenerIdsRef.current;
+    if (!listenerIds) {
+      return;
+    }
+    voiceMojo.router.removeListener(listenerIds.partial);
+    voiceMojo.router.removeListener(listenerIds.final);
+    voiceMojo.router.removeListener(listenerIds.error);
+    listenerIdsRef.current = null;
+  }, []);
+  const cleanupCapture = (0, import_react20.useCallback)(async ({ resetStatus, stopBackend }) => {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    unbindVoiceListeners();
+    workletRef.current?.port.close();
+    workletRef.current?.disconnect();
+    muteRef.current?.disconnect();
+    sourceRef.current?.disconnect();
+    analyserRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach((track) => {
+      track.stop();
+    });
+    const audioContext = audioContextRef.current;
+    if (audioContext) {
+      try {
+        await audioContext.close();
+      } catch (error) {
+        if (error instanceof Error) {
+          console.warn("[maho-ai] Failed to close voice audio context:", error.message);
+        } else {
+          console.warn("[maho-ai] Failed to close voice audio context:", String(error));
+        }
+      }
+    }
+    if (workletUrlRef.current) {
+      URL.revokeObjectURL(workletUrlRef.current);
+    }
+    audioContextRef.current = null;
+    analyserRef.current = null;
+    sourceRef.current = null;
+    workletRef.current = null;
+    muteRef.current = null;
+    streamRef.current = null;
+    workletUrlRef.current = null;
+    storeRef.current.setVoiceLevel(0);
+    if (stopBackend) {
+      try {
+        await voiceMojo.handler.stopVoiceSession();
+      } catch (error) {
+        if (error instanceof Error) {
+          console.warn("[maho-ai] Failed to stop voice session:", error.message);
+        } else {
+          console.warn("[maho-ai] Failed to stop voice session:", String(error));
+        }
+      }
+    }
+    if (resetStatus) {
+      storeRef.current.setVoiceStatus("idle");
+    }
+  }, [unbindVoiceListeners]);
+  const stop = (0, import_react20.useCallback)(async () => {
+    await cleanupCapture({ resetStatus: true, stopBackend: true });
+  }, [cleanupCapture]);
+  const bindVoiceListeners = (0, import_react20.useCallback)(() => {
+    unbindVoiceListeners();
+    listenerIdsRef.current = {
+      partial: voiceMojo.router.onVoicePartial.addListener((transcript) => {
+        storeRef.current.setVoiceTranscript(transcript);
+      }),
+      final: voiceMojo.router.onVoiceFinal.addListener((transcript) => {
+        storeRef.current.setVoiceTranscript(transcript);
+        onFinalTranscriptRef.current(transcript, { stop });
+      }),
+      error: voiceMojo.router.onVoiceError.addListener((message) => {
+        storeRef.current.setVoiceError(message);
+        void cleanupCapture({ resetStatus: false, stopBackend: true });
+      })
+    };
+  }, [cleanupCapture, stop, unbindVoiceListeners]);
+  const updateLevel = (0, import_react20.useCallback)(() => {
+    const analyser = analyserRef.current;
+    if (!analyser) {
+      return;
+    }
+    const samples = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const sample of samples) {
+      sum += sample * sample;
+    }
+    const rms = Math.sqrt(sum / samples.length);
+    storeRef.current.setVoiceLevel(Math.min(1, rms * RMS_GAIN));
+    animationFrameRef.current = requestAnimationFrame(updateLevel);
+  }, []);
+  const start = (0, import_react20.useCallback)(async () => {
+    if (!hasVoiceCaptureSupport()) {
+      storeRef.current.setVoiceError("Voice input is not supported in this WebUI host.");
+      storeRef.current.setVoiceStatus("unsupported");
+      return;
+    }
+    await cleanupCapture({ resetStatus: false, stopBackend: true });
+    storeRef.current.setVoiceError(null);
+    storeRef.current.setVoiceTranscript("");
+    storeRef.current.setVoiceLevel(0);
+    bindVoiceListeners();
+    try {
+      const { accepted } = await voiceMojo.handler.startVoiceSession();
+      if (!accepted) {
+        storeRef.current.setVoiceError("Voice input is already listening.");
+        await cleanupCapture({ resetStatus: false, stopBackend: true });
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new AudioContext();
+      const workletUrl = createWorkletUrl();
+      await audioContext.audioWorklet.addModule(workletUrl);
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      const worklet = new AudioWorkletNode(audioContext, WORKLET_NAME, {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1]
+      });
+      const mute = audioContext.createGain();
+      mute.gain.value = 0;
+      worklet.port.onmessage = (event) => {
+        if (!(event.data instanceof Float32Array)) {
+          return;
+        }
+        void voiceMojo.handler.pushAudioChunk(Array.from(event.data));
+      };
+      source.connect(analyser);
+      source.connect(worklet);
+      worklet.connect(mute);
+      mute.connect(audioContext.destination);
+      streamRef.current = stream;
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      sourceRef.current = source;
+      workletRef.current = worklet;
+      muteRef.current = mute;
+      workletUrlRef.current = workletUrl;
+      storeRef.current.setVoiceStatus("listening");
+      animationFrameRef.current = requestAnimationFrame(updateLevel);
+    } catch (error) {
+      storeRef.current.setVoiceError(getVoiceCaptureErrorMessage(error));
+      await cleanupCapture({ resetStatus: false, stopBackend: true });
+    }
+  }, [bindVoiceListeners, cleanupCapture, updateLevel]);
+  (0, import_react20.useEffect)(() => {
+    return () => {
+      void cleanupCapture({ resetStatus: true, stopBackend: true });
+    };
+  }, [cleanupCapture]);
+  return { start, stop };
+}
+
+// ../maho_common/react/ui/sonner.tsx
+var import_jsx_runtime56 = __toESM(require_jsx_runtime());
+var Toaster = ({ ...props }) => {
+  return /* @__PURE__ */ (0, import_jsx_runtime56.jsx)(
+    $e,
+    {
+      className: "toaster group",
+      toastOptions: {
+        classNames: {
+          toast: "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
+          description: "group-[.toast]:text-muted-foreground",
+          actionButton: "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
+          cancelButton: "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground"
+        }
+      },
+      ...props
+    }
   );
+};
+
+// ../maho_common/react/theme/apply_theme.ts
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    root.setAttribute("data-theme", prefersDark ? "dark" : "light");
+  } else {
+    root.setAttribute("data-theme", mode);
+  }
+}
+function watchAutoTheme(onChange) {
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const handler = () => onChange(mq.matches ? "dark" : "light");
+  mq.addEventListener("change", handler);
+  return () => mq.removeEventListener("change", handler);
 }
 
 // react/app.tsx
-var import_jsx_runtime37 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime57 = __toESM(require_jsx_runtime(), 1);
 var PAGE_HANDLER_TIMEOUT_MS = 3e3;
 function getPendingThreadLabel(entries, pending) {
   if (!pending) {
@@ -30228,18 +41108,20 @@ function getPendingThreadLabel(entries, pending) {
   return getToolProgressLabel(latestToolName);
 }
 function BootErrorCard({ message }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("section", { className: "boot-error", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("h1", { children: "Maho AI failed to start" }),
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("pre", { children: message })
+  return /* @__PURE__ */ (0, import_jsx_runtime57.jsxs)(Alert, { className: "border-destructive/60 bg-destructive/10 text-destructive shadow-sm", variant: "destructive", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(CircleAlert, { className: "size-4" }),
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(AlertTitle, { children: "Maho AI failed to start" }),
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(AlertDescription, { children: /* @__PURE__ */ (0, import_jsx_runtime57.jsx)("pre", { className: "m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive", children: message }) })
   ] });
 }
 function PageHandlerTimeoutCard() {
-  return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("section", { className: "boot-error", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("h1", { children: "Maho AI failed to start" }),
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("pre", { children: "Page handler did not respond within " + String(PAGE_HANDLER_TIMEOUT_MS / 1e3) + "s. Reload the panel or restart the browser." })
+  return /* @__PURE__ */ (0, import_jsx_runtime57.jsxs)(Alert, { className: "border-destructive/60 bg-destructive/10 text-destructive shadow-sm", variant: "destructive", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(CircleAlert, { className: "size-4" }),
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(AlertTitle, { children: "Maho AI failed to start" }),
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(AlertDescription, { children: /* @__PURE__ */ (0, import_jsx_runtime57.jsx)("pre", { className: "m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive", children: "Page handler did not respond within " + String(PAGE_HANDLER_TIMEOUT_MS / 1e3) + "s. Reload the panel or restart the browser." }) })
   ] });
 }
-var ErrorBoundary = class extends import_react12.Component {
+var ErrorBoundary = class extends import_react21.Component {
   constructor(props) {
     super(props);
     this.state = { caughtError: null };
@@ -30252,7 +41134,7 @@ var ErrorBoundary = class extends import_react12.Component {
   }
   render() {
     if (this.state.caughtError) {
-      return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(BootErrorCard, { message: this.state.caughtError.message });
+      return /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(BootErrorCard, { message: this.state.caughtError.message });
     }
     return this.props.children;
   }
@@ -30266,12 +41148,26 @@ function isEditableTarget(target) {
 }
 function MahoAiApp({ store: store2 }) {
   const state = useAppState(store2);
-  const bootstrappedRef = (0, import_react12.useRef)(false);
-  const [handlerTimedOut, setHandlerTimedOut] = import_react12.default.useState(false);
-  (0, import_react12.useEffect)(() => {
+  const bootstrappedRef = (0, import_react21.useRef)(false);
+  const [handlerTimedOut, setHandlerTimedOut] = import_react21.default.useState(false);
+  const [tidySuggestions, setTidySuggestions] = (0, import_react21.useState)(null);
+  const [tidyLoading, setTidyLoading] = (0, import_react21.useState)(false);
+  (0, import_react21.useEffect)(() => {
     window["__mahoAiMounted"] = true;
+    applyTheme("auto");
+    return watchAutoTheme((resolved) => applyTheme(resolved));
   }, []);
-  (0, import_react12.useEffect)(() => {
+  (0, import_react21.useEffect)(() => {
+    void store2.refreshAISettings();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void store2.refreshAISettings();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [store2]);
+  (0, import_react21.useEffect)(() => {
     const timeoutId = setTimeout(() => {
       setHandlerTimedOut(true);
     }, PAGE_HANDLER_TIMEOUT_MS);
@@ -30289,7 +41185,7 @@ function MahoAiApp({ store: store2 }) {
     });
     return () => clearTimeout(timeoutId);
   }, [store2]);
-  (0, import_react12.useEffect)(() => {
+  (0, import_react21.useEffect)(() => {
     const handleKeyDown = (event) => {
       if (isEditableTarget(event.target)) {
         return;
@@ -30304,7 +41200,127 @@ function MahoAiApp({ store: store2 }) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [store2]);
-  const composerHandlers = (0, import_react12.useMemo)(() => ({
+  const runSubmission = (0, import_react21.useCallback)((submission) => {
+    void submission.catch((error) => {
+      ue.error(error instanceof Error ? error.message : String(error));
+    });
+  }, []);
+  const handleComposerSubmit = (0, import_react21.useCallback)(() => {
+    const stateSnapshot = store2.getSnapshot();
+    const prompt = stateSnapshot.composer.prompt.trim();
+    if (prompt.startsWith("/")) {
+      const parts = prompt.split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+      if (cmd === "/agent") {
+        const sub = parts[1]?.toLowerCase();
+        if (sub === "new") {
+          store2.setActiveSlashEditor("agent-new");
+          store2.setComposerPrompt("");
+          return;
+        } else if (sub === "switch") {
+          const name = parts.slice(2).join(" ").trim();
+          if (name) {
+            const targetProfile = stateSnapshot.profiles.find((p) => p.name.toLowerCase() === name.toLowerCase());
+            if (targetProfile && stateSnapshot.activeWorkspace) {
+              void store2.switchWorkspaceProfile(stateSnapshot.activeWorkspace.id, targetProfile.id);
+            } else {
+              ue.error(`Agent profile "${name}" not found`);
+            }
+          } else {
+            ue.error("Usage: /agent switch <name>");
+          }
+          store2.setComposerPrompt("");
+          return;
+        } else {
+          ue.error("Usage: /agent new | /agent switch <name>");
+          store2.setComposerPrompt("");
+          return;
+        }
+      } else if (cmd === "/tools") {
+        const sub = parts[1]?.toLowerCase();
+        const target = parts[2]?.toLowerCase();
+        if (sub === "add") {
+          if (target === "mcp") {
+            store2.setActiveSlashEditor("mcp-add");
+            store2.setComposerPrompt("");
+            return;
+          } else if (target === "cli") {
+            store2.setActiveSlashEditor("cli-add");
+            store2.setComposerPrompt("");
+            return;
+          } else {
+            ue.error("Usage: /tools add mcp | /tools add cli");
+            store2.setComposerPrompt("");
+            return;
+          }
+        } else {
+          ue.error("Usage: /tools add mcp | /tools add cli");
+          store2.setComposerPrompt("");
+          return;
+        }
+      } else if (cmd === "/workspace") {
+        const sub = parts[1]?.toLowerCase();
+        if (sub === "import") {
+          const path = parts.slice(2).join(" ").trim();
+          if (path && stateSnapshot.activeWorkspace) {
+            void store2.importProfileFromToml(stateSnapshot.activeWorkspace.id, path);
+          } else {
+            ue.error("Usage: /workspace import <path>");
+          }
+          store2.setComposerPrompt("");
+          return;
+        } else {
+          ue.error("Usage: /workspace import <path>");
+          store2.setComposerPrompt("");
+          return;
+        }
+      } else {
+        ue.error(`Unknown command "${cmd}". Available: /agent, /tools, /workspace`);
+        store2.setComposerPrompt("");
+        return;
+      }
+    }
+    if (!store2.getSnapshot().currentSessionId) {
+      runSubmission(store2.startSessionThenSubmit());
+      return;
+    }
+    runSubmission(store2.submitPrompt());
+  }, [runSubmission, store2]);
+  const handleSuggestionSelect = (0, import_react21.useCallback)((text) => {
+    store2.setComposerPrompt(text);
+    const stateSnapshot = store2.getSnapshot();
+    if (!stateSnapshot.currentSessionId) {
+      runSubmission(store2.startSessionThenSubmit());
+      return;
+    }
+    runSubmission(store2.submitPrompt());
+  }, [runSubmission, store2]);
+  const handleVoiceFinal = (0, import_react21.useCallback)((transcript, controls) => {
+    const text = transcript.trim();
+    if (!text) {
+      store2.setVoiceError("Didn't catch that");
+      return;
+    }
+    store2.setComposerPrompt(text);
+    handleComposerSubmit();
+    void controls.stop().then(() => {
+      store2.closeVoice();
+    });
+  }, [handleComposerSubmit, store2]);
+  const { start: startVoiceInput, stop: stopVoiceInput } = useVoiceInput({
+    store: store2,
+    onFinalTranscript: handleVoiceFinal
+  });
+  const handleOpenVoice = (0, import_react21.useCallback)(() => {
+    store2.openVoice();
+    void startVoiceInput();
+  }, [startVoiceInput, store2]);
+  const handleCloseVoice = (0, import_react21.useCallback)(() => {
+    void stopVoiceInput().then(() => {
+      store2.closeVoice();
+    });
+  }, [stopVoiceInput, store2]);
+  const composerHandlers = (0, import_react21.useMemo)(() => ({
     onPromptChange: (value) => store2.setComposerPrompt(value),
     onCancel: () => {
       void store2.cancelTurn();
@@ -30312,16 +41328,54 @@ function MahoAiApp({ store: store2 }) {
     onStartSession: () => {
       void store2.startSession();
     },
+    onLoadOpenTabs: () => {
+      void store2.loadOpenTabs();
+    },
+    onRefreshOpenTabs: () => {
+      void store2.loadOpenTabs(true);
+    },
+    onResetHistorySearch: () => {
+      store2.resetHistorySearch();
+    },
+    onSearchHistory: (query) => {
+      void store2.searchHistory(query);
+    },
     onToggleBrowserContext: () => store2.toggleBrowserContext(),
-    onSubmit: () => {
-      if (!store2.getSnapshot().currentSessionId) {
-        void store2.startSession();
-        return;
+    onToggleHistoryAttachment: (attachment) => {
+      store2.toggleAttachment(attachment);
+    },
+    onToggleTabAttachment: (attachment) => {
+      store2.toggleAttachment(attachment);
+    },
+    onAttachFiles: async (files) => {
+      const list = Array.from(files);
+      for (const file of list) {
+        try {
+          const attachment = await createFileAttachment(file);
+          store2.addAttachment(attachment);
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          console.error("Failed to attach file", file.name, e);
+          ue.error(errMsg);
+        }
       }
-      void store2.submitPrompt();
-    }
-  }), [store2]);
-  const modeHandlers = (0, import_react12.useMemo)(() => ({
+    },
+    onRequestFileChooser: () => {
+      void store2.requestFileChooser();
+    },
+    onRemoveAttachment: (attachment) => {
+      store2.toggleAttachment(attachment);
+    },
+    onSetActiveAI: (providerId, modelId) => {
+      return store2.setActiveAI(providerId, modelId);
+    },
+    onOpenSettings: () => {
+      void store2.openSettings();
+    },
+    onOpenVoice: handleOpenVoice,
+    onSubmit: handleComposerSubmit
+  }), [handleComposerSubmit, handleOpenVoice, store2]);
+  const modeHandlers = (0, import_react21.useMemo)(() => ({
     onNewSession: () => {
       void store2.startSession();
     },
@@ -30330,6 +41384,9 @@ function MahoAiApp({ store: store2 }) {
     },
     onOpenSettings: () => {
       void store2.openSettings();
+    },
+    onConnectMcp: () => {
+      void store2.openSettings("maho-ai-developers");
     },
     onGetViewMode: () => store2.getViewMode(),
     onResumeSession: (sessionId) => {
@@ -30343,8 +41400,29 @@ function MahoAiApp({ store: store2 }) {
     onSetDeveloperMode: (enabled) => store2.setDeveloperMode(enabled),
     onSetViewMode: (mode) => {
       void store2.setViewMode(mode);
+    },
+    onSetActiveAI: (providerId, modelId) => {
+      return store2.setActiveAI(providerId, modelId);
     }
   }), [store2]);
+  const handleTidyTabs = () => {
+    if (tidyLoading) return;
+    setTidyLoading(true);
+    const openTabsItems = state.openTabs.items;
+    const tabs = openTabsItems.map((t) => ({ tabId: t.tabId, title: t.title, url: t.url }));
+    void store2.requestTabTidy(tabs).then((folders) => {
+      setTidyLoading(false);
+      if (folders.length > 0) {
+        setTidySuggestions(folders.map((f) => ({ name: f.name, tabIds: f.tabIds })));
+      }
+    }).catch(() => {
+      setTidyLoading(false);
+    });
+  };
+  const handleTidyApply = (selected) => {
+    setTidySuggestions(null);
+    void store2.applyTabTidyFolders(selected.map((f) => ({ name: f.name, tabIds: f.tabIds })));
+  };
   const sessionEvents = state.currentSessionId ? state.eventsBySessionId[state.currentSessionId] || [] : [];
   const hasMessages = sessionEvents.length > 0;
   const currentSession = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
@@ -30352,41 +41430,67 @@ function MahoAiApp({ store: store2 }) {
   const pendingTurn = !!(state.currentSessionId && state.turnPendingBySessionId[state.currentSessionId]);
   const thinkingLabel = getPendingThreadLabel(sessionEvents, pendingTurn);
   if (handlerTimedOut && !state.bootError) {
-    return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(PageHandlerTimeoutCard, {});
+    return /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(PageHandlerTimeoutCard, {});
   }
-  return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: cn("console-shell", state.developerMode && "console-shell--developer"), children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("section", { className: cn("compact-panel", state.developerMode && "compact-panel--developer"), children: state.bootError ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(BootErrorCard, { message: state.bootError }) : /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(import_jsx_runtime37.Fragment, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: "compact-panel__stage-host", children: state.developerMode ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
-      DeveloperWorkspace,
+  return /* @__PURE__ */ (0, import_jsx_runtime57.jsxs)("div", { className: "flex h-screen min-h-0 flex-col bg-background text-foreground", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)("section", { className: "grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 p-3 max-[520px]:gap-2 max-[520px]:p-2", children: state.bootError ? /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(BootErrorCard, { message: state.bootError }) : /* @__PURE__ */ (0, import_jsx_runtime57.jsxs)(import_jsx_runtime57.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime57.jsx)("div", { className: cn(
+        "min-h-0 overflow-hidden",
+        state.developerMode ? "block" : "grid grid-rows-[auto_minmax(0,1fr)] gap-3"
+      ), children: state.developerMode ? /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(
+        DeveloperWorkspace,
+        {
+          onConnect: modeHandlers.onConnectMcp,
+          onNewSession: modeHandlers.onNewSession,
+          onRespondToApproval: modeHandlers.onRespondToApproval,
+          onResumeSession: modeHandlers.onResumeSession,
+          onSearch: modeHandlers.onSearch,
+          onSelectInspector: modeHandlers.onSelectInspector,
+          onSetDeveloperMode: modeHandlers.onSetDeveloperMode,
+          state
+        }
+      ) : /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(
+        CompactShell,
+        {
+          store: store2,
+          entries: sessionEvents,
+          hasMessages,
+          onClosePanel: modeHandlers.onClosePanel,
+          onConnect: modeHandlers.onConnectMcp,
+          onGetViewMode: modeHandlers.onGetViewMode,
+          onOpenSettings: modeHandlers.onOpenSettings,
+          onRespondToApproval: modeHandlers.onRespondToApproval,
+          onSetViewMode: modeHandlers.onSetViewMode,
+          onStartSession: modeHandlers.onNewSession,
+          onTidyTabs: handleTidyTabs,
+          readOnly,
+          state,
+          thinkingLabel
+        }
+      ) }),
+      /* @__PURE__ */ (0, import_jsx_runtime57.jsxs)("div", { className: "sticky bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-transparent pt-1", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(SlashEditors, { store: store2 }),
+        !state.developerMode ? /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(SuggestionChips, { disabled: readOnly || pendingTurn, onSelect: handleSuggestionSelect }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(Composer, { handlers: composerHandlers, state })
+      ] })
+    ] }) }),
+    tidySuggestions && /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(
+      TabTidyModal,
       {
-        onNewSession: modeHandlers.onNewSession,
-        onRespondToApproval: modeHandlers.onRespondToApproval,
-        onResumeSession: modeHandlers.onResumeSession,
-        onSearch: modeHandlers.onSearch,
-        onSelectInspector: modeHandlers.onSelectInspector,
-        onSetDeveloperMode: modeHandlers.onSetDeveloperMode,
-        state
+        folders: tidySuggestions,
+        onApply: handleTidyApply,
+        onDismiss: () => setTidySuggestions(null)
       }
-    ) : /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
-      CompactShell,
+    ),
+    state.voice.active ? /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(
+      VoiceInputModal,
       {
-        entries: sessionEvents,
-        hasMessages,
-        onClosePanel: modeHandlers.onClosePanel,
-        onGetViewMode: modeHandlers.onGetViewMode,
-        onOpenSettings: modeHandlers.onOpenSettings,
-        onRespondToApproval: modeHandlers.onRespondToApproval,
-        onSetViewMode: modeHandlers.onSetViewMode,
-        onStartSession: modeHandlers.onNewSession,
-        readOnly,
         state,
-        thinkingLabel
+        onClose: handleCloseVoice,
+        onRetry: handleOpenVoice
       }
-    ) }),
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: cn(
-      "compact-panel__composer-host",
-      state.developerMode && "console-composer-dock"
-    ), children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Composer, { handlers: composerHandlers, state }) })
-  ] }) }) });
+    ) : null
+  ] });
 }
 var rootElement = document.getElementById("app");
 if (!rootElement) {
@@ -30395,7 +41499,10 @@ if (!rootElement) {
 var store = createMahoAiStore();
 runWithBootGuard(rootElement, () => {
   (0, import_client.createRoot)(rootElement).render(
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(import_react12.default.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(ErrorBoundary, { children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(MahoAiApp, { store }) }) })
+    /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(import_react21.default.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime57.jsxs)(TooltipProvider2, { delayDuration: 200, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(ErrorBoundary, { children: /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(MahoAiApp, { store }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime57.jsx)(Toaster, { position: "bottom-right" })
+    ] }) })
   );
 });
 //# sourceMappingURL=app_bundle.js.map

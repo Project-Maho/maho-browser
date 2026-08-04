@@ -31,45 +31,47 @@ class ResizeObserverStub implements ResizeObserver {
   disconnect(): void {}
 }
 
-globalThis.ResizeObserver ??= ResizeObserverStub;
+if (typeof window !== 'undefined') {
+  globalThis.ResizeObserver ??= ResizeObserverStub;
 
-if (!window.matchMedia) {
-  window.matchMedia = (query: string): MediaQueryList => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: () => {},
-    removeListener: () => {},
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => false,
-  });
-}
-
-if (!Element.prototype.scrollIntoView) {
-  Element.prototype.scrollIntoView = () => {};
-}
-
-Element.prototype.setPointerCapture ??= () => {};
-Element.prototype.releasePointerCapture ??= () => {};
-Element.prototype.hasPointerCapture ??= () => false;
-
-// jsdom ships no PointerEvent, so fireEvent.pointer* silently degrades to an
-// event type that drops clientX and pointerId - swipe and drag assertions then
-// read NaN offsets. MouseEvent already carries the coordinate fields.
-if (typeof globalThis.PointerEvent === 'undefined') {
-  class PointerEventPolyfill extends MouseEvent {
-    readonly pointerId: number;
-    readonly pointerType: string;
-    readonly isPrimary: boolean;
-
-    constructor(type: string, params: PointerEventInit = {}) {
-      super(type, params);
-      this.pointerId = params.pointerId ?? 0;
-      this.pointerType = params.pointerType ?? 'mouse';
-      this.isPrimary = params.isPrimary ?? true;
-    }
+  if (!window.matchMedia) {
+    window.matchMedia = (query: string): MediaQueryList => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    });
   }
-  globalThis.PointerEvent =
-      PointerEventPolyfill as unknown as typeof globalThis.PointerEvent;
+
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+  Element.prototype.hasPointerCapture ??= () => false;
+
+  // jsdom ships no PointerEvent, so fireEvent.pointer* silently degrades to an
+  // event type that drops clientX and pointerId - swipe and drag assertions then
+  // read NaN offsets. MouseEvent already carries the coordinate fields.
+  if (typeof globalThis.PointerEvent === 'undefined') {
+    class PointerEventPolyfill extends MouseEvent {
+      readonly pointerId: number;
+      readonly pointerType: string;
+      readonly isPrimary: boolean;
+
+      constructor(type: string, params: PointerEventInit = {}) {
+        super(type, params);
+        this.pointerId = params.pointerId ?? 0;
+        this.pointerType = params.pointerType ?? 'mouse';
+        this.isPrimary = params.isPrimary ?? true;
+      }
+    }
+    globalThis.PointerEvent =
+        PointerEventPolyfill as unknown as typeof globalThis.PointerEvent;
+  }
 }

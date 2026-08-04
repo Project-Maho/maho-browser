@@ -70,6 +70,25 @@ vi.mock("../../../api", async (importOriginal) => {
 import * as api from "../../../api";
 
 describe("EmailContent", () => {
+  it("shows useful keyboard guidance when no email is selected", () => {
+    render(
+      <EmailContent
+        emailDetail={null}
+        loading={false}
+        onReply={vi.fn()}
+        onForward={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleStar={vi.fn()}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    expect(screen.getByText("Select an email to read")).toBeInTheDocument();
+    expect(screen.getByText(/J\/K/)).toBeInTheDocument();
+    expect(screen.getByText(/Enter/)).toBeInTheDocument();
+    expect(screen.getByText("C", { selector: "kbd" })).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockToast.mockClear();
@@ -95,6 +114,34 @@ describe("EmailContent", () => {
     await waitFor(() => {
       expect(screen.getByText("Select an email to read")).toBeInTheDocument();
     });
+  });
+
+  it("guides the user to reconnect when loading a message fails authentication", () => {
+    const onReconnectAccount = vi.fn();
+
+    render(
+      <EmailContent
+        emailDetail={null}
+        loading={false}
+        authRecoveryError={{
+          emailId: "e1",
+          accountEmail: "alice@example.com",
+          message: "[AUTHENTICATIONFAILED] Invalid credentials",
+        }}
+        onReconnectAccount={onReconnectAccount}
+        onReply={vi.fn()}
+        onForward={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleStar={vi.fn()}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Sign in to continue");
+    expect(screen.getByText(/alice@example.com/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    expect(onReconnectAccount).toHaveBeenCalledTimes(1);
+    expect(mockToast).not.toHaveBeenCalledWith("error", expect.stringContaining("AUTHENTICATIONFAILED"));
   });
 
   it("shows loading skeleton when loading", async () => {

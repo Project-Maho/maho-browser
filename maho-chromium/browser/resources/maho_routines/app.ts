@@ -52,7 +52,7 @@ function renderUpgrade(app: HTMLElement) {
       <div style="background:#f8f4e8;border:1px solid #e8d48b;border-radius:12px;padding:24px;max-width:400px;margin:24px auto">
         <p style="font-size:18px;margin:0 0 12px">Available on Max tier</p>
         <p style="color:#666;margin:0 0 16px">Upgrade to Max to unlock automated browser routines.</p>
-        <a href="chrome://maho-settings#pricing" style="display:inline-block;padding:10px 24px;background:#1a1a1a;color:#fff;border-radius:8px;text-decoration:none">Upgrade to Max</a>
+        <a href="chrome://maho-settings?pane=billing" style="display:inline-block;padding:10px 24px;background:#1a1a1a;color:#fff;border-radius:8px;text-decoration:none">Upgrade to Max</a>
       </div>
     </div>`;
 }

@@ -25,9 +25,42 @@ describe('normalizeAgentEvent', () => {
   });
 
   it('returns null for unknown, malformed, or incomplete events', () => {
-    expect(normalizeAgentEvent('{"type":"thinking","data":"..."}')).toBeNull();
+    expect(normalizeAgentEvent('{"type":"unknown_type","data":"..."}')).toBeNull();
     expect(normalizeAgentEvent('not-json')).toBeNull();
     expect(normalizeAgentEvent('{"data":"hello"}')).toBeNull();
+  });
+
+  it('parses thinking event data', () => {
+    expect(normalizeAgentEvent('{"type":"thinking","data":"..."}')).toEqual({
+      kind: 'thinking',
+      thinking: '...',
+    });
+  });
+
+  it('parses tool_call event data', () => {
+    expect(
+      normalizeAgentEvent(
+        '{"type":"tool_call","data":{"id":"c1","name":"t1","args":"{}"}}',
+      ),
+    ).toEqual({
+      kind: 'tool_call',
+      id: 'c1',
+      name: 't1',
+      args: '{}',
+    });
+  });
+
+  it('parses tool_result event data', () => {
+    expect(
+      normalizeAgentEvent(
+        '{"type":"tool_result","data":{"id":"c1","name":"t1","result":"ok"}}',
+      ),
+    ).toEqual({
+      kind: 'tool_result',
+      id: 'c1',
+      name: 't1',
+      result: 'ok',
+    });
   });
 
   it('keeps empty token strings and string complete payloads', () => {

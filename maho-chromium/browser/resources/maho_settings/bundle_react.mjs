@@ -25,6 +25,15 @@ if (!sourceDirArg || !outputFileArg) {
 const sourceDir = path.resolve(process.cwd(), sourceDirArg);
 const outputFile = path.resolve(process.cwd(), outputFileArg);
 
+const settingsMojomExternalPlugin = {
+  name: 'maho-settings-mojom-external',
+  setup(build) {
+    build.onResolve({filter: /maho_settings\.mojom-webui\.js$/}, () => {
+      return {path: './maho_settings.mojom-webui.js', external: true};
+    });
+  },
+};
+
 const result = await build({
   absWorkingDir: sourceDir,
   banner: {
@@ -45,12 +54,14 @@ const result = await build({
   nodePaths: [websiteNodeModules],
   outfile: outputFile,
   platform: 'browser',
-  plugins: [nodeModulesGuardPlugin(websiteNodeModules)],
+  plugins: [
+    nodeModulesGuardPlugin(websiteNodeModules),
+    settingsMojomExternalPlugin,
+  ],
   sourcemap: false,
   target: ['chrome120'],
   tsconfig: path.join(sourceDir, 'react/tsconfig.json'),
   external: [
-    './maho_settings.mojom-webui.js',
     'chrome://resources/js/*',
   ],
 });

@@ -48,7 +48,7 @@ export function CompactShell(
       <div className="flex h-full min-h-0 flex-col">
         <div
             ref={topOverlayRef}
-            className="relative z-20 grid shrink-0 gap-3 bg-background px-3 pb-2 pt-3 after:pointer-events-none after:absolute after:inset-x-0 after:bottom-[-1.5rem] after:h-6 after:bg-gradient-to-b after:from-background after:to-transparent max-[520px]:gap-2 max-[520px]:px-2 max-[520px]:pb-2 max-[520px]:pt-2">
+            className="relative z-20 grid shrink-0 gap-3 px-3 pb-2 pt-3 max-[520px]:gap-2 max-[520px]:px-2 max-[520px]:pb-2 max-[520px]:pt-2">
           <CompactTopbar
             store={store}
             onClosePanel={onClosePanel}

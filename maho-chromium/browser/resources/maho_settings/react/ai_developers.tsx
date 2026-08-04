@@ -141,6 +141,18 @@ export function AiDevelopersPane({pane}: {readonly pane: PaneDefinition}) {
         <section className="space-y-3">
           <h3 className="px-1 text-base font-semibold tracking-tight text-foreground">CLI</h3>
           <CliHeroCard />
+          <SectionCard title="Installation" description="Install the maho CLI tool to your terminal.">
+            <div className="grid gap-3 border-t-0 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6">
+              <div className="min-w-0">
+                <h4 className="text-sm font-medium text-foreground">Install CLI</h4>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">Run this script in your terminal to download and install the Maho CLI.</p>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+                <CommandPill command="curl -fsSL https://mahobrowser.com/install-cli.sh | sh" />
+                <CopyCommandButton command="curl -fsSL https://mahobrowser.com/install-cli.sh | sh" />
+              </div>
+            </div>
+          </SectionCard>
           <SectionCard title="Commands" description="Supported local commands for browser agents and developer workflows.">
             {CLI_COMMANDS.map(item => (
               <CommandRow key={item.command} {...item} />

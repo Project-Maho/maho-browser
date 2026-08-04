@@ -2,99 +2,135 @@
 // biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
 // biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
 import BaseLayout from '../layouts/BaseLayout.astro';
-import Footer from '../components/Footer.astro';
 import Nav from '../components/Nav.astro';
-import { getSiteUrl } from '../lib/site';
-
-const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
-const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro $5/mo, Max $20/mo subscriptions, PAYG credits, and BYOK usage terms.";
+import Footer from '../components/Footer.astro';
 ---
 
-<BaseLayout title="Terms of Service — Maho" description={description}>
-  <div class="min-h-screen bg-background text-foreground">
-    <Nav />
-    <main id="main" class="max-w-3xl mx-auto px-6 pt-32 pb-24">
-      <h1 class="heading-serif text-4xl sm:text-5xl mb-4">Terms of Service</h1>
-      <p class="text-muted-foreground text-sm mb-12">Effective: June 28, 2026</p>
+<BaseLayout title="Terms of Service — Maho" description="Terms governing Maho Browser, accounts, encrypted sync, managed AI, subscriptions, and PAYG credits.">
+  <Nav />
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Agreement to Terms</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        By downloading or using Maho applications, you agree to these terms. If you do not agree, you may not use our software.
-      </p>
+  <main class="policy-main">
+    <div class="policy-wrap">
+      <div class="policy-header">
+        <p class="policy-kicker">Legal</p>
+        <h1>Terms of Service</h1>
+        <p class="policy-date">Effective: August 1, 2026</p>
+      </div>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">License</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho grants you a non-exclusive, non-transferable license to use the software for personal or commercial use. This license does not grant you any rights to modify, distribute, or create derivative works unless explicitly permitted in writing by the Developer, or under a separate license accompanying a specific component released as such.
-      </p>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        The software is provided as-is. We reserve the right to modify, suspend, or discontinue any aspect of the software at any time without notice.
-      </p>
+      <div class="policy-body">
+        <section>
+          <h2>1. Agreement and provider identity</h2>
+          <p>These Terms are an agreement between you and <strong>Yoon Indo</strong>, an individual business operator trading as <strong>OSB</strong> and providing Maho under the <strong>Maho</strong> product name, for your use of Maho Browser, mahobrowser.com, account services, encrypted sync, managed AI, subscriptions, and PAYG credits.</p>
+          <p>The provider's address is 213-315, Gran City Xi 2nd Officetel, 17 Haeyang 5-ro, Sangrok-gu, Ansan-si, Gyeonggi-do, Republic of Korea. Business Registration Number: <strong>150-32-00795</strong>. Legal notices may be sent to <a href="mailto:hello@mahobrowser.com">hello@mahobrowser.com</a>. The mail-order sales registration number will be added after its exact registered form is verified.</p>
+          <p>LemonSqueezy acts as merchant of record for purchases it processes and is responsible for checkout, payment collection, applicable transaction taxes, receipts, and its customer-facing payment terms. Maho remains responsible for providing the Maho service and entitlements described here.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Software License</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho Browser and Maho Mail are proprietary software, developed and provided by an individual developer (hereinafter "the Developer"). The software is licensed, not sold, under the terms of this agreement. Source code is not publicly distributed. The Developer may, at sole discretion, release individual components under separate public license terms; such components are governed by their respective licenses.
-      </p>
+        <section>
+          <h2>2. Eligibility and accounts</h2>
+          <p>You must be at least 13 and old enough under local law to enter this agreement. If you are below the age of majority, a parent or guardian must agree where required. You must provide accurate account information, protect credentials and recovery material, and promptly report suspected unauthorized access.</p>
+          <p>You are responsible for activity performed through your account unless caused by Maho's breach of its legal duties. You may not sell, transfer, automate abuse of, or share access in a way that bypasses plan, quota, or security controls.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">User Data</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho applications run locally on your device. We do not collect, store, or transmit your personal data, emails, browsing history, or any other information to our servers. All data remains under your control on your device.
-      </p>
+        <section>
+          <h2>3. Local-first browser and encrypted sync</h2>
+          <p>Maho is local-first, but optional account, authentication, encrypted sync, managed AI, billing, and security features process limited data through Maho-operated services as described in the <a href="/privacy">Privacy Policy</a>. Maho does not promise that all application data remains only on your device.</p>
+          <p>Encrypted sync is a convenience feature, not a guaranteed backup or archival service. Keep independent backups of important data. Pairing or recovery material may be required to decrypt synced content. If you lose all usable devices and recovery material, Maho may be technically unable to restore plaintext content.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Third-Party Services</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho applications connect to email providers, local sync servers, and AI model backends. These connections are made directly from your device, or through our billing proxy for managed subscriptions. We are not responsible for the availability, terms, or policies of third-party model providers.
-      </p>
+        <section>
+          <h2>4. Acceptable use</h2>
+          <p>You may not use Maho to violate law or third-party rights; distribute malware; probe or disrupt systems without authorization; evade limits; automate fraudulent purchases; abuse providers; or generate, upload, transmit, or request content that violates the acceptable-use rules of Cloudflare, LemonSqueezy, OpenRouter, a selected AI provider, or another service used for the requested feature.</p>
+          <p>You retain rights in content you submit. You grant Maho and necessary processors a limited license to transmit, process, and temporarily hold that content only as needed to provide, secure, and support the feature you request.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Pricing and Billing</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho offers three recurring monthly subscription tiers: Free at $0/mo, Pro at $5/mo, and Max at $20/mo. Subscriptions renew automatically each month unless you cancel before the renewal date. Billing is processed through LemonSqueezy, our Merchant of Record.
-      </p>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Pay-as-you-go credits are sold as one-time purchases in $10, $50, and $100 packs. Credits never expire in your account. Credit purchases are non-refundable after 14 days from the purchase date. Refunds requested within 14 days are capped at the unconsumed balance.
-      </p>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Bring your own key (BYOK) is free and does not create any Maho billing. If you use BYOK, you are responsible for the terms, pricing, and account standing with your API provider.
-      </p>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Frontier models are excluded from Maho-managed tiers and are available through BYOK only. Maho does not bill you for BYOK usage. Your provider bills that usage directly under its own pricing.
-      </p>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        You can cancel subscriptions at any time. Paid access continues until the end of the current paid period, and then the subscription does not renew.
-      </p>
+        <section>
+          <h2>5. AI features</h2>
+          <p>BYOK requests are sent to the provider you select using your provider credentials. Managed-AI requests pass through Maho's Cloudflare-hosted proxy, OpenRouter, and the selected model provider. Provider availability, pricing, acceptable-use rules, retention, and model behaviour may change.</p>
+          <p>AI output may be inaccurate, incomplete, offensive, insecure, or fabricated. It is not professional legal, medical, financial, security, or other expert advice. You must review output before relying on it, publishing it, executing code, sending communications, or taking consequential action. You are responsible for having rights to inputs and for lawful use of outputs.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Acceptable Use & Abuse Prevention</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        You agree not to use Maho-managed AI services for any unlawful activities, generation of prohibited content, or automated bulk spamming. We reserve the right to suspend or terminate accounts that exhibit abusive usage patterns, exceed their tier-specific per-request limits, or attempt to bypass billing and authentication mechanisms.
-      </p>
+        <section>
+          <h2>6. Subscriptions, renewal, and cancellation</h2>
+          <p>Subscription prices, billing interval, currency, included usage, and whether displayed prices include tax are shown at checkout. LemonSqueezy calculates applicable taxes and may present localized currency or conversion information. Your payment method is charged when the order is accepted. Monthly subscriptions renew on the corresponding billing date, subject to calendar and processor rules, until cancelled.</p>
+          <p>You may cancel through the LemonSqueezy customer portal linked from Maho billing settings. Cancellation stops future renewal; paid access continues until the end of the current paid period shown in your account unless a refund, chargeback, fraud response, or legal requirement ends access earlier. A failed payment may cause retry, processor notices, temporary restriction, or expiration. No grace period is promised unless shown in the product.</p>
+          <p>Upgrades, downgrades, and any proration are shown before confirmation or are governed by the merchant-of-record checkout terms. A downgrade ordinarily applies no later than the next renewal. Maho may change future prices or plan limits with reasonable advance notice where required; the new price applies on a later renewal, not retroactively to a completed period.</p>
+          <p>Except where checkout states otherwise, subscription charges are non-refundable after the service period begins. This does not limit mandatory cooling-off, withdrawal, conformity, refund, or other remedies. If you expressly request immediate supply of digital service during a withdrawal period, local law may reduce or end the withdrawal right after performance begins.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Disclaimer of Warranties</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        The software is provided "as is" without warranty of any kind, either express or implied, including but not limited to the implied warranties of merchantability, fitness for a particular purpose, or non-infringement. We do not warrant that the software will be error-free or uninterrupted.
-      </p>
+        <section>
+          <h2>7. PAYG credits</h2>
+          <p>PAYG purchases add a USD-denominated service balance to your Maho account. A displayed $10 balance means $10 of Maho service credit, not necessarily $10 of a model provider's wholesale usage. Maho currently charges managed-AI usage at calculated model cost plus a 30% service charge. Model and route prices may change; the applicable rate is the rate presented for the request or published pricing at the time of use.</p>
+          <p>Usage is measured by provider-reported or route-calculated units and rounded as shown in product pricing. A request may be charged when upstream processing occurs even if you dislike the output; a request that Maho can verify failed before billable provider processing should not be charged. Credits are not cash, deposits, stored-value currency, or transferable property; they cannot be sold, exchanged, or redeemed for cash except where law requires.</p>
+          <p>Refunded or charged-back purchases may cause the corresponding credit to be deducted, never below zero. Unused credits may be removed on account deletion because the service account is removed. If Maho permanently discontinues PAYG service, Maho will provide notice and a reasonable use, migration, or legally required refund path. Mandatory consumer remedies remain available.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Limitation of Liability</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        In no event shall the Developer, contributors, or affiliates be liable for any direct, indirect, incidental, special, consequential, or punitive damages arising out of or relating to your use of the software, even if advised of the possibility of such damages.
-      </p>
+        <section>
+          <h2>8. Suspension, termination, and appeal</h2>
+          <p>Maho may limit or suspend access when reasonably necessary for security, suspected fraud, non-payment, provider restrictions, unlawful activity, serious or repeated breach, or protection of users and infrastructure. Where lawful and practical, Maho will provide the reason and an opportunity to appeal to <a href="mailto:hello@mahobrowser.com">hello@mahobrowser.com</a> for human review.</p>
+          <p>You may stop using Maho at any time and may request authenticated account deletion. Deletion removes account-linked service data as described in the Privacy Policy, but legally required or technically unlinked billing, tax, refund, anti-fraud, security, and audit records may remain. Unused credits are not transferable to another account.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Changes to Terms</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        We may update these terms from time to time. Continued use of the software after any changes constitutes your acceptance of the revised terms. We encourage you to review these terms periodically.
-      </p>
+        <section>
+          <h2>9. Service changes, availability, and export</h2>
+          <p>Maho may add, modify, deprecate, or discontinue features. Maho will use reasonable efforts to notify users before a material paid-feature reduction or service termination and, where practical, provide a way to export or migrate user-controlled data. Maintenance, provider outages, security events, and circumstances outside reasonable control may interrupt service.</p>
+        </section>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Contact</h2>
-      <p class="text-muted-foreground leading-relaxed mb-4">
-        Questions about these terms can be directed to hello@mahobrowser.com
-      </p>
-    </main>
-    <Footer />
-  </div>
-  <script is:inline type="application/ld+json" set:html={JSON.stringify({
-    "@context": "https://schema.org",
-    "@type": "WebPage",
-    "name": "Terms of Service — Maho",
-    "description": description,
-    "url": absoluteUrl('/terms'),
-    "isPartOf": { "@type": "WebSite", "@id": `${siteUrl}/#website` },
-  })} />
+        <section>
+          <h2>10. Intellectual property</h2>
+          <p>Maho and its proprietary software, branding, interfaces, and documentation are owned by the provider or its licensors. These Terms give you a personal, limited, revocable, non-exclusive, non-transferable right to use the service for its intended purpose. They do not grant rights to copy, resell, reverse engineer where law permits restriction, or misuse Maho branding.</p>
+        </section>
+
+        <section>
+          <h2>11. Warranties and consumer rights</h2>
+          <p>To the maximum extent permitted by law, Maho is provided “as is” and “as available,” without promises that it will be uninterrupted, error-free, compatible with every system, or that AI output will be accurate. Nothing in these Terms excludes, restricts, or modifies any warranty, guarantee, remedy, or other right that cannot lawfully be excluded or restricted under applicable consumer law.</p>
+          <p>If digital content or a digital service is defective, unavailable, or not as described, you may have mandatory rights to repair, replacement, price reduction, termination, or refund. Those rights apply regardless of narrower language elsewhere in these Terms.</p>
+        </section>
+
+        <section>
+          <h2>12. Liability</h2>
+          <p>Nothing excludes liability that cannot lawfully be excluded, including liability for fraud, wilful misconduct, death or personal injury caused by negligence where applicable, breach of mandatory consumer rights, or other non-excludable liability.</p>
+          <p>Subject to that rule, neither party is liable for indirect, incidental, special, punitive, or consequential loss, or lost profits, revenue, goodwill, or data, where such exclusion is lawful. Maho's aggregate liability arising from a paid service is limited to the greater of the amount you paid for that service in the 12 months before the event or USD 100. For free service, the limit is USD 100. These limits do not apply where local law provides a higher mandatory remedy.</p>
+        </section>
+
+        <section>
+          <h2>13. Governing law and disputes</h2>
+          <p>These Terms are governed by the laws of the Republic of Korea, without regard to its conflict-of-law rules. The courts of the Republic of Korea have jurisdiction over disputes, subject to any mandatory consumer-protection law that gives you the protections or courts available in your country of residence.</p>
+        </section>
+
+        <section>
+          <h2>14. Export controls and sanctions</h2>
+          <p>You may not use or export Maho in violation of applicable export-control, sanctions, or trade laws. You represent that you are not prohibited from receiving the service under laws applicable to you or the provider.</p>
+        </section>
+
+        <section>
+          <h2>15. Changes to these Terms</h2>
+          <p>Maho may update these Terms for legal, security, provider, or product reasons. Material changes will be posted with a revised effective date and, where required, notified in advance by email or in-product notice. Changes do not retroactively remove accrued rights. If you do not agree, stop using the affected service before the change takes effect and cancel any renewal.</p>
+        </section>
+
+        <section>
+          <h2>16. General</h2>
+          <p>If part of these Terms is unenforceable, the remainder continues and the affected term is limited only as necessary. Failure to enforce a term is not a waiver. You may not assign your account or these Terms without consent; Maho may assign them as part of a legitimate business transfer, subject to applicable notice and consumer rights. These Terms, the Privacy Policy, checkout disclosures, and plan-specific terms form the agreement for the relevant service.</p>
+          <p>Notices and questions may be sent to <a href="mailto:hello@mahobrowser.com">hello@mahobrowser.com</a> or by post to Yoon Indo (OSB), 213-315, Gran City Xi 2nd Officetel, 17 Haeyang 5-ro, Sangrok-gu, Ansan-si, Gyeonggi-do, Republic of Korea.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
 </BaseLayout>
+
+<style>
+  .policy-main { min-height: 80vh; padding: 10rem 2rem 8rem; }
+  .policy-wrap { max-width: 780px; margin: 0 auto; }
+  .policy-header { padding-bottom: 3rem; border-bottom: 1px solid var(--border); margin-bottom: 3.5rem; }
+  .policy-kicker { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--purple); margin: 0 0 1rem; }
+  .policy-header h1 { font-size: clamp(2.5rem, 6vw, 4rem); letter-spacing: -0.04em; margin: 0 0 1rem; }
+  .policy-date { font-size: 0.9rem; color: var(--muted); margin: 0; }
+  .policy-body section { margin-bottom: 3rem; }
+  .policy-body h2 { font-size: 1.35rem; letter-spacing: -0.02em; margin: 0 0 1.25rem; }
+  .policy-body p, .policy-body li { font-size: 0.98rem; line-height: 1.75; color: var(--muted); }
+  .policy-body p { margin: 0 0 1rem; }
+  .policy-body a { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+  .policy-body strong { color: var(--text); }
+  @media (max-width: 600px) { .policy-main { padding: 8rem 1.25rem 5rem; } }
+</style>

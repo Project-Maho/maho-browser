@@ -56,6 +56,34 @@ export function normalizeAgentEvent(raw: string): AgentEvent | null {
       const token = typeof envelope.data === 'string' ? envelope.data : '';
       return { kind: 'token', token };
     }
+    case 'thinking': {
+      const thinking = typeof envelope.data === 'string' ? envelope.data : '';
+      return { kind: 'thinking', thinking };
+    }
+    case 'tool_call': {
+      let id = '';
+      let name = 'unknown_tool';
+      let args = '{}';
+      if (typeof envelope.data === 'object' && envelope.data !== null) {
+        const d = envelope.data as Record<string, unknown>;
+        if (typeof d.id === 'string') id = d.id;
+        if (typeof d.name === 'string') name = d.name;
+        if (typeof d.args === 'string') args = d.args;
+      }
+      return { kind: 'tool_call', id, name, args };
+    }
+    case 'tool_result': {
+      let id = '';
+      let name = 'unknown_tool';
+      let result = '';
+      if (typeof envelope.data === 'object' && envelope.data !== null) {
+        const d = envelope.data as Record<string, unknown>;
+        if (typeof d.id === 'string') id = d.id;
+        if (typeof d.name === 'string') name = d.name;
+        if (typeof d.result === 'string') result = d.result;
+      }
+      return { kind: 'tool_result', id, name, result };
+    }
     case 'complete': {
       // data is `{ full_text: string, tool_calls_json: string }`
       // tool_calls_json is always "[]" — ignored here

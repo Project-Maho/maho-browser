@@ -21,6 +21,15 @@ export interface AggregateAccountResult {
   folderId: string;
 }
 
+export interface MailAuthRecoveryError {
+  emailId: string;
+  message: string;
+}
+
+function isAuthenticationError(message: string): boolean {
+  return /authenticationfailed|invalid credentials|auth error|invalid_grant|sign-in expired/i.test(message);
+}
+
 
 
 export function useMailClient(onError?: (message: string) => void) {
@@ -29,6 +38,7 @@ export function useMailClient(onError?: (message: string) => void) {
   const [selection, setSelection] = useState<MailboxSelection>(null);
   const [emails, setEmails] = useState<EmailSummary[]>([]);
   const [selectedEmail, setSelectedEmail] = useState<EmailDetail | null>(null);
+  const [authRecoveryError, setAuthRecoveryError] = useState<MailAuthRecoveryError | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isBootstrappingAccounts, setIsBootstrappingAccounts] = useState(true);
@@ -409,6 +419,7 @@ export function useMailClient(onError?: (message: string) => void) {
       try {
         setEmailLoading(true);
         setError(null);
+        setAuthRecoveryError(null);
         const detail = await api.getEmail(emailId);
         
         if (selectingRef.current !== emailId) return;
@@ -440,7 +451,13 @@ export function useMailClient(onError?: (message: string) => void) {
         }
       } catch (err) {
         if (selectingRef.current === emailId) {
-          reportError("Failed to load email", err);
+          const message = err instanceof Error ? err.message : "Failed to load email";
+          if (isAuthenticationError(message)) {
+            setError(null);
+            setAuthRecoveryError({ emailId, message });
+          } else {
+            reportError("Failed to load email", err);
+          }
         }
       } finally {
         if (selectingRef.current === emailId) {
@@ -644,6 +661,7 @@ export function useMailClient(onError?: (message: string) => void) {
     selection,
     emails,
     selectedEmail,
+    authRecoveryError,
     emailLoading,
     loading,
     isBootstrappingAccounts,
@@ -672,12 +690,14 @@ export function useMailClient(onError?: (message: string) => void) {
     changeAccount,
     changeFolder,
     clearError: () => setError(null),
+    clearAuthRecoveryError: () => setAuthRecoveryError(null),
   }), [
     accounts,
     accountFolders,
     selection,
     emails,
     selectedEmail,
+    authRecoveryError,
     emailLoading,
     loading,
     isBootstrappingAccounts,

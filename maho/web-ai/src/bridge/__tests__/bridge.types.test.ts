@@ -92,7 +92,7 @@ describe('bridge type exports', () => {
     expect(types).toHaveLength(25);
   });
 
-  it('MahoBridge has exactly 34 method signatures', () => {
+  it('MahoBridge has exactly 39 method signatures', () => {
     // Count keys on the interface via a dummy conformance object
     const methodNames: (keyof MahoBridge)[] = [
       // BYOK (5)
@@ -101,6 +101,12 @@ describe('bridge type exports', () => {
       'byokSetKey',
       'byokDeleteKey',
       'byokValidateKey',
+      // AI Settings (5)
+      'getAiSettings',
+      'setAiProvider',
+      'setAiBaseUrl',
+      'setAiApiKey',
+      'setAiModel',
       // Chat Session (10)
       'chatSessionStart',
       'chatSessionResume',
@@ -137,7 +143,7 @@ describe('bridge type exports', () => {
       'openSettings',
       'hapticFeedback',
     ];
-    expect(methodNames).toHaveLength(34);
+    expect(methodNames).toHaveLength(39);
   });
 
   it('chatSessionStart returns Promise<SessionHandle> (string), not number', () => {
@@ -170,9 +176,9 @@ describe('bridge type exports', () => {
     expect(kinds).toHaveLength(4);
   });
 
-  it('AgentEvent covers all 3 discriminants', () => {
-    const kinds: AgentEvent['kind'][] = ['token', 'complete', 'error'];
-    expect(kinds).toHaveLength(3);
+  it('AgentEvent covers all 6 discriminants', () => {
+    const kinds: AgentEvent['kind'][] = ['token', 'thinking', 'tool_call', 'tool_result', 'complete', 'error'];
+    expect(kinds).toHaveLength(6);
   });
 
   it('KeyValidationResult has valid boolean and optional error', () => {

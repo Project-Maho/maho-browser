@@ -15,6 +15,7 @@ import {
   Lock,
   Unlock,
   FileText,
+  LogIn,
 } from "lucide-react";
 import { EmptyState } from "../common/EmptyState";
 import { DelegateEmailDialog } from "../common/DelegateEmailDialog";
@@ -146,6 +147,12 @@ interface EmailContentProps {
   onSendRequested?: (request: ComposeEmailRequest) => void;
   onOpenAiSettings?: () => void;
   onComposeToRecipient?: (email: string) => void;
+  authRecoveryError?: {
+    emailId: string;
+    accountEmail?: string;
+    message: string;
+  } | null;
+  onReconnectAccount?: () => void;
 }
 
 export function EmailContent({
@@ -164,6 +171,8 @@ export function EmailContent({
   onSendRequested,
   onOpenAiSettings,
   onComposeToRecipient,
+  authRecoveryError,
+  onReconnectAccount,
 }: EmailContentProps) {
   const { toast } = useToast();
   const { t } = useI18nTranslation();
@@ -365,12 +374,45 @@ export function EmailContent({
   }
 
   if (!emailDetail) {
+    if (authRecoveryError) {
+      return (
+        <div className="flex flex-1 items-center justify-center bg-background/95 px-8 animate-fade-in">
+          <div role="alert" className="max-w-md rounded-3xl border border-amber-500/30 bg-amber-500/10 px-10 py-9 text-center shadow-sm">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-300">
+              <LogIn size={22} />
+            </div>
+            <h2 className="mt-5 text-lg font-semibold text-foreground">Sign in to continue</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              {authRecoveryError.accountEmail
+                ? `${authRecoveryError.accountEmail} needs to be connected again before Maho can load this message.`
+                : "Your email account needs to be connected again before Maho can load this message."}
+            </p>
+            <button
+              type="button"
+              onClick={onReconnectAccount}
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <LogIn size={16} />
+              Sign in again
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className="flex flex-1 items-center justify-center bg-background animate-fade-in">
-        <EmptyState
-          title="Select an email to read"
-          description="Choose an email from the list to view its contents"
-        />
+      <div className="flex flex-1 items-center justify-center bg-background/95 px-8 animate-fade-in">
+        <div className="max-w-md rounded-3xl border border-border/50 bg-card/35 px-10 py-9 shadow-sm backdrop-blur-xl">
+          <EmptyState
+            title="Select an email to read"
+            description="Choose a message from the list. Your reading pane keeps the conversation and actions in one place."
+          />
+          <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs text-muted-foreground">
+            <span className="rounded-lg border border-border/60 bg-background/70 px-2.5 py-1.5"><kbd className="font-semibold text-foreground">J/K</kbd> move</span>
+            <span className="rounded-lg border border-border/60 bg-background/70 px-2.5 py-1.5"><kbd className="font-semibold text-foreground">Enter</kbd> open</span>
+            <span className="rounded-lg border border-border/60 bg-background/70 px-2.5 py-1.5"><kbd className="font-semibold text-foreground">C</kbd> compose</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -404,7 +446,6 @@ export function EmailContent({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to summarize";
       setAiError(message);
-      toast("error", message);
     } finally {
       setSummaryLoading(false);
     }
@@ -424,7 +465,6 @@ export function EmailContent({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to draft reply";
       setAiError(message);
-      toast("error", message);
     } finally {
       setDraftLoading(false);
     }
@@ -441,7 +481,6 @@ export function EmailContent({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to classify email";
       setAiError(message);
-      toast("error", message);
     } finally {
       setClassifyLoading(false);
     }
@@ -887,14 +926,29 @@ export function EmailContent({
         </div>
       )}
 
-      {category && (
-        <div className="border-b border-border px-6 pb-3">
+      {(category || aiError) && (
+        <div className="border-b border-border/60 bg-card/35 px-6 py-3">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/50 bg-background/65 px-3 py-2.5 shadow-sm">
+            <Sparkles size={14} className={aiError ? "text-destructive" : "text-primary"} />
+            <span className="text-xs font-semibold text-foreground">Mail intelligence</span>
+            {category && (
           <span
             className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${categoryStyles[category] ?? "border-border bg-card text-muted-foreground"}`}
           >
             <Tag size={12} className="mr-1" />
             {category}
           </span>
+            )}
+            {aiError && <span className="min-w-0 flex-1 text-xs text-destructive">{aiError}</span>}
+            {aiError && onOpenAiSettings && (
+              <button type="button" onClick={onOpenAiSettings} className="text-xs font-semibold text-primary hover:underline">
+                Open settings
+              </button>
+            )}
+            <button type="button" onClick={() => { setAiError(null); setCategory(null); }} className="ml-auto text-xs text-muted-foreground hover:text-foreground">
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
@@ -961,21 +1015,23 @@ export function EmailContent({
 
       {/* AI Summary collapsible */}
       {summary && (
-        <div className="border-b border-border bg-background/50">
+        <div className="border-b border-border/60 bg-card/35 px-6 py-3">
+          <div className="rounded-2xl border border-primary/20 bg-primary/5 shadow-sm">
           <button
             type="button"
             onClick={() => setSummaryOpen(!summaryOpen)}
-            className="flex w-full items-center gap-2 px-6 py-2 text-left text-xs font-medium text-muted-foreground"
+            className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold text-foreground"
           >
             <Sparkles size={12} />
             AI Summary
             {summaryOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </button>
           {summaryOpen && (
-            <div className="px-6 pb-3 text-sm leading-relaxed text-muted-foreground">
+            <div className="px-4 pb-4 text-sm leading-relaxed text-muted-foreground">
               {summary}
             </div>
           )}
+          </div>
         </div>
       )}
 

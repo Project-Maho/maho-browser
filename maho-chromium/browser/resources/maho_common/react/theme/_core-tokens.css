@@ -1,0 +1,39 @@
+/* AUTO-GENERATED from docs/brand/tokens.core.json @ 610ade32 */
+/* Do NOT edit by hand. Run: node scripts/gen-tokens.mjs */
+/* role.* (background/accent/fonts) are per-surface — NOT generated here. */
+
+:root {
+  /* Spacing scale (4px base) — unified. Replaces --maho-{settings,ai}-space-*. */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+  /* Radius scale. */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 9999px;
+  /* Semantic colors (Apple-system baseline; surfaces may re-tint but keep names). */
+  --color-success: #30d158;
+  --color-success-subtle: #0d2e1a;
+  --color-error: #ff453a;
+  --color-error-subtle: #2e0d0b;
+  --color-warning: #ffd60a;
+  --color-warning-subtle: #2e2800;
+  --color-info: #0a84ff;
+  --color-info-subtle: #001e36;
+  /* Motion. */
+  --duration-fast: 150ms;
+  --duration-medium: 200ms;
+  --duration-slow: 300ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+}

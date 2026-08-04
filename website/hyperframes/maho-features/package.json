@@ -1,0 +1,11 @@
+{
+  "name": "maho-features",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.7.77 preview",
+    "check": "npx --yes hyperframes@0.7.77 check",
+    "render": "npx --yes hyperframes@0.7.77 render",
+    "publish": "npx --yes hyperframes@0.7.77 publish"
+  }
+}

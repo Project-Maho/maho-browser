@@ -2,37 +2,11 @@
 
 /* maho_ai-specific token overrides if needed (e.g., panel padding) */
 :root {
-  --color-accent-glow: rgba(212,216,226,0.18);
-  --voice-glow-blue: #3B4CFF;
-  --voice-glow-purple: #8C4CFF;
-  --voice-glow-magenta: #E23B9A;
-  --voice-headline-lavender: #D8C8FF;
+  --shadow-raised: 0 8px 24px -12px rgba(0,0,0,0.45);
+  --shadow-overlay: 0 20px 60px -40px rgba(0,0,0,0.65);
 }
 
 @layer utilities {
-  @keyframes halo-drift {
-    0%,
-    100% {
-      transform: translate3d(0, 0, 0) rotate(0deg);
-    }
-
-    25% {
-      transform: translate3d(3px, -2px, 0) rotate(1deg);
-    }
-
-    50% {
-      transform: translate3d(4px, 3px, 0) rotate(2deg);
-    }
-
-    75% {
-      transform: translate3d(-3px, 2px, 0) rotate(-1deg);
-    }
-  }
-
-  .animate-halo-drift {
-    animation: halo-drift 24s linear infinite;
-  }
-
   @keyframes voice-fade-in {
     from {
       opacity: 0;
@@ -53,31 +27,6 @@
     }
   }
 
-  @keyframes voice-breathe {
-    0%,
-    100% {
-      transform: scale(1);
-      filter: brightness(1);
-    }
-
-    50% {
-      transform: scale(1.045);
-      filter: brightness(1.12);
-    }
-  }
-
-  @keyframes voice-blink {
-    0%,
-    88%,
-    100% {
-      transform: scaleY(1);
-    }
-
-    92% {
-      transform: scaleY(0.1);
-    }
-  }
-
   .animate-voice-fade-in {
     animation: voice-fade-in 180ms ease-out both;
   }
@@ -85,44 +34,11 @@
   .animate-voice-fade-out {
     animation: voice-fade-out 140ms ease-in both;
   }
-
-  .animate-voice-breathe {
-    animation: voice-breathe 2.7s ease-in-out infinite;
-    transform-origin: center;
-    will-change: transform, filter;
-  }
-
-  .animate-voice-blink {
-    animation: voice-blink 4.8s ease-in-out infinite;
-    transform-origin: center;
-    will-change: transform;
-  }
-
-  .voice-bottom-glow {
-    background: radial-gradient(ellipse at bottom,
-        var(--voice-glow-blue) 0%,
-        var(--voice-glow-purple) 43%,
-        var(--voice-glow-magenta) 68%,
-        transparent 78%);
-  }
-
-  .voice-headline-gradient {
-    background: linear-gradient(100deg,
-        var(--voice-glow-blue) 0%,
-        var(--voice-headline-lavender) 58%,
-        rgba(255,255,255,0.92) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-halo-drift,
   .animate-voice-fade-in,
-  .animate-voice-fade-out,
-  .animate-voice-breathe,
-  .animate-voice-blink {
+  .animate-voice-fade-out {
     animation: none;
   }
 }

@@ -10,13 +10,17 @@ import {createRoot} from 'react-dom/client';
 
 import type {SettingValue} from '../mojo.js';
 import {BrowserUpdateState} from '../mojo.js';
+import {scopeApplicabilityLabel} from '../models.js';
 import type {PaneDefinition, SettingMetadata} from '../models.js';
 import {DOMAIN_DEFINITIONS} from '../schema/domains.js';
 import {
+  LEGACY_PROFILE_ROW_GUARD_PANE_KEYS,
   LIVE_PANE_SECTION_MANIFEST,
   PANE_DEFINITION_MAP,
   PANE_DEFINITIONS,
   panesForSettings,
+  selectedProfileLegacyRowDisposition,
+  selectedProfilePaneDisposition,
 } from '../schema/panes.js';
 import {
   SETTING_METADATA,
@@ -106,7 +110,6 @@ const BROWSER_CONTENT_CLASS = 'h-full overflow-hidden';
 const BROWSER_PANE_CLASS = 'flex h-full min-h-0 min-w-0 flex-col';
 const BROWSER_TOOLBAR_CLASS = 'flex shrink-0 items-center border-b border-border/60 glass px-4 py-2';
 const BROWSER_SHELL_CLASS = 'min-h-0 min-w-0 flex-1 overflow-hidden bg-background';
-const BROWSER_FRAME_CLASS = 'block h-full w-full border-0 bg-background';
 const SETTING_ROW_CLASS =
     'grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-center';
 const SETTING_COPY_CLASS = 'min-w-0 flex-1';
@@ -167,6 +170,28 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
     return grouped;
   }, [visiblePanes]);
 
+  const paneDisposition = selectedProfilePaneDisposition(
+      currentPane.selectedProfileSupport,
+      state.selectedProfileTarget !== null,
+      state.selectedProfileContext?.isHostProfile);
+  const selectedProfileDisplayName =
+      state.selectedProfileMetadata?.name.trim() || null;
+
+  useEffect(() => {
+    if (state.selectedProfileTarget && state.selectedProfileContext &&
+        !state.selectedProfileMetadata && !state.selectedProfileLoading &&
+        !state.selectedProfileError) {
+      void store.refreshSelectedProfileMetadata();
+    }
+  }, [
+    state.selectedProfileContext,
+    state.selectedProfileError,
+    state.selectedProfileLoading,
+    state.selectedProfileMetadata,
+    state.selectedProfileTarget,
+    store,
+  ]);
+
   return (
     <div className={SETTINGS_SHELL_CLASS}>
       <div className={SETTINGS_WINDOW_CLASS}>
@@ -195,7 +220,13 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
                             isActive={pane.key === currentPane.key}
                             pane={pane}
                             onSelect={() => {
-                              if (pane.externalAction === 'openExtensions') {
+                              const externalActionDisposition =
+                                  selectedProfilePaneDisposition(
+                                      pane.selectedProfileSupport,
+                                      state.selectedProfileTarget !== null,
+                                      state.selectedProfileContext?.isHostProfile);
+                              if (pane.externalAction === 'openExtensions' &&
+                                  externalActionDisposition === 'pane') {
                                 store.getHandler().openExtensionsPage();
                               } else {
                                 store.selectPane(pane.key);
@@ -211,14 +242,28 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
             </aside>
           )}
           <main className={SETTINGS_CONTENT_CLASS}>
-            <div className={currentPane.kind === 'embed' ? BROWSER_CONTENT_CLASS : SETTINGS_CONTENT_SCROLL_CLASS}>
-              {currentPane.kind === 'embed' ? (
-                <EmbedPane pane={currentPane} onExit={() => store.selectPane('general')} />
+            <div className={currentPane.kind === 'embed' && paneDisposition === 'pane' ? BROWSER_CONTENT_CLASS : SETTINGS_CONTENT_SCROLL_CLASS}>
+              {paneDisposition === 'limitation' ? (
+                <ProfileTargetLimitation
+                  error={state.selectedProfileError}
+                  loading={state.selectedProfileLoading}
+                  pane={currentPane}
+                  profileDisplayName={selectedProfileDisplayName}
+                />
+              ) : currentPane.kind === 'embed' ? (
+                <ChromiumSettingsPane
+                  pane={currentPane}
+                  onExit={() => store.selectPane('general')}
+                  onOpen={() => void store.getHandler().openChromiumSettingsPage()}
+                />
               ) : isMigratedLivePane(currentPane) ? (
                 <LivePaneSection
                   bootstrapError={state.bootstrapError}
                   lastActionError={state.lastActionError}
                   pane={currentPane}
+                  selectedProfileContextIsHost={state.selectedProfileContext?.isHostProfile}
+                  selectedProfileDisplayName={selectedProfileDisplayName}
+                  hasSelectedProfileTarget={state.selectedProfileTarget !== null}
                   settings={state.settings}
                   store={store}
                 />
@@ -234,9 +279,12 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
   );
 }
 
-function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
-  const embedUrl = pane.embedUrl || 'chrome://settings/';
-
+function ChromiumSettingsPane(
+    {pane, onExit, onOpen}: {
+      pane: PaneDefinition;
+      onExit: () => void;
+      onOpen: () => void;
+    }) {
   return (
     <section
       className={BROWSER_PANE_CLASS}
@@ -251,17 +299,74 @@ function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
           <ArrowLeft aria-hidden="true" className={SETTING_ICON_CLASS} />
           Back to Maho settings
         </Button>
+        <span className="ml-auto text-xs font-medium text-muted-foreground">
+          Current browser profile settings
+        </span>
       </header>
-      <div className={BROWSER_SHELL_CLASS}>
-        <iframe
-          className={BROWSER_FRAME_CLASS}
-          role="document"
-          src={embedUrl}
-          title={pane.title}
-        />
+      <div className={`${BROWSER_SHELL_CLASS} flex items-center justify-center p-6`}>
+        <div className="max-w-xl rounded-2xl border border-border/70 bg-card p-6 shadow-sm sm:p-8">
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">
+            Open Chromium settings
+          </h2>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            Chromium settings run in their own browser-owned tab for this profile.
+          </p>
+          <Button className="mt-6" type="button" onClick={onOpen}>
+            Open Chromium settings
+            <ArrowUpRight aria-hidden="true" className={SETTING_ICON_CLASS} />
+          </Button>
+        </div>
       </div>
     </section>
   );
+}
+
+function ProfileTargetLimitation(
+    {pane, profileDisplayName, loading, error}: {
+      pane: PaneDefinition;
+      profileDisplayName: string | null;
+      loading: boolean;
+      error: string | null;
+    }) {
+  const selectedProfileName = profileDisplayName || 'the selected profile';
+
+  return (
+    <section
+      aria-labelledby="selected-profile-limitation-title"
+      className="mx-auto flex min-h-[min(520px,70vh)] max-w-2xl items-center px-2 py-8 sm:px-6"
+      data-pane={pane.key}
+      data-selected-profile-limitation="true"
+      id={`section-${pane.key}`}>
+      <div className="w-full rounded-2xl border border-border/70 bg-card p-6 shadow-sm sm:p-8">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Selected profile limitation
+        </p>
+        <h2
+          className="mt-3 text-xl font-semibold tracking-tight text-foreground"
+          id="selected-profile-limitation-title">
+          {pane.title} is not available for {selectedProfileName}
+        </h2>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          This area is bound to the profile hosting this Settings window. To manage {pane.title.toLowerCase()} for {selectedProfileName}, open that profile&apos;s own browser window and use its Settings surface.
+        </p>
+        {loading ? (
+          <p className="mt-4 text-sm text-muted-foreground" role="status">
+            Confirming the selected profile context…
+          </p>
+        ) : null}
+        {!loading && error ? (
+          <p className="mt-4 text-sm text-destructive" role="alert">{error}</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+export function ScopeApplicabilityLabel({scope}: {scope: PaneDefinition['scope']}) {
+  const label = scopeApplicabilityLabel(scope);
+  return label ? (
+    <span className="text-xs font-medium text-muted-foreground">{label}</span>
+  ) : null;
 }
 
 function PaneButton(
@@ -315,6 +420,7 @@ function BrowserVersionCard({store}: {store: MahoSettingsStore}) {
         <div className="grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <div className="min-w-0">
             <div className="text-sm font-medium text-foreground">{versionLine}</div>
+            <ScopeApplicabilityLabel scope="process" />
             <div className="mt-1 text-sm text-muted-foreground">
               {isDev
                 ? 'Developer build — automatic updates are disabled.'
@@ -346,10 +452,22 @@ function BrowserVersionCard({store}: {store: MahoSettingsStore}) {
 }
 
 function LivePaneSection(
-    {bootstrapError, lastActionError, pane, settings, store}: {
+    {
+      bootstrapError,
+      lastActionError,
+      pane,
+      selectedProfileContextIsHost,
+      selectedProfileDisplayName,
+      hasSelectedProfileTarget,
+      settings,
+      store,
+    }: {
       bootstrapError: string | null;
       lastActionError: string | null;
       pane: PaneDefinition;
+      selectedProfileContextIsHost: boolean | null | undefined;
+      selectedProfileDisplayName: string | null;
+      hasSelectedProfileTarget: boolean;
       settings: SettingValue[];
       store: MahoSettingsStore;
     }) {
@@ -379,8 +497,21 @@ function LivePaneSection(
     }));
   }, [pane.key, pane.title, relevantSettings]);
 
+  const declaredSettingKeys = LIVE_PANE_SECTION_MANIFEST[pane.key]?.flatMap(
+      section => section.card.settingKeys) ?? relevantSettings.map(setting => setting.key);
+  const declaredScopes = declaredSettingKeys.map(
+      key => SETTING_METADATA[key]?.scope);
+  const hasDeclaredProfileRows = declaredScopes.includes('profile');
+  const hasDeclaredNonProfileRows = declaredScopes.some(
+      scope => scope !== undefined && scope !== 'profile');
+  const paneForShell: PaneDefinition =
+      hasDeclaredProfileRows && hasDeclaredNonProfileRows ?
+      {...pane, scope: 'profile'} : pane;
+  const isLegacyProfileRowGuardPane =
+      LEGACY_PROFILE_ROW_GUARD_PANE_KEYS.includes(pane.key as typeof LEGACY_PROFILE_ROW_GUARD_PANE_KEYS[number]);
+
   return (
-    <PaneShell pane={pane}>
+    <PaneShell pane={paneForShell}>
       {bootstrapError ? <p className="mb-4 text-sm leading-6 text-muted-foreground">{bootstrapError}</p> : null}
       {!bootstrapError && lastActionError ? (
         <p className="mb-4 text-sm leading-6 text-muted-foreground">{lastActionError}</p>
@@ -406,7 +537,11 @@ function LivePaneSection(
             {card.settings.map(setting => (
               <SettingRow
                 key={setting.key}
+                hasSelectedProfileTarget={hasSelectedProfileTarget}
+                isLegacyProfileRowGuardPane={isLegacyProfileRowGuardPane}
                 item={setting}
+                selectedProfileContextIsHost={selectedProfileContextIsHost}
+                selectedProfileDisplayName={selectedProfileDisplayName}
                 store={store}
               />
             ))}
@@ -418,28 +553,95 @@ function LivePaneSection(
 }
 
 function SettingRow(
-    {item, store}: {
+    {
+      hasSelectedProfileTarget,
+      isLegacyProfileRowGuardPane,
+      item,
+      selectedProfileContextIsHost,
+      selectedProfileDisplayName,
+      store,
+    }: {
+      hasSelectedProfileTarget: boolean;
+      isLegacyProfileRowGuardPane: boolean;
       item: SettingValue;
+      selectedProfileContextIsHost: boolean | null | undefined;
+      selectedProfileDisplayName: string | null;
       store: MahoSettingsStore;
     }) {
   const meta = getSettingMetadata(item);
+  const rowDisposition = selectedProfileLegacyRowDisposition(
+      meta?.scope,
+      meta?.selectedProfile,
+      isLegacyProfileRowGuardPane,
+      hasSelectedProfileTarget,
+      selectedProfileContextIsHost);
+
+  if (rowDisposition === 'limitation') {
+    return (
+      <ProfileScopedSettingLimitation
+        item={item}
+        meta={meta}
+        profileDisplayName={selectedProfileDisplayName}
+      />
+    );
+  }
 
   return (
     <section className={SETTING_ROW_CLASS}>
       <div className={SETTING_COPY_CLASS}>
-        <h4 className={SETTING_ROW_TITLE_CLASS}>{meta ? meta.label : item.key}</h4>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h4 className={SETTING_ROW_TITLE_CLASS}>{meta ? meta.label : item.key}</h4>
+          {meta ? <ScopeApplicabilityLabel scope={meta.scope} /> : null}
+        </div>
         <p className={SETTING_ROW_DESCRIPTION_CLASS}>
           {meta ? meta.description : `Metadata missing for ${item.key}.`}
         </p>
       </div>
       <div className={SETTING_CONTROL_CLASS}>
         {meta ? (
-          <SettingControl item={item} meta={meta} store={store} />
+          <div className="flex w-full flex-col items-start gap-2 sm:items-end">
+            <SettingControl item={item} meta={meta} store={store} />
+            {hasSelectedProfileTarget && meta.selectedProfile &&
+                store.getSnapshot().selectedProfileMutationErrorSettingKey === item.key &&
+                store.getSnapshot().selectedProfileMutationError?.message ? (
+              <p className="text-xs text-destructive" role="alert">
+                {store.getSnapshot().selectedProfileMutationError?.message}
+              </p>
+            ) : null}
+          </div>
         ) : (
           <p className={SETTING_ROW_DESCRIPTION_CLASS}>
             {`Unsupported setting metadata for ${item.key}. Current value: ${item.value || '(empty)'}`}
           </p>
         )}
+      </div>
+    </section>
+  );
+}
+
+function ProfileScopedSettingLimitation(
+    {item, meta, profileDisplayName}: {
+      item: SettingValue;
+      meta: SettingMetadata | null;
+      profileDisplayName: string | null;
+    }) {
+  const selectedProfileName = profileDisplayName || 'the selected profile';
+  const label = meta?.label || item.key;
+
+  return (
+    <section
+      className={SETTING_ROW_CLASS}
+      data-selected-profile-row-limitation={item.key}>
+      <div className={SETTING_COPY_CLASS}>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Selected profile limitation
+        </p>
+        <h4 className={`${SETTING_ROW_TITLE_CLASS} mt-1`}>
+          {label} is not available for {selectedProfileName}
+        </h4>
+        <p className={SETTING_ROW_DESCRIPTION_CLASS}>
+          This control is bound to the profile hosting this Settings window. Manage {label.toLowerCase()} in the selected profile&apos;s editor, or open that profile&apos;s own Settings window.
+        </p>
       </div>
     </section>
   );

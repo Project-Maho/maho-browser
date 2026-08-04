@@ -1,0 +1,10 @@
+{
+  "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
+  "registry": "https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry",
+  "paths": {
+    "assets": "assets"
+  },
+  "media": {
+    "autoProxy": true
+  }
+}

@@ -179,6 +179,7 @@ export interface FolderCount {
 // Attachment types
 export interface Attachment {
   id: string;
+  part_id: string;
   email_id: string;
   filename: string | null;
   mime_type: string;
@@ -772,37 +773,6 @@ export interface GoogleCalendarSyncResult {
   events_upserted: number;
   events_deleted: number;
   reauthorize_required: boolean;
-}
-
-// AI Agent types
-export interface AgentChatSession {
-  id: string;
-  account_id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AgentChatMessage {
-  id: string;
-  session_id: string;
-  role: "user" | "assistant" | "tool_result";
-  content: string;
-  created_at: string;
-  tool_calls?: string;
-}
-
-export type AgentStreamEventKind =
-  | "token"
-  | "tool_call_start"
-  | "tool_call_result"
-  | "phase"
-  | "error";
-
-export interface AgentStreamEvent {
-  session_id: string;
-  kind: AgentStreamEventKind;
-  payload: Record<string, unknown>;
 }
 
 // Auto Draft types

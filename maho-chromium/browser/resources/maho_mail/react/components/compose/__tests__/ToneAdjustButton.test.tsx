@@ -41,7 +41,7 @@ describe("ToneAdjustButton", () => {
       />
     );
 
-    const button = screen.getByLabelText("Adjust Tone");
+    const button = screen.getByLabelText("Rewrite message");
     expect(button).toBeInTheDocument();
 
     // Click to open dropdown

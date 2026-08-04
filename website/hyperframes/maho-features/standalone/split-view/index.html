@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+      .background { position: absolute; inset: 0; background: radial-gradient(120% 90% at 50% 8%, #26222b 0%, #17151b 46%, #0c0b0f 100%); }
+      .camera { position: absolute; inset: 0; transform-origin: 19% 64%; will-change: transform, filter; }
+      .frame { position: absolute; left: 210px; top: 60px; width: 1500px; height: 949px; border-radius: 26px; overflow: hidden; background: #000; box-shadow: 0 40px 120px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06); object-fit: cover; }
+    </style>
+  </head>
+  <body>
+    <div id="split-root" data-composition-id="split-view" data-start="0" data-duration="8" data-width="1920" data-height="1080" style="position: relative; width: 1920px; height: 1080px; overflow: hidden;">
+      <div class="background"></div>
+      <div id="split-camera" class="camera" data-layout-allow-overflow>
+        <video id="split-video" class="frame clip" src="assets/split-view.mp4" data-start="0" data-duration="8" data-track-index="1" muted playsinline></video>
+      </div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const timeline = gsap.timeline({ paused: true });
+      const focusEase = (progress) => -0.806 * progress * progress + 1.806 * progress;
+      timeline.set("#split-camera", { scale: 0.94, xPercent: 0, yPercent: 0, transformOrigin: "19% 64%" }, 0);
+      timeline.fromTo(
+        "#split-camera",
+        { scale: 0.94, xPercent: 0, yPercent: 0 },
+        { scale: 1.52, xPercent: 1.8, yPercent: -1.8, duration: 0.9, ease: focusEase, immediateRender: false },
+        0.5,
+      );
+      timeline.fromTo(
+        "#split-camera",
+        { scale: 1.52, xPercent: 1.8, yPercent: -1.8, filter: "blur(0px)" },
+        { scale: 1.56, xPercent: 2.1, yPercent: -2.1, filter: "blur(6px)", duration: 0.1, ease: "power2.in", immediateRender: false },
+        2.84,
+      );
+      timeline.fromTo(
+        "#split-camera",
+        { scale: 1.56, xPercent: 2.1, yPercent: -2.1, filter: "blur(6px)" },
+        { scale: 0.96, xPercent: 0, yPercent: 0, filter: "blur(0px)", duration: 0.8, ease: focusEase, immediateRender: false },
+        2.94,
+      );
+      timeline.fromTo(
+        "#split-camera",
+        { scale: 0.96, xPercent: 0, yPercent: 0 },
+        { scale: 0.92, xPercent: 0, yPercent: 0, duration: 3.6, ease: "none", immediateRender: false },
+        3.74,
+      );
+      window.__timelines["split-view"] = timeline;
+    </script>
+  </body>
+</html>

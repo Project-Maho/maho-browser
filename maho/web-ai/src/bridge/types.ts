@@ -49,6 +49,22 @@ export interface PhotoCapture {
 
 export type HapticStyle = 'light' | 'medium' | 'heavy';
 
+/**
+ * AI provider settings, mirroring the desktop `AISettings` mojo struct
+ * (maho_settings.mojom). Stored per-shell (Chromium prefs on desktop,
+ * UserDefaults/Keychain on iOS, SharedPreferences on Android).
+ *
+ * provider: "" | "maho-managed" | "openai" | "anthropic" | "openai-compatible"
+ */
+export interface AiSettings {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  hasByokOpenai: boolean;
+  hasByokAnthropic: boolean;
+}
+
 export type SessionHandle = string;
 export type AgentHandle = string;
 export type Provider = string;
@@ -78,6 +94,9 @@ export type ChatEvent =
  */
 export type AgentEvent =
   | { kind: 'token'; token: string }
+  | { kind: 'thinking'; thinking: string }
+  | { kind: 'tool_call'; id: string; name: string; args: string }
+  | { kind: 'tool_result'; id: string; name: string; result: string }
   | { kind: 'complete'; fullText: string }
   | { kind: 'error'; message: string };
 
@@ -183,9 +202,16 @@ export interface MahoBridge {
   byokDeleteKey(provider: string): Promise<boolean>;
   byokValidateKey(provider: string, key: string): Promise<boolean>;
 
+  // --- AI provider settings (desktop parity: maho_settings.mojom) ---
+  getAiSettings(): Promise<AiSettings>;
+  setAiProvider(provider: string): Promise<void>;
+  setAiBaseUrl(url: string): Promise<void>;
+  setAiApiKey(key: string): Promise<void>;
+  setAiModel(model: string): Promise<void>;
+
   // --- Chat Session ---
   chatSessionStart(opts: ChatSessionOpts): Promise<SessionHandle>;
-  chatSessionResume(handle: SessionHandle): Promise<void>;
+  chatSessionResume(conversationId: string): Promise<SessionHandle>;
   chatSessionFree(handle: SessionHandle): Promise<void>;
   chatSendMessage(handle: SessionHandle, content: ChatContent): Promise<void>;
   chatCancelTurn(handle: SessionHandle): Promise<void>;
@@ -202,6 +228,7 @@ export interface MahoBridge {
   conversationDelete(sessionId: string): Promise<boolean>;
   conversationRename(sessionId: string, title: string): Promise<boolean>;
   conversationGetMessages(sessionId: string): Promise<ChatMessage[]>;
+  saveConversationMessage?(sessionId: string, role: string, content: string): Promise<boolean>;
 
   // --- Space AI Config ---
   getSpaceAIConfig(spaceId: string): Promise<SpaceAIConfig | null>;
@@ -229,4 +256,15 @@ export interface MahoBridge {
   captureScreenshot(): Promise<Uint8Array | null>;
   openSettings(): Promise<void>;
   hapticFeedback(style: HapticStyle): Promise<void>;
+
+  // --- Relay auth (gated onboarding) ---
+  relaySignIn(email: string, password: string): Promise<{ ok: boolean; error?: string }>;
+  relaySignUp(email: string, password: string, displayName: string): Promise<{ ok: boolean; error?: string }>;
+  relayAccountStatus(): Promise<{ hasValidSession: boolean; isReauth: boolean }>;
+
+  // --- Default browser ---
+  openDefaultBrowserSettings(): Promise<void>;
+
+  // --- Finish ---
+  completeOnboarding(): Promise<void>;
 }

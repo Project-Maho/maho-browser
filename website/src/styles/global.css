@@ -61,6 +61,22 @@
     text-wrap: balance;
   }
 
+  .marketing-scope .landing-display-hero {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: clamp(2rem, 4.4vw, 3.5rem);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  @media (min-width: 1024px) {
+    .marketing-scope .landing-display-hero {
+      white-space: nowrap;
+      text-wrap: nowrap;
+    }
+  }
+
   .marketing-scope .landing-section-title {
     font-family: var(--font-serif);
     font-style: normal;

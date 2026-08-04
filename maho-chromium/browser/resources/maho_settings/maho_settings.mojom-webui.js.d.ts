@@ -8,12 +8,159 @@ export interface SettingValue {
   value: string;
 }
 
+export interface SearchEngineInfo {
+  keyword: string;
+  name: string;
+  iconUrl: string;
+  isDefault: boolean;
+}
+
+export enum SettingScope {
+  kProfile = 0,
+  kDevice = 1,
+  kProcess = 2,
+  kAccount = 3,
+  kCoreGlobal = 4,
+}
+
+export interface ScopedSettingValue {
+  key: string;
+  value: string;
+  scope: SettingScope;
+}
+
+export enum ProfileLifecycleState {
+  kLoading = 0,
+  kReady = 1,
+  kDeleting = 2,
+  kUnavailable = 3,
+}
+
+export enum ProfileTargetErrorCode {
+  kNone = 0,
+  kInvalidProfileId = 1,
+  kProfileNotFound = 2,
+  kProfileDeleting = 3,
+  kProfileUnavailable = 4,
+  kStaleContext = 5,
+  kStaleProfileRevision = 6,
+  kUnsupportedScope = 7,
+  kInvalidArgument = 8,
+  kInternal = 9,
+}
+
+export interface ProfileTarget {
+  profileId: string;
+  targetToken: string;
+}
+
+export interface ProfileTargetError {
+  code: ProfileTargetErrorCode;
+  message: string;
+  currentContextRevision: bigint;
+  currentProfileRevision: bigint | null;
+}
+
+export interface SelectedProfileContext {
+  profileId: string;
+  targetToken: string;
+  contextRevision: bigint;
+  profileRevision: bigint;
+  lifecycleState: ProfileLifecycleState;
+  isHostProfile: boolean;
+  isActiveMahoProfile: boolean;
+}
+
+export interface SelectedProfileContextResult {
+  context: SelectedProfileContext | null;
+  error: ProfileTargetError | null;
+}
+
+export interface ProfileMetadata {
+  name: string;
+  avatarColor: string;
+}
+
+export interface ProfileMetadataUpdate {
+  name: string;
+  avatarColor: string;
+  expectedProfileRevision: bigint;
+}
+
+export interface ProfileMetadataResult {
+  context: SelectedProfileContext | null;
+  metadata: ProfileMetadata | null;
+  error: ProfileTargetError | null;
+}
+
+export interface ProfileSearchSettings {
+  engines: SearchEngineInfo[];
+  suggestionsEnabled: boolean;
+}
+
+export interface ProfileSearchSettingsResult {
+  context: SelectedProfileContext | null;
+  search: ProfileSearchSettings | null;
+  error: ProfileTargetError | null;
+}
+
+export interface ProfileDownloadSettings {
+  directoryDisplayPath: string;
+  promptForDownload: boolean;
+}
+
+export interface ProfileDownloadSettingsResult {
+  context: SelectedProfileContext | null;
+  download: ProfileDownloadSettings | null;
+  error: ProfileTargetError | null;
+}
+
+export interface ProfileArchiveSettings {
+  timeoutHours: number;
+}
+
+export interface ProfileArchiveSettingsResult {
+  context: SelectedProfileContext | null;
+  archive: ProfileArchiveSettings | null;
+  error: ProfileTargetError | null;
+}
+
+export interface ProfileMutationResult {
+  context: SelectedProfileContext | null;
+  error: ProfileTargetError | null;
+}
+
 export interface ProfileInfo {
   id: string;
   name: string;
   isDefault: boolean;
   isActive: boolean;
   spaceIds: string[];
+}
+
+export enum ProfileObservableLifecycleState {
+  kProvisioning = 0,
+  kReady = 1,
+  kDeleting = 2,
+  kRepairRequired = 3,
+}
+
+export interface ProfileObservableLifecycleEntry {
+  profileId: string;
+  lifecycleState: ProfileObservableLifecycleState;
+}
+
+export enum DeletedProfileHistoryAvailability {
+  kUnavailable = 0,
+}
+
+export interface ProfileObservablesSnapshot {
+  activeBrowserProfileId: string | null;
+  activeMahoProfileId: string | null;
+  registryRevision: bigint;
+  lifecycleEntries: ProfileObservableLifecycleEntry[];
+  pendingDeletionProfileIds: string[];
+  deletedHistoryAvailability: DeletedProfileHistoryAvailability;
 }
 
 export interface ATCRule {
@@ -271,6 +418,13 @@ export interface SpaceBasicInfo {
   name: string;
 }
 
+export interface CurrentBrowserSpaceSnapshot {
+  focusedBrowserSessionId: number;
+  selectedSpace: SpaceBasicInfo;
+  assignedTabIds: string[];
+  assignedWindowIds: string[];
+}
+
 export interface AutofillAddress {
   id: string;
   name: string;
@@ -441,10 +595,52 @@ export class PageHandlerRemote {
   setSetting(key: string, value: string): Promise<{success: boolean}>;
   getSearchEngines(): Promise<{engines: SearchEngineInfo[]}>;
   setDefaultSearchEngine(keyword: string): Promise<{success: boolean}>;
+  getGlobalSettingsSnapshot(): Promise<{settings: ScopedSettingValue[]}>;
+  getSelectedProfileContext(
+      target: ProfileTarget): Promise<{result: SelectedProfileContextResult}>;
+  getSelectedProfileMetadata(
+      target: ProfileTarget): Promise<{result: ProfileMetadataResult}>;
+  updateSelectedProfileMetadata(
+      target: ProfileTarget,
+      expectedContextRevision: bigint,
+      update: ProfileMetadataUpdate): Promise<{result: ProfileMetadataResult}>;
+  getSelectedProfileSearchSettings(
+      target: ProfileTarget): Promise<{result: ProfileSearchSettingsResult}>;
+  setSelectedProfileDefaultSearchEngine(
+      target: ProfileTarget,
+      expectedContextRevision: bigint,
+      keyword: string,
+      expectedProfileRevision: bigint): Promise<{result: ProfileSearchSettingsResult}>;
+  setSelectedProfileSearchSuggestionsEnabled(
+      target: ProfileTarget,
+      expectedContextRevision: bigint,
+      enabled: boolean,
+      expectedProfileRevision: bigint): Promise<{result: ProfileSearchSettingsResult}>;
+  getSelectedProfileDownloadSettings(
+      target: ProfileTarget): Promise<{result: ProfileDownloadSettingsResult}>;
+  setSelectedProfileDownloadPrompt(
+      target: ProfileTarget,
+      expectedContextRevision: bigint,
+      promptForDownload: boolean,
+      expectedProfileRevision: bigint): Promise<{result: ProfileDownloadSettingsResult}>;
+  selectSelectedProfileDownloadDirectory(
+      target: ProfileTarget,
+      expectedContextRevision: bigint,
+      expectedProfileRevision: bigint): Promise<{result: ProfileDownloadSettingsResult}>;
+  getSelectedProfileArchiveSettings(
+      target: ProfileTarget): Promise<{result: ProfileArchiveSettingsResult}>;
+  setSelectedProfileArchiveTimeout(
+      target: ProfileTarget,
+      expectedContextRevision: bigint,
+      timeoutHours: number,
+      expectedProfileRevision: bigint): Promise<{result: ProfileArchiveSettingsResult}>;
   getBrowserVersionInfo(): Promise<{info: BrowserVersionInfo}>;
   checkForBrowserUpdates(): Promise<void>;
   applyBrowserUpdateAndRestart(): Promise<void>;
   getProfiles(): Promise<{profiles: ProfileInfo[]}>;
+  getProfileObservablesSnapshot(): Promise<{
+    snapshot: ProfileObservablesSnapshot | null;
+  }>;
   createProfile(name: string): Promise<{profile?: ProfileInfo | null}>;
   deleteProfile(profileId: string): Promise<{success: boolean}>;
   switchProfile(profileId: string): Promise<{success: boolean}>;
@@ -480,6 +676,9 @@ export class PageHandlerRemote {
   disconnectSyncDevice(deviceId: string): Promise<{success: boolean}>;
   renameSyncDevice(deviceId: string, newName: string): Promise<{success: boolean}>;
   getSpaces(): Promise<{spaces: SpaceBasicInfo[]}>;
+  getCurrentBrowserSpaceSnapshot(): Promise<{
+    snapshot: CurrentBrowserSpaceSnapshot | null;
+  }>;
   getPasswordProviderStatus(): Promise<{status: PasswordProviderStatus}>;
   getPasswordProviderOptions(): Promise<{options: PasswordProviderOption[]}>;
   getSavedPasswords(): Promise<{passwords: SavedPassword[]}>;
@@ -591,19 +790,22 @@ export class PageHandlerRemote {
     mutation: ContentBlockerMutationResult;
   }>;
   openExtensionsPage(): Promise<void>;
+  openChromiumSettingsPage(): Promise<void>;
   setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
   clearBYOKKey(provider: string): Promise<{success: boolean}>;
   login(email: string, password: string): Promise<{success: boolean; errorMessage: string}>;
+  signInWithGoogle(): Promise<{success: boolean; errorMessage: string}>;
   logout(): Promise<void>;
   getAccountStatus(): Promise<{status: AccountStatus}>;
   getBillingInfo(): Promise<{info: BillingInfo | null; error: string}>;
   getInvoices(): Promise<{invoices: Invoice[]}>;
   getBillingPortalUrl(): Promise<{url: string}>;
   getBuyCreditsUrl(packSizeUsd: number): Promise<{checkoutUrl: string}>;
+  getSubscriptionCheckoutUrl(tier: string): Promise<{checkoutUrl: string}>;
   mailListAccounts(): Promise<{ok: boolean; resultJson: string}>;
   mailAddAccount(requestJson: string): Promise<{ok: boolean; resultJson: string}>;
   mailDeleteAccount(accountId: string): Promise<{ok: boolean; resultJson: string}>;
-  mailOAuthStartUrl(provider: string, clientId: string, redirectUri: string): Promise<{ok: boolean; resultJson: string}>;
+  mailBeginOAuth(provider: string): Promise<{ok: boolean; resultJson: string}>;
   mailOAuthComplete(state: string, code: string): Promise<{ok: boolean; resultJson: string}>;
   mailReconnectAccount(accountId: string): Promise<{ok: boolean; resultJson: string}>;
   mailOAuthCancel(state: string): Promise<{ accepted: boolean }>;

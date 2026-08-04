@@ -49,6 +49,10 @@ export function EmailBodyView({
 
   const { email, attachments = [] } = emailDetail;
 
+  useEffect(() => {
+    setImagesBlocked(true);
+  }, [email.id]);
+
   const shouldBlockImages = blockRemoteImages && imagesBlocked;
   const htmlToRender = (!showOriginalBody && translatedHtml) ? translatedHtml : email.body_html;
 
@@ -280,7 +284,7 @@ export function EmailBodyView({
                           email.account_id,
                           email.uid,
                           email.folder_id,
-                          att.content_id ?? att.id,
+                          att.part_id,
                           att.filename ?? "attachment",
                         );
                         await api.openAttachment(path);
@@ -302,7 +306,7 @@ export function EmailBodyView({
                           email.account_id,
                           email.uid,
                           email.folder_id,
-                          att.content_id ?? att.id,
+                          att.part_id,
                           att.filename ?? "attachment",
                         );
                         toast("success", `Saved ${att.filename ?? "attachment"}`);

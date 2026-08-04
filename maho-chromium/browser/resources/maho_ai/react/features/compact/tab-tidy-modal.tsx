@@ -42,7 +42,7 @@ export function TabTidyModal({folders, onApply, onDismiss}: Props) {
 
   return (
     <Dialog open={true} onOpenChange={(open: boolean) => { if (!open) onDismiss(); }}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="sm:max-w-[425px] glass-strong">
         <DialogHeader>
           <DialogTitle>Tab Tidy Suggestions</DialogTitle>
         </DialogHeader>
@@ -50,7 +50,7 @@ export function TabTidyModal({folders, onApply, onDismiss}: Props) {
         <p className="text-sm text-muted-foreground">Select folders to create:</p>
         <ul className="flex flex-col gap-2 max-h-60 overflow-y-auto py-2">
           {folders.map((folder, i) => (
-            <li key={i} className="flex items-center space-x-2 p-2 border rounded hover:bg-accent/50 cursor-pointer" onClick={() => toggle(i)}>
+            <li key={i} className="flex items-center space-x-2 p-2 border rounded hover:bg-surface-hover cursor-pointer" onClick={() => toggle(i)}>
               <Checkbox
                 checked={checked.has(i)}
                 onCheckedChange={() => toggle(i)}

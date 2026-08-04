@@ -31,7 +31,7 @@ export function ProfileSwitcher({store}: {store: MahoAiStore}) {
           <ChevronDown className="size-3 text-muted-foreground opacity-60" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-[180px] p-1.5 rounded-xl shadow-lg border border-border/80 bg-popover/95 backdrop-blur-md">
+      <DropdownMenuContent align="start" className="w-[180px] p-1.5 rounded-xl shadow-[var(--shadow-raised)] border border-border/80 bg-popover">
         <div className="px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           AI Agent Profile
         </div>

@@ -248,7 +248,7 @@ export function prepareIframeHtml(
 
   const cspMeta = doc.createElement("meta");
   cspMeta.setAttribute("http-equiv", "Content-Security-Policy");
-  const imgCSP = options.blockImages ? "data: cid:" : "* data: cid:";
+  const imgCSP = options.blockImages ? "data: blob: cid:" : "https: data: blob: cid:";
   cspMeta.setAttribute(
     "content",
     `default-src 'none'; img-src ${imgCSP}; style-src 'unsafe-inline'; script-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none';`

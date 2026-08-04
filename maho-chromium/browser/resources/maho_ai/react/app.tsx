@@ -418,7 +418,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   }
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
+    <div className="flex h-screen min-h-0 flex-col bg-transparent text-foreground">
       <section className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 p-3 max-[520px]:gap-2 max-[520px]:p-2">
         {state.bootError ? <BootErrorCard message={state.bootError} /> : (
           <>
@@ -455,7 +455,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                 />
               )}
             </div>
-            <div className="sticky bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-transparent pt-1">
+            <div className="sticky bottom-0 z-10 pt-1">
               <SlashEditors store={store} />
               <SuggestionChips
                 attachmentCount={state.composer.attachments.length}
