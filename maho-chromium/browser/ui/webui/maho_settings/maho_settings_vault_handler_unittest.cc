@@ -9,6 +9,9 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_hydration.h"
+#include "maho/browser/ui/webui/maho_subscription_checkout.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -90,6 +93,17 @@ class MahoSettingsVaultHandlerTest : public testing::Test {
   MahoCore* core_ = nullptr;
   std::unique_ptr<ScopedCoreOverride> core_override_;
 };
+
+TEST(SubscriptionCheckoutMappingTest, MapsOnlyMonthlySubscriptionTiers) {
+  EXPECT_EQ(maho::webui::SubscriptionCheckoutUrlForTier("pro"),
+            maho::webui::kProMonthlyCheckoutUrl);
+  EXPECT_EQ(maho::webui::SubscriptionCheckoutUrlForTier("max"),
+            maho::webui::kMaxMonthlyCheckoutUrl);
+  EXPECT_TRUE(
+      maho::webui::SubscriptionCheckoutUrlForTier("free").empty());
+  EXPECT_TRUE(
+      maho::webui::SubscriptionCheckoutUrlForTier("enterprise").empty());
+}
 
 TEST_F(MahoSettingsVaultHandlerTest,
        InitializeUnlockListAndStatusResponsesRemainSecretFree) {
@@ -222,6 +236,53 @@ TEST_F(MahoSettingsVaultHandlerTest, WrongPassphraseReturnsSafeFailure) {
   EXPECT_EQ("invalid_credentials", result->error_code);
   EXPECT_EQ("Vault operation failed.", result->error_message);
   EXPECT_FALSE(result->status);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       PasswordSetupCompletionRequiresApprovedProviderAndInitializedVault) {
+  auto uninitialized = GetVaultStatusFromCore();
+  ASSERT_TRUE(uninitialized->success);
+  ASSERT_TRUE(uninitialized->status);
+  EXPECT_FALSE(
+      IsPasswordSetupCompleteForTesting("maho_native", uninitialized.get()));
+
+  auto unlocked = InitializeVaultInCore("correct passphrase", "recovery key");
+  ASSERT_TRUE(unlocked->success);
+  ASSERT_TRUE(unlocked->status);
+
+  for (const std::string_view provider :
+       {"maho_native", "bitwarden", "onepassword"}) {
+    SCOPED_TRACE(provider);
+    EXPECT_TRUE(IsPasswordSetupCompleteForTesting(std::string(provider),
+                                                  unlocked.get()));
+  }
+
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("disabled", unlocked.get()));
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("unknown", unlocked.get()));
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("", unlocked.get()));
+
+  auto locked = LockVaultInCore();
+  ASSERT_TRUE(locked->success);
+  ASSERT_TRUE(locked->status);
+  EXPECT_TRUE(IsPasswordSetupCompleteForTesting("maho_native", locked.get()));
+
+  auto auto_locked = maho_settings::mojom::VaultOperationResult::New();
+  auto_locked->success = true;
+  auto_locked->status = maho_settings::mojom::VaultStatus::New();
+  auto_locked->status->lock_state =
+      maho_settings::mojom::VaultLockState::kAutoLocked;
+  EXPECT_TRUE(
+      IsPasswordSetupCompleteForTesting("maho_native", auto_locked.get()));
+
+  auto failed = maho_settings::mojom::VaultOperationResult::New();
+  failed->success = false;
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("maho_native", failed.get()));
+
+  auto missing_status = maho_settings::mojom::VaultOperationResult::New();
+  missing_status->success = true;
+  EXPECT_FALSE(
+      IsPasswordSetupCompleteForTesting("maho_native", missing_status.get()));
+  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("maho_native", nullptr));
 }
 
 TEST_F(MahoSettingsVaultHandlerTest, RecoveryUnlockUsesDistinctLifecyclePath) {
@@ -516,32 +577,6 @@ TEST_F(MahoSettingsVaultHandlerTest, ProviderSelectionAvailabilityMatrix) {
 }
 
 TEST_F(MahoSettingsVaultHandlerTest,
-       PasswordSetupCompletionRequiresApprovedProviderAndInitializedVault) {
-  auto vault_status = maho_settings::mojom::VaultOperationResult::New();
-  vault_status->success = true;
-  vault_status->status = maho_settings::mojom::VaultStatus::New();
-
-  vault_status->status->lock_state =
-      maho_settings::mojom::VaultLockState::kUninitialized;
-  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("maho_native",
-                                                 vault_status.get()));
-
-  for (const auto lock_state : {
-           maho_settings::mojom::VaultLockState::kLocked,
-           maho_settings::mojom::VaultLockState::kUnlocked,
-           maho_settings::mojom::VaultLockState::kAutoLocked,
-       }) {
-    vault_status->status->lock_state = lock_state;
-    EXPECT_TRUE(
-        IsPasswordSetupCompleteForTesting("bitwarden", vault_status.get()));
-    EXPECT_TRUE(
-        IsPasswordSetupCompleteForTesting("onepassword", vault_status.get()));
-  }
-  EXPECT_FALSE(IsPasswordSetupCompleteForTesting("unsupported",
-                                                 vault_status.get()));
-}
-
-TEST_F(MahoSettingsVaultHandlerTest,
        AutoLockedRateLimitedStatusProjectsCanonicalFields) {
   auto result = ParseVaultOperationResultJson(R"({
     "ok": true,
@@ -745,6 +780,314 @@ TEST_F(MahoSettingsVaultHandlerTest,
   EXPECT_TRUE(audit->entries.empty());
   EXPECT_EQ("core_unavailable", audit->error_code);
   EXPECT_EQ("core_unavailable", audit->unavailable_reason);
+}
+
+TEST(MahoSettingsCurrentBrowserSpaceSnapshotTest,
+     Task12ParserBuildsReadOnlyWindowScopedDto) {
+  auto snapshot =
+      MahoSettingsPageHandler::ParseCurrentBrowserSpaceSnapshotForTesting(
+          42, "space-work",
+          R"([{"id":"space-home","name":"Home"},{"id":"space-work","name":"Work"}])",
+          R"([{"id":"tab-a","title":"A"},{"id":"tab-b","title":"B"}])");
+
+  ASSERT_TRUE(snapshot);
+  EXPECT_EQ(42, snapshot->focused_browser_session_id);
+  ASSERT_TRUE(snapshot->selected_space);
+  EXPECT_EQ("space-work", snapshot->selected_space->id);
+  EXPECT_EQ("Work", snapshot->selected_space->name);
+  EXPECT_EQ((std::vector<std::string>{"tab-a", "tab-b"}),
+            snapshot->assigned_tab_ids);
+  EXPECT_EQ((std::vector<std::string>{"42"}),
+            snapshot->assigned_window_ids);
+}
+
+TEST(MahoSettingsCurrentBrowserSpaceSnapshotTest,
+     Task12ParserFailsClosedForUnavailableOrInvalidCoreData) {
+  constexpr std::string_view kInvalidSpaceCatalogs[] = {
+      "", "not-json", R"({"id":"space-work"})",
+      R"([{"id":"space-other","name":"Other"}])",
+      R"([{"id":"space-work"}])"};
+  for (std::string_view catalog : kInvalidSpaceCatalogs) {
+    SCOPED_TRACE(catalog);
+    EXPECT_FALSE(
+        MahoSettingsPageHandler::ParseCurrentBrowserSpaceSnapshotForTesting(
+            42, "space-work", std::string(catalog), "[]"));
+  }
+
+  constexpr std::string_view kInvalidTabPayloads[] = {
+      "", "not-json", R"({"id":"tab-a"})", R"([null])",
+      R"([{"title":"missing id"}])", R"([{"id":""}])"};
+  for (std::string_view tabs : kInvalidTabPayloads) {
+    SCOPED_TRACE(tabs);
+    EXPECT_FALSE(
+        MahoSettingsPageHandler::ParseCurrentBrowserSpaceSnapshotForTesting(
+            42, "space-work",
+            R"([{"id":"space-work","name":"Work"}])",
+            std::string(tabs)));
+  }
+
+  EXPECT_FALSE(
+      MahoSettingsPageHandler::ParseCurrentBrowserSpaceSnapshotForTesting(
+          0, "space-work", R"([{"id":"space-work","name":"Work"}])",
+          "[]"));
+  EXPECT_FALSE(
+      MahoSettingsPageHandler::ParseCurrentBrowserSpaceSnapshotForTesting(
+          42, "", R"([{"id":"space-work","name":"Work"}])", "[]"));
+}
+
+TEST(MahoSettingsCurrentBrowserSpaceSnapshotTest,
+     Task12PrivacyGateAllowsOnlyRegularProfiles) {
+  EXPECT_TRUE(MahoSettingsPageHandler::IsCurrentBrowserSpaceSnapshotProfileAllowedForTesting(
+      true, false, false, false));
+  EXPECT_FALSE(MahoSettingsPageHandler::IsCurrentBrowserSpaceSnapshotProfileAllowedForTesting(
+      false, false, false, false));
+  EXPECT_FALSE(MahoSettingsPageHandler::IsCurrentBrowserSpaceSnapshotProfileAllowedForTesting(
+      true, true, false, false));
+  EXPECT_FALSE(MahoSettingsPageHandler::IsCurrentBrowserSpaceSnapshotProfileAllowedForTesting(
+      true, false, true, false));
+  EXPECT_FALSE(MahoSettingsPageHandler::IsCurrentBrowserSpaceSnapshotProfileAllowedForTesting(
+      true, false, false, true));
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task5StateMachineHostASelectsB) {
+  MahoSettingsPageHandler::SelectedProfileRequestState state;
+  state.selected_id = "host-a";
+  state.target_token = "token-a";
+  state.context_revision = 4;
+  state.profile_revision = 9;
+  state.load_generation = 12;
+  state.attached = true;
+
+  const uint64_t generation =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-b", "token-b");
+
+  EXPECT_EQ(13u, generation);
+  EXPECT_EQ("profile-b", state.selected_id);
+  EXPECT_EQ("token-b", state.target_token);
+  EXPECT_EQ(4u, state.context_revision);
+  EXPECT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, generation, "profile-b", "token-b", 27));
+  EXPECT_TRUE(state.attached);
+  EXPECT_EQ(5u, state.context_revision);
+  EXPECT_EQ(27u, state.profile_revision);
+
+  auto context = MahoSettingsPageHandler::BuildSelectedProfileContextForTesting(
+      state, true, false,
+      maho_settings::mojom::ProfileLifecycleState::kReady);
+  EXPECT_EQ("profile-b", context->profile_id);
+  EXPECT_EQ("token-b", context->target_token);
+  EXPECT_EQ(5u, context->context_revision);
+  EXPECT_EQ(27u, context->profile_revision);
+  EXPECT_TRUE(context->is_host_profile);
+  EXPECT_FALSE(context->is_active_maho_profile);
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task5StateMachineDelayedBAfterCIsStale) {
+  MahoSettingsPageHandler::SelectedProfileRequestState state;
+
+  const uint64_t generation_b =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-b", "token-b");
+  const uint64_t generation_c =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-c", "token-c");
+
+  EXPECT_FALSE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, generation_b, "profile-b", "token-b", 11));
+  EXPECT_EQ(0u, state.context_revision);
+  EXPECT_EQ(0u, state.profile_revision);
+  EXPECT_FALSE(state.attached);
+
+  EXPECT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, generation_c, "profile-c", "token-c", 12));
+  EXPECT_EQ(1u, state.context_revision);
+  EXPECT_EQ(12u, state.profile_revision);
+  EXPECT_TRUE(state.attached);
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task5StateMachineSameTargetStable) {
+  MahoSettingsPageHandler::SelectedProfileRequestState state;
+  const uint64_t first_generation =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-a", "token-a");
+  ASSERT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, first_generation, "profile-a", "token-a", 7));
+  ASSERT_EQ(1u, state.context_revision);
+
+  const uint64_t second_generation =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-a", "token-a");
+  EXPECT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, second_generation, "profile-a", "token-a", 8));
+  EXPECT_EQ(1u, state.context_revision);
+  EXPECT_EQ(8u, state.profile_revision);
+  EXPECT_TRUE(state.attached);
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task5StateMachineMatchingInvalidation) {
+  MahoSettingsPageHandler::SelectedProfileRequestState state;
+  const uint64_t generation =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-a", "token-a");
+  ASSERT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, generation, "profile-a", "token-a", 5));
+  ASSERT_EQ(1u, state.context_revision);
+  ASSERT_EQ(1u, state.load_generation);
+
+  EXPECT_FALSE(MahoSettingsPageHandler::InvalidateSelectedProfileRequestForTesting(
+      &state, "profile-b", "token-b"));
+  EXPECT_EQ(1u, state.context_revision);
+  EXPECT_EQ(1u, state.load_generation);
+  EXPECT_EQ("profile-a", state.selected_id);
+
+  EXPECT_TRUE(MahoSettingsPageHandler::InvalidateSelectedProfileRequestForTesting(
+      &state, "profile-a", "token-a"));
+  EXPECT_EQ(2u, state.context_revision);
+  EXPECT_EQ(2u, state.load_generation);
+  EXPECT_EQ(0u, state.profile_revision);
+  EXPECT_TRUE(state.selected_id.empty());
+  EXPECT_TRUE(state.target_token.empty());
+  EXPECT_FALSE(state.attached);
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task6IdentityValidationRejectsMismatchesAndStaleRevisions) {
+  using Error = maho_settings::mojom::ProfileTargetErrorCode;
+  MahoSettingsPageHandler::SelectedProfileRequestState state;
+  const uint64_t generation =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-b", "token-b");
+  ASSERT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, generation, "profile-b", "token-b", 27));
+
+  EXPECT_EQ(Error::kNone,
+            MahoSettingsPageHandler::ValidateSelectedProfileIdentityForTesting(
+                state, "profile-b", "token-b", 1, 27));
+  EXPECT_EQ(Error::kStaleContext,
+            MahoSettingsPageHandler::ValidateSelectedProfileIdentityForTesting(
+                state, "profile-c", "token-b", 1, 27));
+  EXPECT_EQ(Error::kStaleContext,
+            MahoSettingsPageHandler::ValidateSelectedProfileIdentityForTesting(
+                state, "profile-b", "wrong-token", 1, 27));
+  EXPECT_EQ(Error::kStaleContext,
+            MahoSettingsPageHandler::ValidateSelectedProfileIdentityForTesting(
+                state, "profile-b", "token-b", 2, 27));
+  EXPECT_EQ(Error::kStaleProfileRevision,
+            MahoSettingsPageHandler::ValidateSelectedProfileIdentityForTesting(
+                state, "profile-b", "token-b", 1, 28));
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     ProfileMetadataAndArchiveMutationRoundTripBumpsRevision) {
+  maho::ProfileRegistryRecord record;
+  record.maho_id = "profile-b";
+  record.name = "Profile B";
+  record.avatar_color = "#AF52DE";
+  record.archive_timeout_hours = 12;
+  record.revision = 9;
+  uint64_t catalog_revision = 9;
+  const std::string name = "Work";
+  const std::string avatar_color = "#34C759";
+
+  ASSERT_TRUE(MahoSettingsPageHandler::ApplyProfileSettingsMutationForTesting(
+      &record, &catalog_revision, &name, &avatar_color, nullptr));
+  EXPECT_EQ(record.name, "Work");
+  EXPECT_EQ(record.avatar_color, "#34C759");
+  EXPECT_EQ(record.revision, 10u);
+  EXPECT_EQ(catalog_revision, 10u);
+
+  const std::optional<int32_t> disabled_timeout;
+  ASSERT_TRUE(MahoSettingsPageHandler::ApplyProfileSettingsMutationForTesting(
+      &record, &catalog_revision, nullptr, nullptr, &disabled_timeout));
+  EXPECT_FALSE(record.archive_timeout_hours.has_value());
+  EXPECT_EQ(record.revision, 11u);
+  EXPECT_EQ(catalog_revision, 11u);
+
+  MahoSettingsPageHandler::SelectedProfileRequestState state;
+  const uint64_t generation =
+      MahoSettingsPageHandler::BeginSelectedProfileRequestForTesting(
+          &state, "profile-b", "token-b");
+  ASSERT_TRUE(MahoSettingsPageHandler::CompleteSelectedProfileRequestForTesting(
+      &state, generation, "profile-b", "token-b", record.revision));
+  EXPECT_EQ(
+      maho_settings::mojom::ProfileTargetErrorCode::kStaleProfileRevision,
+      MahoSettingsPageHandler::ValidateSelectedProfileIdentityForTesting(
+          state, "profile-b", "token-b", state.context_revision, 10));
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     ProfileUpdateErrorsPreserveTaxonomy) {
+  using Error = maho_settings::mojom::ProfileTargetErrorCode;
+  EXPECT_EQ(Error::kInvalidArgument,
+            MahoSettingsPageHandler::MapProfileUpdateErrorForTesting(
+                "PROFILE_NAME_DUPLICATE"));
+  EXPECT_EQ(Error::kInvalidArgument,
+            MahoSettingsPageHandler::MapProfileUpdateErrorForTesting(
+                "PROFILE_AVATAR_COLOR_INVALID"));
+  EXPECT_EQ(Error::kInvalidArgument,
+            MahoSettingsPageHandler::MapProfileUpdateErrorForTesting(
+                "PROFILE_ARCHIVE_TIMEOUT_INVALID"));
+  EXPECT_EQ(Error::kProfileNotFound,
+            MahoSettingsPageHandler::MapProfileUpdateErrorForTesting(
+                "PROFILE_NOT_FOUND"));
+  EXPECT_EQ(Error::kInternal,
+            MahoSettingsPageHandler::MapProfileUpdateErrorForTesting(
+                "PROFILE_PERSISTENCE_FAILED"));
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task7DeletionPreflightProtectsUnsafeTargets) {
+  using Lifecycle = maho::ProfileLifecycleState;
+  EXPECT_TRUE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      false, false, false, false, Lifecycle::kReady));
+  EXPECT_FALSE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      true, false, false, false, Lifecycle::kReady));
+  EXPECT_FALSE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      false, true, false, false, Lifecycle::kReady));
+  EXPECT_FALSE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      false, false, true, false, Lifecycle::kReady));
+  EXPECT_FALSE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      false, false, false, true, Lifecycle::kReady));
+  EXPECT_FALSE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      false, false, false, false, Lifecycle::kProvisioning));
+  EXPECT_FALSE(MahoSettingsPageHandler::CanDeleteProfileForTesting(
+      false, false, false, false, Lifecycle::kDeleting));
+}
+
+TEST(MahoSettingsSelectedProfileStateMachineTest,
+     Task5RegistryErrorsAreDistinct) {
+  using LookupError = maho::ProfileRegistryLookupError;
+  using MojoError = maho_settings::mojom::ProfileTargetErrorCode;
+
+  struct ErrorCase {
+    LookupError input;
+    MojoError expected_code;
+  };
+  constexpr ErrorCase kCases[] = {
+      {LookupError::kInvalidProfileId, MojoError::kInvalidProfileId},
+      {LookupError::kUnknownProfile, MojoError::kProfileNotFound},
+      {LookupError::kProfileDeleting, MojoError::kProfileDeleting},
+      {LookupError::kStaleRevision, MojoError::kStaleContext},
+      {LookupError::kCatalogUnavailable, MojoError::kProfileUnavailable},
+      {LookupError::kProfileProvisioning, MojoError::kProfileUnavailable},
+      {LookupError::kProfileRepairRequired, MojoError::kProfileUnavailable},
+  };
+
+  for (const auto& test_case : kCases) {
+    SCOPED_TRACE(static_cast<int>(test_case.input));
+    auto error = MahoSettingsPageHandler::MakeLookupErrorForTesting(
+        test_case.input, 17, 23);
+    EXPECT_EQ(test_case.expected_code, error->code);
+    EXPECT_FALSE(error->message.empty());
+    EXPECT_EQ(17u, error->current_context_revision);
+    ASSERT_TRUE(error->current_profile_revision.has_value());
+    EXPECT_EQ(23u, *error->current_profile_revision);
+  }
 }
 
 }  // namespace

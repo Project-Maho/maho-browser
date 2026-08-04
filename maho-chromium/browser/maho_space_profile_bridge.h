@@ -13,14 +13,18 @@
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/observer_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "maho/browser/maho_space_profile_hydration.h"
 
 class GlobalBrowserCollection;
 
 class Browser;
 class BrowserWindowInterface;
+class PrefRegistrySimple;
+class PrefService;
 class Profile;
 
 namespace maho {
@@ -37,6 +41,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   };
 
   static MahoSpaceProfileBridge* GetInstance();
+  static void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
   MahoSpaceProfileBridge(const MahoSpaceProfileBridge&) = delete;
   MahoSpaceProfileBridge& operator=(const MahoSpaceProfileBridge&) = delete;
@@ -84,6 +89,25 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   std::string GetSpaceIdForProfile(Profile* profile) const;
   base::FilePath GetProfilePathForSpace(const std::string& space_id) const;
 
+  bool ReconcileProfileRegistry(std::string_view profiles_json,
+                                std::string_view active_profile_id_json,
+                                std::string_view spaces_json);
+  bool ReconcileProfileRegistryFromCore();
+  void SetLocalStateForTesting(PrefService* local_state);
+  const ProfileCatalogResult& GetProfileCatalog() const;
+  uint64_t GetProfileRegistryRevision() const;
+  std::optional<std::string> CanonicalizeProfileId(
+      std::string_view profile_id) const;
+  ProfileRegistryPathResult ResolveProfilePath(
+      std::string_view profile_id,
+      uint64_t expected_registry_revision) const;
+  bool SetProfileLifecycleState(std::string_view profile_id,
+                                ProfileLifecycleState state);
+  bool UpdateProfileSettings(std::string_view profile_id,
+                             const std::string* name,
+                             const std::string* avatar_color,
+                             const std::optional<int32_t>* archive_timeout_hours);
+
   static constexpr size_t kMahoProfileIdMaxLen = 64;
   static std::optional<base::FilePath> ProfileBasenameForId(
       std::string_view profile_id);
@@ -97,7 +121,13 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   void OnBrowserCreated(BrowserWindowInterface* browser) override;
   void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
+  void LoadProfileRegistryFromLocalState();
+  void PersistProfileRegistryToLocalState();
+  PrefService* GetLocalState() const;
+
   base::flat_map<std::string, base::FilePath> space_to_profile_;
+  ProfileCatalogResult profile_catalog_;
+  raw_ptr<PrefService> local_state_for_testing_ = nullptr;
   base::flat_map<std::string, std::string> last_active_tab_per_space_;
   std::string active_space_id_;
   base::flat_map<Browser*, std::string> browser_active_space_;

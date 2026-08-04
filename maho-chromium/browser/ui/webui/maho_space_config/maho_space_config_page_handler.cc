@@ -15,15 +15,151 @@
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 #include "maho/third_party/maho/maho_ffi.h"
-#include "ui/color/color_provider_manager.h"
 #include "ui/views/view_utils.h"
 
+// static
+maho_space_config::mojom::SpaceInfoPtr
+MahoSpaceConfigPageHandler::ParseSpaceInfoFromDictForTesting(
+    const base::DictValue& dict) {
+  const std::string* id = dict.FindString("id");
+  if (!id) {
+    return nullptr;
+  }
+
+  auto info = maho_space_config::mojom::SpaceInfo::New();
+  info->id = *id;
+
+  const std::string* name = dict.FindString("name");
+  info->name = name ? *name : std::string();
+
+  const std::string* icon = dict.FindString("icon");
+  info->icon = icon ? *icon : std::string();
+
+  if (const base::DictValue* color = dict.FindDict("color")) {
+    info->color =
+        maho_theme::SpaceColorDictToHex(*color).value_or(std::string());
+  } else if (const std::string* legacy_color = dict.FindString("color")) {
+    info->color = *legacy_color;
+  }
+
+  if (const base::DictValue* theme = dict.FindDict("theme")) {
+    info->theme_json = maho_theme::SerializeSpaceThemeJson(*theme);
+  }
+
+  const std::string* pid = dict.FindString("profileId");
+  if (pid && !pid->empty()) {
+    info->profile_id = *pid;
+  }
+
+  return info;
+}
+
+maho_space_config::mojom::ProfileInfoPtr
+MahoSpaceConfigPageHandler::ParseProfileInfoFromDictForTesting(
+    const base::DictValue& dict) {
+  const std::string* id = dict.FindString("id");
+  const std::string* name = dict.FindString("name");
+  if (!id || !name) {
+    return nullptr;
+  }
+
+  auto profile = maho_space_config::mojom::ProfileInfo::New();
+  profile->id = *id;
+  profile->name = *name;
+  const base::Value* data_store_id = dict.Find("dataStoreId");
+  profile->is_default = !data_store_id || data_store_id->is_none();
+  return profile;
+}
+
 namespace {
+
+struct ValidatedProfileUpdate {
+  base::FilePath profile_basename;
+  std::string profile_id;
+  std::string event_json;
+};
+
+std::optional<ValidatedProfileUpdate> BuildValidatedProfileUpdate(
+    const std::string& space_id,
+    const std::optional<std::string>& profile_id) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  const uint64_t revision = bridge->GetProfileRegistryRevision();
+  maho::ProfileRegistryPathResult resolved = bridge->ResolveProfilePath(
+      profile_id.value_or("default"), revision);
+  std::optional<std::string> canonical_id =
+      bridge->CanonicalizeProfileId(profile_id.value_or("default"));
+  if (resolved.error != maho::ProfileRegistryLookupError::kNone ||
+      !resolved.path || !canonical_id) {
+    return std::nullopt;
+  }
+
+  base::DictValue changes;
+  changes.Set("spaceId", space_id);
+  changes.Set("profileId", *canonical_id);
+  base::DictValue event;
+  event.Set("kind", "update_space_config");
+  event.Set("changes", std::move(changes));
+  std::string event_json;
+  if (!base::JSONWriter::Write(event, &event_json)) {
+    return std::nullopt;
+  }
+  return ValidatedProfileUpdate{.profile_basename = *resolved.path,
+                                .profile_id = std::move(*canonical_id),
+                                .event_json = std::move(event_json)};
+}
+
+bool CoreAcceptedSpaceConfigUpdate(const std::string& result_json,
+                                   const std::string& expected_space_id,
+                                   const std::string& expected_profile_id) {
+  std::optional<base::Value> result =
+      base::JSONReader::Read(result_json, base::JSON_PARSE_RFC);
+  if (!result || !result->is_list()) {
+    return false;
+  }
+  for (const base::Value& update : result->GetList()) {
+    const base::DictValue* dict = update.GetIfDict();
+    const std::string* kind = dict ? dict->FindString("kind") : nullptr;
+    const base::DictValue* changes = dict ? dict->FindDict("changes") : nullptr;
+    const std::string* space_id =
+        changes ? changes->FindString("spaceId") : nullptr;
+    const std::string* profile_id =
+        changes ? changes->FindString("profileId") : nullptr;
+    if (kind && *kind == "space_config_updated" && space_id &&
+        *space_id == expected_space_id && profile_id &&
+        *profile_id == expected_profile_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<base::FilePath> UpdateProfileOnPool(
+    const std::string& space_id,
+    ValidatedProfileUpdate update) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::nullopt;
+  }
+
+  char* result = maho_core_handle_event(core, update.event_json.c_str());
+  if (!result) {
+    return std::nullopt;
+  }
+  const std::string result_json(result);
+  maho_string_free(result);
+  if (!CoreAcceptedSpaceConfigUpdate(result_json, space_id,
+                                     update.profile_id) ||
+      maho_core_save_state(core) == 0) {
+    return std::nullopt;
+  }
+  return update.profile_basename;
+}
 
 maho_space_config::mojom::SpaceInfoPtr LoadSpaceOnPool(
     const std::string& space_id) {
@@ -55,72 +191,10 @@ maho_space_config::mojom::SpaceInfoPtr LoadSpaceOnPool(
       continue;
     }
 
-    auto info = maho_space_config::mojom::SpaceInfo::New();
-    info->id = *id;
-
-    const std::string* name = dict->FindString("name");
-    info->name = name ? *name : std::string();
-
-    const std::string* icon = dict->FindString("icon");
-    info->icon = icon ? *icon : std::string();
-
-    const std::string* color = dict->FindString("color");
-    info->color = color ? *color : std::string();
-
-    if (const std::string* theme_json = dict->FindString("theme_json")) {
-      info->theme_json = *theme_json;
-    }
-
-    const std::string* pid = dict->FindString("profile_id");
-    if (pid && !pid->empty()) {
-      info->profile_id = *pid;
-    }
-
-    return info;
+    return MahoSpaceConfigPageHandler::ParseSpaceInfoFromDictForTesting(*dict);
   }
 
   return nullptr;
-}
-
-std::vector<maho_space_config::mojom::ProfileInfoPtr> BuildProfilesOnPool() {
-  std::vector<maho_space_config::mojom::ProfileInfoPtr> profiles;
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return profiles;
-  }
-
-  char* json_str = maho_core_list_profiles(core);
-  if (!json_str) {
-    return profiles;
-  }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return profiles;
-  }
-
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* id = dict->FindString("id");
-    const std::string* name = dict->FindString("name");
-    if (!id || !name) {
-      continue;
-    }
-
-    auto profile = maho_space_config::mojom::ProfileInfo::New();
-    profile->id = *id;
-    profile->name = *name;
-    profile->is_default = dict->FindBool("is_default").value_or(false);
-    profiles.push_back(std::move(profile));
-  }
-
-  return profiles;
 }
 
 bool RenameSpaceOnPool(const std::string& space_id,
@@ -174,6 +248,24 @@ bool RecolorSpaceOnPool(const std::string& space_id,
 
 }  // namespace
 
+std::optional<std::string>
+MahoSpaceConfigPageHandler::BuildProfileUpdateEventJsonForTesting(
+    const std::string& space_id,
+    const std::optional<std::string>& profile_id) {
+  std::optional<ValidatedProfileUpdate> update =
+      BuildValidatedProfileUpdate(space_id, profile_id);
+  return update ? std::optional<std::string>(std::move(update->event_json))
+                : std::nullopt;
+}
+
+bool MahoSpaceConfigPageHandler::CoreAcceptedSpaceConfigUpdateForTesting(
+    const std::string& result_json,
+    const std::string& expected_space_id,
+    const std::string& expected_profile_id) {
+  return CoreAcceptedSpaceConfigUpdate(result_json, expected_space_id,
+                                       expected_profile_id);
+}
+
 MahoSpaceConfigPageHandler::MahoSpaceConfigPageHandler(
     mojo::PendingReceiver<maho_space_config::mojom::PageHandler> receiver,
     mojo::PendingRemote<maho_space_config::mojom::Page> page,
@@ -216,10 +308,24 @@ void MahoSpaceConfigPageHandler::GetSpaceInfo(GetSpaceInfoCallback callback) {
 }
 
 void MahoSpaceConfigPageHandler::GetProfiles(GetProfilesCallback callback) {
-  maho::PostCoreTask<std::vector<maho_space_config::mojom::ProfileInfoPtr>>(
-      FROM_HERE,
-      base::BindOnce(&BuildProfilesOnPool),
-      std::move(callback));
+  std::vector<maho_space_config::mojom::ProfileInfoPtr> profiles;
+  const maho::ProfileCatalogResult& catalog =
+      maho::MahoSpaceProfileBridge::GetInstance()->GetProfileCatalog();
+  if (catalog.error != maho::ProfileCatalogError::kNone) {
+    std::move(callback).Run(std::move(profiles));
+    return;
+  }
+  for (const maho::ProfileRegistryRecord& record : catalog.records) {
+    if (record.lifecycle != maho::ProfileLifecycleState::kReady) {
+      continue;
+    }
+    auto profile = maho_space_config::mojom::ProfileInfo::New();
+    profile->id = record.maho_id;
+    profile->name = record.name;
+    profile->is_default = record.is_default;
+    profiles.push_back(std::move(profile));
+  }
+  std::move(callback).Run(std::move(profiles));
 }
 
 void MahoSpaceConfigPageHandler::UpdateName(
@@ -297,8 +403,17 @@ void MahoSpaceConfigPageHandler::UpdateColor(
              bool success) {
             if (weak_self && success) {
               weak_self->cached_theme_json_ = std::move(theme_json_value);
-              MahoSpaceThemeState::UpdateFromCore();
-              ui::ColorProviderManager::Get().ResetColorProviderCache();
+              MahoSpaceThemeState::ChangedSpaceIds changed_spaces =
+                  MahoSpaceThemeState::UpdateFromCore();
+              if (changed_spaces.empty()) {
+                changed_spaces.push_back(weak_self->space_id_);
+              }
+              for (Browser* affected_browser :
+                   maho::MahoSpaceProfileBridge::GetInstance()
+                       ->GetBrowsersForSpaces(changed_spaces)) {
+                maho::MahoSidebarView::RefreshSpaceThemeForBrowser(
+                    affected_browser);
+              }
             }
             std::move(cb).Run(success);
           },
@@ -308,12 +423,32 @@ void MahoSpaceConfigPageHandler::UpdateColor(
 void MahoSpaceConfigPageHandler::UpdateProfile(
     const std::optional<std::string>& profile_id,
     UpdateProfileCallback callback) {
-  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-  if (bridge && profile_id.has_value()) {
-    bridge->RegisterSpace(space_id_,
-                          base::FilePath::FromASCII(profile_id.value()));
+  const std::string space_id = space_id_;
+  std::optional<ValidatedProfileUpdate> update =
+      BuildValidatedProfileUpdate(space_id, profile_id);
+  if (!update) {
+    std::move(callback).Run(false);
+    return;
   }
-  std::move(callback).Run(true);
+  maho::PostCoreTask<std::optional<base::FilePath>>(
+      FROM_HERE,
+      base::BindOnce(&UpdateProfileOnPool, space_id, std::move(*update)),
+      base::BindOnce(
+          [](const std::string& space_id,
+             base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
+             UpdateProfileCallback cb,
+             std::optional<base::FilePath> profile_basename) {
+            const bool success = profile_basename.has_value();
+            if (success) {
+              maho::MahoSpaceProfileBridge::GetInstance()->RegisterSpace(
+                  space_id, *profile_basename);
+              if (weak_self) {
+                weak_self->RefreshSidebar();
+              }
+            }
+            std::move(cb).Run(success);
+          },
+          space_id, weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoSpaceConfigPageHandler::CloseDialog() {

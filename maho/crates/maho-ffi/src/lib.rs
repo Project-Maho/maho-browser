@@ -5,10 +5,13 @@ pub mod import_destination;
 pub(crate) mod import_gate;
 pub mod vault_backend;
 
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::Path;
 use std::ptr;
 use std::str::FromStr;
+use std::sync::{Arc as FfiArc, Condvar as FfiCondvar, Mutex as FfiMutex, MutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
 use maho_core::content_blocker::normalize_site_exception_key;
@@ -20,6 +23,78 @@ use maho_types::vault::{
     CredentialOrigin, VaultItemId, VaultItemKind, VaultItemListRequest, VaultItemPublicDto,
     VaultItemPublicMetadata, VaultSchemaVersion,
 };
+
+static FFI_SERIALIZATION_GATE: FfiMutex<()> = FfiMutex::new(());
+
+thread_local! {
+    static FFI_SERIALIZATION_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static DEFERRED_CORE_UPDATES: RefCell<Vec<maho_types::events::core_update::CoreUpdate>> =
+        const { RefCell::new(Vec::new()) };
+    static ACTIVE_CALLBACK_TOKENS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+struct FfiSerializationScope {
+    _guard: Option<MutexGuard<'static, ()>>,
+}
+
+impl FfiSerializationScope {
+    fn enter() -> Self {
+        let nested = FFI_SERIALIZATION_DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current + 1);
+            current > 0
+        });
+        let guard = (!nested).then(|| {
+            FFI_SERIALIZATION_GATE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        Self { _guard: guard }
+    }
+}
+
+impl Drop for FfiSerializationScope {
+    fn drop(&mut self) {
+        FFI_SERIALIZATION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+#[doc(hidden)]
+pub fn with_ffi_serialization<T>(operation: impl FnOnce() -> T) -> T {
+    let scope = FfiSerializationScope::enter();
+    let is_outermost = scope._guard.is_some();
+    let result = operation();
+    drop(scope);
+    if is_outermost {
+        let updates = DEFERRED_CORE_UPDATES.with(|updates| updates.take());
+        dispatch_split_callbacks_for_updates(&updates);
+    }
+    result
+}
+
+#[no_mangle]
+pub extern "C" fn maho_ffi_serialization_scope_enter() -> *mut c_void {
+    match std::panic::catch_unwind(FfiSerializationScope::enter) {
+        Ok(scope) => Box::into_raw(Box::new(scope)).cast(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `scope` must be null or returned by `maho_ffi_serialization_scope_enter`
+/// on the same thread.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ffi_serialization_scope_exit(scope: *mut c_void) {
+    if !scope.is_null() {
+        let scope = unsafe { Box::from_raw(scope.cast::<FfiSerializationScope>()) };
+        let is_outermost = scope._guard.is_some();
+        drop(scope);
+        if is_outermost {
+            let updates = DEFERRED_CORE_UPDATES.with(|updates| updates.take());
+            dispatch_split_callbacks_for_updates(&updates);
+        }
+    }
+}
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -228,7 +303,9 @@ pub unsafe extern "C" fn maho_core_free(ptr: *mut MahoCore) {
     ffi_safe!(
         {
             if !ptr.is_null() {
-                drop(Box::from_raw(ptr));
+                let mut core = Box::from_raw(ptr);
+                core.handle_event(maho_types::events::shell_event::ShellEvent::AppWillTerminate);
+                drop(core);
             }
         },
         ()
@@ -1338,7 +1415,8 @@ pub unsafe extern "C" fn maho_core_get_side_panel_options_for_profile(
                 Err(_) => return false,
             };
             let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
-            if let Some(opt) = core.get_side_panel_options_for_profile(profile_key, ext_id.as_ref()) {
+            if let Some(opt) = core.get_side_panel_options_for_profile(profile_key, ext_id.as_ref())
+            {
                 if !out_path.is_null() {
                     if let Ok(p_cstr) = CString::new(opt.path.clone()) {
                         *out_path = p_cstr.into_raw();
@@ -1822,8 +1900,7 @@ pub unsafe extern "C" fn maho_core_boost_update(
                 }
             };
             let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
-            core.update_boost_persisted(&bid, changes);
-            core.get_boost_by_id(&bid)
+            core.update_boost_persisted(&bid, changes)
                 .map(|b| to_json_cstring(&b))
                 .unwrap_or(ptr::null_mut())
         },
@@ -1871,32 +1948,32 @@ pub unsafe extern "C" fn maho_core_boost_set_active(
     ptr: *mut MahoCore,
     domain: *const c_char,
     boost_id: *const c_char,
-) {
+) -> bool {
     ffi_safe!(
         {
             if ptr.is_null() || domain.is_null() {
-                return;
+                return false;
             }
             // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
             if import_gate::is_active() {
-                return;
+                return false;
             }
             let core = &mut *ptr;
             let domain_str = match CStr::from_ptr(domain).to_str() {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(_) => return false,
             };
             let active_boost_id = if boost_id.is_null() {
                 None
             } else {
                 match CStr::from_ptr(boost_id).to_str() {
                     Ok(s) => Some(maho_types::identifiers::BoostId::new(s.to_string())),
-                    Err(_) => return,
+                    Err(_) => return false,
                 }
             };
-            core.set_active_boost_persisted(domain_str, active_boost_id);
+            core.set_active_boost_persisted(domain_str, active_boost_id)
         },
-        ()
+        false
     )
 }
 
@@ -2062,7 +2139,9 @@ pub unsafe extern "C" fn maho_core_boost_discard(
             let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
             match core.discard_boost_persisted(&bid) {
                 Some(prev_id) => {
-                    let id_string = prev_id.as_ref().to_string();
+                    let id_string = prev_id
+                        .as_ref()
+                        .map_or_else(String::new, |id| id.as_ref().to_string());
                     match CString::new(id_string) {
                         Ok(s) => s.into_raw(),
                         Err(_) => ptr::null_mut(),
@@ -4841,7 +4920,8 @@ pub unsafe extern "C" fn maho_core_toggle_extension_for_profile(
                 Ok(value) => value,
                 Err(_) => return false,
             };
-            core.toggle_extension_for_profile(profile_key, id_str).is_some()
+            core.toggle_extension_for_profile(profile_key, id_str)
+                .is_some()
         },
         false
     )
@@ -4903,7 +4983,8 @@ pub unsafe extern "C" fn maho_core_remove_extension_for_profile(
                 Ok(value) => value,
                 Err(_) => return false,
             };
-            core.remove_extension_for_profile(profile_key, id_str).is_some()
+            core.remove_extension_for_profile(profile_key, id_str)
+                .is_some()
         },
         false
     )
@@ -7334,6 +7415,41 @@ pub unsafe extern "C" fn maho_core_get_activation_target_for_space(
 
 // === Profile Management ===
 
+fn profile_update_result_json(
+    result: Result<maho_types::profile::ProfileConfig, maho_core::profile_manager::ProfileError>,
+) -> *mut c_char {
+    use maho_core::profile_manager::ProfileError;
+
+    match result {
+        Ok(profile) => to_json_cstring(&serde_json::json!({
+            "ok": true,
+            "profile": profile,
+            "error": serde_json::Value::Null,
+        })),
+        Err(error) => {
+            let code = match &error {
+                ProfileError::EmptyName => "PROFILE_NAME_EMPTY",
+                ProfileError::DuplicateName(_) => "PROFILE_NAME_DUPLICATE",
+                ProfileError::NotFound => "PROFILE_NOT_FOUND",
+                ProfileError::InvalidAvatarColor(_) => "PROFILE_AVATAR_COLOR_INVALID",
+                ProfileError::InvalidArchiveTimeout => "PROFILE_ARCHIVE_TIMEOUT_INVALID",
+                ProfileError::PersistenceFailed(_) => "PROFILE_PERSISTENCE_FAILED",
+                ProfileError::LimitReached(_) | ProfileError::InternalError => {
+                    "PROFILE_UPDATE_FAILED"
+                }
+            };
+            to_json_cstring(&serde_json::json!({
+                "ok": false,
+                "profile": serde_json::Value::Null,
+                "error": {
+                    "code": code,
+                    "message": error.to_string(),
+                },
+            }))
+        }
+    }
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `name` must be a valid null-terminated C string.
@@ -7391,10 +7507,12 @@ pub unsafe extern "C" fn maho_core_delete_profile(
                 Err(_) => return ptr::null_mut(),
             };
             let id = maho_types::identifiers::ProfileId::new(id_str);
-            let success = core.delete_profile(&id);
+            let outcome = core.delete_profile_detailed(&id);
             let result = serde_json::json!({
-                "success": success,
-                "profile_id": if success { Some(id_str) } else { None }
+                "success": outcome.is_deleted(),
+                "profile_id": if outcome.is_deleted() { Some(id_str) } else { None },
+                "outcome": outcome,
+                "error_code": outcome.error_code(),
             });
             to_json_cstring(&result)
         },
@@ -7450,6 +7568,145 @@ pub unsafe extern "C" fn maho_core_switch_profile(
             core.switch_profile(&id)
         },
         false
+    )
+}
+
+/// Updates the profile identified by `profile_id` without switching the active profile.
+/// The returned JSON is `{ok, profile, error}` and preserves validation and lookup errors.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new*`.
+/// `profile_id`, `name`, and `avatar_color` must be valid null-terminated C strings.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_update_profile(
+    ptr: *mut MahoCore,
+    profile_id: *const c_char,
+    name: *const c_char,
+    avatar_color: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_id.is_null() || name.is_null() || avatar_color.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let id_str = match CStr::from_ptr(profile_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let name = match CStr::from_ptr(name).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let avatar_color = match CStr::from_ptr(avatar_color).to_str() {
+                Ok(value) => value.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let id = maho_types::identifiers::ProfileId::new(id_str);
+            profile_update_result_json((&mut *ptr).update_profile_persisted(
+                &id,
+                Some(name),
+                Some(avatar_color),
+                None,
+                None,
+            ))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns the profile archive timeout as `{ok, timeout_hours, error}`.
+/// `timeout_hours` is `0` when per-profile auto-archive is disabled.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new*`.
+/// `profile_id` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_profile_archive_timeout(
+    ptr: *mut MahoCore,
+    profile_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_id.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let id_str = match CStr::from_ptr(profile_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let id = maho_types::identifiers::ProfileId::new(id_str);
+            match (&*ptr)
+                .list_profiles()
+                .iter()
+                .find(|profile| profile.id == id)
+            {
+                Some(profile) => to_json_cstring(&serde_json::json!({
+                    "ok": true,
+                    "timeout_hours": profile.archive_timeout_hours.unwrap_or(0.0),
+                    "error": serde_json::Value::Null,
+                })),
+                None => to_json_cstring(&serde_json::json!({
+                    "ok": false,
+                    "timeout_hours": serde_json::Value::Null,
+                    "error": {
+                        "code": "PROFILE_NOT_FOUND",
+                        "message": "Profile not found",
+                    },
+                })),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Sets the profile archive timeout without switching the active profile.
+/// `timeout_hours == 0` disables per-profile auto-archive.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new*`.
+/// `profile_id` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_profile_archive_timeout(
+    ptr: *mut MahoCore,
+    profile_id: *const c_char,
+    timeout_hours: i32,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || profile_id.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let id_str = match CStr::from_ptr(profile_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let id = maho_types::identifiers::ProfileId::new(id_str);
+            let archive_timeout = if timeout_hours == 0 {
+                None
+            } else {
+                Some(timeout_hours as f64)
+            };
+            profile_update_result_json((&mut *ptr).update_profile_persisted(
+                &id,
+                None,
+                None,
+                None,
+                Some(archive_timeout),
+            ))
+        },
+        ptr::null_mut()
     )
 }
 
@@ -9314,10 +9571,12 @@ pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
 #[macro_export]
 macro_rules! ffi_safe {
     ($body:block, $fallback:expr) => {{
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
-            Ok(val) => val,
-            Err(_) => $fallback,
-        }
+        $crate::with_ffi_serialization(|| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+                Ok(val) => val,
+                Err(_) => $fallback,
+            }
+        })
     }};
 }
 
@@ -9780,7 +10039,7 @@ pub unsafe extern "C" fn maho_chat_send_image(
                 return false;
             }
             let core = &mut *core;
-            use maho_types::chat::{ChatContent, ChatRequestContext, ChatRequestMode};
+            use maho_types::chat::{ChatRequestContext, ChatRequestMode};
             use maho_types::events::shell_event::ShellEvent;
             let message = format!("[image:{} {} bytes]", mime_str, bytes.len());
             core.handle_event(ShellEvent::ChatMessage {
@@ -9852,13 +10111,62 @@ pub unsafe extern "C" fn maho_chat_send_text_with_image(
 // ============================================================
 
 use maho_agent::{AgentRuntime, MutexAgentStorage, SessionRuntime, SwiftideBackend};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 const AGENT_SKILL_INJECT_BUDGET_CHARS: usize = 2_000;
 
+const fn credential_error_envelope(error: maho_agent::CredentialError) -> &'static str {
+    match error {
+        maho_agent::CredentialError::ProviderNotConfigured => {
+            r#"{"version":1,"kind":"credential_error","code":"provider_not_configured"}"#
+        }
+        maho_agent::CredentialError::CredentialUnusable => {
+            r#"{"version":1,"kind":"credential_error","code":"credential_unusable"}"#
+        }
+        maho_agent::CredentialError::SecureStoreUnavailable => {
+            r#"{"version":1,"kind":"credential_error","code":"secure_store_unavailable"}"#
+        }
+        maho_agent::CredentialError::CredentialDecryptFailed => {
+            r#"{"version":1,"kind":"credential_error","code":"credential_decrypt_failed"}"#
+        }
+        maho_agent::CredentialError::ManagedAuthUnavailable => {
+            r#"{"version":1,"kind":"credential_error","code":"managed_auth_unavailable"}"#
+        }
+        maho_agent::CredentialError::UnsupportedProvider => {
+            r#"{"version":1,"kind":"credential_error","code":"unsupported_provider"}"#
+        }
+    }
+}
+
+fn agent_error_callback_text(error: &maho_agent::AgentError) -> Cow<'static, str> {
+    match error {
+        maho_agent::AgentError::Credential(credential_error) => {
+            Cow::Borrowed(credential_error_envelope(*credential_error))
+        }
+        _ => Cow::Owned(error.to_string()),
+    }
+}
+
 pub struct MahoAgentSession {
     runtime: Arc<SwiftideBackend>,
     isolation: Arc<SessionRuntime>,
+    callback_lease: Option<Arc<SessionCallbackLease>>,
+    accepted_leased_turns: Arc<AcceptedLeasedTurns>,
+    permission_callback: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            arguments_json: *const c_char,
+        ) -> MahoAgentPermissionDecision,
+    >,
+    browser_tool_callback: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            args_json: *const c_char,
+        ) -> MahoAgentToolResult,
+    >,
     session_id: String,
     core: std::ptr::NonNull<MahoCore>,
     workspace_root: std::path::PathBuf,
@@ -9898,6 +10206,153 @@ struct SendableUserData(usize);
 unsafe impl Send for SendableUserData {}
 #[allow(dead_code)]
 unsafe impl Sync for SendableUserData {}
+
+struct AcceptedLeasedTurns {
+    current: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+impl AcceptedLeasedTurns {
+    fn accept(self: &Arc<Self>) -> AcceptedLeasedTurn {
+        let latch = Arc::new(AtomicBool::new(false));
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *current = Some(Arc::clone(&latch));
+        AcceptedLeasedTurn {
+            owner: Arc::clone(self),
+            latch,
+        }
+    }
+
+    fn signal_current(&self) -> bool {
+        let current = self
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(latch) = current.as_ref() else {
+            return false;
+        };
+        latch.store(true, AtomicOrdering::Release);
+        true
+    }
+
+    fn clear_if_current(&self, latch: &Arc<AtomicBool>) {
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if current
+            .as_ref()
+            .is_some_and(|active_latch| Arc::ptr_eq(active_latch, latch))
+        {
+            *current = None;
+        }
+    }
+}
+
+struct AcceptedLeasedTurn {
+    owner: Arc<AcceptedLeasedTurns>,
+    latch: Arc<AtomicBool>,
+}
+
+impl AcceptedLeasedTurn {
+    fn latch(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.latch)
+    }
+}
+
+impl Drop for AcceptedLeasedTurn {
+    fn drop(&mut self) {
+        self.owner.clear_if_current(&self.latch);
+    }
+}
+
+pub type MahoAgentReleaseCallback = unsafe extern "C" fn(user_data: *mut c_void);
+
+struct CallbackReleasePolicy {
+    callback: MahoAgentReleaseCallback,
+    user_data: *mut c_void,
+}
+
+struct CallbackRelease {
+    armed: AtomicBool,
+    callback: SendableCallback<MahoAgentReleaseCallback>,
+    user_data: SendableUserData,
+}
+
+impl CallbackRelease {
+    fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            callback: SendableCallback(callback),
+            user_data: SendableUserData(user_data as usize),
+        }
+    }
+
+    fn arm(&self) {
+        self.armed.store(true, AtomicOrdering::Release);
+    }
+
+    fn release(&self) {
+        if !self.armed.load(AtomicOrdering::Acquire) {
+            return;
+        }
+        // SAFETY: the FFI ownership contract transfers `user_data` to this lease exactly once.
+        // The caller's release callback must not unwind or retain the pointer after this call.
+        unsafe { (self.callback.0)(self.user_data.0 as *mut c_void) };
+    }
+}
+
+/// Owns one accepted turn's callback context until every callback closure is destroyed.
+struct TurnCallbackLease(CallbackRelease);
+
+impl TurnCallbackLease {
+    fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Self {
+        Self(CallbackRelease::new(callback, user_data))
+    }
+
+    fn arm(&self) {
+        self.0.arm();
+    }
+}
+
+impl Drop for TurnCallbackLease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+fn invoke_with_turn_callback_lease(
+    lease: Option<Arc<TurnCallbackLease>>,
+    callback: impl FnOnce(),
+) {
+    callback();
+    drop(lease);
+}
+
+/// Owns a session callback context until the session and every runtime callback release it.
+struct SessionCallbackLease(CallbackRelease);
+
+impl SessionCallbackLease {
+    fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Arc<Self> {
+        Arc::new(Self(CallbackRelease::new(callback, user_data)))
+    }
+
+    fn arm(&self) {
+        self.0.arm();
+    }
+}
+
+impl Drop for SessionCallbackLease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+fn clone_callback_lease<T>(lease: &Option<Arc<T>>) -> Option<Arc<T>> {
+    lease.as_ref().map(Arc::clone)
+}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -9943,6 +10398,8 @@ struct FfiBrowserToolBridge {
         ) -> MahoAgentToolResult,
     >,
     user_data: SendableUserData,
+    _session_callback_lease: Option<Arc<SessionCallbackLease>>,
+    _turn_callback_lease: Option<Arc<TurnCallbackLease>>,
 }
 
 impl maho_agent::BrowserToolBridge for FfiBrowserToolBridge {
@@ -9993,11 +10450,74 @@ impl maho_agent::BrowserToolBridge for FfiBrowserToolBridge {
     }
 }
 
-/// # Safety
-/// `core` must be a valid pointer to a `MahoCore`.
-/// `session_id` must be a null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn maho_agent_create_session(
+fn leased_permission_callback(
+    callback: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            arguments_json: *const c_char,
+        ) -> MahoAgentPermissionDecision,
+    >,
+    callback_user_data: *mut std::ffi::c_void,
+    turn_callback_lease: &Option<Arc<TurnCallbackLease>>,
+) -> Option<maho_agent::PermissionCallback> {
+    callback.map(|callback| {
+        let callback = SendableCallback(callback);
+        let callback_user_data = SendableUserData(callback_user_data as usize);
+        let turn_callback_lease = clone_callback_lease(turn_callback_lease);
+        Box::new(move |request: maho_agent::PermissionRequest| {
+            let _ = &turn_callback_lease;
+            let decision = match (
+                CString::new(request.tool_name),
+                CString::new(request.arguments),
+            ) {
+                (Ok(tool_name), Ok(arguments)) => {
+                    // SAFETY: the leased FFI turn owns `callback_user_data` through
+                    // `turn_callback_lease`, and C-string arguments remain live for this call.
+                    unsafe {
+                        (callback.0)(
+                            callback_user_data.0 as *mut std::ffi::c_void,
+                            tool_name.as_ptr(),
+                            arguments.as_ptr(),
+                        )
+                    }
+                }
+                _ => MahoAgentPermissionDecision::Deny,
+            };
+            let decision = match decision {
+                MahoAgentPermissionDecision::Allow => maho_agent::PermissionDecision::Allow,
+                MahoAgentPermissionDecision::Deny => maho_agent::PermissionDecision::Deny,
+            };
+            Box::pin(async move { decision })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = maho_agent::PermissionDecision> + Send>,
+                >
+        }) as maho_agent::PermissionCallback
+    })
+}
+
+fn leased_browser_tool_bridge(
+    callback: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            args_json: *const c_char,
+        ) -> MahoAgentToolResult,
+    >,
+    callback_user_data: *mut std::ffi::c_void,
+    turn_callback_lease: &Option<Arc<TurnCallbackLease>>,
+) -> Option<Arc<dyn maho_agent::BrowserToolBridge>> {
+    callback.map(|callback| {
+        Arc::new(FfiBrowserToolBridge {
+            cb: SendableCallback(callback),
+            user_data: SendableUserData(callback_user_data as usize),
+            _session_callback_lease: None,
+            _turn_callback_lease: clone_callback_lease(turn_callback_lease),
+        }) as Arc<dyn maho_agent::BrowserToolBridge>
+    })
+}
+
+unsafe fn maho_agent_create_session_impl(
     core: *mut MahoCore,
     session_id: *const c_char,
     workspace_root: *const c_char,
@@ -10026,20 +10546,23 @@ pub unsafe extern "C" fn maho_agent_create_session(
     >,
     browser_tool_user_data: *mut std::ffi::c_void,
     space_id: *const c_char,
+    callback_release_policy: Option<CallbackReleasePolicy>,
 ) -> *mut MahoAgentSession {
     ffi_safe!(
         {
             if core.is_null() || session_id.is_null() {
                 tracing::debug!(
-                "[maho_agent_create_session] FAIL: null pointer args (core_null={}, session_id_null={})",
-                core.is_null(),
-                session_id.is_null(),
-            );
+                    "[maho_agent_create_session] FAIL: null pointer args (core_null={}, session_id_null={})",
+                    core.is_null(),
+                    session_id.is_null(),
+                );
                 return std::ptr::null_mut();
             }
             // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
             if import_gate::is_active() {
-                tracing::debug!("[maho_agent_create_session] FAIL: import_gate is active (data import in progress)");
+                tracing::debug!(
+                    "[maho_agent_create_session] FAIL: import_gate is active (data import in progress)"
+                );
                 return ptr::null_mut();
             }
             let Some(core_ptr) = std::ptr::NonNull::new(core) else {
@@ -10092,11 +10615,26 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 }
             };
 
-            let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+            let isolation = match SessionRuntime::new() {
+                Ok(i) => Arc::new(i),
+                Err(e) => {
+                    tracing::debug!(
+                        "[maho_agent_create_session] FAIL: SessionRuntime::new() failed \
+                     (Tokio runtime build error; session_id={sid}): {e}"
+                    );
+                    return std::ptr::null_mut();
+                }
+            };
 
-            let permission_callback = permission_cb.map(|cb| {
+            let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+            let callback_lease = callback_release_policy
+                .map(|policy| SessionCallbackLease::new(policy.callback, policy.user_data));
+
+            let session_permission_callback = permission_cb;
+            let permission_callback = session_permission_callback.map(|cb| {
                 let user_data_ptr = SendableUserData(permission_user_data as usize);
                 let cb_sendable = SendableCallback(cb);
+                let callback_lease = clone_callback_lease(&callback_lease);
                 let callback: Box<
                     dyn Fn(
                             maho_agent::PermissionRequest,
@@ -10109,6 +10647,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
                         + Sync
                         + 'static,
                 > = Box::new(move |req| {
+                    let _ = &callback_lease;
                     let cb = cb_sendable.0;
                     let user_data = user_data_ptr.0 as *mut std::ffi::c_void;
                     let tool_name_c = match CString::new(req.tool_name) {
@@ -10141,7 +10680,9 @@ pub unsafe extern "C" fn maho_agent_create_session(
             if let Some(cb) = secure_storage_cb {
                 let user_data_ptr = SendableUserData(secure_storage_user_data as usize);
                 let cb_sendable = SendableCallback(cb);
+                let callback_lease = clone_callback_lease(&callback_lease);
                 let callback = Box::new(move |provider: &str| {
+                    let _ = &callback_lease;
                     let cb = cb_sendable.0;
                     let user_data = user_data_ptr.0 as *mut std::ffi::c_void;
                     let provider_c = match CString::new(provider) {
@@ -10149,24 +10690,25 @@ pub unsafe extern "C" fn maho_agent_create_session(
                         Err(_) => {
                             return Err(maho_agent::AgentError::ExecutionError(
                                 "Invalid provider name".to_string(),
-                            ))
+                            ));
                         }
                     };
                     let secure_key = unsafe { cb(user_data, provider_c.as_ptr()) };
                     if secure_key.ptr.is_null() {
-                        return Err(maho_agent::AgentError::ExecutionError(
-                            "BYOK key not found".to_string(),
-                        ));
+                        return Err(maho_agent::CredentialError::ProviderNotConfigured.into());
+                    }
+                    if secure_key.len == 0 {
+                        if let Some(free_fn) = secure_key.free_fn {
+                            // SAFETY: the secure-storage callback transferred this non-null
+                            // allocation and its declared length to the FFI adapter.
+                            unsafe { free_fn(secure_key.ptr, secure_key.len) };
+                        }
+                        return Err(maho_agent::CredentialError::CredentialUnusable.into());
                     }
                     let key_slice = unsafe {
                         std::slice::from_raw_parts(secure_key.ptr as *const u8, secure_key.len)
                     };
-                    let key_str = match String::from_utf8(key_slice.to_vec()) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(maho_agent::AgentError::ExecutionError(e.to_string()))
-                        }
-                    };
+                    let key_bytes = key_slice.to_vec();
 
                     unsafe {
                         std::ptr::write_bytes(secure_key.ptr, 0, secure_key.len);
@@ -10177,6 +10719,15 @@ pub unsafe extern "C" fn maho_agent_create_session(
                             free_fn(secure_key.ptr, secure_key.len);
                         }
                     }
+
+                    let key_str = match String::from_utf8(key_bytes) {
+                        Ok(s) => s,
+                        Err(error) => {
+                            let mut bytes = error.into_bytes();
+                            bytes.zeroize();
+                            return Err(maho_agent::CredentialError::CredentialDecryptFailed.into());
+                        }
+                    };
 
                     let base_url_opt = if !secure_key.base_url.is_null() {
                         let s = unsafe { CStr::from_ptr(secure_key.base_url) }
@@ -10215,13 +10766,16 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 runtime.set_secure_storage_callback(callback).unwrap();
             }
 
-            if let Some(cb) = browser_tool_cb {
+            let session_browser_tool_callback = browser_tool_cb;
+            if let Some(cb) = session_browser_tool_callback {
                 let user_data_ptr = SendableUserData(browser_tool_user_data as usize);
                 let cb_sendable = SendableCallback(cb);
                 let bridge: std::sync::Arc<dyn maho_agent::BrowserToolBridge> =
                     std::sync::Arc::new(FfiBrowserToolBridge {
                         cb: cb_sendable,
                         user_data: user_data_ptr,
+                        _session_callback_lease: clone_callback_lease(&callback_lease),
+                        _turn_callback_lease: None,
                     });
                 runtime.set_browser_tool_bridge(bridge).unwrap();
             }
@@ -10238,28 +10792,141 @@ pub unsafe extern "C" fn maho_agent_create_session(
                 runtime.set_active_space_id(Some(sid.clone()));
             }
 
-            let isolation = match SessionRuntime::new() {
-                Ok(i) => Arc::new(i),
-                Err(e) => {
-                    tracing::debug!(
-                        "[maho_agent_create_session] FAIL: SessionRuntime::new() failed \
-                     (Tokio runtime build error; session_id={sid}): {e}"
-                    );
-                    return std::ptr::null_mut();
-                }
-            };
-
-            Box::into_raw(Box::new(MahoAgentSession {
+            let session = Box::new(MahoAgentSession {
                 runtime,
                 isolation,
+                callback_lease,
+                accepted_leased_turns: Arc::new(AcceptedLeasedTurns {
+                    current: Mutex::new(None),
+                }),
+                permission_callback: session_permission_callback,
+                browser_tool_callback: session_browser_tool_callback,
                 session_id: sid,
                 core: core_ptr,
                 workspace_root: session_workspace_root,
                 active_space_id,
-            }))
+            });
+            if let Some(callback_lease) = session.callback_lease.as_ref() {
+                callback_lease.arm();
+            }
+            Box::into_raw(session)
         },
         std::ptr::null_mut()
     )
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `session_id` must be a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_create_session(
+    core: *mut MahoCore,
+    session_id: *const c_char,
+    workspace_root: *const c_char,
+    allow_insecure_key_storage: bool,
+    permission_cb: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            arguments_json: *const c_char,
+        ) -> MahoAgentPermissionDecision,
+    >,
+    permission_user_data: *mut std::ffi::c_void,
+    secure_storage_cb: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            provider: *const c_char,
+        ) -> MahoAgentSecureKey,
+    >,
+    secure_storage_user_data: *mut std::ffi::c_void,
+    browser_tool_cb: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            args_json: *const c_char,
+        ) -> MahoAgentToolResult,
+    >,
+    browser_tool_user_data: *mut std::ffi::c_void,
+    space_id: *const c_char,
+) -> *mut MahoAgentSession {
+    // SAFETY: this legacy ABI forwards its validated caller contract without a lease policy.
+    unsafe {
+        maho_agent_create_session_impl(
+            core,
+            session_id,
+            workspace_root,
+            allow_insecure_key_storage,
+            permission_cb,
+            permission_user_data,
+            secure_storage_cb,
+            secure_storage_user_data,
+            browser_tool_cb,
+            browser_tool_user_data,
+            space_id,
+            None,
+        )
+    }
+}
+
+/// # Safety
+/// Same pointer requirements as `maho_agent_create_session`. When this function returns a
+/// non-null session, `on_session_release` receives `session_release_user_data` exactly once after
+/// the session and every runtime-held callback closure release their ownership. The callback must
+/// not unwind.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_create_session_leased(
+    core: *mut MahoCore,
+    session_id: *const c_char,
+    workspace_root: *const c_char,
+    allow_insecure_key_storage: bool,
+    permission_cb: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            arguments_json: *const c_char,
+        ) -> MahoAgentPermissionDecision,
+    >,
+    permission_user_data: *mut std::ffi::c_void,
+    secure_storage_cb: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            provider: *const c_char,
+        ) -> MahoAgentSecureKey,
+    >,
+    secure_storage_user_data: *mut std::ffi::c_void,
+    browser_tool_cb: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            tool_name: *const c_char,
+            args_json: *const c_char,
+        ) -> MahoAgentToolResult,
+    >,
+    browser_tool_user_data: *mut std::ffi::c_void,
+    space_id: *const c_char,
+    on_session_release: MahoAgentReleaseCallback,
+    session_release_user_data: *mut c_void,
+) -> *mut MahoAgentSession {
+    // SAFETY: the leased ABI transfers the dedicated release context only after the private
+    // implementation accepts the session and creates its session callback lease.
+    unsafe {
+        maho_agent_create_session_impl(
+            core,
+            session_id,
+            workspace_root,
+            allow_insecure_key_storage,
+            permission_cb,
+            permission_user_data,
+            secure_storage_cb,
+            secure_storage_user_data,
+            browser_tool_cb,
+            browser_tool_user_data,
+            space_id,
+            Some(CallbackReleasePolicy {
+                callback: on_session_release,
+                user_data: session_release_user_data,
+            }),
+        )
+    }
 }
 
 /// # Safety
@@ -10269,6 +10936,12 @@ pub unsafe extern "C" fn maho_agent_session_free(session: *mut MahoAgentSession)
     ffi_safe!(
         {
             if !session.is_null() {
+                let session_ref = &*session;
+                session_ref.accepted_leased_turns.signal_current();
+                let runtime = Arc::clone(&session_ref.runtime);
+                let session_id = session_ref.session_id.clone();
+                let isolation = Arc::clone(&session_ref.isolation);
+                let _ = isolation.block_on(async move { runtime.cancel(&session_id).await });
                 drop(Box::from_raw(session));
             }
         },
@@ -10276,11 +10949,7 @@ pub unsafe extern "C" fn maho_agent_session_free(session: *mut MahoAgentSession)
     )
 }
 
-/// # Safety
-/// `session` must be a valid pointer to a `MahoAgentSession`.
-/// `message` must be a null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn maho_agent_send_message(
+unsafe fn maho_agent_send_message_impl(
     session: *mut MahoAgentSession,
     message: *const c_char,
     on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
@@ -10312,6 +10981,7 @@ pub unsafe extern "C" fn maho_agent_send_message(
     >,
     on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
     user_data: *mut std::ffi::c_void,
+    callback_release_policy: Option<CallbackReleasePolicy>,
 ) -> bool {
     ffi_safe!(
         {
@@ -10336,11 +11006,17 @@ pub unsafe extern "C" fn maho_agent_send_message(
             } else {
                 runtime.set_allowed_tools(None);
             }
+            let turn_callback_lease = callback_release_policy
+                .map(|policy| Arc::new(TurnCallbackLease::new(policy.callback, policy.user_data)));
+            let session_callback_lease = clone_callback_lease(&session.callback_lease);
 
             let on_token_cb = on_token.map(|cb| {
                 let cb_sendable = SendableCallback(cb);
                 let user_data_val = SendableUserData(user_data as usize);
+                let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
+                let session_callback_lease = clone_callback_lease(&session_callback_lease);
                 let callback: Box<dyn Fn(&str) + Send + Sync> = Box::new(move |token| {
+                    let _ = (&turn_callback_lease, &session_callback_lease);
                     let cb = cb_sendable.0;
                     let udata = user_data_val.0 as *mut std::ffi::c_void;
                     let token_c = match CString::new(token) {
@@ -10362,7 +11038,10 @@ pub unsafe extern "C" fn maho_agent_send_message(
                 let on_tool_result_sendable = SendableCallback(on_tool_result);
                 let on_thinking_sendable = SendableCallback(on_thinking);
                 let user_data_val = SendableUserData(user_data as usize);
+                let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
+                let session_callback_lease = clone_callback_lease(&session_callback_lease);
                 let callback = move |event: maho_agent::AgentStreamEvent| {
+                    let _ = (&turn_callback_lease, &session_callback_lease);
                     let udata = user_data_val.0 as *mut std::ffi::c_void;
                     match event {
                         maho_agent::AgentStreamEvent::Thinking(thinking) => {
@@ -10416,54 +11095,176 @@ pub unsafe extern "C" fn maho_agent_send_message(
             let on_error = SendableCallback(on_error);
             let user_data_val = SendableUserData(user_data as usize);
 
+            if let Some(callback_lease) = turn_callback_lease.as_ref() {
+                callback_lease.arm();
+            }
+
             let fut = async move {
                 let user_chat_msg = maho_types::chat::ChatMessage::user(
                     maho_types::chat::ChatContent::text(msg_str),
                 );
-                match runtime
+                let result = runtime
                     .run_turn(&session_id, user_chat_msg, on_token_cb, on_event_cb)
-                    .await
-                {
-                    Ok(response) => {
-                        let text = match &response.content {
-                            maho_types::chat::ChatContent::Text(t) => t.clone(),
-                            _ => String::new(),
-                        };
-                        let Some(text_c) = cstring_or_fallback(&text, "") else {
-                            return;
-                        };
-                        let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
-                            return;
-                        };
-                        if let Some(cb) = on_complete.0 {
-                            cb(
-                                user_data_val.0 as *mut std::ffi::c_void,
-                                text_c.as_ptr(),
-                                empty_json.as_ptr(),
-                            );
+                    .await;
+                invoke_with_turn_callback_lease(turn_callback_lease, || {
+                    match result {
+                        Ok(response) => {
+                            let text = match &response.content {
+                                maho_types::chat::ChatContent::Text(t) => t.clone(),
+                                _ => String::new(),
+                            };
+                            let Some(text_c) = cstring_or_fallback(&text, "") else {
+                                return;
+                            };
+                            let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
+                                return;
+                            };
+                            if let Some(cb) = on_complete.0 {
+                                cb(
+                                    user_data_val.0 as *mut std::ffi::c_void,
+                                    text_c.as_ptr(),
+                                    empty_json.as_ptr(),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            let error_text = agent_error_callback_text(&e);
+                            let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
+                                return;
+                            };
+                            if let Some(cb) = on_error.0 {
+                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                            }
                         }
                     }
-                    Err(e) => {
-                        let error_text = e.to_string();
-                        let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
-                            return;
-                        };
-                        if let Some(cb) = on_error.0 {
-                            cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
-                        }
-                    }
-                }
+                });
+                drop(on_complete);
+                drop(on_error);
             };
 
             let isolation = Arc::clone(&session.isolation);
             let _handle = isolation.block_on(async move {
                 tokio::spawn(fut);
             });
-
             true
         },
         false
     )
+}
+
+/// # Safety
+/// `session` must be a valid pointer to a `MahoAgentSession`.
+/// `message` must be a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_send_message(
+    session: *mut MahoAgentSession,
+    message: *const c_char,
+    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_thinking: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
+    >,
+    on_tool_call: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            id: *const c_char,
+            name: *const c_char,
+            args: *const c_char,
+        ),
+    >,
+    on_tool_result: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            id: *const c_char,
+            name: *const c_char,
+            result: *const c_char,
+        ),
+    >,
+    on_complete: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            full_text: *const c_char,
+            tool_calls_json: *const c_char,
+        ),
+    >,
+    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
+    user_data: *mut std::ffi::c_void,
+) -> bool {
+    // SAFETY: this legacy ABI forwards its validated caller contract without a lease policy.
+    unsafe {
+        maho_agent_send_message_impl(
+            session,
+            message,
+            on_token,
+            on_thinking,
+            on_tool_call,
+            on_tool_result,
+            on_complete,
+            on_error,
+            user_data,
+            None,
+        )
+    }
+}
+
+/// # Safety
+/// Same pointer requirements as `maho_agent_send_message`. When this function returns `true`,
+/// `on_release` receives `release_user_data` exactly once after the terminal callback and every
+/// turn callback closure are dropped. The callback must not unwind.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_send_message_leased(
+    session: *mut MahoAgentSession,
+    message: *const c_char,
+    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_thinking: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
+    >,
+    on_tool_call: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            id: *const c_char,
+            name: *const c_char,
+            args: *const c_char,
+        ),
+    >,
+    on_tool_result: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            id: *const c_char,
+            name: *const c_char,
+            result: *const c_char,
+        ),
+    >,
+    on_complete: Option<
+        unsafe extern "C" fn(
+            user_data: *mut std::ffi::c_void,
+            full_text: *const c_char,
+            tool_calls_json: *const c_char,
+        ),
+    >,
+    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
+    callback_user_data: *mut std::ffi::c_void,
+    on_release: MahoAgentReleaseCallback,
+    release_user_data: *mut c_void,
+) -> bool {
+    // SAFETY: the leased ABI transfers the dedicated release context only after the private
+    // implementation accepts the turn and creates its turn callback lease.
+    unsafe {
+        maho_agent_send_message_impl(
+            session,
+            message,
+            on_token,
+            on_thinking,
+            on_tool_call,
+            on_tool_result,
+            on_complete,
+            on_error,
+            callback_user_data,
+            Some(CallbackReleasePolicy {
+                callback: on_release,
+                user_data: release_user_data,
+            }),
+        )
+    }
 }
 
 /// # Safety
@@ -10577,7 +11378,7 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
                         }
                     }
                     Err(e) => {
-                        let error_text = e.to_string();
+                        let error_text = agent_error_callback_text(&e);
                         let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
                             return;
                         };
@@ -10609,12 +11410,13 @@ pub unsafe extern "C" fn maho_agent_cancel(session: *mut MahoAgentSession) -> bo
                 return false;
             }
             let session = &*session;
+            let accepted_leased_turn = session.accepted_leased_turns.signal_current();
             let runtime = Arc::clone(&session.runtime);
             let session_id = session.session_id.clone();
 
             let isolation = Arc::clone(&session.isolation);
             let res = isolation.block_on(async move { runtime.cancel(&session_id).await });
-            res.is_ok()
+            accepted_leased_turn || res.is_ok()
         },
         false
     )
@@ -10639,6 +11441,36 @@ pub unsafe extern "C" fn maho_agent_set_approval_policy(
             }
         },
         ()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer to a `MahoAgentSession`.
+/// `provider` may be null to clear the explicit provider selection; otherwise it
+/// must be a null-terminated UTF-8 string naming an allowlisted provider.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_session_set_preferred_provider(
+    session: *mut MahoAgentSession,
+    provider: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return false;
+            }
+            let provider = if provider.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(provider).to_str() {
+                    Ok(s) => Some(s.to_owned()),
+                    Err(_) => return false,
+                }
+            };
+            let session = &*session;
+            session.runtime.set_preferred_provider(provider);
+            true
+        },
+        false
     )
 }
 
@@ -12149,71 +12981,191 @@ pub unsafe extern "C" fn maho_routines_latest(
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static SPLIT_CALLBACKS: OnceLock<Mutex<Vec<(u64, extern "C" fn(*const c_char))>>> = OnceLock::new();
+#[derive(Clone)]
+struct SplitChangeCallback {
+    token: u64,
+    callback: extern "C" fn(*const c_char),
+    lease: FfiArc<CallbackLease>,
+}
+
+static SPLIT_CALLBACKS: OnceLock<Mutex<Vec<SplitChangeCallback>>> = OnceLock::new();
 static NEXT_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 type ToolAvailCb = unsafe extern "C" fn(*mut c_void, *const c_char);
-static TOOL_AVAIL_CALLBACKS: OnceLock<Mutex<Vec<(u64, usize, ToolAvailCb)>>> = OnceLock::new();
+
+#[derive(Default)]
+struct CallbackLeaseState {
+    removed: bool,
+    in_flight: usize,
+}
+
+#[derive(Default)]
+struct CallbackLease {
+    state: FfiMutex<CallbackLeaseState>,
+    idle: FfiCondvar,
+}
+
+impl CallbackLease {
+    fn enter(self: &FfiArc<Self>, token: u64) -> Option<CallbackInvocation> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.removed {
+            return None;
+        }
+        state.in_flight += 1;
+        drop(state);
+        ACTIVE_CALLBACK_TOKENS.with(|tokens| tokens.borrow_mut().push(token));
+        Some(CallbackInvocation {
+            token,
+            lease: FfiArc::clone(self),
+        })
+    }
+
+    fn remove_and_wait(&self, token: u64) {
+        let remaining_self_invocations = ACTIVE_CALLBACK_TOKENS.with(|tokens| {
+            tokens
+                .borrow()
+                .iter()
+                .filter(|active| **active == token)
+                .count()
+        });
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.removed = true;
+        while state.in_flight > remaining_self_invocations {
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+}
+
+struct CallbackInvocation {
+    token: u64,
+    lease: FfiArc<CallbackLease>,
+}
+
+impl Drop for CallbackInvocation {
+    fn drop(&mut self) {
+        ACTIVE_CALLBACK_TOKENS.with(|tokens| {
+            let mut tokens = tokens.borrow_mut();
+            if let Some(index) = tokens.iter().rposition(|token| *token == self.token) {
+                tokens.remove(index);
+            }
+        });
+        let mut state = self
+            .lease
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.in_flight = state.in_flight.saturating_sub(1);
+        self.lease.idle.notify_all();
+    }
+}
+
+#[derive(Clone)]
+struct ToolAvailabilityCallback {
+    token: u64,
+    user_data: usize,
+    callback: ToolAvailCb,
+    lease: FfiArc<CallbackLease>,
+}
+
+static TOOL_AVAIL_CALLBACKS: OnceLock<Mutex<Vec<ToolAvailabilityCallback>>> = OnceLock::new();
 
 type SettingsChangeCb = unsafe extern "C" fn(*mut c_void, *const c_char);
-static SETTINGS_CHANGE_CALLBACKS: OnceLock<Mutex<Vec<(u64, usize, SettingsChangeCb)>>> =
-    OnceLock::new();
 
-fn get_split_callbacks() -> &'static Mutex<Vec<(u64, extern "C" fn(*const c_char))>> {
+#[derive(Clone)]
+struct SettingsChangeCallback {
+    token: u64,
+    user_data: usize,
+    callback: SettingsChangeCb,
+    lease: FfiArc<CallbackLease>,
+}
+
+static SETTINGS_CHANGE_CALLBACKS: OnceLock<Mutex<Vec<SettingsChangeCallback>>> = OnceLock::new();
+
+fn get_split_callbacks() -> &'static Mutex<Vec<SplitChangeCallback>> {
     SPLIT_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn get_tool_avail_callbacks() -> &'static Mutex<Vec<(u64, usize, ToolAvailCb)>> {
+fn get_tool_avail_callbacks() -> &'static Mutex<Vec<ToolAvailabilityCallback>> {
     TOOL_AVAIL_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn get_settings_change_callbacks() -> &'static Mutex<Vec<(u64, usize, SettingsChangeCb)>> {
+fn get_settings_change_callbacks() -> &'static Mutex<Vec<SettingsChangeCallback>> {
     SETTINGS_CHANGE_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn process_split_callbacks_for_updates(updates: &[maho_types::events::core_update::CoreUpdate]) {
+    let inside_serialized_ffi = FFI_SERIALIZATION_DEPTH.with(|depth| depth.get() != 0);
+    if inside_serialized_ffi {
+        DEFERRED_CORE_UPDATES.with(|pending| pending.borrow_mut().extend_from_slice(updates));
+    } else {
+        dispatch_split_callbacks_for_updates(updates);
+    }
+}
+
+fn dispatch_split_callbacks_for_updates(updates: &[maho_types::events::core_update::CoreUpdate]) {
     for update in updates {
         match update {
             maho_types::events::core_update::CoreUpdate::SplitViewChanged { .. } => {
-                if let Ok(cbs) = get_split_callbacks().lock() {
-                    let json_str = serde_json::to_string(update).unwrap_or_default();
-                    let c_json = CString::new(json_str).unwrap();
-                    for (_, cb) in cbs.iter() {
-                        cb(c_json.as_ptr());
-                    }
+                let callbacks = get_split_callbacks()
+                    .lock()
+                    .map(|callbacks| callbacks.clone())
+                    .unwrap_or_default();
+                let json_str = serde_json::to_string(update).unwrap_or_default();
+                let c_json = CString::new(json_str).unwrap();
+                for entry in callbacks {
+                    let Some(_invocation) = entry.lease.enter(entry.token) else {
+                        continue;
+                    };
+                    (entry.callback)(c_json.as_ptr());
                 }
             }
             maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged { .. } => {
-                if let Ok(cbs) = get_tool_avail_callbacks().lock() {
-                    let json_str = serde_json::to_string(update).unwrap_or_default();
-                    let c_json = CString::new(json_str).unwrap();
-                    for (_, ud, cb) in cbs.iter() {
-                        unsafe {
-                            cb(*ud as *mut c_void, c_json.as_ptr());
-                        }
+                let callbacks = get_tool_avail_callbacks()
+                    .lock()
+                    .map(|callbacks| callbacks.clone())
+                    .unwrap_or_default();
+                let json_str = serde_json::to_string(update).unwrap_or_default();
+                let c_json = CString::new(json_str).unwrap();
+                for entry in callbacks {
+                    let Some(_invocation) = entry.lease.enter(entry.token) else {
+                        continue;
+                    };
+                    unsafe {
+                        (entry.callback)(entry.user_data as *mut c_void, c_json.as_ptr());
                     }
                 }
             }
             maho_types::events::core_update::CoreUpdate::SettingsChanged { settings } => {
-                if let Ok(cbs) = get_settings_change_callbacks().lock() {
-                    if cbs.is_empty() {
+                let callbacks = get_settings_change_callbacks()
+                    .lock()
+                    .map(|callbacks| callbacks.clone())
+                    .unwrap_or_default();
+                if callbacks.is_empty() {
+                    continue;
+                }
+                // Contract C2: marshal the `settings` payload (not the update wrapper);
+                // pass null on failure since the C side is documented null-tolerant.
+                let c_json = serde_json::to_string(settings)
+                    .ok()
+                    .and_then(|json| CString::new(json).ok());
+                let json_ptr = c_json.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+                for entry in callbacks {
+                    let Some(_invocation) = entry.lease.enter(entry.token) else {
                         continue;
-                    }
-                    // Contract C2: marshal the `settings` payload (not the update wrapper);
-                    // pass null on failure since the C side is documented null-tolerant.
-                    let c_json = serde_json::to_string(settings)
-                        .ok()
-                        .and_then(|json| CString::new(json).ok());
-                    let json_ptr = c_json.as_ref().map_or(ptr::null(), |c| c.as_ptr());
-                    for (_, ud, cb) in cbs.iter() {
-                        // SAFETY: `cb` is a caller-provided C function pointer registered via
-                        // `maho_core_register_settings_change_callback`; `*ud` is the matching
-                        // `user_data`. `json_ptr` is a valid NUL-terminated string (or null)
-                        // that outlives every call in this loop. The registry mutex is held,
-                        // so no concurrent unregister can free an entry mid-dispatch.
-                        unsafe {
-                            cb(*ud as *mut c_void, json_ptr);
-                        }
+                    };
+                    // SAFETY: the function pointer and user data were copied while the
+                    // registry was locked. The C string outlives this callback invocation.
+                    unsafe {
+                        (entry.callback)(entry.user_data as *mut c_void, json_ptr);
                     }
                 }
             }
@@ -12291,7 +13243,11 @@ pub unsafe extern "C" fn maho_core_register_split_change_callback(
             });
             let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
             if let Ok(mut cbs) = get_split_callbacks().lock() {
-                cbs.push((token, callback));
+                cbs.push(SplitChangeCallback {
+                    token,
+                    callback,
+                    lease: FfiArc::new(CallbackLease::default()),
+                });
             }
             token
         },
@@ -12303,20 +13259,19 @@ pub unsafe extern "C" fn maho_core_register_split_change_callback(
 /// `core` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_unregister_split_change_callback(
-    core: *mut MahoCore,
+    _core: *mut MahoCore,
     token: u64,
 ) {
-    ffi_safe!(
-        {
-            if core.is_null() {
-                return;
-            }
-            if let Ok(mut cbs) = get_split_callbacks().lock() {
-                cbs.retain(|(t, _)| *t != token);
-            }
-        },
-        ()
-    )
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let removed = get_split_callbacks().lock().ok().and_then(|mut cbs| {
+            cbs.iter()
+                .position(|entry| entry.token == token)
+                .map(|index| cbs.remove(index))
+        });
+        if let Some(entry) = removed {
+            entry.lease.remove_and_wait(token);
+        }
+    }));
 }
 
 /// # Safety
@@ -12339,7 +13294,12 @@ pub unsafe extern "C" fn maho_core_register_tool_availability_callback(
             });
             let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
             if let Ok(mut cbs) = get_tool_avail_callbacks().lock() {
-                cbs.push((token, user_data as usize, callback));
+                cbs.push(ToolAvailabilityCallback {
+                    token,
+                    user_data: user_data as usize,
+                    callback,
+                    lease: FfiArc::new(CallbackLease::default()),
+                });
             }
             token
         },
@@ -12351,20 +13311,19 @@ pub unsafe extern "C" fn maho_core_register_tool_availability_callback(
 /// `core` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_unregister_tool_availability_callback(
-    core: *mut MahoCore,
+    _core: *mut MahoCore,
     token: u64,
 ) {
-    ffi_safe!(
-        {
-            if core.is_null() {
-                return;
-            }
-            if let Ok(mut cbs) = get_tool_avail_callbacks().lock() {
-                cbs.retain(|(t, _, _)| *t != token);
-            }
-        },
-        ()
-    )
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let removed = get_tool_avail_callbacks().lock().ok().and_then(|mut cbs| {
+            cbs.iter()
+                .position(|entry| entry.token == token)
+                .map(|index| cbs.remove(index))
+        });
+        if let Some(entry) = removed {
+            entry.lease.remove_and_wait(token);
+        }
+    }));
 }
 
 /// # Safety
@@ -12388,7 +13347,12 @@ pub unsafe extern "C" fn maho_core_register_settings_change_callback(
             });
             let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
             if let Ok(mut cbs) = get_settings_change_callbacks().lock() {
-                cbs.push((token, user_data as usize, callback));
+                cbs.push(SettingsChangeCallback {
+                    token,
+                    user_data: user_data as usize,
+                    callback,
+                    lease: FfiArc::new(CallbackLease::default()),
+                });
             }
             token
         },
@@ -12400,25 +13364,770 @@ pub unsafe extern "C" fn maho_core_register_settings_change_callback(
 /// `core` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_unregister_settings_change_callback(
-    core: *mut MahoCore,
+    _core: *mut MahoCore,
     token: u64,
 ) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let removed = get_settings_change_callbacks()
+            .lock()
+            .ok()
+            .and_then(|mut cbs| {
+                cbs.iter()
+                    .position(|entry| entry.token == token)
+                    .map(|index| cbs.remove(index))
+            });
+        if let Some(entry) = removed {
+            entry.lease.remove_and_wait(token);
+        }
+    }));
+}
+
+/// Starts Google Sign-In and returns `{"state","authUrl"}` JSON, or null on
+/// failure. The redirect is caught on a background thread; `on_complete` then
+/// fires with the `id_token` + `nonce` the caller must POST to the relay.
+///
+/// # Safety
+/// `client_id` must be a null-terminated C string (may be empty to use the
+/// build-time client id). `user_data` must remain valid until `on_complete`
+/// fires. Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_google_sign_in_start(
+    client_id: *const c_char,
+    on_complete: Option<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            id_token: *const c_char,
+            nonce: *const c_char,
+            error: *const c_char,
+        ),
+    >,
+    user_data: *mut c_void,
+) -> *mut c_char {
     ffi_safe!(
         {
-            if core.is_null() {
-                return;
-            }
-            if let Ok(mut cbs) = get_settings_change_callbacks().lock() {
-                cbs.retain(|(t, _, _)| *t != token);
-            }
+            let client_id_str = if client_id.is_null() {
+                ""
+            } else {
+                match CStr::from_ptr(client_id).to_str() {
+                    Ok(s) => s,
+                    Err(_) => return ptr::null_mut(),
+                }
+            };
+
+            let sink = GoogleSignInSink {
+                on_complete,
+                user_data,
+            };
+            let started = match maho_core::google_identity::start_google_sign_in(
+                client_id_str,
+                move |result| sink.deliver(result),
+            ) {
+                Ok(started) => started,
+                Err(_) => return ptr::null_mut(),
+            };
+
+            to_json_cstring(&serde_json::json!({
+                "state": started.state,
+                "authUrl": started.auth_url,
+            }))
         },
-        ()
+        ptr::null_mut()
     )
+}
+
+/// Carries the C callback across the sign-in thread boundary. The raw
+/// `user_data` pointer is not `Send`, so the unsafe impl asserts the C++ owner
+/// keeps it alive until `on_complete` fires (documented on the FFI entry point).
+struct GoogleSignInSink {
+    on_complete: Option<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            id_token: *const c_char,
+            nonce: *const c_char,
+            error: *const c_char,
+        ),
+    >,
+    user_data: *mut c_void,
+}
+
+// SAFETY: the C++ owner guarantees `user_data` outlives the single callback
+// invocation; see the safety contract on `maho_google_sign_in_start`.
+unsafe impl Send for GoogleSignInSink {}
+
+impl GoogleSignInSink {
+    fn deliver(
+        &self,
+        result: std::result::Result<
+            maho_core::google_identity::GoogleSignInResult,
+            maho_core::error::CoreError,
+        >,
+    ) {
+        let Some(callback) = self.on_complete else {
+            return;
+        };
+        match result {
+            Ok(success) => {
+                let Ok(id_token) = CString::new(success.id_token) else {
+                    return;
+                };
+                let Ok(nonce) = CString::new(success.nonce) else {
+                    return;
+                };
+                // SAFETY: both CStrings outlive the call; error is null on success.
+                unsafe {
+                    callback(
+                        self.user_data,
+                        id_token.as_ptr(),
+                        nonce.as_ptr(),
+                        ptr::null(),
+                    );
+                }
+            }
+            Err(err) => {
+                let Ok(message) = CString::new(err.to_string()) else {
+                    return;
+                };
+                // SAFETY: `message` outlives the call; token fields are null on error.
+                unsafe {
+                    callback(self.user_data, ptr::null(), ptr::null(), message.as_ptr());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct SelfUnregisterContext {
+        core: usize,
+        token: std::sync::atomic::AtomicU64,
+        calls: std::sync::atomic::AtomicU64,
+    }
+
+    unsafe extern "C" fn self_unregister_tool_callback(
+        user_data: *mut c_void,
+        _json: *const c_char,
+    ) {
+        let context = unsafe { &*(user_data as *const SelfUnregisterContext) };
+        context
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let token = context.token.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe {
+            maho_core_unregister_tool_availability_callback(context.core as *mut MahoCore, token);
+        }
+    }
+
+    #[test]
+    fn tool_callback_can_unregister_itself_without_deadlock() {
+        let core = maho_core_new() as usize;
+        assert_ne!(core, 0);
+        let context = Box::new(SelfUnregisterContext {
+            core,
+            token: std::sync::atomic::AtomicU64::new(0),
+            calls: std::sync::atomic::AtomicU64::new(0),
+        });
+        let context_ptr = Box::into_raw(context);
+        let token = unsafe {
+            maho_core_register_tool_availability_callback(
+                core as *mut MahoCore,
+                context_ptr.cast(),
+                self_unregister_tool_callback,
+            )
+        };
+        assert_ne!(token, 0);
+        unsafe {
+            (*context_ptr)
+                .token
+                .store(token, std::sync::atomic::Ordering::SeqCst)
+        };
+
+        process_split_callbacks_for_updates(&[
+            maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                workspace_id: "workspace".to_string(),
+                server_name: "server".to_string(),
+                available: true,
+            },
+        ]);
+        process_split_callbacks_for_updates(&[
+            maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                workspace_id: "workspace".to_string(),
+                server_name: "server".to_string(),
+                available: false,
+            },
+        ]);
+
+        assert_eq!(
+            unsafe {
+                (*context_ptr)
+                    .calls
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            },
+            1
+        );
+        unsafe {
+            drop(Box::from_raw(context_ptr));
+            maho_core_free(core as *mut MahoCore);
+        }
+    }
+
+    struct NestedSelfUnregisterContext {
+        token: std::sync::atomic::AtomicU64,
+        calls: std::sync::atomic::AtomicU64,
+    }
+
+    unsafe extern "C" fn nested_self_unregister_tool_callback(
+        user_data: *mut c_void,
+        _json: *const c_char,
+    ) {
+        let context = unsafe { &*(user_data as *const NestedSelfUnregisterContext) };
+        let call = context
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            process_split_callbacks_for_updates(&[
+                maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                    workspace_id: "nested".to_string(),
+                    server_name: "server".to_string(),
+                    available: false,
+                },
+            ]);
+        } else {
+            maho_core_unregister_tool_availability_callback(
+                ptr::null_mut(),
+                context.token.load(std::sync::atomic::Ordering::SeqCst),
+            );
+        }
+    }
+
+    #[test]
+    fn nested_tool_callback_can_unregister_itself_without_deadlock() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        let context = Box::into_raw(Box::new(NestedSelfUnregisterContext {
+            token: std::sync::atomic::AtomicU64::new(0),
+            calls: std::sync::atomic::AtomicU64::new(0),
+        }));
+        let token = unsafe {
+            maho_core_register_tool_availability_callback(
+                core,
+                context.cast(),
+                nested_self_unregister_tool_callback,
+            )
+        };
+        assert_ne!(token, 0);
+        unsafe {
+            (*context)
+                .token
+                .store(token, std::sync::atomic::Ordering::SeqCst)
+        };
+        process_split_callbacks_for_updates(&[
+            maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                workspace_id: "outer".to_string(),
+                server_name: "server".to_string(),
+                available: true,
+            },
+        ]);
+        assert_eq!(
+            unsafe { (*context).calls.load(std::sync::atomic::Ordering::SeqCst) },
+            2
+        );
+        unsafe {
+            drop(Box::from_raw(context));
+            maho_core_free(core);
+        }
+    }
+
+    #[test]
+    fn callback_unregister_succeeds_after_core_shutdown() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        let context = Box::into_raw(Box::new(SelfUnregisterContext {
+            core: 0,
+            token: std::sync::atomic::AtomicU64::new(0),
+            calls: std::sync::atomic::AtomicU64::new(0),
+        }));
+        let token = unsafe {
+            maho_core_register_tool_availability_callback(
+                core,
+                context.cast(),
+                self_unregister_tool_callback,
+            )
+        };
+        assert_ne!(token, 0);
+        unsafe { maho_core_free(core) };
+        unsafe { maho_core_unregister_tool_availability_callback(ptr::null_mut(), token) };
+        process_split_callbacks_for_updates(&[
+            maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                workspace_id: "after-shutdown".to_string(),
+                server_name: "server".to_string(),
+                available: true,
+            },
+        ]);
+        assert_eq!(
+            unsafe { (*context).calls.load(std::sync::atomic::Ordering::SeqCst) },
+            0
+        );
+        unsafe { drop(Box::from_raw(context)) };
+    }
+
+    struct ReentrantCallbackContext {
+        core: usize,
+        entered: std::sync::Barrier,
+        proceed: std::sync::Barrier,
+    }
+
+    unsafe extern "C" fn reentrant_tool_callback(user_data: *mut c_void, _json: *const c_char) {
+        let context = unsafe { &*(user_data as *const ReentrantCallbackContext) };
+        context.entered.wait();
+        context.proceed.wait();
+        let result = unsafe {
+            maho_core_boost_list_for_domain(context.core as *mut MahoCore, c"example.com".as_ptr())
+        };
+        if !result.is_null() {
+            unsafe { maho_string_free(result) };
+        }
+    }
+
+    #[test]
+    fn unregister_waits_without_blocking_callback_ffi_reentry() {
+        let core = maho_core_new() as usize;
+        assert_ne!(core, 0);
+        let context = FfiArc::new(ReentrantCallbackContext {
+            core,
+            entered: std::sync::Barrier::new(2),
+            proceed: std::sync::Barrier::new(2),
+        });
+        let context_ptr = FfiArc::into_raw(FfiArc::clone(&context)) as *mut c_void;
+        let token = unsafe {
+            maho_core_register_tool_availability_callback(
+                core as *mut MahoCore,
+                context_ptr,
+                reentrant_tool_callback,
+            )
+        };
+        assert_ne!(token, 0);
+
+        let dispatch = std::thread::spawn(|| {
+            process_split_callbacks_for_updates(&[
+                maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                    workspace_id: "workspace".to_string(),
+                    server_name: "server".to_string(),
+                    available: true,
+                },
+            ]);
+        });
+        context.entered.wait();
+        let unregister = std::thread::spawn(move || unsafe {
+            maho_core_unregister_tool_availability_callback(core as *mut MahoCore, token);
+        });
+        context.proceed.wait();
+
+        dispatch.join().expect("dispatch");
+        unregister.join().expect("unregister");
+        unsafe {
+            drop(FfiArc::from_raw(
+                context_ptr as *const ReentrantCallbackContext,
+            ));
+            maho_core_free(core as *mut MahoCore);
+        }
+    }
+
+    #[test]
+    fn ffi_gate_serializes_concurrent_core_mutations() {
+        let core = maho_core_new() as usize;
+        assert_ne!(core, 0);
+        let workers: Vec<_> = (0..8)
+            .map(|worker| {
+                std::thread::spawn(move || {
+                    let core = core as *mut MahoCore;
+                    for index in 0..25 {
+                        let domain = CString::new(format!("worker-{worker}.example")).unwrap();
+                        let name = CString::new(format!("Boost {index}")).unwrap();
+                        let result =
+                            unsafe { maho_core_boost_create(core, domain.as_ptr(), name.as_ptr()) };
+                        assert!(!result.is_null());
+                        unsafe { maho_string_free(result) };
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        unsafe { maho_core_free(core as *mut MahoCore) };
+    }
+
+    #[test]
+    fn import_admission_waits_for_existing_ffi_scope() {
+        import_gate::exit();
+        let entered = FfiArc::new(std::sync::Barrier::new(2));
+        let release = FfiArc::new(std::sync::Barrier::new(2));
+        let holder_entered = FfiArc::clone(&entered);
+        let holder_release = FfiArc::clone(&release);
+        let holder = std::thread::spawn(move || {
+            with_ffi_serialization(|| {
+                holder_entered.wait();
+                holder_release.wait();
+            });
+        });
+        entered.wait();
+
+        let admitted = FfiArc::new(std::sync::atomic::AtomicBool::new(false));
+        let admitted_worker = FfiArc::clone(&admitted);
+        let importer = std::thread::spawn(move || {
+            let result = with_ffi_serialization(import_gate::enter);
+            admitted_worker.store(result, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(!admitted.load(std::sync::atomic::Ordering::SeqCst));
+        release.wait();
+        holder.join().expect("holder exits");
+        importer.join().expect("importer exits");
+        assert!(admitted.load(std::sync::atomic::Ordering::SeqCst));
+        import_gate::exit();
+    }
+
+    #[test]
+    fn active_boost_clear_reports_import_rejection() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        let domain = CString::new("example.com").unwrap();
+        assert!(import_gate::enter());
+        assert!(!unsafe { maho_core_boost_set_active(core, domain.as_ptr(), ptr::null()) });
+        import_gate::exit();
+        unsafe { maho_core_free(core) };
+    }
+    use std::sync::Mutex;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum CallbackLeaseEvent {
+        Complete,
+        Error,
+        Release,
+    }
+
+    unsafe extern "C" fn record_complete_then_release(
+        user_data: *mut c_void,
+        _full_text: *const c_char,
+        _tool_calls_json: *const c_char,
+    ) {
+        // SAFETY: each test passes a live `Mutex<Vec<CallbackLeaseEvent>>` as `user_data`
+        // and drops its lease before the event log leaves scope.
+        let events = unsafe { &*(user_data as *const Mutex<Vec<CallbackLeaseEvent>>) };
+        events.lock().unwrap().push(CallbackLeaseEvent::Complete);
+    }
+
+    unsafe extern "C" fn record_error_then_release(user_data: *mut c_void, _error: *const c_char) {
+        // SAFETY: each test passes a live `Mutex<Vec<CallbackLeaseEvent>>` as `user_data`
+        // and drops its lease before the event log leaves scope.
+        let events = unsafe { &*(user_data as *const Mutex<Vec<CallbackLeaseEvent>>) };
+        events.lock().unwrap().push(CallbackLeaseEvent::Error);
+    }
+
+    unsafe extern "C" fn record_release(user_data: *mut c_void) {
+        // SAFETY: each test passes a live `Mutex<Vec<CallbackLeaseEvent>>` as `user_data`
+        // and drops every lease before the event log leaves scope.
+        let events = unsafe { &*(user_data as *const Mutex<Vec<CallbackLeaseEvent>>) };
+        events.lock().unwrap().push(CallbackLeaseEvent::Release);
+    }
+
+    #[test]
+    fn turn_callback_lease_releases_once_after_complete_callback() {
+        // Given: the FFI caller's callback context and a planned private turn lease.
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let lease = TurnCallbackLease::new(record_release, user_data);
+        lease.arm();
+
+        // When: a successful turn invokes the C ABI terminal callback, then ends.
+        unsafe { record_complete_then_release(user_data, ptr::null(), ptr::null()) };
+        drop(lease);
+
+        // Then: the terminal callback happens before exactly one release.
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![CallbackLeaseEvent::Complete, CallbackLeaseEvent::Release]
+        );
+    }
+
+    #[test]
+    fn credential_error_callback_envelopes_are_versioned_and_secret_free() {
+        // Given: every typed credential error and key-like sentinel input.
+        let sentinel = "S3NTINEL-credential-value";
+        let cases = [
+            (
+                maho_agent::CredentialError::ProviderNotConfigured,
+                "provider_not_configured",
+            ),
+            (
+                maho_agent::CredentialError::CredentialUnusable,
+                "credential_unusable",
+            ),
+            (
+                maho_agent::CredentialError::SecureStoreUnavailable,
+                "secure_store_unavailable",
+            ),
+            (
+                maho_agent::CredentialError::CredentialDecryptFailed,
+                "credential_decrypt_failed",
+            ),
+            (
+                maho_agent::CredentialError::ManagedAuthUnavailable,
+                "managed_auth_unavailable",
+            ),
+            (
+                maho_agent::CredentialError::UnsupportedProvider,
+                "unsupported_provider",
+            ),
+        ];
+
+        for (error, code) in cases {
+            // When: the FFI callback representation is selected.
+            let display = error.to_string();
+            let envelope = agent_error_callback_text(&error.into());
+            let envelope_json: serde_json::Value =
+                serde_json::from_str(&envelope).expect("credential envelope is valid JSON");
+
+            // Then: only the versioned allowlisted protocol fields are exposed.
+            assert_eq!(envelope_json["version"], 1);
+            assert_eq!(envelope_json["kind"], "credential_error");
+            assert_eq!(envelope_json["code"], code);
+            assert!(!display.contains(sentinel));
+            assert!(!envelope.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn unrelated_agent_errors_keep_the_legacy_callback_text() {
+        // Given: a failure that is not a typed credential error.
+        let error = maho_agent::AgentError::ExecutionError("legacy failure".to_string());
+
+        // When: it crosses the existing callback boundary.
+        let callback_text = agent_error_callback_text(&error);
+
+        // Then: the established plain-text behavior remains intact.
+        assert_eq!(callback_text, "Execution error: legacy failure");
+    }
+
+    #[test]
+    fn turn_callback_lease_releases_once_after_error_callback() {
+        // Given: the FFI caller's callback context and a planned private turn lease.
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let lease = TurnCallbackLease::new(record_release, user_data);
+        lease.arm();
+
+        // When: a failed turn invokes the C ABI terminal callback, then ends.
+        unsafe { record_error_then_release(user_data, ptr::null()) };
+        drop(lease);
+
+        // Then: the terminal callback happens before exactly one release.
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![CallbackLeaseEvent::Error, CallbackLeaseEvent::Release]
+        );
+    }
+
+    #[test]
+    fn turn_callback_lease_releases_once_when_accepted_turn_is_dropped() {
+        // Given: an accepted turn which owns the planned private callback lease.
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let lease = TurnCallbackLease::new(record_release, user_data);
+        lease.arm();
+
+        // When: the task is aborted or dropped before either terminal callback runs.
+        drop(lease);
+
+        // Then: Drop releases the caller context exactly once.
+        assert_eq!(*events.lock().unwrap(), vec![CallbackLeaseEvent::Release]);
+    }
+
+    #[test]
+    fn terminal_callback_helper_runs_before_turn_callback_lease_release() {
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let lease = Arc::new(TurnCallbackLease::new(record_release, user_data));
+        lease.arm();
+
+        invoke_with_turn_callback_lease(Some(lease), || {
+            events
+                .lock()
+                .unwrap()
+                .push(CallbackLeaseEvent::Complete);
+        });
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![CallbackLeaseEvent::Complete, CallbackLeaseEvent::Release]
+        );
+    }
+
+    #[test]
+    fn session_callback_lease_releases_after_final_runtime_callback_clone_drops() {
+        // Given: a session-owned lease plus the clone retained by a runtime callback.
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let session_lease = SessionCallbackLease::new(record_release, user_data);
+        let runtime_callback_lease = Arc::clone(&session_lease);
+        session_lease.arm();
+
+        // When: session teardown drops its owner before the runtime callback is destroyed.
+        drop(session_lease);
+        assert!(events.lock().unwrap().is_empty());
+        drop(runtime_callback_lease);
+
+        // Then: the release callback runs only after the final runtime-clone drops.
+        assert_eq!(*events.lock().unwrap(), vec![CallbackLeaseEvent::Release]);
+    }
+
+    #[test]
+    fn unarmed_turn_callback_lease_drops_without_release() {
+        // Given: a leased turn that has not yet transferred ownership to Rust.
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let lease = TurnCallbackLease::new(record_release, user_data);
+
+        // When: the pending turn is rejected or unwinds before acceptance.
+        drop(lease);
+
+        // Then: the caller retains the context because the lease was never armed.
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unarmed_session_callback_lease_drops_without_release() {
+        // Given: a leased session that has not yet returned a non-null handle.
+        let events = Mutex::new(Vec::new());
+        let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+        let lease = SessionCallbackLease::new(record_release, user_data);
+
+        // When: session setup fails before acceptance.
+        drop(lease);
+
+        // Then: no release callback runs for the unaccepted session context.
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn accepted_leased_turn_latch_signals_before_backend_admission() {
+        // Given: an accepted leased turn whose backend registration has not run yet.
+        let accepted_turns = Arc::new(AcceptedLeasedTurns {
+            current: Mutex::new(None),
+        });
+        let accepted_turn = accepted_turns.accept();
+        let latch = accepted_turn.latch();
+
+        // When: cancellation is requested synchronously at the FFI boundary.
+        let signaled = accepted_turns.signal_current();
+
+        // Then: cancel reports the accepted turn and its backend latch is already set.
+        assert!(signaled);
+        assert!(latch.load(AtomicOrdering::Acquire));
+    }
+
+    #[test]
+    fn prior_leased_turn_drop_does_not_clear_newer_latch() {
+        // Given: a session accepts a replacement leased turn before the prior future exits.
+        let accepted_turns = Arc::new(AcceptedLeasedTurns {
+            current: Mutex::new(None),
+        });
+        let prior_turn = accepted_turns.accept();
+        let current_turn = accepted_turns.accept();
+        let current_latch = current_turn.latch();
+
+        // When: the prior future finishes after the current turn was accepted.
+        drop(prior_turn);
+        let signaled = accepted_turns.signal_current();
+
+        // Then: only the identity-matched current latch remains cancellable.
+        assert!(signaled);
+        assert!(current_latch.load(AtomicOrdering::Acquire));
+        drop(current_turn);
+        assert!(!accepted_turns.signal_current());
+    }
+
+    #[test]
+    fn leased_send_rejection_does_not_transfer_release_ownership() {
+        // Given: a caller-owned release context and an invalid session pointer.
+        let events = Mutex::new(Vec::new());
+        let release_user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
+            .cast_mut()
+            .cast();
+
+        // When: the leased call is rejected before turn ownership is accepted.
+        let accepted = unsafe {
+            maho_agent_send_message_leased(
+                ptr::null_mut(),
+                ptr::null(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                ptr::null_mut(),
+                record_release,
+                release_user_data,
+            )
+        };
+
+        // Then: the caller keeps its context and the release callback never runs.
+        assert!(!accepted);
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn legacy_agent_exports_have_no_release_parameters() {
+        let source = include_str!("lib.rs");
+
+        let create_signature = source
+            .split_once("pub unsafe extern \"C\" fn maho_agent_create_session(")
+            .unwrap()
+            .1
+            .split_once(") -> *mut MahoAgentSession")
+            .unwrap()
+            .0;
+        let send_signature = source
+            .split_once("pub unsafe extern \"C\" fn maho_agent_send_message(")
+            .unwrap()
+            .1
+            .split_once(") -> bool")
+            .unwrap()
+            .0;
+        let simple_signature = source
+            .split_once("pub unsafe extern \"C\" fn maho_agent_send_message_simple(")
+            .unwrap()
+            .1
+            .split_once(") -> bool")
+            .unwrap()
+            .0;
+
+        assert!(!create_signature.contains("release"));
+        assert!(!send_signature.contains("release"));
+        assert!(!simple_signature.contains("release"));
+        assert!(source.contains("pub type MahoAgentReleaseCallback"));
+        assert!(source.contains("on_session_release: MahoAgentReleaseCallback"));
+        assert!(source.contains("on_release: MahoAgentReleaseCallback"));
+        assert!(!source.contains(concat!("Option<", "MahoAgentReleaseCallback>")));
+    }
+
     /// Verifies that the alloc/free pair for preview bytes uses matching allocator layouts.
     ///
     /// The alloc side (`maho_core_get_tab_preview`) does:

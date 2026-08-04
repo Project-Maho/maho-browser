@@ -7,7 +7,7 @@ fn detector_enumerates_default_and_numbered_profiles() {
     let chrome_dir = tmp.path().join("Google").join("Chrome");
 
     for (subdir, name) in [
-        ("Default",   "Personal"),
+        ("Default", "Personal"),
         ("Profile 1", "Work"),
         ("Profile 2", "Side"),
     ] {
@@ -17,10 +17,12 @@ fn detector_enumerates_default_and_numbered_profiles() {
         std::fs::write(
             pdir.join("Preferences"),
             serde_json::json!({"profile": {"name": name}}).to_string(),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
-    let profiles: Vec<_> = std::fs::read_dir(&chrome_dir).unwrap()
+    let profiles: Vec<_> = std::fs::read_dir(&chrome_dir)
+        .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .filter(|n| n == "Default" || n.starts_with("Profile "))

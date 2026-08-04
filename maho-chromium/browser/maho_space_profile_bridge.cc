@@ -2,14 +2,36 @@
 
 #include "maho/browser/maho_space_profile_bridge.h"
 
+#include "base/containers/flat_set.h"
 #include "base/no_destructor.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_hydration.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/third_party/maho/maho_ffi.h"
 
 namespace maho {
+namespace {
+
+constexpr char kProfileRegistryPref[] = "maho.profile_registry";
+constexpr char kProfileRegistryRevisionKey[] = "revision";
+constexpr char kProfileRegistryRecordsKey[] = "records";
+constexpr char kProfileRegistryIdKey[] = "maho_id";
+constexpr char kProfileRegistryNameKey[] = "name";
+constexpr char kProfileRegistryAvatarColorKey[] = "avatar_color";
+constexpr char kProfileRegistryArchiveTimeoutKey[] = "archive_timeout_hours";
+constexpr char kProfileRegistryBasenameKey[] = "chromium_basename";
+constexpr char kProfileRegistryDefaultKey[] = "is_default";
+constexpr char kProfileRegistryActiveKey[] = "is_active";
+constexpr char kProfileRegistryLifecycleKey[] = "lifecycle";
+constexpr char kProfileRegistrySpaceIdsKey[] = "space_ids";
+
+}  // namespace
 
 void MahoSpaceProfileBridge::Observer::OnSpaceProfileBridgeChanged(
     bool is_structural) {
@@ -21,7 +43,14 @@ MahoSpaceProfileBridge* MahoSpaceProfileBridge::GetInstance() {
   return instance.get();
 }
 
+// static
+void MahoSpaceProfileBridge::RegisterLocalStatePrefs(
+    PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(kProfileRegistryPref);
+}
+
 MahoSpaceProfileBridge::MahoSpaceProfileBridge() {
+  LoadProfileRegistryFromLocalState();
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
 }
@@ -212,6 +241,265 @@ base::FilePath MahoSpaceProfileBridge::GetProfilePathForSpace(
     return it->second;
   }
   return base::FilePath();
+}
+
+bool MahoSpaceProfileBridge::ReconcileProfileRegistry(
+    std::string_view profiles_json,
+    std::string_view active_profile_id_json,
+    std::string_view spaces_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const uint64_t next_revision = profile_catalog_.revision + 1;
+  ProfileCatalogResult next = ParseProfileCatalog(
+      profiles_json, active_profile_id_json, spaces_json, next_revision);
+  if (next.error != ProfileCatalogError::kNone) {
+    return false;
+  }
+
+  for (ProfileRegistryRecord& record : next.records) {
+    for (const ProfileRegistryRecord& existing : profile_catalog_.records) {
+      if (existing.maho_id != record.maho_id) {
+        continue;
+      }
+      record.lifecycle = existing.lifecycle;
+      if (record.lifecycle == ProfileLifecycleState::kProvisioning ||
+          record.lifecycle == ProfileLifecycleState::kDeleting) {
+        record.lifecycle = ProfileLifecycleState::kRepairRequired;
+      }
+      break;
+    }
+  }
+  profile_catalog_ = std::move(next);
+  PersistProfileRegistryToLocalState();
+  return true;
+}
+
+bool MahoSpaceProfileBridge::ReconcileProfileRegistryFromCore() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  char* profiles = maho_core_list_profiles(core);
+  char* active_id = maho_core_get_active_profile_id(core);
+  char* spaces = maho_core_get_space_view_models(core);
+  if (!profiles || !active_id || !spaces) {
+    maho_string_free(profiles);
+    maho_string_free(active_id);
+    maho_string_free(spaces);
+    return false;
+  }
+  const bool success = ReconcileProfileRegistry(profiles, active_id, spaces);
+  maho_string_free(profiles);
+  maho_string_free(active_id);
+  maho_string_free(spaces);
+  return success;
+}
+
+void MahoSpaceProfileBridge::SetLocalStateForTesting(PrefService* local_state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  local_state_for_testing_ = local_state;
+  LoadProfileRegistryFromLocalState();
+}
+
+const ProfileCatalogResult& MahoSpaceProfileBridge::GetProfileCatalog() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return profile_catalog_;
+}
+
+uint64_t MahoSpaceProfileBridge::GetProfileRegistryRevision() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return profile_catalog_.revision;
+}
+
+std::optional<std::string> MahoSpaceProfileBridge::CanonicalizeProfileId(
+    std::string_view profile_id) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return CanonicalizeProfileRegistryId(profile_catalog_, profile_id);
+}
+
+ProfileRegistryPathResult MahoSpaceProfileBridge::ResolveProfilePath(
+    std::string_view profile_id,
+    uint64_t expected_registry_revision) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return ResolveProfileRegistryPath(profile_catalog_, profile_id,
+                                    expected_registry_revision);
+}
+
+bool MahoSpaceProfileBridge::UpdateProfileSettings(
+    std::string_view profile_id,
+    const std::string* name,
+    const std::string* avatar_color,
+    const std::optional<int32_t>* archive_timeout_hours) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::optional<std::string> canonical_id = CanonicalizeProfileId(profile_id);
+  if (!canonical_id) {
+    return false;
+  }
+  for (ProfileRegistryRecord& record : profile_catalog_.records) {
+    if (record.maho_id != *canonical_id) {
+      continue;
+    }
+    if (name) {
+      record.name = *name;
+    }
+    if (avatar_color) {
+      record.avatar_color = *avatar_color;
+    }
+    if (archive_timeout_hours) {
+      record.archive_timeout_hours = *archive_timeout_hours;
+    }
+    record.revision = ++profile_catalog_.revision;
+    PersistProfileRegistryToLocalState();
+    return true;
+  }
+  return false;
+}
+
+bool MahoSpaceProfileBridge::SetProfileLifecycleState(
+    std::string_view profile_id,
+    ProfileLifecycleState state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::optional<std::string> canonical_id = CanonicalizeProfileId(profile_id);
+  if (!canonical_id) {
+    return false;
+  }
+  for (ProfileRegistryRecord& record : profile_catalog_.records) {
+    if (record.maho_id == *canonical_id) {
+      if (record.lifecycle == state) {
+        return true;
+      }
+      record.lifecycle = state;
+      record.revision = ++profile_catalog_.revision;
+      PersistProfileRegistryToLocalState();
+      return true;
+    }
+  }
+  return false;
+}
+
+PrefService* MahoSpaceProfileBridge::GetLocalState() const {
+  if (local_state_for_testing_) {
+    return local_state_for_testing_;
+  }
+  return g_browser_process ? g_browser_process->local_state() : nullptr;
+}
+
+void MahoSpaceProfileBridge::LoadProfileRegistryFromLocalState() {
+  PrefService* local_state = GetLocalState();
+  if (!local_state || !local_state->FindPreference(kProfileRegistryPref)) {
+    return;
+  }
+  const base::DictValue& persisted =
+      local_state->GetDict(kProfileRegistryPref);
+  std::optional<int> revision =
+      persisted.FindInt(kProfileRegistryRevisionKey);
+  const base::ListValue* records = persisted.FindList(kProfileRegistryRecordsKey);
+  if (!revision || *revision < 0 || !records) {
+    return;
+  }
+
+  ProfileCatalogResult loaded;
+  loaded.revision = static_cast<uint64_t>(*revision);
+  base::flat_set<std::string> loaded_ids;
+  size_t default_count = 0;
+  size_t active_count = 0;
+  for (const base::Value& value : *records) {
+    const base::DictValue* dict = value.GetIfDict();
+    const std::string* id = dict ? dict->FindString(kProfileRegistryIdKey) : nullptr;
+    const std::string* name =
+        dict ? dict->FindString(kProfileRegistryNameKey) : nullptr;
+    const std::string* avatar_color =
+        dict ? dict->FindString(kProfileRegistryAvatarColorKey) : nullptr;
+    const base::Value* archive_timeout =
+        dict ? dict->Find(kProfileRegistryArchiveTimeoutKey) : nullptr;
+    const std::string* basename =
+        dict ? dict->FindString(kProfileRegistryBasenameKey) : nullptr;
+    const std::string* lifecycle =
+        dict ? dict->FindString(kProfileRegistryLifecycleKey) : nullptr;
+    std::optional<bool> is_default =
+        dict ? dict->FindBool(kProfileRegistryDefaultKey) : std::nullopt;
+    std::optional<bool> is_active =
+        dict ? dict->FindBool(kProfileRegistryActiveKey) : std::nullopt;
+    std::optional<ProfileLifecycleState> parsed_lifecycle =
+        lifecycle ? ProfileLifecycleStateFromString(*lifecycle) : std::nullopt;
+    if (!id || id->empty() || !name || !basename || !is_default || !is_active ||
+        !parsed_lifecycle || !loaded_ids.insert(*id).second) {
+      return;
+    }
+    ProfileRegistryRecord record;
+    record.maho_id = *id;
+    record.name = *name;
+    record.avatar_color = avatar_color ? *avatar_color : "#007AFF";
+    if (archive_timeout && !archive_timeout->is_none()) {
+      std::optional<int> timeout = archive_timeout->GetIfInt();
+      if (!timeout || *timeout < 0) {
+        return;
+      }
+      record.archive_timeout_hours = *timeout;
+    }
+    record.chromium_basename = base::FilePath::FromUTF8Unsafe(*basename);
+    std::optional<base::FilePath> expected_basename =
+        *is_default ? std::optional<base::FilePath>(
+                          base::FilePath::FromASCII("Default"))
+                    : ProfileBasenameForId(*id);
+    if (!expected_basename || record.chromium_basename != *expected_basename) {
+      return;
+    }
+    record.is_default = *is_default;
+    record.is_active = *is_active;
+    default_count += record.is_default ? 1u : 0u;
+    active_count += record.is_active ? 1u : 0u;
+    record.revision = loaded.revision;
+    record.lifecycle = *parsed_lifecycle;
+    if (const base::ListValue* space_ids =
+            dict->FindList(kProfileRegistrySpaceIdsKey)) {
+      for (const base::Value& space_id : *space_ids) {
+        if (space_id.is_string()) {
+          record.space_ids.push_back(space_id.GetString());
+        }
+      }
+    }
+    loaded.records.push_back(std::move(record));
+  }
+  if (loaded.records.empty() || default_count != 1u || active_count != 1u) {
+    return;
+  }
+  profile_catalog_ = std::move(loaded);
+}
+
+void MahoSpaceProfileBridge::PersistProfileRegistryToLocalState() {
+  PrefService* local_state = GetLocalState();
+  if (!local_state || !local_state->FindPreference(kProfileRegistryPref)) {
+    return;
+  }
+  base::DictValue persisted;
+  persisted.Set(kProfileRegistryRevisionKey,
+                static_cast<int>(profile_catalog_.revision));
+  base::ListValue records;
+  for (const ProfileRegistryRecord& record : profile_catalog_.records) {
+    base::DictValue dict;
+    dict.Set(kProfileRegistryIdKey, record.maho_id);
+    dict.Set(kProfileRegistryNameKey, record.name);
+    dict.Set(kProfileRegistryAvatarColorKey, record.avatar_color);
+    if (record.archive_timeout_hours) {
+      dict.Set(kProfileRegistryArchiveTimeoutKey,
+               *record.archive_timeout_hours);
+    }
+    dict.Set(kProfileRegistryBasenameKey,
+             record.chromium_basename.AsUTF8Unsafe());
+    dict.Set(kProfileRegistryDefaultKey, record.is_default);
+    dict.Set(kProfileRegistryActiveKey, record.is_active);
+    dict.Set(kProfileRegistryLifecycleKey,
+             ProfileLifecycleStateToString(record.lifecycle));
+    base::ListValue space_ids;
+    for (const std::string& space_id : record.space_ids) {
+      space_ids.Append(space_id);
+    }
+    dict.Set(kProfileRegistrySpaceIdsKey, std::move(space_ids));
+    records.Append(std::move(dict));
+  }
+  persisted.Set(kProfileRegistryRecordsKey, std::move(records));
+  local_state->SetDict(kProfileRegistryPref, std::move(persisted));
 }
 
 // static

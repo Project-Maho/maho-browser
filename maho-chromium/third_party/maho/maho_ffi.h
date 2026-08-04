@@ -104,6 +104,8 @@ typedef struct MahoAgentToolResult {
   void (*free_fn)(char*);
 } MahoAgentToolResult;
 
+typedef void (*MahoAgentReleaseCallback)(void *user_data);
+
 /**
  * Progress callback type invoked from the import background thread.
  *
@@ -130,6 +132,15 @@ typedef void (*MahoImportProgressCallback)(uint32_t kind,
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+void *maho_ffi_serialization_scope_enter(void);
+
+/**
+ * # Safety
+ * `scope` must be null or returned by `maho_ffi_serialization_scope_enter`
+ * on the same thread.
+ */
+void maho_ffi_serialization_scope_exit(void *scope);
 
 struct MahoCore *maho_core_new(void);
 
@@ -547,7 +558,7 @@ bool maho_core_boost_delete(struct MahoCore *ptr, const char *boost_id);
  * `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
  * `boost_id` may be null to clear.
  */
-void maho_core_boost_set_active(struct MahoCore *ptr, const char *domain, const char *boost_id);
+bool maho_core_boost_set_active(struct MahoCore *ptr, const char *domain, const char *boost_id);
 
 /**
  * Returns the active Boost for a domain as JSON, or null if none is set.
@@ -1932,6 +1943,44 @@ char *maho_core_list_profiles(struct MahoCore *ptr);
 bool maho_core_switch_profile(struct MahoCore *ptr, const char *profile_id);
 
 /**
+ * Updates the profile identified by `profile_id` without switching the active profile.
+ * The returned JSON is `{ok, profile, error}` and preserves validation and lookup errors.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new*`.
+ * `profile_id`, `name`, and `avatar_color` must be valid null-terminated C strings.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_update_profile(struct MahoCore *ptr,
+                               const char *profile_id,
+                               const char *name,
+                               const char *avatar_color);
+
+/**
+ * Returns the profile archive timeout as `{ok, timeout_hours, error}`.
+ * `timeout_hours` is `0` when per-profile auto-archive is disabled.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new*`.
+ * `profile_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_profile_archive_timeout(struct MahoCore *ptr, const char *profile_id);
+
+/**
+ * Sets the profile archive timeout without switching the active profile.
+ * `timeout_hours == 0` disables per-profile auto-archive.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new*`.
+ * `profile_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_set_profile_archive_timeout(struct MahoCore *ptr,
+                                            const char *profile_id,
+                                            int32_t timeout_hours);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `profile_id` must be a valid null-terminated C string.
@@ -2560,6 +2609,32 @@ struct MahoAgentSession *maho_agent_create_session(struct MahoCore *core,
 
 /**
  * # Safety
+ * Same pointer requirements as `maho_agent_create_session`. When this function returns a
+ * non-null session, `on_session_release` receives `session_release_user_data` exactly once after
+ * the session and every runtime-held callback closure release their ownership. The callback must
+ * not unwind.
+ */
+struct MahoAgentSession *maho_agent_create_session_leased(struct MahoCore *core,
+                                                          const char *session_id,
+                                                          const char *workspace_root,
+                                                          bool allow_insecure_key_storage,
+                                                          enum MahoAgentPermissionDecision (*permission_cb)(void *user_data,
+                                                                                                            const char *tool_name,
+                                                                                                            const char *arguments_json),
+                                                          void *permission_user_data,
+                                                          struct MahoAgentSecureKey (*secure_storage_cb)(void *user_data,
+                                                                                                         const char *provider),
+                                                          void *secure_storage_user_data,
+                                                          struct MahoAgentToolResult (*browser_tool_cb)(void *user_data,
+                                                                                                        const char *tool_name,
+                                                                                                        const char *args_json),
+                                                          void *browser_tool_user_data,
+                                                          const char *space_id,
+                                                          MahoAgentReleaseCallback on_session_release,
+                                                          void *session_release_user_data);
+
+/**
+ * # Safety
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 void maho_agent_session_free(struct MahoAgentSession *session);
@@ -2589,6 +2664,32 @@ bool maho_agent_send_message(struct MahoAgentSession *session,
 
 /**
  * # Safety
+ * Same pointer requirements as `maho_agent_send_message`. When this function returns `true`,
+ * `on_release` receives `release_user_data` exactly once after the terminal callback and every
+ * turn callback closure are dropped. The callback must not unwind.
+ */
+bool maho_agent_send_message_leased(struct MahoAgentSession *session,
+                                    const char *message,
+                                    void (*on_token)(void *user_data, const char *token),
+                                    void (*on_thinking)(void *user_data, const char *thinking),
+                                    void (*on_tool_call)(void *user_data,
+                                                         const char *id,
+                                                         const char *name,
+                                                         const char *args),
+                                    void (*on_tool_result)(void *user_data,
+                                                           const char *id,
+                                                           const char *name,
+                                                           const char *result),
+                                    void (*on_complete)(void *user_data,
+                                                        const char *full_text,
+                                                        const char *tool_calls_json),
+                                    void (*on_error)(void *user_data, const char *error),
+                                    void *callback_user_data,
+                                    MahoAgentReleaseCallback on_release,
+                                    void *release_user_data);
+
+/**
+ * # Safety
  * Fast-path variant of `maho_agent_send_message`. Skips all tool registration
  * and dispatches straight to the LLM. Callers MUST NOT rely on tool_calls
  * being processed. Same pointer safety requirements as `maho_agent_send_message`.
@@ -2615,6 +2716,15 @@ bool maho_agent_cancel(struct MahoAgentSession *session);
  * `policy` must be a null-terminated C string (e.g. "prompt", "allow", "deny").
  */
 void maho_agent_set_approval_policy(struct MahoAgentSession *session, const char *policy);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ * `provider` may be null to clear the explicit provider selection; otherwise it
+ * must be a null-terminated UTF-8 string naming an allowlisted provider.
+ */
+bool maho_agent_session_set_preferred_provider(struct MahoAgentSession *session,
+                                               const char *provider);
 
 /**
  * # Safety
@@ -2931,7 +3041,7 @@ uint64_t maho_core_register_split_change_callback(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_unregister_split_change_callback(struct MahoCore *core, uint64_t token);
+void maho_core_unregister_split_change_callback(struct MahoCore *_core, uint64_t token);
 
 /**
  * # Safety
@@ -2947,7 +3057,7 @@ uint64_t maho_core_register_tool_availability_callback(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_unregister_tool_availability_callback(struct MahoCore *core, uint64_t token);
+void maho_core_unregister_tool_availability_callback(struct MahoCore *_core, uint64_t token);
 
 /**
  * # Safety
@@ -2964,7 +3074,24 @@ uint64_t maho_core_register_settings_change_callback(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_unregister_settings_change_callback(struct MahoCore *core, uint64_t token);
+void maho_core_unregister_settings_change_callback(struct MahoCore *_core, uint64_t token);
+
+/**
+ * Starts Google Sign-In and returns `{"state","authUrl"}` JSON, or null on
+ * failure. The redirect is caught on a background thread; `on_complete` then
+ * fires with the `id_token` + `nonce` the caller must POST to the relay.
+ *
+ * # Safety
+ * `client_id` must be a null-terminated C string (may be empty to use the
+ * build-time client id). `user_data` must remain valid until `on_complete`
+ * fires. Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_google_sign_in_start(const char *client_id,
+                                void (*on_complete)(void *user_data,
+                                                    const char *id_token,
+                                                    const char *nonce,
+                                                    const char *error),
+                                void *user_data);
 
 /**
  * Returns the secret-free Vault status owned by `core`.

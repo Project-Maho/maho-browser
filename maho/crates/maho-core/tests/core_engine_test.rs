@@ -196,7 +196,9 @@ fn delete_active_space_falls_back_and_persists_order_name_and_profile_linkage() 
     let storage_path = temp_dir.path().join("maho-core.lmdb");
 
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-    let profile = core.create_profile_persisted("Work Profile".to_string()).unwrap();
+    let profile = core
+        .create_profile_persisted("Work Profile".to_string())
+        .unwrap();
     let color = SpaceColor {
         hue: 210.0,
         saturation: 0.6,
@@ -413,13 +415,10 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
 
         // Verify default values
-        assert_eq!(
-            core.get_open_external_links_in_little_arc(),
-            false
-        );
+        assert_eq!(core.get_open_external_links_in_maho_mini(), false);
 
         // Set values and trigger events
-        core.set_open_external_links_in_little_arc_persisted(true);
+        core.set_open_external_links_in_maho_mini_persisted(true);
         core.handle_event(ShellEvent::SetDefaultLinkBehavior {
             behavior: maho_types::air_traffic::DefaultLinkBehavior::SpecificSpace {
                 space_id: maho_types::identifiers::SpaceId::new("space-abc"),
@@ -431,10 +430,7 @@ mod persistence_tests {
         let mut restored_core = create_persisted_core(&temp_dir);
         assert!(restored_core.load_persisted_data().is_ok());
 
-        assert_eq!(
-            restored_core.get_open_external_links_in_little_arc(),
-            true
-        );
+        assert_eq!(restored_core.get_open_external_links_in_maho_mini(), true);
         match restored_core.get_default_link_behavior() {
             maho_types::air_traffic::DefaultLinkBehavior::SpecificSpace { space_id } => {
                 assert_eq!(space_id.as_ref(), "space-abc");
@@ -662,7 +658,9 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
         assert!(core.load_persisted_data().is_ok());
 
-        let profile = core.create_profile_persisted("Test Profile".to_string()).unwrap();
+        let profile = core
+            .create_profile_persisted("Test Profile".to_string())
+            .unwrap();
         let profile_id = profile.id.clone();
 
         drop(core);
@@ -677,12 +675,146 @@ mod persistence_tests {
     }
 
     #[test]
+    fn profile_metadata_update_targets_non_active_profile_and_survives_restart() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+        assert!(core.load_persisted_data().is_ok());
+
+        let active = core
+            .create_profile_persisted("Profile A".to_string())
+            .unwrap();
+        let active_id = active.id.clone();
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .unwrap();
+        let target_id = target.id.clone();
+        assert!(core.switch_profile(&active_id));
+        let updates = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&updates);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+
+        let updated = core
+            .update_profile_persisted(
+                &target_id,
+                Some("  Profile B Updated  ".to_string()),
+                Some("#112233".to_string()),
+                Some("/tmp/profile-b".to_string()),
+                Some(None),
+            )
+            .expect("target profile exists");
+
+        assert_eq!(core.get_active_profile_id(), Some(&active_id));
+        assert_eq!(updated.name, "Profile B Updated");
+        assert_eq!(updated.avatar_color, "#112233");
+        assert_eq!(updated.download_path, "/tmp/profile-b");
+        assert_eq!(updated.archive_timeout_hours, None);
+        // The persisted helper emits exactly one target ProfileUpdated and
+        // never a misleading active-profile update, matching the lib-level
+        // contract update_profile_persisted_emits_exactly_one_target_metadata_update.
+        assert!(matches!(
+            updates.borrow().as_slice(),
+            [CoreUpdate::ProfileUpdated { profile }]
+                if profile.id == target_id
+                    && profile.id != active_id
+                    && profile.name == "Profile B Updated"
+        ));
+
+        drop(core);
+
+        let mut restored = create_persisted_core(&temp_dir);
+        assert!(restored.load_persisted_data().is_ok());
+        assert_eq!(restored.get_active_profile_id(), Some(&active_id));
+        let restored_target = restored
+            .list_profiles()
+            .iter()
+            .find(|profile| profile.id == target_id)
+            .expect("target profile survives restart");
+        assert_eq!(restored_target.name, "Profile B Updated");
+        assert_eq!(restored_target.avatar_color, "#112233");
+        assert_eq!(restored_target.download_path, "/tmp/profile-b");
+        assert_eq!(restored_target.archive_timeout_hours, None);
+    }
+
+    #[test]
+    fn update_profile_event_emits_target_update_without_active_switch() {
+        let mut core = MahoCore::new();
+        let active_id = core
+            .get_active_profile_id()
+            .expect("default profile is active")
+            .clone();
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .unwrap();
+        let updates = core.handle_event(ShellEvent::UpdateProfile {
+            profile_id: target.id.clone(),
+            name: Some("Profile B Updated".to_string()),
+            avatar_color: None,
+            download_path: None,
+            archive_timeout_hours: None,
+        });
+
+        assert_eq!(core.get_active_profile_id(), Some(&active_id));
+        assert!(matches!(
+            updates.as_slice(),
+            [CoreUpdate::ProfileUpdated { profile }]
+                if profile.id == target.id && profile.name == "Profile B Updated"
+        ));
+    }
+
+    #[test]
+    fn profile_delete_outcomes_cover_protected_not_found_in_use_and_final() {
+        use maho_types::identifiers::ProfileId;
+        use maho_types::profile::{ProfileConfig, ProfileDeleteOutcome};
+
+        let mut core = MahoCore::new();
+        let default_id = core
+            .get_active_profile_id()
+            .expect("default profile is active")
+            .clone();
+        assert_eq!(
+            core.delete_profile_detailed(&default_id),
+            ProfileDeleteOutcome::Protected
+        );
+        assert_eq!(
+            core.delete_profile_detailed(&ProfileId::new("malformed/not-a-real-profile")),
+            ProfileDeleteOutcome::NotFound
+        );
+
+        let in_use = core.create_profile_persisted("In Use".to_string()).unwrap();
+        core.create_space(
+            "Profile Space",
+            SpaceColor {
+                hue: 120.0,
+                saturation: 0.5,
+                brightness: 0.5,
+                grain: 0.0,
+            },
+            in_use.id.clone(),
+        );
+        assert_eq!(
+            core.delete_profile_detailed(&in_use.id),
+            ProfileDeleteOutcome::InUse
+        );
+
+        let final_profile = ProfileConfig::new("Final".to_string());
+        let final_id = final_profile.id.clone();
+        let mut manager = maho_core::profile_manager::ProfileManager::new();
+        manager.restore_profiles(vec![final_profile], Some(final_id.clone()));
+        assert_eq!(
+            manager.delete_profile(&final_id),
+            ProfileDeleteOutcome::FinalProfile
+        );
+    }
+
+    #[test]
     fn profile_delete_persistence() {
         let temp_dir = temp_dir();
         let mut core = create_persisted_core(&temp_dir);
         assert!(core.load_persisted_data().is_ok());
 
-        let profile = core.create_profile_persisted("Test Profile 2".to_string()).unwrap();
+        let profile = core
+            .create_profile_persisted("Test Profile 2".to_string())
+            .unwrap();
         let profile_id = profile.id.clone();
 
         let deleted = core.delete_profile(&profile_id);
@@ -703,7 +835,9 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
         assert!(core.load_persisted_data().is_ok());
 
-        let profile = core.create_profile_persisted("Test Profile 3".to_string()).unwrap();
+        let profile = core
+            .create_profile_persisted("Test Profile 3".to_string())
+            .unwrap();
         let profile_id = profile.id.clone();
 
         let switched = core.switch_profile(&profile_id);
@@ -790,7 +924,7 @@ mod persistence_tests {
             "fullscreen",
             "minimize",
             "new_window",
-            "little_arc",
+            "maho_mini",
             "close_window",
             "add_split_view",
             "remove_split_view",

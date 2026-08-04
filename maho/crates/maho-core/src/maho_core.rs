@@ -327,6 +327,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn boost_url_lookup_inherits_parent_domain_and_prefers_exact_host() {
+        let mut core = MahoCore::new();
+        let parent = core
+            .boost_manager
+            .create("github.com".to_string(), "GitHub".to_string());
+        core.boost_manager
+            .set_active("github.com", Some(parent.id.clone()));
+
+        let inherited = core.get_boosts_for_url("https://gist.github.com/starred");
+        assert_eq!(inherited.len(), 1);
+        assert_eq!(inherited[0].id, parent.id);
+
+        let exact = core
+            .boost_manager
+            .create("gist.github.com".to_string(), "Gist".to_string());
+        core.boost_manager
+            .set_active("gist.github.com", Some(exact.id.clone()));
+
+        let exact_match = core.get_boosts_for_url("https://gist.github.com/starred");
+        assert_eq!(exact_match.len(), 1);
+        assert_eq!(exact_match[0].id, exact.id);
+    }
+
+    #[test]
+    fn boost_url_lookup_never_inherits_from_public_suffix() {
+        let mut core = MahoCore::new();
+        let public_suffix = core
+            .boost_manager
+            .create("github.io".to_string(), "Unsafe shared host".to_string());
+        core.boost_manager
+            .set_active("github.io", Some(public_suffix.id));
+
+        assert!(core
+            .get_boosts_for_url("https://victim-project.github.io/page")
+            .is_empty());
+    }
+
+    #[test]
+    fn boost_url_lookup_stops_after_registrable_domain() {
+        let mut core = MahoCore::new();
+        let registrable = core
+            .boost_manager
+            .create("example.co.uk".to_string(), "Example UK".to_string());
+        core.boost_manager
+            .set_active("example.co.uk", Some(registrable.id.clone()));
+
+        let inherited = core.get_boosts_for_url("https://docs.example.co.uk/page");
+        assert_eq!(inherited.len(), 1);
+        assert_eq!(inherited[0].id, registrable.id);
+    }
+
+    #[test]
     fn vault_state_slot_read_error_is_not_uninitialized() {
         let boom = MahoCore::classify_slot_read(Err(maho_storage::StorageError::Other(
             "boom".to_string(),
@@ -1623,6 +1675,418 @@ mod tests {
         assert!(group_b.tab_ids.contains(&tab_ids[3]));
         assert!(group_b.tab_ids.contains(&tab_ids[4]));
     }
+
+    #[test]
+    fn discard_first_temporary_boost_deletes_persisted_record() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("discard-first-temp.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        let boost = core.create_temp_boost_persisted("example.com".to_string());
+
+        assert_eq!(core.discard_boost_persisted(&boost.id), Some(None));
+        assert!(core
+            .storage_ref()
+            .expect("storage")
+            .load_boosts()
+            .expect("load boosts")
+            .iter()
+            .all(|stored| stored.id != boost.id));
+    }
+
+    #[test]
+    fn update_profile_persisted_emits_target_only_after_successful_persistence() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        let dir = tempfile::tempdir().expect("dir");
+        let sqlite_path = dir.path().join("profile-update-notification.sqlite");
+        let lmdb_path = dir.path().join("profile-update-notification-state");
+        let mut core = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        let active = core
+            .create_profile_persisted("Profile A".to_string())
+            .expect("create A");
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .expect("create B");
+        assert!(core.switch_profile(&active.id));
+        let spaces_before: Vec<_> = core
+            .space_manager
+            .get_all_spaces()
+            .iter()
+            .map(|space| (space.id.clone(), space.profile_id.clone()))
+            .collect();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+
+        let metadata = core
+            .update_profile_persisted(
+                &target.id,
+                Some("  Profile B Updated  ".to_string()),
+                Some("#af52de".to_string()),
+                None,
+                None,
+            )
+            .expect("metadata update persists");
+
+        assert_eq!(metadata.id, target.id);
+        assert_eq!(metadata.name, "Profile B Updated");
+        assert_eq!(metadata.avatar_color, "#AF52DE");
+        assert_eq!(core.get_active_profile_id(), Some(&active.id));
+        assert!(matches!(
+            events.borrow().as_slice(),
+            [CoreUpdate::ProfileUpdated { profile }]
+                if profile.id == target.id && profile.name == "Profile B Updated"
+        ));
+
+        events.borrow_mut().clear();
+        let archived = core
+            .update_profile_persisted(&target.id, None, None, None, Some(Some(168.0)))
+            .expect("archive timeout persists");
+        assert_eq!(archived.archive_timeout_hours, Some(168.0));
+        assert_eq!(core.get_active_profile_id(), Some(&active.id));
+        assert!(matches!(
+            events.borrow().as_slice(),
+            [CoreUpdate::ProfileUpdated { profile }]
+                if profile.id == target.id && profile.archive_timeout_hours == Some(168.0)
+        ));
+
+        events.borrow_mut().clear();
+        let rejected = core.update_profile_persisted(
+            &target.id,
+            Some(" profile a ".to_string()),
+            None,
+            None,
+            None,
+        );
+        assert!(matches!(
+            rejected,
+            Err(crate::profile_manager::ProfileError::DuplicateName(_))
+        ));
+        assert!(events.borrow().is_empty());
+
+        core.profile_sqlite_persist_fault = true;
+        let failed = core.update_profile_persisted(
+            &target.id,
+            Some("Not Persisted".to_string()),
+            None,
+            None,
+            None,
+        );
+        assert!(matches!(
+            failed,
+            Err(crate::profile_manager::ProfileError::PersistenceFailed(_))
+        ));
+        assert!(events.borrow().is_empty());
+        assert_eq!(core.get_active_profile_id(), Some(&active.id));
+        let spaces_after: Vec<_> = core
+            .space_manager
+            .get_all_spaces()
+            .iter()
+            .map(|space| (space.id.clone(), space.profile_id.clone()))
+            .collect();
+        assert_eq!(spaces_after, spaces_before);
+    }
+
+    #[test]
+    fn update_profile_persisted_emits_exactly_one_target_metadata_update() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        let dir = tempfile::tempdir().expect("dir");
+        let sqlite_path = dir.path().join("profile-update-event.sqlite");
+        let lmdb_path = dir.path().join("profile-update-event-state");
+        let mut core = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        let active = core
+            .create_profile_persisted("Profile A".to_string())
+            .expect("create A");
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .expect("create B");
+        assert!(core.switch_profile(&active.id));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+
+        let updated = core
+            .update_profile_persisted(
+                &target.id,
+                Some("Profile B Updated".to_string()),
+                Some("#112233".to_string()),
+                None,
+                None,
+            )
+            .expect("update target");
+
+        assert_eq!(core.get_active_profile_id(), Some(&active.id));
+        assert_eq!(updated.id, target.id);
+        assert_eq!(updated.name, "Profile B Updated");
+        assert_eq!(updated.avatar_color, "#112233");
+        assert!(matches!(
+            events.borrow().as_slice(),
+            [CoreUpdate::ProfileUpdated { profile }]
+                if profile.id == target.id
+                    && profile.name == "Profile B Updated"
+                    && profile.avatar_color == "#112233"
+        ));
+    }
+
+    #[test]
+    fn update_profile_persisted_emits_exactly_one_archive_timeout_update() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        let dir = tempfile::tempdir().expect("dir");
+        let sqlite_path = dir.path().join("profile-archive-event.sqlite");
+        let lmdb_path = dir.path().join("profile-archive-event-state");
+        let mut core = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .expect("create B");
+        let active_id = core.get_active_profile_id().cloned();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+
+        let updated = core
+            .update_profile_persisted(&target.id, None, None, None, Some(Some(24.0)))
+            .expect("update archive timeout");
+
+        assert_eq!(core.get_active_profile_id(), active_id.as_ref());
+        assert_eq!(updated.archive_timeout_hours, Some(24.0));
+        assert!(matches!(
+            events.borrow().as_slice(),
+            [CoreUpdate::ProfileUpdated { profile }]
+                if profile.id == target.id && profile.archive_timeout_hours == Some(24.0)
+        ));
+    }
+
+    #[test]
+    fn update_profile_persisted_validation_and_unknown_id_emit_no_update() {
+        let mut core = MahoCore::new();
+        let existing = core
+            .create_profile_persisted("Existing".to_string())
+            .expect("create existing");
+        let target = core
+            .create_profile_persisted("Target".to_string())
+            .expect("create target");
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+
+        assert!(matches!(
+            core.update_profile_persisted(
+                &target.id,
+                Some(existing.name.clone()),
+                None,
+                None,
+                None,
+            ),
+            Err(crate::profile_manager::ProfileError::DuplicateName(_))
+        ));
+        assert!(events.borrow().is_empty());
+
+        assert!(matches!(
+            core.update_profile_persisted(&target.id, None, Some("blue".to_string()), None, None),
+            Err(crate::profile_manager::ProfileError::InvalidAvatarColor(_))
+        ));
+        assert!(events.borrow().is_empty());
+
+        assert!(matches!(
+            core.update_profile_persisted(&target.id, None, None, None, Some(Some(48.0))),
+            Err(crate::profile_manager::ProfileError::InvalidArchiveTimeout)
+        ));
+        assert!(events.borrow().is_empty());
+
+        assert!(matches!(
+            core.update_profile_persisted(
+                &maho_types::identifiers::ProfileId::generate(),
+                Some("Unknown".to_string()),
+                None,
+                None,
+                None,
+            ),
+            Err(crate::profile_manager::ProfileError::NotFound)
+        ));
+        assert!(events.borrow().is_empty());
+    }
+
+    #[test]
+    fn profile_update_sqlite_failure_rolls_back_memory_lmdb_and_notifications() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        let dir = tempfile::tempdir().expect("dir");
+        let sqlite_path = dir.path().join("profile-update.sqlite");
+        let lmdb_path = dir.path().join("profile-update-state");
+        let mut core = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        let active = core
+            .create_profile_persisted("Profile A".to_string())
+            .expect("create A");
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .expect("create B");
+        assert!(core.switch_profile(&active.id));
+        core.persist_profile_state_lmdb(
+            core.profile_manager.list_profiles(),
+            core.profile_manager.get_active_profile_id(),
+        )
+        .expect("seed LMDB profiles");
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+        core.profile_sqlite_persist_fault = true;
+
+        let result = core.update_profile_persisted(
+            &target.id,
+            Some("Changed".to_string()),
+            None,
+            None,
+            None,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::profile_manager::ProfileError::PersistenceFailed(_))
+        ));
+        assert_eq!(core.get_active_profile_id(), Some(&active.id));
+        assert_eq!(
+            core.profile_manager.get_profile(&target.id).unwrap().name,
+            "Profile B"
+        );
+        assert!(events.borrow().is_empty());
+        core.profile_sqlite_persist_fault = false;
+        drop(core);
+
+        let mut restored = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        restored.load_state().expect("restore");
+        assert_eq!(restored.get_active_profile_id(), Some(&active.id));
+        assert_eq!(
+            restored
+                .profile_manager
+                .get_profile(&target.id)
+                .unwrap()
+                .name,
+            "Profile B"
+        );
+    }
+
+    #[test]
+    fn profile_delete_sqlite_failure_rolls_back_memory_lmdb_and_notifications() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        let dir = tempfile::tempdir().expect("dir");
+        let sqlite_path = dir.path().join("profile-delete.sqlite");
+        let lmdb_path = dir.path().join("profile-delete-state");
+        let mut core = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        let active = core
+            .create_profile_persisted("Profile A".to_string())
+            .expect("create A");
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .expect("create B");
+        assert!(core.switch_profile(&active.id));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        core.on_update(Box::new(move |update| captured.borrow_mut().push(update)));
+        core.profile_sqlite_persist_fault = true;
+
+        let outcome = core.delete_profile_detailed(&target.id);
+
+        assert_eq!(
+            outcome,
+            maho_types::profile::ProfileDeleteOutcome::PersistenceFailed
+        );
+        assert_eq!(core.get_active_profile_id(), Some(&active.id));
+        assert!(core.profile_manager.get_profile(&target.id).is_some());
+        assert!(events.borrow().is_empty());
+        core.profile_sqlite_persist_fault = false;
+        drop(core);
+
+        let mut restored = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        restored.load_state().expect("restore");
+        assert_eq!(restored.get_active_profile_id(), Some(&active.id));
+        assert!(restored.profile_manager.get_profile(&target.id).is_some());
+    }
+
+    #[test]
+    fn profile_lmdb_failure_does_not_reach_sqlite_or_mutate_memory() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        let dir = tempfile::tempdir().expect("dir");
+        let sqlite_path = dir.path().join("profile-lmdb.sqlite");
+        let lmdb_path = dir.path().join("profile-lmdb-state");
+        let mut core = MahoCore::new()
+            .with_storage(sqlite_path.to_str().expect("utf8"))
+            .with_lmdb_storage(&lmdb_path);
+        let target = core
+            .create_profile_persisted("Profile B".to_string())
+            .expect("create B");
+        let active_id = core.get_active_profile_id().cloned();
+        core.profile_lmdb_persist_fault = true;
+
+        let result = core.update_profile_persisted(
+            &target.id,
+            Some("Changed".to_string()),
+            None,
+            None,
+            None,
+        );
+        let outcome = core.delete_profile_detailed(&target.id);
+
+        assert!(matches!(
+            result,
+            Err(crate::profile_manager::ProfileError::PersistenceFailed(_))
+        ));
+        assert_eq!(
+            outcome,
+            maho_types::profile::ProfileDeleteOutcome::PersistenceFailed
+        );
+        assert_eq!(core.get_active_profile_id(), active_id.as_ref());
+        assert_eq!(
+            core.profile_manager.get_profile(&target.id).unwrap().name,
+            "Profile B"
+        );
+        core.profile_lmdb_persist_fault = false;
+        drop(core);
+
+        let mut restored = MahoCore::new().with_storage(sqlite_path.to_str().expect("utf8"));
+        restored.load_persisted_data().expect("restore SQLite");
+        assert_eq!(
+            restored
+                .profile_manager
+                .get_profile(&target.id)
+                .unwrap()
+                .name,
+            "Profile B"
+        );
+    }
+
+    #[test]
+    fn rejected_boost_update_emits_no_update_event() {
+        let mut core = MahoCore::new();
+        let boost = core.create_temp_boost_persisted("example.com".to_string());
+        let updates = core.handle_event(ShellEvent::UpdateBoost {
+            boost_id: boost.id.clone(),
+            changes: BoostUpdate {
+                custom_css: Some("x".repeat(256 * 1024 + 1)),
+                ..Default::default()
+            },
+        });
+
+        assert!(updates.is_empty());
+        assert_eq!(
+            core.boost_manager
+                .get_boost(&boost.id)
+                .expect("boost")
+                .custom_css,
+            ""
+        );
+    }
 }
 
 impl std::fmt::Display for PersistenceError {
@@ -1765,6 +2229,10 @@ pub struct MahoCore {
     vault_item_persist_fault: bool,
     #[cfg(test)]
     vault_initialization_persist_fault: bool,
+    #[cfg(test)]
+    profile_sqlite_persist_fault: bool,
+    #[cfg(test)]
+    profile_lmdb_persist_fault: bool,
 }
 
 impl Default for MahoCore {
@@ -2095,6 +2563,10 @@ impl MahoCore {
             vault_item_persist_fault: false,
             #[cfg(test)]
             vault_initialization_persist_fault: false,
+            #[cfg(test)]
+            profile_sqlite_persist_fault: false,
+            #[cfg(test)]
+            profile_lmdb_persist_fault: false,
         };
 
         core
@@ -2442,6 +2914,31 @@ impl MahoCore {
         }
 
         Ok(())
+    }
+
+    fn persist_profile_state_lmdb(
+        &self,
+        profiles: &[maho_types::profile::ProfileConfig],
+        active_profile_id: Option<&maho_types::identifiers::ProfileId>,
+    ) -> Result<(), PersistenceError> {
+        let Some(lmdb) = self.lmdb_storage.as_ref() else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if self.profile_lmdb_persist_fault {
+            return Err(PersistenceError::Storage(
+                "injected profile LMDB persistence failure".to_string(),
+            ));
+        }
+        let profiles_json = serde_json::to_vec(profiles)
+            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+        let active_profile_json = serde_json::to_vec(&active_profile_id)
+            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+        lmdb.put_batch(&[
+            ("profiles", profiles_json.as_slice()),
+            ("active_profile_id", active_profile_json.as_slice()),
+        ])
+        .map_err(|error| PersistenceError::Storage(error.to_string()))
     }
 
     fn persist_lmdb_now_partial(&self, bits: u8) {
@@ -3801,25 +4298,42 @@ impl MahoCore {
         }
     }
 
-    fn persist_profile(&self, profile: &maho_types::profile::ProfileConfig) {
-        if let Some(ref storage) = self.storage {
-            match serde_json::to_string(profile) {
-                Ok(json) => {
-                    if let Err(e) = storage.save_profile(profile.id.as_ref(), &json) {
-                        eprintln!("Failed to persist profile {}: {}", profile.id, e);
-                    }
-                }
-                Err(e) => eprintln!("Failed to serialize profile {}: {}", profile.id, e),
-            }
+    fn persist_profile(
+        &self,
+        profile: &maho_types::profile::ProfileConfig,
+    ) -> Result<(), PersistenceError> {
+        let Some(storage) = self.storage.as_ref() else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if self.profile_sqlite_persist_fault {
+            return Err(PersistenceError::Storage(
+                "injected profile SQLite persistence failure".to_string(),
+            ));
         }
+        let json = serde_json::to_string(profile)
+            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+        storage
+            .save_profile(profile.id.as_ref(), &json)
+            .map_err(|error| PersistenceError::Storage(error.to_string()))
     }
 
-    fn delete_persisted_profile(&self, id: &maho_types::identifiers::ProfileId) {
-        if let Some(ref storage) = self.storage {
-            if let Err(e) = storage.delete_profile(id.as_ref()) {
-                eprintln!("Failed to delete persisted profile {}: {}", id, e);
-            }
+    fn delete_persisted_profile(
+        &self,
+        id: &maho_types::identifiers::ProfileId,
+    ) -> Result<(), PersistenceError> {
+        let Some(storage) = self.storage.as_ref() else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if self.profile_sqlite_persist_fault {
+            return Err(PersistenceError::Storage(
+                "injected profile SQLite persistence failure".to_string(),
+            ));
         }
+        storage
+            .delete_profile(id.as_ref())
+            .map_err(|error| PersistenceError::Storage(error.to_string()))
     }
 
     fn persist_boost(&self, boost: &Boost) {
@@ -3900,19 +4414,22 @@ impl MahoCore {
         boost
     }
 
-    pub fn update_boost_persisted(&mut self, boost_id: &BoostId, changes: BoostUpdate) {
-        self.boost_manager.update(boost_id, changes);
-        if let Some(boost) = self.boost_manager.get_boost(boost_id) {
-            self.persist_boost(boost);
-            if let Ok(payload) = serde_json::to_string(boost) {
-                self.push_sync_entity(
-                    SyncEntityType::Boost,
-                    boost_id.as_ref().to_string(),
-                    payload,
-                    false,
-                );
-            }
+    pub fn update_boost_persisted(
+        &mut self,
+        boost_id: &BoostId,
+        changes: BoostUpdate,
+    ) -> Option<Boost> {
+        let boost = self.boost_manager.update(boost_id, changes)?;
+        self.persist_boost(&boost);
+        if let Ok(payload) = serde_json::to_string(&boost) {
+            self.push_sync_entity(
+                SyncEntityType::Boost,
+                boost_id.as_ref().to_string(),
+                payload,
+                false,
+            );
         }
+        Some(boost)
     }
 
     pub fn delete_boost_persisted(&mut self, boost_id: &BoostId) -> Option<Boost> {
@@ -3929,11 +4446,14 @@ impl MahoCore {
         boost
     }
 
-    pub fn set_active_boost_persisted(&mut self, domain: &str, boost_id: Option<BoostId>) {
-        self.boost_manager.set_active(domain, boost_id.clone());
+    pub fn set_active_boost_persisted(&mut self, domain: &str, boost_id: Option<BoostId>) -> bool {
+        if !self.boost_manager.set_active(domain, boost_id.clone()) {
+            return false;
+        }
         if let Some(ref storage) = self.storage {
             let _ = storage.set_active_boost(domain, boost_id.as_ref().map(|id| id.as_ref()));
         }
+        true
     }
 
     pub fn get_active_boost_for_domain(&self, domain: &str) -> Option<Boost> {
@@ -3974,12 +4494,12 @@ impl MahoCore {
         Some(boost)
     }
 
-    pub fn discard_boost_persisted(&mut self, boost_id: &BoostId) -> Option<BoostId> {
+    pub fn discard_boost_persisted(&mut self, boost_id: &BoostId) -> Option<Option<BoostId>> {
         let domain = self.boost_manager.get_boost(boost_id)?.domain.clone();
         let prev = self.boost_manager.discard_boost(boost_id)?;
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_boost(boost_id.as_ref());
-            let _ = storage.set_active_boost(&domain, Some(prev.as_ref()));
+            let _ = storage.set_active_boost(&domain, prev.as_ref().map(|id| id.as_ref()));
         }
         Some(prev)
     }
@@ -5170,7 +5690,14 @@ impl MahoCore {
                 return vec![];
             }
             ShellEvent::DeleteProfile { profile_id } => {
-                self.delete_profile(profile_id);
+                let outcome = self.delete_profile_detailed(profile_id);
+                if let Some(code) = outcome.error_code() {
+                    return vec![Self::make_error_update(
+                        "delete_profile",
+                        code,
+                        Self::profile_delete_error_message(&outcome),
+                    )];
+                }
                 return vec![];
             }
             ShellEvent::UpdateProfile {
@@ -5180,20 +5707,18 @@ impl MahoCore {
                 download_path,
                 archive_timeout_hours,
             } => {
-                if let Some(profile) = self.update_profile_persisted(
+                match self.update_profile_persisted(
                     profile_id,
                     name.clone(),
                     avatar_color.clone(),
                     download_path.clone(),
                     archive_timeout_hours.map(|hours| Some(hours as f64)),
                 ) {
-                    return vec![CoreUpdate::ProfileUpdated { profile }];
+                    Ok(profile) => return vec![CoreUpdate::ProfileUpdated { profile }],
+                    Err(error) => {
+                        return vec![Self::profile_update_error_to_update(error)];
+                    }
                 }
-                return vec![Self::make_error_update(
-                    "update_profile",
-                    "PROFILE_NOT_FOUND",
-                    "Profile not found",
-                )];
             }
             ShellEvent::SwitchProfile { profile_id } => {
                 if self.profile_manager.switch_profile(profile_id) {
@@ -5311,19 +5836,20 @@ impl MahoCore {
                 return vec![CoreUpdate::BoostCreated { boost }];
             }
             ShellEvent::UpdateBoost { boost_id, changes } => {
-                self.update_boost_persisted(boost_id, changes.clone());
-                if let Some(boost) = self.boost_manager.get_boost(boost_id).cloned() {
+                if let Some(boost) = self.update_boost_persisted(boost_id, changes.clone()) {
                     let boost_id = boost_id.clone();
                     return vec![CoreUpdate::BoostUpdated { boost_id, boost }];
                 }
                 return vec![];
             }
             ShellEvent::SetActiveBoost { domain, boost_id } => {
-                self.set_active_boost_persisted(domain, boost_id.clone());
-                return vec![CoreUpdate::BoostActiveChanged {
-                    domain: domain.clone(),
-                    active_boost_id: boost_id.clone(),
-                }];
+                if self.set_active_boost_persisted(domain, boost_id.clone()) {
+                    return vec![CoreUpdate::BoostActiveChanged {
+                        domain: domain.clone(),
+                        active_boost_id: boost_id.clone(),
+                    }];
+                }
+                return vec![];
             }
             ShellEvent::DeleteBoost { boost_id } => {
                 if let Some(deleted) = self.delete_boost_persisted(boost_id) {
@@ -6621,7 +7147,12 @@ impl MahoCore {
         name: String,
     ) -> Result<maho_types::profile::ProfileConfig, crate::profile_manager::ProfileError> {
         let profile = self.profile_manager.create_profile(name)?.clone();
-        self.persist_profile(&profile);
+        if let Err(error) = self.persist_profile(&profile) {
+            let _ = self.profile_manager.delete_profile(&profile.id);
+            return Err(crate::profile_manager::ProfileError::PersistenceFailed(
+                error.to_string(),
+            ));
+        }
         let update = CoreUpdate::ProfileCreated {
             profile: profile.clone(),
         };
@@ -6631,45 +7162,104 @@ impl MahoCore {
         Ok(profile)
     }
 
-    pub fn delete_profile(&mut self, id: &maho_types::identifiers::ProfileId) -> bool {
-        let spaces_using_profile = self
+    fn profile_delete_error_message(
+        outcome: &maho_types::profile::ProfileDeleteOutcome,
+    ) -> &'static str {
+        use maho_types::profile::ProfileDeleteOutcome;
+
+        match outcome {
+            ProfileDeleteOutcome::Deleted => "",
+            ProfileDeleteOutcome::Protected => "The default profile cannot be deleted",
+            ProfileDeleteOutcome::NotFound => "Profile not found",
+            ProfileDeleteOutcome::InUse => "Remove this profile from all spaces before deleting",
+            ProfileDeleteOutcome::FinalProfile => "The final profile cannot be deleted",
+            ProfileDeleteOutcome::PersistenceFailed => "Profile deletion could not be persisted",
+        }
+    }
+
+    pub fn delete_profile_detailed(
+        &mut self,
+        id: &maho_types::identifiers::ProfileId,
+    ) -> maho_types::profile::ProfileDeleteOutcome {
+        use maho_types::profile::ProfileDeleteOutcome;
+
+        let Some(profile) = self.profile_manager.get_profile(id) else {
+            return ProfileDeleteOutcome::NotFound;
+        };
+        if profile.data_store_id.is_none() {
+            return ProfileDeleteOutcome::Protected;
+        }
+        if self.profile_manager.list_profiles().len() <= 1 {
+            return ProfileDeleteOutcome::FinalProfile;
+        }
+        if self
             .space_manager
             .get_all_spaces()
             .iter()
-            .any(|s| s.profile_id == *id);
-
-        if spaces_using_profile {
-            let update = CoreUpdate::Error {
-                context: "delete_profile".to_string(),
-                error: maho_types::events::core_update::MahoError {
-                    code: "PROFILE_IN_USE".to_string(),
-                    message: "Remove this profile from all spaces before deleting".to_string(),
-                    details: None,
-                },
-            };
-            for listener in self.update_listeners.borrow().iter() {
-                listener(update.clone());
-            }
-            return false;
+            .any(|space| space.profile_id == *id)
+        {
+            return ProfileDeleteOutcome::InUse;
         }
 
-        let data_store_id = self
-            .profile_manager
-            .get_profile(id)
-            .and_then(|p| p.data_store_id.clone());
-
-        let deleted = self.profile_manager.delete_profile(id);
-        if deleted {
-            self.delete_persisted_profile(id);
-            let update = CoreUpdate::ProfileDeleted {
-                profile_id: id.clone(),
-                data_store_id,
-            };
-            for listener in self.update_listeners.borrow().iter() {
-                listener(update.clone());
-            }
+        let data_store_id = profile.data_store_id.clone();
+        let previous_profiles = self.profile_manager.list_profiles().to_vec();
+        let previous_active = self.profile_manager.get_active_profile_id().cloned();
+        let mut candidate = self.profile_manager.clone();
+        let outcome = candidate.delete_profile(id);
+        if !outcome.is_deleted() {
+            return outcome;
         }
-        deleted
+
+        if self
+            .persist_profile_state_lmdb(
+                candidate.list_profiles(),
+                candidate.get_active_profile_id(),
+            )
+            .is_err()
+        {
+            return ProfileDeleteOutcome::PersistenceFailed;
+        }
+        if self.delete_persisted_profile(id).is_err() {
+            let _ = self.persist_profile_state_lmdb(&previous_profiles, previous_active.as_ref());
+            return ProfileDeleteOutcome::PersistenceFailed;
+        }
+
+        self.profile_manager = candidate;
+        let update = CoreUpdate::ProfileDeleted {
+            profile_id: id.clone(),
+            data_store_id,
+        };
+        for listener in self.update_listeners.borrow().iter() {
+            listener(update.clone());
+        }
+        ProfileDeleteOutcome::Deleted
+    }
+
+    pub fn delete_profile(&mut self, id: &maho_types::identifiers::ProfileId) -> bool {
+        let outcome = self.delete_profile_detailed(id);
+        if let Some(code) = outcome.error_code() {
+            self.emit_error(
+                "delete_profile",
+                code,
+                Self::profile_delete_error_message(&outcome),
+            );
+        }
+        outcome.is_deleted()
+    }
+
+    fn profile_update_error_to_update(error: crate::profile_manager::ProfileError) -> CoreUpdate {
+        use crate::profile_manager::ProfileError;
+
+        let code = match &error {
+            ProfileError::EmptyName => "PROFILE_NAME_EMPTY",
+            ProfileError::DuplicateName(_) => "PROFILE_NAME_DUPLICATE",
+            ProfileError::NotFound => "PROFILE_NOT_FOUND",
+            ProfileError::InvalidAvatarColor(_) => "PROFILE_AVATAR_COLOR_INVALID",
+            ProfileError::InvalidArchiveTimeout => "PROFILE_ARCHIVE_TIMEOUT_INVALID",
+            ProfileError::PersistenceFailed(_) => "PROFILE_PERSISTENCE_FAILED",
+            ProfileError::LimitReached(_) | ProfileError::InternalError => "PROFILE_UPDATE_FAILED",
+        };
+        Self::make_error_update("update_profile", code, &error.to_string())
     }
 
     pub fn update_profile(
@@ -6679,7 +7269,7 @@ impl MahoCore {
         avatar_color: Option<String>,
         download_path: Option<String>,
         archive_timeout_hours: Option<Option<f64>>,
-    ) -> Option<maho_types::profile::ProfileConfig> {
+    ) -> Result<maho_types::profile::ProfileConfig, crate::profile_manager::ProfileError> {
         let profile = self
             .profile_manager
             .update_profile(id, name, avatar_color, download_path, archive_timeout_hours)?
@@ -6690,7 +7280,7 @@ impl MahoCore {
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
         }
-        Some(profile)
+        Ok(profile)
     }
 
     pub fn update_profile_persisted(
@@ -6700,24 +7290,36 @@ impl MahoCore {
         avatar_color: Option<String>,
         download_path: Option<String>,
         archive_timeout_hours: Option<Option<f64>>,
-    ) -> Option<maho_types::profile::ProfileConfig> {
-        let result = self
-            .profile_manager
-            .update_profile(id, name, avatar_color, download_path, archive_timeout_hours)
-            .cloned();
-        if result.is_some() {
-            self.persist_lmdb_now_partial(LMDB_DIRTY_PROFILES);
+    ) -> Result<maho_types::profile::ProfileConfig, crate::profile_manager::ProfileError> {
+        let previous_profiles = self.profile_manager.list_profiles().to_vec();
+        let active_profile_id = self.profile_manager.get_active_profile_id().cloned();
+        let mut candidate = self.profile_manager.clone();
+        let profile = candidate
+            .update_profile(id, name, avatar_color, download_path, archive_timeout_hours)?
+            .clone();
+
+        self.persist_profile_state_lmdb(candidate.list_profiles(), active_profile_id.as_ref())
+            .map_err(|error| {
+                crate::profile_manager::ProfileError::PersistenceFailed(error.to_string())
+            })?;
+        if let Err(error) = self.persist_profile(&profile) {
+            let _ = self.persist_profile_state_lmdb(&previous_profiles, active_profile_id.as_ref());
+            return Err(crate::profile_manager::ProfileError::PersistenceFailed(
+                error.to_string(),
+            ));
         }
-        let switched = self.profile_manager.switch_profile(id);
-        if switched {
-            let update = CoreUpdate::ActiveProfileChanged {
-                profile_id: id.clone(),
-            };
-            for listener in self.update_listeners.borrow().iter() {
-                listener(update.clone());
-            }
+
+        self.profile_manager = candidate;
+        let update = CoreUpdate::ProfileUpdated {
+            profile: profile.clone(),
+        };
+        self.emitted_during_dispatch
+            .borrow_mut()
+            .push(update.clone());
+        for listener in self.update_listeners.borrow().iter() {
+            listener(update.clone());
         }
-        result
+        Ok(profile)
     }
 
     pub fn get_active_profile_id(&self) -> Option<&maho_types::identifiers::ProfileId> {
@@ -7285,10 +7887,7 @@ impl MahoCore {
             .extension_bridge
             .toggle_extension_for_profile(profile_key, extension_id);
         if let Some(enabled) = res {
-            if let Some(cb) = self
-                .extension_bridge
-                .sync_callback_for_profile(profile_key)
-            {
+            if let Some(cb) = self.extension_bridge.sync_callback_for_profile(profile_key) {
                 cb(extension_id, enabled, false);
             }
             let update = CoreUpdate::InstalledExtensionsUpdated;
@@ -7315,10 +7914,7 @@ impl MahoCore {
             .extension_bridge
             .remove_extension_for_profile(profile_key, extension_id);
         if res.is_some() {
-            if let Some(cb) = self
-                .extension_bridge
-                .sync_callback_for_profile(profile_key)
-            {
+            if let Some(cb) = self.extension_bridge.sync_callback_for_profile(profile_key) {
                 cb(extension_id, false, true);
             }
             let update = CoreUpdate::InstalledExtensionsUpdated;
@@ -7471,8 +8067,7 @@ impl MahoCore {
         // H7: emit deletion tombstones for removed extensions. The receive path
         // handles deleted:true, but the send path never produced them → uninstalls
         // never propagated. Must run before the mirror is replaced below.
-        let new_ids: std::collections::HashSet<&str> =
-            exts.iter().map(|e| e.id.as_str()).collect();
+        let new_ids: std::collections::HashSet<&str> = exts.iter().map(|e| e.id.as_str()).collect();
         let removed_ids: Vec<String> = self
             .extension_bridge
             .extension_ids_for_profile(profile_key)
@@ -7535,10 +8130,31 @@ impl MahoCore {
         &self,
         url: &str,
     ) -> Vec<maho_types::traits::shell_renderer::BoostViewModel> {
-        let host = extract_domain_from_url(url);
-        let parts: Vec<&str> = host.as_deref().unwrap_or("").split('.').collect();
+        let Some(host) = extract_domain_from_url(url) else {
+            return vec![];
+        };
+        if host.parse::<std::net::IpAddr>().is_ok() {
+            return self
+                .boost_manager
+                .get_active(&host)
+                .map(|active| {
+                    vec![maho_types::traits::shell_renderer::BoostViewModel {
+                        id: active.id.clone(),
+                        domain: active.domain.clone(),
+                        name: active.name.clone(),
+                        custom_css: Some(self.boost_manager.compose_css(&active, None)),
+                        enabled: true,
+                    }]
+                })
+                .unwrap_or_default();
+        }
+        let registrable = psl::domain_str(&host);
+        let parts: Vec<&str> = host.split('.').collect();
         for i in 0..parts.len() {
             let domain = parts[i..].join(".");
+            if registrable.is_some_and(|registrable| domain.len() < registrable.len()) {
+                break;
+            }
             if let Some(active) = self.boost_manager.get_active(&domain) {
                 let enabled = true;
                 return vec![maho_types::traits::shell_renderer::BoostViewModel {
@@ -7548,6 +8164,9 @@ impl MahoCore {
                     custom_css: Some(self.boost_manager.compose_css(&active, None)),
                     enabled,
                 }];
+            }
+            if registrable == Some(domain.as_str()) {
+                break;
             }
         }
         vec![]
@@ -12443,10 +13062,7 @@ impl CommandBarInterface for CommandBarEngine {
 }
 
 fn extract_domain_from_url(url: &str) -> Option<String> {
-    let host = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
-    let host = host.split('/').next()?.split(':').next()?;
-    Some(host.to_string())
+    let parsed = reqwest::Url::parse(url).ok()?;
+    matches!(parsed.scheme(), "http" | "https")
+        .then(|| parsed.host_str().map(str::to_ascii_lowercase))?
 }

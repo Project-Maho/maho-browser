@@ -531,43 +531,25 @@ std::string GetBoostInjectionCss(MahoCore* core, const char* url) {
     return std::string();
   }
 
-  GURL gurl(url);
-  if (!gurl.is_valid() || !gurl.has_host()) {
+  char* boosts_json = maho_core_get_boosts_for_url(core, url);
+  if (!boosts_json) {
     return std::string();
   }
-  const std::string domain(gurl.host());
-  if (domain.empty()) {
+  auto parsed = base::JSONReader::Read(boosts_json, base::JSON_PARSE_RFC);
+  maho_string_free(boosts_json);
+  if (!parsed || !parsed->is_list() || parsed->GetList().empty()) {
+    VLOG(1) << "[MahoBoost] GetBoostInjectionCss: no active boost for url="
+            << url;
     return std::string();
   }
-
-  char* active_json = maho_core_boost_get_active(core, domain.c_str());
-  if (!active_json) {
-    VLOG(1) << "[MahoBoost] GetBoostInjectionCss: no active boost for domain="
-            << domain;
-    return std::string();
-  }
-
-  auto parsed = base::JSONReader::Read(active_json, base::JSON_PARSE_RFC);
-  maho_string_free(active_json);
-  if (!parsed || !parsed->is_dict()) {
-    return std::string();
-  }
-  const std::string* boost_id = parsed->GetDict().FindString("id");
-  if (!boost_id || boost_id->empty()) {
-    return std::string();
-  }
-
-  char* css = maho_core_boost_compose_css(core, boost_id->c_str());
+  const base::DictValue* boost = parsed->GetList().front().GetIfDict();
+  const std::string* css = boost ? boost->FindString("customCss") : nullptr;
   if (!css) {
-    VLOG(1) << "[MahoBoost] GetBoostInjectionCss: compose_css returned null "
-            << "for boost_id=" << *boost_id << " domain=" << domain;
     return std::string();
   }
-  std::string result(css);
-  maho_string_free(css);
-  VLOG(1) << "[MahoBoost] GetBoostInjectionCss: domain=" << domain
-          << " css_length=" << result.size();
-  return result;
+  VLOG(1) << "[MahoBoost] GetBoostInjectionCss: url=" << url
+          << " css_length=" << css->size();
+  return *css;
 }
 
 std::string CreateTempBoost(MahoCore* core, const char* domain) {

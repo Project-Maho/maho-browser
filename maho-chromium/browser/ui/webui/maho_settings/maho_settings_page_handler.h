@@ -3,11 +3,13 @@
 #ifndef MAHO_BROWSER_UI_WEBUI_MAHO_SETTINGS_MAHO_SETTINGS_PAGE_HANDLER_H_
 #define MAHO_BROWSER_UI_WEBUI_MAHO_SETTINGS_MAHO_SETTINGS_PAGE_HANDLER_H_
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -18,7 +20,11 @@
 #include "components/os_crypt/async/common/encryptor.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
+#include "chrome/browser/profiles/profile_manager_observer.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_hydration.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 #include "maho/browser/updates/maho_update_manager.h"
@@ -44,9 +50,30 @@ namespace device_reauth {
 class DeviceAuthenticator;
 }
 
+namespace maho_settings::testing {
+
+enum class ProfileObservablesDecisionKind { kSnapshot, kRetry, kNull };
+
+struct ProfileObservablesDecision {
+  ProfileObservablesDecisionKind kind;
+  maho_settings::mojom::ProfileObservablesSnapshotPtr snapshot;
+};
+
+ProfileObservablesDecision DecideProfileObservablesSnapshotForTesting(
+    const maho::ProfileCatalogResult& captured_catalog,
+    uint64_t current_registry_revision,
+    const base::FilePath& handler_profile_basename,
+    const std::optional<std::string>& active_profile_id_json,
+    uint32_t attempt);
+
+}  // namespace maho_settings::testing
+
 class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                                  public maho::MahoMailService::Observer,
                                  public maho::MahoUpdateObserver,
+                                 public maho::MahoSpaceProfileBridge::Observer,
+                                 public ProfileObserver,
+                                 public ProfileManagerObserver,
                                  public ui::SelectFileDialog::Listener {
  public:
   MahoSettingsPageHandler(
@@ -57,17 +84,22 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   MahoSettingsPageHandler& operator=(const MahoSettingsPageHandler&) = delete;
   ~MahoSettingsPageHandler() override;
 
-  void OnProfileDeletedForTesting(DeleteProfileCallback callback,
-                                  std::string json_res) {
-    OnProfileDeleted(std::move(callback), json_res);
-  }
-
   // maho::MahoMailService::Observer:
   void OnAccountsChanged() override;
 
   // maho::MahoUpdateObserver:
   void OnUpdateStateChanged(maho::UpdateState state) override;
   void OnUpdateProgress(double percent) override;
+
+  // maho::MahoSpaceProfileBridge::Observer:
+  void OnSpaceProfileBridgeChanged() override;
+
+  // ProfileObserver:
+  void OnProfileWillBeDestroyed(Profile* profile) override;
+
+  // ProfileManagerObserver:
+  void OnProfileMarkedForPermanentDeletion(Profile* profile) override;
+  void OnProfileManagerDestroying() override;
 
   // ui::SelectFileDialog::Listener:
   void FileSelected(const ui::SelectedFileInfo& file, int index) override;
@@ -79,16 +111,344 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   }
   void NotifyShortcutRecorded(maho_settings::mojom::MojoKeyComboPtr key_combo);
 
+  struct SelectedProfileRequestState {
+    std::string selected_id;
+    std::string target_token;
+    std::string attached_id;
+    std::string attached_target_token;
+    uint64_t context_revision = 0;
+    uint64_t profile_revision = 0;
+    uint64_t load_generation = 0;
+    bool attached = false;
+  };
+
+  static uint64_t BeginSelectedProfileRequestForTesting(
+      SelectedProfileRequestState* state,
+      const std::string& canonical_id,
+      const std::string& target_token) {
+    CHECK(state);
+    state->selected_id = canonical_id;
+    state->target_token = target_token;
+    if (!state->attached) {
+      state->attached_id.clear();
+      state->attached_target_token.clear();
+    }
+    return ++state->load_generation;
+  }
+  static bool CompleteSelectedProfileRequestForTesting(
+      SelectedProfileRequestState* state,
+      uint64_t load_generation,
+      const std::string& canonical_id,
+      const std::string& target_token,
+      uint64_t profile_revision) {
+    CHECK(state);
+    if (state->load_generation != load_generation ||
+        state->selected_id != canonical_id ||
+        state->target_token != target_token) {
+      return false;
+    }
+    if (state->attached && state->attached_id == canonical_id &&
+        state->attached_target_token == target_token) {
+      state->profile_revision = profile_revision;
+      return true;
+    }
+    state->attached = true;
+    state->attached_id = canonical_id;
+    state->attached_target_token = target_token;
+    state->profile_revision = profile_revision;
+    ++state->context_revision;
+    return true;
+  }
+  static bool InvalidateSelectedProfileRequestForTesting(
+      SelectedProfileRequestState* state,
+      const std::string& canonical_id,
+      const std::string& target_token) {
+    CHECK(state);
+    if (!state->attached || state->selected_id != canonical_id ||
+        state->target_token != target_token) {
+      return false;
+    }
+    state->selected_id.clear();
+    state->target_token.clear();
+    state->attached_id.clear();
+    state->attached_target_token.clear();
+    state->profile_revision = 0;
+    state->attached = false;
+    ++state->load_generation;
+    ++state->context_revision;
+    return true;
+  }
+  static maho_settings::mojom::SelectedProfileContextPtr
+  BuildSelectedProfileContextForTesting(
+      const SelectedProfileRequestState& state,
+      bool is_host_profile,
+      bool is_active_maho_profile,
+      maho_settings::mojom::ProfileLifecycleState lifecycle_state) {
+    auto context = maho_settings::mojom::SelectedProfileContext::New();
+    context->profile_id = state.selected_id;
+    context->target_token = state.target_token;
+    context->context_revision = state.context_revision;
+    context->profile_revision = state.profile_revision;
+    context->lifecycle_state = lifecycle_state;
+    context->is_host_profile = is_host_profile;
+    context->is_active_maho_profile = is_active_maho_profile;
+    return context;
+  }
+  static maho_settings::mojom::ProfileTargetErrorCode
+  ValidateSelectedProfileIdentityForTesting(
+      const SelectedProfileRequestState& state,
+      const std::string& profile_id,
+      const std::string& target_token,
+      uint64_t expected_context_revision,
+      uint64_t expected_profile_revision) {
+    if (profile_id.empty()) {
+      return maho_settings::mojom::ProfileTargetErrorCode::kInvalidProfileId;
+    }
+    if (!state.attached || profile_id != state.attached_id ||
+        target_token != state.attached_target_token ||
+        profile_id != state.selected_id || target_token != state.target_token) {
+      return maho_settings::mojom::ProfileTargetErrorCode::kStaleContext;
+    }
+    if (expected_context_revision != state.context_revision) {
+      return maho_settings::mojom::ProfileTargetErrorCode::kStaleContext;
+    }
+    if (expected_profile_revision != state.profile_revision) {
+      return maho_settings::mojom::ProfileTargetErrorCode::kStaleProfileRevision;
+    }
+    return maho_settings::mojom::ProfileTargetErrorCode::kNone;
+  }
+  static bool ApplyProfileSettingsMutationForTesting(
+      maho::ProfileRegistryRecord* record,
+      uint64_t* catalog_revision,
+      const std::string* name,
+      const std::string* avatar_color,
+      const std::optional<int32_t>* archive_timeout_hours) {
+    if (!record || !catalog_revision) {
+      return false;
+    }
+    if (name) {
+      record->name = *name;
+    }
+    if (avatar_color) {
+      record->avatar_color = *avatar_color;
+    }
+    if (archive_timeout_hours) {
+      record->archive_timeout_hours = *archive_timeout_hours;
+    }
+    record->revision = ++*catalog_revision;
+    return true;
+  }
+  static maho_settings::mojom::ProfileTargetErrorCode
+  MapProfileUpdateErrorForTesting(const std::string& code) {
+    if (code == "PROFILE_NAME_EMPTY" || code == "PROFILE_NAME_DUPLICATE" ||
+        code == "PROFILE_AVATAR_COLOR_INVALID" ||
+        code == "PROFILE_ARCHIVE_TIMEOUT_INVALID") {
+      return maho_settings::mojom::ProfileTargetErrorCode::kInvalidArgument;
+    }
+    if (code == "PROFILE_NOT_FOUND") {
+      return maho_settings::mojom::ProfileTargetErrorCode::kProfileNotFound;
+    }
+    return maho_settings::mojom::ProfileTargetErrorCode::kInternal;
+  }
+  static bool CanDeleteProfileForTesting(bool is_default,
+                                         bool is_final_ready_profile,
+                                         bool is_host,
+                                         bool has_space_references,
+                                         maho::ProfileLifecycleState lifecycle) {
+    return !is_default && !is_final_ready_profile && !is_host &&
+           !has_space_references &&
+           lifecycle == maho::ProfileLifecycleState::kReady;
+  }
+  static maho_settings::mojom::CurrentBrowserSpaceSnapshotPtr
+  ParseCurrentBrowserSpaceSnapshotForTesting(
+      int32_t focused_browser_session_id,
+      const std::string& selected_space_id,
+      const std::string& spaces_json,
+      const std::string& tabs_json) {
+    if (focused_browser_session_id <= 0 || selected_space_id.empty() ||
+        spaces_json.empty() || tabs_json.empty()) {
+      return nullptr;
+    }
+    std::optional<base::Value> parsed_spaces =
+        base::JSONReader::Read(spaces_json, base::JSON_PARSE_RFC);
+    std::optional<base::Value> parsed_tabs =
+        base::JSONReader::Read(tabs_json, base::JSON_PARSE_RFC);
+    if (!parsed_spaces || !parsed_spaces->is_list() || !parsed_tabs ||
+        !parsed_tabs->is_list()) {
+      return nullptr;
+    }
+
+    maho_settings::mojom::SpaceBasicInfoPtr selected_space;
+    for (const base::Value& item : parsed_spaces->GetList()) {
+      const base::DictValue* dict = item.GetIfDict();
+      if (!dict) {
+        continue;
+      }
+      const std::string* id = dict->FindString("id");
+      if (!id || *id != selected_space_id) {
+        continue;
+      }
+      const std::string* name = dict->FindString("name");
+      if (!name) {
+        return nullptr;
+      }
+      selected_space = maho_settings::mojom::SpaceBasicInfo::New();
+      selected_space->id = *id;
+      selected_space->name = *name;
+      break;
+    }
+    if (!selected_space) {
+      return nullptr;
+    }
+
+    std::vector<std::string> tab_ids;
+    tab_ids.reserve(parsed_tabs->GetList().size());
+    for (const base::Value& item : parsed_tabs->GetList()) {
+      const base::DictValue* dict = item.GetIfDict();
+      const std::string* id = dict ? dict->FindString("id") : nullptr;
+      if (!id || id->empty()) {
+        return nullptr;
+      }
+      tab_ids.push_back(*id);
+    }
+
+    auto snapshot =
+        maho_settings::mojom::CurrentBrowserSpaceSnapshot::New();
+    snapshot->focused_browser_session_id = focused_browser_session_id;
+    snapshot->selected_space = std::move(selected_space);
+    snapshot->assigned_tab_ids = std::move(tab_ids);
+    snapshot->assigned_window_ids = {
+        std::to_string(focused_browser_session_id)};
+    return snapshot;
+  }
+  static bool IsCurrentBrowserSpaceSnapshotProfileAllowedForTesting(
+      bool is_regular_profile,
+      bool is_off_the_record,
+      bool is_guest,
+      bool is_system) {
+    return is_regular_profile && !is_off_the_record && !is_guest && !is_system;
+  }
+  static maho_settings::mojom::ProfileTargetErrorPtr
+  MakeLookupErrorForTesting(
+      maho::ProfileRegistryLookupError error,
+      uint64_t current_context_revision,
+      std::optional<uint64_t> current_profile_revision) {
+    auto target_error = maho_settings::mojom::ProfileTargetError::New();
+    switch (error) {
+      case maho::ProfileRegistryLookupError::kInvalidProfileId:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kInvalidProfileId;
+        target_error->message = "Selected profile ID is invalid.";
+        break;
+      case maho::ProfileRegistryLookupError::kUnknownProfile:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kProfileNotFound;
+        target_error->message = "Selected profile was not found.";
+        break;
+      case maho::ProfileRegistryLookupError::kProfileDeleting:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kProfileDeleting;
+        target_error->message = "Selected profile is being deleted.";
+        break;
+      case maho::ProfileRegistryLookupError::kStaleRevision:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kStaleContext;
+        target_error->message = "Selected profile context is stale.";
+        break;
+      case maho::ProfileRegistryLookupError::kCatalogUnavailable:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kProfileUnavailable;
+        target_error->message =
+            "Selected profile catalog is unavailable.";
+        break;
+      case maho::ProfileRegistryLookupError::kProfileProvisioning:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kProfileUnavailable;
+        target_error->message =
+            "Selected profile is unavailable while provisioning.";
+        break;
+      case maho::ProfileRegistryLookupError::kProfileRepairRequired:
+        target_error->code =
+            maho_settings::mojom::ProfileTargetErrorCode::kProfileUnavailable;
+        target_error->message =
+            "Selected profile is unavailable until repaired.";
+        break;
+      case maho::ProfileRegistryLookupError::kNone:
+        target_error->code = maho_settings::mojom::ProfileTargetErrorCode::kNone;
+        break;
+    }
+    target_error->current_context_revision = current_context_revision;
+    target_error->current_profile_revision = current_profile_revision;
+    return target_error;
+  }
+
   void GetSettings(GetSettingsCallback callback) override;
   void SetSetting(const std::string& key,
                   const std::string& value,
                   SetSettingCallback callback) override;
+  void GetSearchEngines(GetSearchEnginesCallback callback) override;
+  void SetDefaultSearchEngine(
+      const std::string& keyword,
+      SetDefaultSearchEngineCallback callback) override;
+  void GetGlobalSettingsSnapshot(
+      GetGlobalSettingsSnapshotCallback callback) override;
+  void GetSelectedProfileContext(
+      maho_settings::mojom::ProfileTargetPtr target,
+      GetSelectedProfileContextCallback callback) override;
+  void GetSelectedProfileMetadata(
+      maho_settings::mojom::ProfileTargetPtr target,
+      GetSelectedProfileMetadataCallback callback) override;
+  void UpdateSelectedProfileMetadata(
+      maho_settings::mojom::ProfileTargetPtr target,
+      uint64_t expected_context_revision,
+      maho_settings::mojom::ProfileMetadataUpdatePtr update,
+      UpdateSelectedProfileMetadataCallback callback) override;
+  void GetSelectedProfileSearchSettings(
+      maho_settings::mojom::ProfileTargetPtr target,
+      GetSelectedProfileSearchSettingsCallback callback) override;
+  void SetSelectedProfileDefaultSearchEngine(
+      maho_settings::mojom::ProfileTargetPtr target,
+      uint64_t expected_context_revision,
+      const std::string& keyword,
+      uint64_t expected_profile_revision,
+      SetSelectedProfileDefaultSearchEngineCallback callback) override;
+  void SetSelectedProfileSearchSuggestionsEnabled(
+      maho_settings::mojom::ProfileTargetPtr target,
+      uint64_t expected_context_revision,
+      bool enabled,
+      uint64_t expected_profile_revision,
+      SetSelectedProfileSearchSuggestionsEnabledCallback callback) override;
+  void GetSelectedProfileDownloadSettings(
+      maho_settings::mojom::ProfileTargetPtr target,
+      GetSelectedProfileDownloadSettingsCallback callback) override;
+  void SetSelectedProfileDownloadPrompt(
+      maho_settings::mojom::ProfileTargetPtr target,
+      uint64_t expected_context_revision,
+      bool prompt_for_download,
+      uint64_t expected_profile_revision,
+      SetSelectedProfileDownloadPromptCallback callback) override;
+  void SelectSelectedProfileDownloadDirectory(
+      maho_settings::mojom::ProfileTargetPtr target,
+      uint64_t expected_context_revision,
+      uint64_t expected_profile_revision,
+      SelectSelectedProfileDownloadDirectoryCallback callback) override;
+  void GetSelectedProfileArchiveSettings(
+      maho_settings::mojom::ProfileTargetPtr target,
+      GetSelectedProfileArchiveSettingsCallback callback) override;
+  void SetSelectedProfileArchiveTimeout(
+      maho_settings::mojom::ProfileTargetPtr target,
+      uint64_t expected_context_revision,
+      int32_t timeout_hours,
+      uint64_t expected_profile_revision,
+      SetSelectedProfileArchiveTimeoutCallback callback) override;
 
   void GetBrowserVersionInfo(GetBrowserVersionInfoCallback callback) override;
   void CheckForBrowserUpdates() override;
   void ApplyBrowserUpdateAndRestart() override;
 
   void GetProfiles(GetProfilesCallback callback) override;
+  void GetProfileObservablesSnapshot(
+      GetProfileObservablesSnapshotCallback callback) override;
   void CreateProfile(const std::string& name,
                      CreateProfileCallback callback) override;
   void DeleteProfile(const std::string& profile_id,
@@ -146,6 +506,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                         RenameSyncDeviceCallback callback) override;
 
   void GetSpaces(GetSpacesCallback callback) override;
+  void GetCurrentBrowserSpaceSnapshot(
+      GetCurrentBrowserSpaceSnapshotCallback callback) override;
 
   void GetVaultStatus(GetVaultStatusCallback callback) override;
   void GetVaultProviderStatus(GetVaultProviderStatusCallback callback) override;
@@ -267,6 +629,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                            TriggerFilterUpdateCallback callback) override;
 
   void OpenExtensionsPage() override;
+  void OpenChromiumSettingsPage() override;
 
   void SetBYOKKey(const std::string& provider,
                   const std::string& key,
@@ -277,6 +640,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void Login(const std::string& email,
              const std::string& password,
              LoginCallback callback) override;
+  void SignInWithGoogle(SignInWithGoogleCallback callback) override;
   void Logout(LogoutCallback callback) override;
   void GetAccountStatus(GetAccountStatusCallback callback) override;
   void GetBillingInfo(GetBillingInfoCallback callback) override;
@@ -284,6 +648,9 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void GetBillingPortalUrl(GetBillingPortalUrlCallback callback) override;
   void GetBuyCreditsUrl(int32_t pack_size_usd,
                         GetBuyCreditsUrlCallback callback) override;
+  void GetSubscriptionCheckoutUrl(
+      const std::string& tier,
+      GetSubscriptionCheckoutUrlCallback callback) override;
 
   // Mail accounts — thin proxies to the profile-keyed MahoMailService.
   void MailListAccounts(MailListAccountsCallback callback) override;
@@ -291,10 +658,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                       MailAddAccountCallback callback) override;
   void MailDeleteAccount(const std::string& account_id,
                          MailDeleteAccountCallback callback) override;
-  void MailOAuthStartUrl(const std::string& provider,
-                         const std::string& client_id,
-                         const std::string& redirect_uri,
-                         MailOAuthStartUrlCallback callback) override;
+  void MailBeginOAuth(const std::string& provider,
+                      MailBeginOAuthCallback callback) override;
   void MailOAuthComplete(const std::string& state,
                          const std::string& code,
                          MailOAuthCompleteCallback callback) override;
@@ -373,16 +738,6 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                            const std::string& value,
                            MailSetBehaviorPrefCallback callback) override;
 
-  // AI
-  void MailGetAIConfig(const std::string& feature,
-                       MailGetAIConfigCallback callback) override;
-  void MailSetAIConfig(const std::string& feature,
-                       const std::string& config_json,
-                       MailSetAIConfigCallback callback) override;
-  void MailSetAIKey(const std::string& provider,
-                    const std::string& api_key,
-                    MailSetAIKeyCallback callback) override;
-
   // Security (PGP/S-MIME)
   void MailGeneratePgpKey(const std::string& account_id,
                           const std::string& email,
@@ -422,6 +777,60 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                   const std::string& payload) override;
 
  private:
+  void StartProfileObservablesSnapshotRead(
+      GetProfileObservablesSnapshotCallback callback,
+      uint32_t attempt);
+  void OnActiveMahoProfileIdRead(
+      GetProfileObservablesSnapshotCallback callback,
+      uint32_t attempt,
+      maho::ProfileCatalogResult captured_catalog,
+      base::FilePath handler_profile_basename,
+      std::optional<std::string> active_profile_id_json);
+  const maho::ProfileRegistryRecord* FindRegistryRecord(
+      const std::string& canonical_id) const;
+  maho_settings::mojom::SelectedProfileContextPtr BuildSelectedProfileContext()
+      const;
+  maho_settings::mojom::ProfileTargetErrorPtr MakeProfileTargetError(
+      maho_settings::mojom::ProfileTargetErrorCode code,
+      const std::string& message) const;
+  void OnSelectedProfileLoaded(
+      uint64_t load_generation,
+      std::string canonical_id,
+      std::string target_token,
+      base::FilePath expected_path,
+      uint64_t record_revision,
+      GetSelectedProfileContextCallback callback,
+      Profile* loaded_profile);
+  void AttachSelectedProfile(const std::string& canonical_id,
+                             const std::string& target_token,
+                             uint64_t record_revision,
+                             Profile* selected_profile);
+  void InvalidateSelectedProfileContext();
+  maho_settings::mojom::ProfileTargetErrorPtr ValidateSelectedProfileTarget(
+      const maho_settings::mojom::ProfileTargetPtr& target,
+      std::optional<uint64_t> expected_context_revision,
+      std::optional<uint64_t> expected_profile_revision) const;
+  void OnProfileMetadataUpdated(
+      std::string profile_id,
+      uint64_t context_revision,
+      uint64_t profile_revision,
+      UpdateSelectedProfileMetadataCallback callback,
+      std::string json_result);
+  void OnProfileArchiveSettingsLoaded(
+      std::string profile_id,
+      uint64_t context_revision,
+      uint64_t profile_revision,
+      GetSelectedProfileArchiveSettingsCallback callback,
+      std::string json_result);
+  void OnProfileArchiveTimeoutUpdated(
+      std::string profile_id,
+      uint64_t context_revision,
+      uint64_t profile_revision,
+      SetSelectedProfileArchiveTimeoutCallback callback,
+      std::string json_result);
+  void OnSelectedProfileDownloadDirectoryChosen(
+      const base::FilePath& directory);
+
   static const char* GetPrefPath(const std::string& maho_key);
   std::string ReadSetting(const std::string& maho_key);
   void OnPrefChanged(const std::string& pref_name);
@@ -446,7 +855,13 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void OnRelayLoginCompleted(LoginCallback callback,
                              bool ok,
                              const std::string& error_message);
-  void OnProfileDeleted(DeleteProfileCallback callback, std::string json_res);
+  void OnProfileCreatedInCore(
+      CreateProfileCallback callback,
+      maho_settings::mojom::ProfileInfoPtr profile);
+  void OnChromiumProfileCreated(
+      CreateProfileCallback callback,
+      maho_settings::mojom::ProfileInfoPtr profile,
+      Profile* chromium_profile);
   void OnSubscriptionResponse(GetBillingInfoCallback callback,
                               bool refreshed_once,
                               std::unique_ptr<network::SimpleURLLoader> loader,
@@ -460,6 +875,20 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   PrefChangeRegistrar pref_registrar_;
   raw_ptr<PrefService> local_state_;
   PrefChangeRegistrar local_state_pref_registrar_;
+
+  raw_ptr<Profile> selected_profile_ = nullptr;
+  base::ScopedObservation<Profile, ProfileObserver>
+      selected_profile_observation_{this};
+  std::string selected_profile_id_;
+  std::string selected_profile_target_token_;
+  uint64_t selected_profile_context_revision_ = 0;
+  uint64_t selected_profile_revision_ = 0;
+  uint64_t selected_profile_load_generation_ = 0;
+  bool selected_profile_attached_ = false;
+  bool observing_profile_manager_ = false;
+  base::ScopedObservation<maho::MahoSpaceProfileBridge,
+                          maho::MahoSpaceProfileBridge::Observer>
+      profile_bridge_observation_{this};
 
   base::OneShotTimer notify_timer_;
   std::string last_emitted_snapshot_;
@@ -512,6 +941,13 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   raw_ptr<MahoPasswordImportJob> password_import_job_ = nullptr;
   scoped_refptr<ui::SelectFileDialog> password_import_select_file_dialog_;
   SelectPasswordImportFileCallback password_import_file_callback_;
+  scoped_refptr<ui::SelectFileDialog> download_directory_select_file_dialog_;
+  SelectSelectedProfileDownloadDirectoryCallback
+      download_directory_select_callback_;
+  std::string download_directory_profile_id_;
+  std::string download_directory_target_token_;
+  uint64_t download_directory_context_revision_ = 0;
+  uint64_t download_directory_profile_revision_ = 0;
   double last_known_credit_balance_ = -1.0;
   double last_known_tier_ceiling_ = -1.0;
 

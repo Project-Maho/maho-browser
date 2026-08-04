@@ -98,20 +98,26 @@ bool MahoSpaceProfileBridge::HydrateFromCore() {
     return false;
   }
 
-  char* spaces_json_cstr = maho_core_get_space_view_models(core);
   char* active_space_id_json_cstr = maho_core_get_active_space_id(core);
-  if (!spaces_json_cstr || !active_space_id_json_cstr) {
-    maho_string_free(spaces_json_cstr);
+  if (!active_space_id_json_cstr || !ReconcileProfileRegistryFromCore()) {
     maho_string_free(active_space_id_json_cstr);
     return false;
   }
 
-  std::string spaces_json(spaces_json_cstr);
   std::string active_space_id_json(active_space_id_json_cstr);
-  maho_string_free(spaces_json_cstr);
   maho_string_free(active_space_id_json_cstr);
-  return HydrateFromSerializedStateForTesting(spaces_json,
-                                              active_space_id_json);
+  std::optional<SpaceProfileHydrationState> state =
+      BuildSpaceProfileHydrationStateFromCatalog(profile_catalog_,
+                                                 active_space_id_json);
+  if (!state) {
+    return false;
+  }
+  SpaceProfileHydrationChanges changes = ReplaceSpaceProfileHydrationState(
+      std::move(*state), &space_to_profile_, &active_space_id_);
+  if (changes.structural || changes.active_space) {
+    NotifyChanged(changes.structural);
+  }
+  return true;
 }
 
 bool MahoSpaceProfileBridge::HydrateFromSerializedStateForTesting(

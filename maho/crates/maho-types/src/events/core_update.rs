@@ -5,6 +5,7 @@ use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::boost::Boost;
 use crate::chat::ChatRequestContext;
 use crate::common::{ImageData, Url};
+use crate::content_blocking::ContentBlockerStateChange;
 use crate::identifiers::{BoostId, DownloadId, FolderId, ProfileId, SpaceId, TabId, WindowId};
 use crate::passwords::SavedPassword;
 use crate::profile::ProfileConfig;
@@ -270,10 +271,7 @@ pub enum CoreUpdate {
     ContentRulesCompiled {
         rule_count: usize,
     },
-    ContentBlockerStateChanged {
-        enabled: bool,
-        popup_blocking: bool,
-    },
+    ContentBlockerStateChanged(ContentBlockerStateChange),
     FilterListUpdated {
         id: String,
         rule_count: usize,
@@ -517,7 +515,7 @@ impl CoreUpdate {
         matches!(
             self,
             Self::SettingsChanged { .. }
-                | Self::ContentBlockerStateChanged { .. }
+                | Self::ContentBlockerStateChanged(..)
                 | Self::FilterListUpdated { .. }
                 | Self::ExtensionToggled { .. }
                 | Self::ExtensionRemoved { .. }

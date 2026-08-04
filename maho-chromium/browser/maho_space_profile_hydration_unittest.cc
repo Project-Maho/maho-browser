@@ -5,8 +5,10 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/files/file_path.h"
+#include "base/json/string_escape.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho {
@@ -29,6 +31,177 @@ TEST(MahoSpaceProfileHydrationTest, ParsesAndFiltersSerializedSnapshot) {
             base::FilePath::FromASCII("MahoProfile_alpha"));
   EXPECT_FALSE(state->space_to_profile.contains("invalid"));
   EXPECT_EQ(state->active_space_id, "personal");
+}
+
+TEST(MahoSpaceProfileHydrationTest, BuildsAuthoritativeProfileCatalog) {
+  constexpr char kGeneratedDefaultProfileId[] =
+      "2fd9d16c-cf31-4a71-91dd-783f87420dd2";
+  constexpr char kWorkProfileId[] =
+      "39b56c04-70eb-49d5-ae4b-d858b18c0f71";
+  const std::string profiles_json =
+      R"([{"id":")" + std::string(kGeneratedDefaultProfileId) +
+      R"(","name":"Default","avatarColor":"#007AFF","archiveTimeoutHours":12,"dataStoreId":null},{"id":")" +
+      std::string(kWorkProfileId) +
+      R"(","name":"Work","avatarColor":"#AF52DE","archiveTimeoutHours":null,"dataStoreId":"work-store"}])";
+  const std::string active_id_json =
+      R"(")" + std::string(kWorkProfileId) + R"(")";
+  const std::string spaces_json =
+      R"([{"id":"personal","profileId":")" +
+      std::string(kGeneratedDefaultProfileId) +
+      R"("},{"id":"work","profileId":")" +
+      std::string(kWorkProfileId) + R"("}])";
+
+  ProfileCatalogResult result =
+      ParseProfileCatalog(profiles_json, active_id_json, spaces_json, 7);
+
+  ASSERT_EQ(result.error, ProfileCatalogError::kNone);
+  ASSERT_EQ(result.records.size(), 2u);
+  EXPECT_EQ(result.records[0].maho_id, kGeneratedDefaultProfileId);
+  EXPECT_EQ(result.records[0].chromium_basename,
+            base::FilePath::FromASCII("Default"));
+  EXPECT_TRUE(result.records[0].is_default);
+  EXPECT_FALSE(result.records[0].is_active);
+  EXPECT_EQ(result.records[0].space_ids,
+            std::vector<std::string>({"personal"}));
+  EXPECT_EQ(result.records[1].maho_id, kWorkProfileId);
+  EXPECT_EQ(result.records[1].chromium_basename,
+            base::FilePath::FromASCII("MahoProfile_" +
+                                      std::string(kWorkProfileId)));
+  EXPECT_EQ(result.records[1].avatar_color, "#AF52DE");
+  EXPECT_FALSE(result.records[1].archive_timeout_hours.has_value());
+  EXPECT_FALSE(result.records[1].is_default);
+  EXPECT_TRUE(result.records[1].is_active);
+  EXPECT_EQ(result.records[1].space_ids,
+            std::vector<std::string>({"work"}));
+  EXPECT_EQ(result.records[1].revision, 7u);
+  EXPECT_EQ(result.records[1].lifecycle, ProfileLifecycleState::kReady);
+}
+
+TEST(MahoSpaceProfileHydrationTest,
+     LegacyMissingProfileIdMapsToGeneratedDefaultProfile) {
+  constexpr char kDefaultId[] = "2fd9d16c-cf31-4a71-91dd-783f87420dd2";
+  ProfileCatalogResult catalog = ParseProfileCatalog(
+      R"([{"id":")" + std::string(kDefaultId) +
+          R"(","name":"Default","dataStoreId":null}])",
+      R"(")" + std::string(kDefaultId) + R"(")",
+      R"([{"id":"legacy-space"}])", 2);
+
+  ASSERT_EQ(catalog.error, ProfileCatalogError::kNone);
+  ASSERT_EQ(catalog.records.size(), 1u);
+  EXPECT_EQ(catalog.records[0].space_ids,
+            std::vector<std::string>({"legacy-space"}));
+}
+
+TEST(MahoSpaceProfileHydrationTest, CatalogErrorsAreStructuredAndFailClosed) {
+  constexpr char kDefaultId[] = "2fd9d16c-cf31-4a71-91dd-783f87420dd2";
+  const std::string valid_profiles =
+      R"([{"id":")" + std::string(kDefaultId) +
+      R"(","name":"Default","dataStoreId":null}])";
+
+  EXPECT_EQ(ParseProfileCatalog("{", R"("active")", "[]", 1).error,
+            ProfileCatalogError::kMalformedProfilesJson);
+  EXPECT_EQ(ParseProfileCatalog(valid_profiles, "not-json", "[]", 1).error,
+            ProfileCatalogError::kMalformedActiveIdJson);
+  EXPECT_EQ(ParseProfileCatalog(valid_profiles, R"("missing")", "[]", 1)
+                .error,
+            ProfileCatalogError::kUnknownActiveProfile);
+  EXPECT_EQ(ParseProfileCatalog(valid_profiles, R"(")" +
+                                                    std::string(kDefaultId) +
+                                                    R"(")",
+                                "{", 1)
+                .error,
+            ProfileCatalogError::kMalformedSpacesJson);
+}
+
+TEST(MahoSpaceProfileHydrationTest,
+     RegistryRejectsTraversalUnknownAndStaleBeforeReturningPath) {
+  constexpr char kDefaultId[] = "2fd9d16c-cf31-4a71-91dd-783f87420dd2";
+  const std::string active_id_json =
+      R"(")" + std::string(kDefaultId) + R"(")";
+  for (const std::string& invalid_id :
+       {"default", "../", "slash/value", "back\\slash", "colon:value"}) {
+    const std::string quoted_id = base::GetQuotedJSONString(invalid_id);
+    const std::string profiles_json =
+        R"([{"id":)" + quoted_id +
+        R"(,"name":"Bad","dataStoreId":null}])";
+    EXPECT_EQ(ParseProfileCatalog(profiles_json, quoted_id, "[]", 3).error,
+              ProfileCatalogError::kInvalidProfileId);
+  }
+
+  ProfileCatalogResult catalog = ParseProfileCatalog(
+      R"([{"id":")" + std::string(kDefaultId) +
+          R"(","name":"Default","dataStoreId":null}])",
+      active_id_json, "[]", 3);
+  ASSERT_EQ(catalog.error, ProfileCatalogError::kNone);
+  EXPECT_EQ(ResolveProfileRegistryPath(catalog, kDefaultId, 2).error,
+            ProfileRegistryLookupError::kStaleRevision);
+  EXPECT_EQ(ResolveProfileRegistryPath(catalog, "unknown", 3).error,
+            ProfileRegistryLookupError::kUnknownProfile);
+  EXPECT_EQ(CanonicalizeProfileRegistryId(catalog, "default"), kDefaultId);
+  EXPECT_EQ(CanonicalizeProfileRegistryId(catalog, "  DeFaUlT  "),
+            kDefaultId);
+  ProfileRegistryPathResult resolved =
+      ResolveProfileRegistryPath(catalog, "default", 3);
+  EXPECT_EQ(resolved.error, ProfileRegistryLookupError::kNone);
+  ASSERT_TRUE(resolved.path.has_value());
+  EXPECT_EQ(*resolved.path, base::FilePath::FromASCII("Default"));
+}
+
+TEST(MahoSpaceProfileHydrationTest,
+     CatalogHydrationUsesOnlyReadyRegistryMembers) {
+  constexpr char kDefaultId[] = "2fd9d16c-cf31-4a71-91dd-783f87420dd2";
+  constexpr char kWorkId[] = "39b56c04-70eb-49d5-ae4b-d858b18c0f71";
+  ProfileCatalogResult catalog = ParseProfileCatalog(
+      R"([{"id":")" + std::string(kDefaultId) +
+          R"(","name":"Default","dataStoreId":null},{"id":")" +
+          std::string(kWorkId) +
+          R"(","name":"Work","dataStoreId":"work-store"}])",
+      R"(")" + std::string(kDefaultId) + R"(")",
+      R"([{"id":"personal","profileId":"default"},{"id":"work","profileId":")" +
+          std::string(kWorkId) + R"("}])",
+      4);
+  ASSERT_EQ(catalog.error, ProfileCatalogError::kNone);
+  catalog.records[1].lifecycle = ProfileLifecycleState::kRepairRequired;
+
+  std::optional<SpaceProfileHydrationState> state =
+      BuildSpaceProfileHydrationStateFromCatalog(catalog, R"("personal")");
+
+  ASSERT_TRUE(state.has_value());
+  ASSERT_EQ(state->space_to_profile.size(), 1u);
+  EXPECT_EQ(state->space_to_profile.at("personal"),
+            base::FilePath::FromASCII("Default"));
+  EXPECT_FALSE(state->space_to_profile.contains("work"));
+}
+
+TEST(MahoSpaceProfileHydrationTest, RegistryRejectsNonReadyLifecycleStates) {
+  constexpr char kDefaultId[] = "2fd9d16c-cf31-4a71-91dd-783f87420dd2";
+  ProfileCatalogResult catalog = ParseProfileCatalog(
+      R"([{"id":")" + std::string(kDefaultId) +
+          R"(","name":"Default","dataStoreId":null}])",
+      R"(")" + std::string(kDefaultId) + R"(")", "[]", 9);
+  ASSERT_EQ(catalog.error, ProfileCatalogError::kNone);
+
+  catalog.records[0].lifecycle = ProfileLifecycleState::kDeleting;
+  EXPECT_EQ(ResolveProfileRegistryPath(catalog, kDefaultId, 9).error,
+            ProfileRegistryLookupError::kProfileDeleting);
+  catalog.records[0].lifecycle = ProfileLifecycleState::kProvisioning;
+  EXPECT_EQ(ResolveProfileRegistryPath(catalog, kDefaultId, 9).error,
+            ProfileRegistryLookupError::kProfileProvisioning);
+  catalog.records[0].lifecycle = ProfileLifecycleState::kRepairRequired;
+  EXPECT_EQ(ResolveProfileRegistryPath(catalog, kDefaultId, 9).error,
+            ProfileRegistryLookupError::kProfileRepairRequired);
+}
+
+TEST(MahoSpaceProfileHydrationTest, LifecycleStatesRoundTrip) {
+  for (ProfileLifecycleState state : {ProfileLifecycleState::kReady,
+                                      ProfileLifecycleState::kProvisioning,
+                                      ProfileLifecycleState::kDeleting,
+                                      ProfileLifecycleState::kRepairRequired}) {
+    EXPECT_EQ(ProfileLifecycleStateFromString(
+                  ProfileLifecycleStateToString(state)),
+              state);
+  }
+  EXPECT_FALSE(ProfileLifecycleStateFromString("unknown").has_value());
 }
 
 TEST(MahoSpaceProfileHydrationTest, ValidatesProfileIdentifiers) {
@@ -84,6 +257,31 @@ TEST(MahoSpaceProfileHydrationTest, MergesWithoutDeletingExistingSpaces) {
   EXPECT_EQ(spaces.at("updated"),
             base::FilePath::FromASCII("MahoProfile_new"));
   EXPECT_EQ(active_space_id, "new");
+}
+
+TEST(MahoSpaceProfileHydrationTest,
+     AuthoritativeReplacementRemovesStaleAndNonReadyMappings) {
+  base::flat_map<std::string, base::FilePath> spaces = {
+      {"stale", base::FilePath::FromASCII("MahoProfile_stale")},
+      {"ready", base::FilePath::FromASCII("MahoProfile_old")},
+  };
+  std::string active_space_id = "stale";
+  SpaceProfileHydrationState state{
+      .space_to_profile =
+          {{"ready", base::FilePath::FromASCII("MahoProfile_ready")}},
+      .active_space_id = "ready",
+  };
+
+  SpaceProfileHydrationChanges changes = ReplaceSpaceProfileHydrationState(
+      std::move(state), &spaces, &active_space_id);
+
+  EXPECT_TRUE(changes.structural);
+  EXPECT_TRUE(changes.active_space);
+  ASSERT_EQ(spaces.size(), 1u);
+  EXPECT_EQ(spaces.at("ready"),
+            base::FilePath::FromASCII("MahoProfile_ready"));
+  EXPECT_FALSE(spaces.contains("stale"));
+  EXPECT_EQ(active_space_id, "ready");
 }
 
 TEST(MahoSpaceProfileHydrationTest, RepeatedMergeIsIdempotent) {

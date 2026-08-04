@@ -133,6 +133,7 @@ TEST_F(MahoSettingsProviderAvailabilityTest,
           true, std::string(selection_case.selected)));
 
       auto status = BuildVaultProviderStatus();
+      auto password_status = BuildPasswordProviderStatus();
 
       const bool selected_is_installed =
           selection_case.expected_selected == Provider::kMahoNative ||
@@ -152,8 +153,13 @@ TEST_F(MahoSettingsProviderAvailabilityTest,
               : Provider::kMahoNative;
       EXPECT_EQ(std::string(ProviderToken(expected_effective)),
                 ReadPasswordProviderModeFromCore());
-      EXPECT_EQ(selection_case.selected,
-                ReadSelectedPasswordProviderModeFromCore());
+      EXPECT_EQ(selection_case.expected_selected, password_status->provider);
+      EXPECT_EQ(selected_is_installed, password_status->is_available);
+      if (!selected_is_installed) {
+        EXPECT_NE(std::string::npos,
+                  password_status->description.find(
+                      "extension is not installed or enabled."));
+      }
       ASSERT_EQ(3u, status->providers.size());
       EXPECT_TRUE(status->providers[0]->is_available);
       EXPECT_EQ(install_case.bitwarden_installed,
