@@ -392,6 +392,32 @@ IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
+                       ShiftClickForcesPeekFromNormalTab) {
+  const GURL source_url = embedded_test_server()->GetURL(kSourcePath);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), source_url));
+  content::WebContents* source = active_contents();
+  ASSERT_TRUE(source);
+  // Arc parity: force_peek applies to ANY tab, including a normal (unpinned,
+  // non-Favorite) source.
+  ASSERT_EQ(PeekSourceRole::kNormal,
+            MahoSidebarContainerView::GetPeekSourceRole(browser(), source));
+
+  const GURL target = embedded_test_server()->GetURL(kTargetPath);
+
+  // A Shift-click arrives as a renderer-initiated NEW_WINDOW; force_peek routes
+  // it into Peek instead of a new window, from a normal tab.
+  const gfx::Point click_point = gfx::ToFlooredPoint(
+      content::GetCenterCoordinatesOfElementWithId(source, "same-tab"));
+  content::SimulateMouseClickAt(source, blink::WebInputEvent::kShiftKey,
+                                blink::WebMouseEvent::Button::kLeft,
+                                click_point);
+  ASSERT_TRUE(WaitForPeekAt(target));
+  EXPECT_EQ(source_url, source->GetLastCommittedURL());
+  EXPECT_EQ(source, active_contents());
+  HidePeek();
+}
+
+IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
                        SeamB_RedirectDoesNotReevaluatePeek) {
   content::WebContents* source = PreparePinnedSource();
   ASSERT_TRUE(source);

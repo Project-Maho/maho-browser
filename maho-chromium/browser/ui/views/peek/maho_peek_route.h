@@ -44,6 +44,7 @@ struct PeekRouteInput {
   PeekSourceRole source_role;
   bool is_user_initiated;
   bool force_tab;
+  bool force_peek;
   bool is_maho_mini_gesture;
   bool atc_has_cross_space_target;
   PeekSlotState peek_slot_state;

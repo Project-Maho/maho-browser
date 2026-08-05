@@ -235,5 +235,59 @@ TEST_F(MahoPeekRouteTest, SameTabThrottleBranches) {
   ExpectCases(cases);
 }
 
+TEST_F(MahoPeekRouteTest, ForcePeekModifierBranches) {
+  const PeekRouteInput link_eligible = EligibleInput(PeekSeam::kOpenUrlFromTab);
+
+  // Shift-click (force_peek) arrives as a renderer-initiated NEW_WINDOW and
+  // opens Peek from ANY tab, bypassing the pinned/favorite source requirement.
+  auto normal_force_peek = link_eligible;
+  normal_force_peek.source_role = PeekSourceRole::kNormal;
+  normal_force_peek.disposition = content::WindowOpenDisposition::NEW_WINDOW;
+  normal_force_peek.force_peek = true;
+
+  std::vector<RouteCase> cases;
+  cases.push_back({"force peek from normal tab opens Peek", normal_force_peek,
+                   PeekRoute::kOpenInPeek});
+
+  auto unresolved_force_peek = normal_force_peek;
+  unresolved_force_peek.source_role = PeekSourceRole::kUnresolved;
+  cases.push_back({"force peek from unresolved source opens Peek",
+                   unresolved_force_peek, PeekRoute::kOpenInPeek});
+
+  auto busy_force_peek = normal_force_peek;
+  busy_force_peek.peek_slot_state = PeekSlotState::kBusy;
+  cases.push_back({"force peek with busy slot routes to foreground tab",
+                   busy_force_peek, PeekRoute::kOpenInForegroundTab});
+
+  auto master_off = normal_force_peek;
+  master_off.master_enabled = false;
+  cases.push_back(
+      {"force peek respects master disabled", master_off, PeekRoute::kFallThrough});
+
+  auto link_off = normal_force_peek;
+  link_off.link_routing_enabled = false;
+  cases.push_back({"force peek respects link routing disabled", link_off,
+                   PeekRoute::kFallThrough});
+
+  auto mini_force_peek = normal_force_peek;
+  mini_force_peek.is_maho_mini_gesture = true;
+  cases.push_back({"Maho Mini gesture beats force peek", mini_force_peek,
+                   PeekRoute::kFallThrough});
+
+  auto atc_force_peek = normal_force_peek;
+  atc_force_peek.atc_has_cross_space_target = true;
+  cases.push_back({"ATC cross-space beats force peek", atc_force_peek,
+                   PeekRoute::kFallThrough});
+
+  // force_peek must NOT rescue a popup whose popup routing is disabled.
+  auto popup_force_peek = EligibleInput(PeekSeam::kAddNewContents);
+  popup_force_peek.popup_routing_enabled = false;
+  popup_force_peek.force_peek = true;
+  cases.push_back({"force peek does not affect popup routing", popup_force_peek,
+                   PeekRoute::kFallThrough});
+
+  ExpectCases(cases);
+}
+
 }  // namespace
 }  // namespace maho

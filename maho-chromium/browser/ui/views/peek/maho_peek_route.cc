@@ -31,10 +31,15 @@ bool IsPeekLinkSource(PeekSourceRole source_role) {
 PeekRoute DecidePeekRoute(const PeekRouteInput& input) {
   const bool force_tab_link =
       input.force_tab && input.seam != PeekSeam::kAddNewContents;
+  // Arc parity: a Shift-click (force_peek) forces a link into Peek from ANY
+  // tab, bypassing the pinned/favorite source-role requirement. It only
+  // applies to link seams; popups (kAddNewContents) are never affected.
+  const bool force_peek_link =
+      input.force_peek && input.seam != PeekSeam::kAddNewContents;
   if (!input.master_enabled || force_tab_link || input.is_maho_mini_gesture ||
       input.atc_has_cross_space_target ||
       !IsDispositionEligible(input.seam, input.disposition) ||
-      input.source_role == PeekSourceRole::kUnresolved) {
+      (input.source_role == PeekSourceRole::kUnresolved && !force_peek_link)) {
     return PeekRoute::kFallThrough;
   }
 
@@ -46,8 +51,10 @@ PeekRoute DecidePeekRoute(const PeekRouteInput& input) {
       break;
     case PeekSeam::kOpenUrlFromTab:
     case PeekSeam::kSameTabThrottle:
-      if (!input.link_routing_enabled || !IsPeekLinkSource(input.source_role) ||
-          !input.is_user_initiated) {
+      if (!input.link_routing_enabled || !input.is_user_initiated) {
+        return PeekRoute::kFallThrough;
+      }
+      if (!force_peek_link && !IsPeekLinkSource(input.source_role)) {
         return PeekRoute::kFallThrough;
       }
       break;
