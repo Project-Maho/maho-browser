@@ -13,6 +13,8 @@ const RELEASE_REPO = import.meta.env.PUBLIC_RELEASE_REPO_URL || 'https://github.
 const RELEASE_URL_MACOS = import.meta.env.PUBLIC_RELEASE_URL_MACOS || `${RELEASE_REPO}/releases`;
 const RELEASE_URL_WINDOWS = import.meta.env.PUBLIC_RELEASE_URL_WINDOWS || `${RELEASE_REPO}/releases`;
 const RELEASE_URL_LINUX = import.meta.env.PUBLIC_RELEASE_URL_LINUX || `${RELEASE_REPO}/releases`;
+const RELEASE_LIVE = import.meta.env.PUBLIC_RELEASE_LIVE === 'true';
+const LAUNCH_DATE_LABEL = 'August 10';
 
 const productParam = Astro.url.searchParams.get('product');
 const isMailProduct = productParam === 'mail';
@@ -155,6 +157,37 @@ const ld = {
     <Nav activeProduct={isMailProduct ? 'mail' : 'browser'} />
 
     <main id="main" class="pt-24 sm:pt-28 md:pt-32">
+      {!RELEASE_LIVE && (
+        <section class="container-marketing pad-x-ladder section-rhythm-tall">
+          <ScrollReveal
+            variant="fade"
+            class="download-shell relative overflow-hidden rounded-squircle-xl border border-border p-8 squircle-enhanced sm:p-10 lg:p-14"
+          >
+            <div class="download-orb download-orb-left" aria-hidden="true"></div>
+            <div class="download-orb download-orb-right" aria-hidden="true"></div>
+            <div class="relative z-10 mx-auto max-w-2xl text-center">
+              <p class="landing-eyebrow mb-4 text-muted-foreground">Download</p>
+              <h1 class="heading-serif text-4xl leading-[0.98] sm:text-5xl lg:text-6xl">
+                Launching {LAUNCH_DATE_LABEL}.
+              </h1>
+              <p class="mx-auto mt-6 max-w-xl text-balance text-lg leading-relaxed text-muted-foreground">
+                {productLabel} for macOS, Windows, and Linux ships {LAUNCH_DATE_LABEL}. Join our Discord to hear the moment it drops.
+              </p>
+              <div class="mt-8 flex justify-center">
+                <a href={discordInvite} class="cta-btn cta-btn-primary">
+                  Join our Discord
+                </a>
+              </div>
+              <p class="mt-5 text-sm leading-relaxed text-muted-foreground">
+                iPhone and Android in development.
+              </p>
+            </div>
+          </ScrollReveal>
+        </section>
+      )}
+
+      {RELEASE_LIVE && (
+      <Fragment>
       <section class="container-marketing pad-x-ladder section-rhythm-tall">
         <ScrollReveal
           variant="fade"
@@ -299,6 +332,8 @@ const ld = {
           </p>
         </div>
       </section>
+      </Fragment>
+      )}
     </main>
 
     <Footer />
