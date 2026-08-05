@@ -44,7 +44,7 @@ const ogImageUrl = new URL(ogImage ?? '/og-image.png', Astro.site).href;
     <link rel="canonical" href={canonicalUrl.href} />
     <link rel="alternate" type="application/rss+xml" title="Maho Blog RSS" href="/blog/rss.xml" />
     <script is:inline>
-      var t=localStorage.getItem("maho-theme")||localStorage.getItem("starlight-theme");if(t==="light"){document.documentElement.classList.replace("dark","light")}if(t){localStorage.setItem("maho-theme",t);localStorage.setItem("starlight-theme",t)}
+      var t=localStorage.getItem("maho-theme")||localStorage.getItem("starlight-theme");if(!t){t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}if(t==="light"){document.documentElement.classList.replace("dark","light")}
     </script>
     <slot name="head" />
   </head>

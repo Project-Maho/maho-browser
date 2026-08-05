@@ -14,7 +14,7 @@ interface Props {
 const { config } = Astro.props;
 
 const frameShape = {
-  'ai-when-asked': 'aspect-[3/4] md:aspect-auto md:mt-0 md:flex-1 md:min-h-0',
+  'ai-when-asked': 'mt-auto aspect-[16/9] md:mt-0 md:flex-1 md:aspect-auto md:min-h-0',
   'mini-maho': 'mt-auto aspect-[16/9]',
 } satisfies Record<'ai-when-asked' | 'mini-maho', string>;
 
@@ -40,20 +40,12 @@ const frameShape = {
               <article
                 class="rounded-squircle-xl squircle-enhanced flex h-full flex-col gap-5 overflow-hidden border border-border bg-card p-5 sm:p-6"
               >
-                {isAgent ? (
-                  <div data-agent-card-title="true" class="space-y-4">
-                    <p class="landing-eyebrow inline-flex rounded-full border border-border bg-background/60 px-3 py-2 text-[0.65rem] text-muted-foreground">
-                      {item.label}
-                    </p>
-                  </div>
-                ) : (
-                  <div class="space-y-4">
-                    <p class="landing-eyebrow inline-flex rounded-full border border-border bg-background/60 px-3 py-2 text-[0.65rem] text-muted-foreground">
-                      {item.label}
-                    </p>
-                    <p class="landing-body text-muted-foreground">{item.body}</p>
-                  </div>
-                )}
+                <div class="space-y-4">
+                  <p class="landing-eyebrow inline-flex rounded-full border border-border bg-background/60 px-3 py-2 text-[0.65rem] text-muted-foreground">
+                    {item.label}
+                  </p>
+                  <p class="landing-body text-muted-foreground">{item.body}</p>
+                </div>
 
                 {isAgent ? (
                   <div

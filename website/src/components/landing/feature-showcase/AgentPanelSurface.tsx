@@ -54,10 +54,11 @@ export const AgentPanelSurface: React.FC<AgentPanelSurfaceProps> = ({
   const streamedResponse = streamTextByCharacter(RESPONSE, streamRatio);
 
   return (
-    <section
+    <div
       data-scene-overlay="ai-panel"
       data-agent-panel-position={position}
       data-agent-panel-density={isCard ? "card" : "showcase"}
+      role="img"
       aria-label="Maho Agent conversation"
       className={`flex h-full w-full flex-col overflow-hidden bg-[#1b1b1d] text-[#f1f1f2] ${className}`}
       style={style}
@@ -252,6 +253,6 @@ export const AgentPanelSurface: React.FC<AgentPanelSurfaceProps> = ({
           </div>
         </div>
       </div>
-    </section>
+    </div>
   );
 };

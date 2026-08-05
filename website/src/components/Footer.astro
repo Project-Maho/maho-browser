@@ -14,8 +14,8 @@ const resourceLinks = [
 ];
 
 const compareLinks = [
-  { href: '/compare/aside', label: 'vs Aside' },
   { href: '/blog/maho-vs-arc', label: 'vs Arc' },
+  { href: '/blog/maho-vs-zen-browser', label: 'vs Zen' },
   { href: '/blog/maho-vs-safari', label: 'vs Safari' },
   { href: '/compare', label: 'All comparisons' },
 ];
@@ -47,7 +47,7 @@ const legalLinks = [
         <span class="landing-eyebrow font-semibold text-foreground">Product</span>
         <div class="flex flex-col gap-3">
           {productLinks.map((link) => (
-            <a href={link.href} class="text-sm text-muted-foreground transition-colors hover:text-foreground">
+            <a href={link.href} class="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground">
               {link.label}
             </a>
           ))}
@@ -58,7 +58,7 @@ const legalLinks = [
         <span class="landing-eyebrow font-semibold text-foreground">Resources</span>
         <div class="flex flex-col gap-3">
           {resourceLinks.map((link) => (
-            <a href={link.href} class="text-sm text-muted-foreground transition-colors hover:text-foreground">
+            <a href={link.href} class="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground">
               {link.label}
             </a>
           ))}
@@ -69,7 +69,7 @@ const legalLinks = [
         <span class="landing-eyebrow font-semibold text-foreground">Compare</span>
         <div class="flex flex-col gap-3">
           {compareLinks.map((link) => (
-            <a href={link.href} class="text-sm text-muted-foreground transition-colors hover:text-foreground">
+            <a href={link.href} class="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground">
               {link.label}
             </a>
           ))}
@@ -80,7 +80,7 @@ const legalLinks = [
         <span class="landing-eyebrow font-semibold text-foreground">Company</span>
         <div class="flex flex-col gap-3">
           {companyLinks.map((link) => (
-            <a href={link.href} class="text-sm text-muted-foreground transition-colors hover:text-foreground">
+            <a href={link.href} class="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground">
               {link.label}
             </a>
           ))}
@@ -92,7 +92,7 @@ const legalLinks = [
       <span>© 2026 Maho.</span>
       <div class="flex flex-wrap gap-4">
         {legalLinks.map((link) => (
-          <a href={link.href} class="transition-colors hover:text-foreground">{link.label}</a>
+          <a href={link.href} class="inline-flex min-h-11 min-w-11 items-center justify-center transition-colors hover:text-foreground">{link.label}</a>
         ))}
       </div>
     </div>

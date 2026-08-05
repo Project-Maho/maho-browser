@@ -3,8 +3,8 @@ import { readConnectionTarget, readSaveData } from "./motion/LandingMotionPolicy
 
 type PlaybackPolicy = "pending" | "motion" | "static";
 
-const VIDEO_SRC = "/demo/hero/maho-hero-capture.mp4";
-const POSTER_SRC = "/demo/hero/maho-hero-capture-poster.png";
+const VIDEO_SRC = "/demo/hero/maho-hero-workflow.mp4";
+const POSTER_SRC = "/demo/hero/maho-hero-workflow-poster.png";
 
 export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -85,7 +85,7 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
       <div
         role="img"
         aria-label="Maho Browser product demo"
-        className="relative mx-auto aspect-[1040/720] w-full max-w-6xl overflow-hidden rounded-squircle-xl border border-border/80 shadow-[0_1.5rem_4rem_rgba(0,0,0,0.28)]"
+        className="relative mx-auto aspect-[4/5] w-full max-w-6xl overflow-hidden rounded-squircle-xl border border-border/80 shadow-[0_1.5rem_4rem_rgba(0,0,0,0.28)] sm:aspect-[1040/720]"
       >
         <div aria-hidden="true" className="absolute inset-0">
           <img
@@ -93,7 +93,7 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
             width={1040}
             height={720}
             alt=""
-            className="absolute inset-0 h-full w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover object-[32%_center] sm:object-center"
           />
           {shouldMountVideo && (
             <video
@@ -108,7 +108,7 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
               autoPlay={isVisible}
               preload="auto"
               onError={() => setIsVideoAvailable(false)}
-              className="absolute inset-0 h-full w-full object-cover"
+              className="absolute inset-0 h-full w-full object-cover object-[32%_center] sm:object-center"
             />
           )}
         </div>

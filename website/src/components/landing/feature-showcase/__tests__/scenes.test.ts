@@ -172,7 +172,7 @@ describe("Typed Scene Registry", () => {
   });
 
   test("Agent action progress keeps the live panel composition stable", () => {
-    const processingProgress = 0.75;
+    const processingProgress = 0.64;
     const html = renderToStaticMarkup(
       React.createElement(MahoBrowserMock, { scene: "agent", captureProgress: processingProgress }),
     );

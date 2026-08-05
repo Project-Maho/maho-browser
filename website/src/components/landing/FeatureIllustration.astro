@@ -206,12 +206,12 @@ interface Props {
   .autofilled { position:absolute; right:6%; top:9%; z-index:3; display:flex; align-items:center; gap:6px; padding:7px 10px; border:1px solid color-mix(in srgb,var(--demo-green) 28%,var(--demo-border)); border-radius:999px; background:color-mix(in srgb,var(--demo-surface-solid) 76%,var(--demo-green-soft)); color:var(--demo-green); box-shadow:var(--demo-shadow-soft); font-size:clamp(8px,1.1vw,11px); font-weight:750; opacity:0; animation:autofill-status 6.8s cubic-bezier(.22,.7,.2,1) infinite; }
 
   @property --blocked { syntax:'<integer>'; inherits:false; initial-value:47; }
-  @keyframes junk-lifecycle { 0%{opacity:0;transform:scale(.94);filter:blur(2px)}8%,30%{opacity:1;transform:scale(1);filter:blur(0)}40%,100%{opacity:0;transform:scale(.66);filter:blur(6px)} }
-  @keyframes junk-flag { 0%,24%{opacity:0;transform:scale(.4)}28%,34%{opacity:1;transform:scale(1)}38%,100%{opacity:0;transform:scale(.4)} }
-  @keyframes content-reflow { 0%{padding-top:0;padding-right:0}10%,32%{padding-top:16%;padding-right:33%}48%,100%{padding-top:0;padding-right:0} }
-  @keyframes scan-pass { 0%,25%{opacity:0;transform:translateY(-120%)}29%{opacity:1;transform:translateY(-60%)}41%{opacity:.85;transform:translateY(300%)}45%,100%{opacity:0;transform:translateY(300%)} }
-  @keyframes badge-reveal { 0%,34%{opacity:0;transform:translateY(7px) scale(.94)}43%,93%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(7px) scale(.94)} }
-  @keyframes count-up { 0%,35%{--blocked:0}56%,100%{--blocked:47} }
+  @keyframes junk-lifecycle { 0%,28%{opacity:1;transform:scale(1);filter:blur(0)}40%,82%{opacity:0;transform:scale(.66);filter:blur(6px)}92%,100%{opacity:1;transform:scale(1);filter:blur(0)} }
+  @keyframes junk-flag { 0%,22%{opacity:0;transform:scale(.4)}28%,36%{opacity:1;transform:scale(1)}40%,100%{opacity:0;transform:scale(.4)} }
+  @keyframes content-reflow { 0%,30%{padding-top:16%;padding-right:33%}48%,82%{padding-top:0;padding-right:0}92%,100%{padding-top:16%;padding-right:33%} }
+  @keyframes scan-pass { 0%,28%{opacity:0;transform:translateY(-120%)}32%{opacity:1;transform:translateY(-60%)}44%{opacity:.85;transform:translateY(300%)}48%,100%{opacity:0;transform:translateY(300%)} }
+  @keyframes badge-reveal { 0%,38%{opacity:0;transform:translateY(7px) scale(.94)}48%,78%{opacity:1;transform:translateY(0) scale(1)}84%,100%{opacity:0;transform:translateY(7px) scale(.94)} }
+  @keyframes count-up { 0%,44%{--blocked:0}56%,80%{--blocked:47}88%,100%{--blocked:0} }
   @keyframes credential-menu { 0%,3%{opacity:0;transform:translateY(10px) rotate(1.8deg)}8%,18%{opacity:1;transform:translateY(0) rotate(1.8deg)}24%,100%{opacity:0;transform:translateY(2px) rotate(1.8deg)} }
   @keyframes credential-select { 0%,10%{transform:scale(1)}14%,18%{transform:scale(.97);background:color-mix(in srgb,var(--demo-blue) 20%,transparent)}23%,100%{transform:scale(1)} }
   @keyframes selected-check { 0%,12%{opacity:0;transform:scale(.5)}16%,21%{opacity:1;transform:scale(1)}25%,100%{opacity:0;transform:scale(.5)} }

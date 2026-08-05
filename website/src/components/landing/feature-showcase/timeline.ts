@@ -69,7 +69,7 @@ export const TIMELINE_THRESHOLDS = {
     typingStart: 0.20,
     typingEnd: 0.45,
     streamStart: 0.55,
-    streamEnd: 0.95,
+    streamEnd: 0.72,
   },
 } as const;
 

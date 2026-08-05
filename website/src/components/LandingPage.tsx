@@ -82,7 +82,7 @@ const content = {
   browser: {
     hero: {
       headline: "The browser tools you liked. Still shipping.",
-      subheadline: "Spaces, split view, command bar — and your logins stay separate when you want them. Still yours, on a Chromium stack that keeps moving.",
+      subheadline: "Keep Spaces and Profiles separate, route URLs by rule, and use AI only when you ask.",
       primaryCta: { label: "Download Maho", href: browserDownloadUrl },
       secondaryCta: { label: "Join our Discord", href: discordUrl, variant: "discord" },
       microCta: "Free. macOS, Windows, and Linux. Mobile in development.",
@@ -108,10 +108,10 @@ const content = {
           alt: "Maho Browser Agent panel analyzing the current page after a user request.",
         },
         {
-          label: "Mini Maho",
-          body: "A lightweight window for quick links. Open something fast without disturbing your main workspace, then send it to a Space or let it go.",
+          label: "Air Traffic Control",
+          body: "Route external URLs to the right Space or Profile based on your rules. Mini Maho holds each link in a lightweight temporary window before it joins a Space or Profile.",
           image: "mini-maho",
-          alt: "Maho Browser window used as a temporary placeholder for the upcoming Mini Maho quick-window view.",
+          alt: "Air Traffic Control routes a Wikipedia URL in a temporary Mini Maho window.",
         },
       ],
     },
@@ -197,7 +197,7 @@ const content = {
     },
     changelog: {
       eyebrow: "In progress",
-      headline: "Everything we're building, in public.",
+      headline: "See what's shipping, as it ships.",
       subheadline: "Follow the blog for feature notes and updates as Maho takes shape. No changelog theater — just what we're actually working on.",
       tilesRowOne: ["Spaces", "Split View", "Command Bar", "Sidebar", "Boosts", "Extensions"],
       tilesRowTwo: ["End-to-end Sync", "BYOK AI", "Privacy by default", "MCP tools", "CLI", "Keyboard-first"],
@@ -254,7 +254,8 @@ const content = {
           cta: { label: "Choose Max", href: browserDownloadUrl },
         },
       ],
-      footerNote: "Also available: pay-as-you-go credits and free BYOK with your own OpenAI, Anthropic, Google, or OpenRouter key. See full pricing.",
+      footerNote: "Also available: pay-as-you-go credits and free BYOK with your own OpenAI, Anthropic, Google, or OpenRouter key.",
+      footerLink: { label: "See full pricing", href: "/pricing" },
     },
     finalCta: {
       headline: "The browser tools you liked. Still yours.",

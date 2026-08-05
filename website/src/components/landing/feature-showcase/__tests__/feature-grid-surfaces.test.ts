@@ -5,13 +5,15 @@ const FEATURE_GRID_URL = new URL("../../FeatureGridSection.astro", import.meta.u
 const MINI_MAHO_URL = new URL("../../MiniMahoPreview.astro", import.meta.url);
 
 describe("Feature grid product surfaces", () => {
-  test("renders only the dedicated Agent panel preview", async () => {
+  test("renders the Agent panel with its product description", async () => {
     const source = await readFile(FEATURE_GRID_URL, "utf8");
 
     expect(source).toContain("AgentPanelPreview");
     expect(source).toContain("<AgentPanelPreview");
-    expect(source).toContain('data-agent-card-title="true"');
+    expect(source).not.toContain('data-agent-card-title="true"');
+    expect(source).toContain('<p class="landing-body text-muted-foreground">{item.body}</p>');
     expect(source).toContain('data-agent-card-media="full-height"');
+    expect(source).not.toContain('aspect-[3/4]');
     expect(source).not.toContain("MahoBrowserMock");
     expect(source).not.toContain('scene="agent"');
     expect(source).not.toContain("maho-feature-agent.png");

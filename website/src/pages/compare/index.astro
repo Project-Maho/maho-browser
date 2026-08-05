@@ -13,16 +13,10 @@ const ld = {
   '@type': 'WebPage',
   name: 'Maho Comparisons',
   url: absoluteUrl('/compare'),
-  description: 'How Maho Browser compares to other modern and agentic browsers like Aside, Arc, Zen, and Dia.'
+  description: 'How Maho Browser compares to other modern and agentic browsers like Arc, Zen, Safari, and Dia.'
 };
 
 const comparisons = [
-  {
-    target: 'Aside',
-    href: '/compare/aside',
-    description: 'YC F25 agentic browser vs Maho\'s user-controlled permission model, multi-provider BYOK, native Spaces, and cross-platform native shells.',
-    tag: 'Agentic'
-  },
   {
     target: 'Arc',
     href: '/blog/maho-vs-arc',
@@ -36,16 +30,16 @@ const comparisons = [
     tag: 'Privacy'
   },
   {
-    target: 'Dia',
-    href: '/blog/maho-vs-dia',
-    description: 'Dia\'s desktop agent vs Maho\'s robust Agent Client Protocol (ACP) standard and privacy-first local architecture.',
-    tag: 'Agentic'
-  },
-  {
     target: 'Safari',
     href: '/blog/maho-vs-safari',
     description: 'Apple\'s platform-native browser vs Maho\'s cross-platform Spaces, BYOK AI, and user-controlled privacy architecture.',
     tag: 'Mainstream'
+  },
+  {
+    target: 'Dia',
+    href: '/blog/maho-vs-dia',
+    description: 'Dia\'s desktop agent vs Maho\'s robust Agent Client Protocol (ACP) standard and privacy-first local architecture.',
+    tag: 'Agentic'
   },
   {
     target: 'Brave + Leo',
@@ -82,13 +76,19 @@ const comparisons = [
     href: '/blog/maho-vs-opera-aria',
     description: 'Opera\'s Aria AI and built-in VPN vs Maho\'s multi-provider BYOK, sandboxed ACP agents, and E2E encrypted sync.',
     tag: 'Agentic'
+  },
+  {
+    target: 'Aside',
+    href: '/compare/aside',
+    description: 'YC F25 agentic browser vs Maho\'s user-controlled permission model, multi-provider BYOK, native Spaces, and cross-platform native shells.',
+    tag: 'Agentic'
   }
 ];
 ---
 
 <BaseLayout
   title="Maho Browser Comparisons — Choose Your Default"
-  description="Compare Maho Browser with other modern browsers including Aside, Arc, Zen, and Dia. Discover our privacy-first, power-user architecture."
+  description="Compare Maho Browser with other modern browsers including Arc, Zen, Safari, and Dia. Discover our privacy-first, power-user architecture."
 >
   <JSONLD data={ld} />
   <div class="min-h-screen bg-background text-foreground">

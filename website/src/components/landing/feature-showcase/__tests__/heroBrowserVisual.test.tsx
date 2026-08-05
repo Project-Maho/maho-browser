@@ -18,7 +18,7 @@ describe("HeroBrowserVisual component", () => {
     const html = renderToStaticMarkup(<HeroBrowserVisual />);
 
     // Then: the native-size poster is the only initial media asset.
-    expect(html).toContain('src="/demo/hero/maho-hero-capture-poster.png"');
+    expect(html).toContain('src="/demo/hero/maho-hero-workflow-poster.png"');
     expect(html).toContain('width="1040"');
     expect(html).toContain('height="720"');
     expect(html).not.toContain(".mp4");
@@ -29,9 +29,13 @@ describe("HeroBrowserVisual component", () => {
     // Given: the component source that defines the runtime media request contract.
     const componentSource = readFileSync(new URL("../HeroBrowserVisual.tsx", import.meta.url), "utf8");
 
-    // Then: only the new capture and poster paths are pinned.
-    expect(componentSource).toContain('"/demo/hero/maho-hero-capture.mp4"');
-    expect(componentSource).toContain('"/demo/hero/maho-hero-capture-poster.png"');
+    // Then: only the cookie-free workflow and poster paths are pinned.
+    expect(componentSource).toContain('"/demo/hero/maho-hero-workflow.mp4"');
+    expect(componentSource).toContain('"/demo/hero/maho-hero-workflow-poster.png"');
+    expect(componentSource).toContain("aspect-[4/5]");
+    expect(componentSource).toContain("sm:aspect-[1040/720]");
+    expect(componentSource).toContain("object-[32%_center]");
+    expect(componentSource).toContain("sm:object-center");
     expect(componentSource).not.toContain("/demo/hero/dom-hyperframes/");
   });
 

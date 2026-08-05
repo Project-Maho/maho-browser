@@ -66,12 +66,12 @@ export function ChangelogSection({ config }: ChangelogSectionProps) {
         <div className="container-marketing">
           <ScrollReveal variant="fade">
             <div className="mt-10 flex flex-wrap items-center justify-center gap-4 sm:mt-12">
-              <a href={config.primaryLink.href} className="landing-body inline-flex items-center gap-2 text-foreground transition-opacity hover:opacity-70">
+              <a href={config.primaryLink.href} className="landing-body inline-flex min-h-11 items-center gap-2 text-foreground transition-opacity hover:opacity-70">
                 {config.primaryLink.label}
                 <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
               </a>
               {config.rssLink && (
-                <a href={config.rssLink.href} className="landing-body inline-flex items-center gap-2 text-muted-foreground transition-opacity hover:text-foreground">
+                <a href={config.rssLink.href} className="landing-body inline-flex min-h-11 items-center gap-2 text-muted-foreground transition-opacity hover:text-foreground">
                   <Rss className="h-4 w-4" aria-hidden="true" />
                   {config.rssLink.label}
                 </a>

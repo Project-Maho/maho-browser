@@ -6,6 +6,7 @@ import {
   streamTextByCharacter,
 } from "../AgentPanelSurface";
 import {
+  AGENT_PREVIEW_INITIAL_ELAPSED_MS,
   AGENT_PREVIEW_DURATION_MS,
   getAgentReducedMotionProgress,
   getAgentPreviewProgress,
@@ -22,10 +23,13 @@ describe("Agent panel preview", () => {
     );
 
     expect(html).toContain('data-agent-panel-position="standalone"');
+    expect(html).toContain('role="img"');
+    expect(html).toContain('aria-label="Maho Agent conversation"');
     expect(html).toContain('data-agent-composer="true"');
     expect(html).toContain('data-agent-quick-action="summarize"');
     expect(html).not.toContain('data-agent-background="subdued-page"');
     expect(html).not.toContain('src="/demo/youtube.png"');
+    expect(html).not.toContain("<section");
   });
 
   test("types in the composer before creating the user bubble", () => {
@@ -87,6 +91,19 @@ describe("Agent panel preview", () => {
     expect(getAgentPreviewProgress(AGENT_PREVIEW_DURATION_MS / 2)).toBe(0.5);
     expect(getAgentPreviewProgress(AGENT_PREVIEW_DURATION_MS)).toBe(0);
     expect(getAgentPreviewProgress(-1)).toBe(0);
+  });
+
+  test("starts after the empty panel slide-in phase", () => {
+    expect(AGENT_PREVIEW_INITIAL_ELAPSED_MS).toBe(
+      TIMELINE_THRESHOLDS.agent.slideEnd * AGENT_PREVIEW_DURATION_MS,
+    );
+    expect(getAgentPreviewProgress(AGENT_PREVIEW_INITIAL_ELAPSED_MS)).toBe(
+      TIMELINE_THRESHOLDS.agent.slideEnd,
+    );
+  });
+
+  test("holds the completed response for the final loop segment", () => {
+    expect(TIMELINE_THRESHOLDS.agent.streamEnd).toBe(0.72);
   });
 
   test("holds the completed response when motion is reduced", () => {

@@ -17,6 +17,7 @@ export type PricingConfig = {
   body: string;
   tiers: PricingTier[];
   footerNote?: string;
+  footerLink?: { label: string; href: string };
 };
 
 type PricingSectionProps = {
@@ -88,9 +89,22 @@ export function PricingSection({ config }: PricingSectionProps) {
           })}
         </div>
 
-        {config.footerNote && (
+        {(config.footerNote || config.footerLink) && (
           <ScrollReveal variant="fade">
-            <p className="landing-body max-w-3xl text-sm text-muted-foreground sm:text-base">{config.footerNote}</p>
+            <p className="landing-body max-w-3xl text-sm text-muted-foreground sm:text-base">
+              {config.footerNote}
+              {config.footerLink && (
+                <>
+                  {config.footerNote && " "}
+                  <a
+                    href={config.footerLink.href}
+                    className="inline-flex min-h-11 items-center font-medium text-foreground underline underline-offset-4 transition-colors hover:text-muted-foreground"
+                  >
+                    {config.footerLink.label}
+                  </a>
+                </>
+              )}
+            </p>
           </ScrollReveal>
         )}
       </div>

@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AgentPanelSurface } from "./AgentPanelSurface";
+import { TIMELINE_THRESHOLDS } from "./timeline";
 
 export const AGENT_PREVIEW_DURATION_MS = 9_000;
+export const AGENT_PREVIEW_INITIAL_ELAPSED_MS =
+  TIMELINE_THRESHOLDS.agent.slideEnd * AGENT_PREVIEW_DURATION_MS;
 
 export function getAgentPreviewProgress(elapsedMs: number): number {
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
@@ -17,7 +20,9 @@ export function getAgentReducedMotionProgress(reducedMotion: boolean): number {
 
 export const AgentPanelPreview: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState(() =>
+    getAgentPreviewProgress(AGENT_PREVIEW_INITIAL_ELAPSED_MS),
+  );
 
   useEffect(() => {
     const reducedMotion = window.matchMedia(
@@ -29,7 +34,7 @@ export const AgentPanelPreview: React.FC = () => {
     }
 
     let animationFrame = 0;
-    let elapsedMs = 0;
+    let elapsedMs = AGENT_PREVIEW_INITIAL_ELAPSED_MS;
     let lastTimestamp: number | null = null;
     let isVisible = true;
 
