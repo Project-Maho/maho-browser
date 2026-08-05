@@ -24,6 +24,9 @@ const char kMahoMiniClickOverrideEnabled[] =
     "maho.maho_mini.click_override_enabled";
 const char kOpenExternalLinksInMahoMini[] =
     "maho.maho_mini.open_external_links_in_maho_mini";
+const char kPeekEnabled[] = "maho.peek.enabled";
+const char kPeekLinkRoutingEnabled[] = "maho.peek.link_routing_enabled";
+const char kPeekPopupRoutingEnabled[] = "maho.peek.popup_routing_enabled";
 const char kMahoMiniWindowWidth[] = "maho.maho_mini.window_width";
 const char kMahoMiniWindowHeight[] = "maho.maho_mini.window_height";
 const char kMahoMailEnabled[] = "maho.mail.enabled";
@@ -75,6 +78,9 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kMahoMiniGlobalShortcutEnabled, true);
   registry->RegisterBooleanPref(kMahoMiniClickOverrideEnabled, true);
   registry->RegisterBooleanPref(kOpenExternalLinksInMahoMini, false);
+  registry->RegisterBooleanPref(kPeekEnabled, true);
+  registry->RegisterBooleanPref(kPeekLinkRoutingEnabled, true);
+  registry->RegisterBooleanPref(kPeekPopupRoutingEnabled, true);
   registry->RegisterIntegerPref(kMahoMiniWindowWidth, 0);
   registry->RegisterIntegerPref(kMahoMiniWindowHeight, 0);
   registry->RegisterBooleanPref(kMahoMailEnabled, true);

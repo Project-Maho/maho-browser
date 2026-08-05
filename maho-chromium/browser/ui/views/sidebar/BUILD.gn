@@ -190,6 +190,7 @@ source_set("maho_sidebar_core") {
     "//maho/browser:maho_tab_tidy_orchestrator",
     "//maho/browser:maho_content_blocker_update_service",
     "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//maho/browser/ui/views/peek:maho_peek_route",
     "//maho/browser/updates:maho_updates_lib",
     "//maho/browser/updates:maho_updates_prefs",
     "//maho/components/constants",

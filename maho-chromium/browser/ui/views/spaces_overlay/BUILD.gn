@@ -79,5 +79,6 @@ source_set("maho_spaces_overlay") {
     "//components/favicon/core",
     "//components/favicon_base",
     "//maho/browser/ui/views/library_overlay:maho_library_overlay",
+    "//maho/browser/ui/views/peek:maho_peek",
   ]
 }

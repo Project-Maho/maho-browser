@@ -26,6 +26,9 @@ extern const char kSpacesFullViewport[];
 extern const char kMahoMiniGlobalShortcutEnabled[];
 extern const char kMahoMiniClickOverrideEnabled[];
 extern const char kOpenExternalLinksInMahoMini[];
+extern const char kPeekEnabled[];
+extern const char kPeekLinkRoutingEnabled[];
+extern const char kPeekPopupRoutingEnabled[];
 extern const char kMahoMiniWindowWidth[];
 extern const char kMahoMiniWindowHeight[];
 
