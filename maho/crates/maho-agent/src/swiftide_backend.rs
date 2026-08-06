@@ -1,9 +1,16 @@
 use async_trait::async_trait;
+
 use maho_types::chat::{ChatContent, ChatMessage as MahoChatMessage};
+
 use std::borrow::Cow;
+
 use std::sync::{Arc, Mutex, MutexGuard};
+
 use swiftide_core::{
-    chat_completion::{ChatMessage as SwiftideChatMessage, ToolCall, ToolOutput, ToolSpec},
+    chat_completion::{
+        ChatCompletion, ChatCompletionRequest, ChatMessage as SwiftideChatMessage, ToolCall,
+        ToolOutput, ToolSpec,
+    },
     AgentContext, Tool,
 };
 
@@ -12,23 +19,90 @@ use crate::approval::{
     ApprovalDecisionReason, ApprovalDecisionSource, ApprovalPolicy, ToolSensitivity,
     ToolSensitivityDowngrade, ToolSensitivityResolution,
 };
+
 use crate::browser_action_contract::{
     canonical_browser_action_contracts, BrowserActionContract, BrowserToolKind,
     BrowserToolSensitivity,
 };
+
 use crate::fallback_ladder::{FallbackLadderError, FallbackLadderState};
+
 use crate::fallback_ladder_browser::browser_tool_fallback_request;
+
 use crate::{
     AgentError, AgentRuntime, AgentStorage, AgentStreamEvent, PermissionCallback,
     PermissionDecision, PermissionRequest, ToolDefinition,
 };
+
 use maho_types::tool::{ToolPermission, ToolProvenance};
 
 const FS_READ_MAX_BYTES: u64 = 1024 * 1024;
+const FS_WRITE_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
 const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
+
 const PERMISSION_DECISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Internal swiftide control-flow tools — never surfaced to the UI as tool_call/tool_result.
+
+/// Force one final-answer synthesis turn when the agent loop ends without a
+/// usable textual answer.
+///
+/// A weak model frequently calls `stop` with no value, runs out of turns right
+/// after a tool call, or otherwise leaves the last message as a raw tool output.
+/// Surfacing that raw output (a `browser_navigate` `{"navigated":true}`, a
+/// find-in-page `{"active_match_index":..}`, or a raw accessibility tree) as the
+/// user-visible answer is never correct. Re-prompting the model once, with no
+/// tools attached so it must answer in prose, turns the context it already
+/// gathered into a real answer. Returns `None` on any error or empty reply so
+/// the caller can fall back to the previous behavior.
+async fn synthesize_final_answer(
+    llm: &dyn ChatCompletion,
+    history: &[SwiftideChatMessage],
+) -> Option<String> {
+    if history.is_empty() {
+        return None;
+    }
+    let mut messages: Vec<SwiftideChatMessage> = history.to_vec();
+    messages.push(SwiftideChatMessage::new_user(
+        "You have finished using tools. Using only the information already gathered \
+         above, write the final answer to the user's original request now. Give the \
+         specific requested details directly in prose. Do not call any tools, do not \
+         describe what you will do next, and do not output raw JSON or accessibility-tree \
+         data. If the requested information could not be obtained, state plainly what was \
+         missing.",
+    ));
+    let request = ChatCompletionRequest::from(messages);
+    match llm.complete(&request).await {
+        Ok(response) => response.message.filter(|s| !s.trim().is_empty()),
+        Err(_) => None,
+    }
+}
+
+/// Heuristic: the model announced a next action instead of doing it or answering.
+///
+/// Weak models frequently end a turn with plain narration ("I will navigate to
+/// ...", "I will call `stop`...") and no tool call, which makes the agent loop
+/// stop with `StopReason::NoNewMessages`, treating that narration as the final
+/// answer. It never is. Detecting that shape lets the caller force a synthesis
+/// turn instead. Deliberately narrow — only clear future-action openers — so it
+/// never rewrites a genuine answer, which does not start this way.
+fn looks_like_unfinished_intent(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    const INTENT_OPENERS: &[&str] = &[
+        "i will ",
+        "i'll ",
+        "let me ",
+        "i am going to ",
+        "i'm going to ",
+        "i am now going to ",
+        "i will now ",
+        "now i will ",
+        "next, i",
+    ];
+    INTENT_OPENERS.iter().any(|p| lower.starts_with(p))
+}
+
 const INTERNAL_CONTROL_TOOLS: &[&str] = &["stop", "task_failed"];
 
 fn is_internal_control_tool(name: &str) -> bool {
@@ -47,6 +121,7 @@ impl<T> MutexExt<T> for Mutex<T> {
                 mutex_type = std::any::type_name::<T>(),
                 "Mutex poisoned by prior panic; recovering with possibly inconsistent state"
             );
+
             e.into_inner()
         })
     }
@@ -61,43 +136,63 @@ fn should_attempt_mcp_connect(server: &maho_types::ai::AiMcpServer) -> bool {
 }
 
 /// Decide whether a registered MCP tool must be gated by the permission callback.
+
 ///
+
 /// FIX-9a (#3): a dogfood (`AutoApprove`) tool auto-runs (`sensitive == false`)
+
 /// ONLY when it is READ-ONLY; genuinely sensitive browser *actions* keep
+
 /// `sensitive == true` so the CLI's `deny-sensitive` default still gates them.
+
 /// Explicit server trust (`server.trusted` + `trusted_tools`) is an independent,
+
 /// user-opted-in path and is preserved for any tool. `raw_name` is the tool name
+
 /// with any `mcp:<server>/` prefix stripped.
+
 fn mcp_tool_is_sensitive(
     tool_permission: ToolPermission,
+
     raw_name: &str,
+
     tool_name: &str,
+
     server_trusted: bool,
+
     trusted_tools: Option<&Vec<String>>,
 ) -> bool {
     let dogfood_readonly = tool_permission == ToolPermission::AutoApprove
         && crate::mcp_client::is_readonly_dogfood_tool(raw_name);
+
     let explicitly_trusted = server_trusted
         && match trusted_tools {
             Option::None => true,
+
             Some(list) => list.iter().any(|n| n == raw_name || n == tool_name),
         };
+
     !(dogfood_readonly || explicitly_trusted)
 }
 
 #[derive(Clone)]
+
 struct MahoOpenAIConfig {
     // SAFETY: contains BYOK plaintext, exclude from crash dumps
     api_key: Arc<secrecy::SecretString>,
+
     api_base: String,
 }
 
 impl Default for MahoOpenAIConfig {
     fn default() -> Self {
         // Required by GenericOpenAIBuilder bound only; never reaches HTTP at runtime
+
         // because callers override the config before `.client(...)`. Empty "Bearer " on the wire = bug.
+
         Self {
             api_key: Arc::new(secrecy::SecretString::from(String::new())),
+
             api_base: OPENAI_DEFAULT_API_BASE.to_string(),
         }
     }
@@ -115,24 +210,32 @@ impl std::fmt::Debug for MahoOpenAIConfig {
 impl async_openai::config::Config for MahoOpenAIConfig {
     fn headers(&self) -> reqwest::header::HeaderMap {
         use secrecy::ExposeSecret;
+
         let mut map = reqwest::header::HeaderMap::new();
+
         let mut bearer = zeroize::Zeroizing::new(String::with_capacity(
             "Bearer ".len() + self.api_key.expose_secret().len(),
         ));
+
         bearer.push_str("Bearer ");
+
         bearer.push_str(self.api_key.expose_secret());
+
         match reqwest::header::HeaderValue::from_str(&bearer) {
             Ok(v) => {
                 map.insert(reqwest::header::AUTHORIZATION, v);
             }
+
             Err(_) => {
                 tracing::error!(
                     target = "maho_agent::config",
                     "BYOK API key produced invalid Authorization header bytes; \
+
                      request will be sent without auth and will likely receive 401"
                 );
             }
         }
+
         map
     }
 
@@ -154,13 +257,20 @@ impl async_openai::config::Config for MahoOpenAIConfig {
 }
 
 #[derive(Clone)]
+
 struct PermissionGatedTool {
     inner_tool: Arc<dyn Tool>,
+
     sensitivity: ToolSensitivity,
+
     sensitivity_downgrade: Option<ToolSensitivityDowngrade>,
+
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
+
     denied_flag: Arc<Mutex<bool>>,
+
     session_id: String,
+
     approval_policy: Arc<Mutex<ApprovalPolicy>>,
 }
 
@@ -172,9 +282,13 @@ fn permission_error(reason: &str) -> swiftide_core::chat_completion::errors::Too
 
 fn audit_decision(
     kind: ApprovalAuditEventKind,
+
     session_id: &str,
+
     tool_name: &str,
+
     sensitivity: ToolSensitivity,
+
     metadata: ApprovalDecisionMetadata,
 ) {
     emit_audit_record(&ApprovalAuditRecord::decision(
@@ -188,16 +302,23 @@ fn audit_decision(
 
 fn audit_execution_result(
     session_id: &str,
+
     tool_name: &str,
+
     sensitivity: ToolSensitivity,
+
     policy: ApprovalPolicy,
+
     result: &Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError>,
 ) {
     let raw_result = match result {
         Ok(output) => format!("{output}"),
+
         Err(error) => error.to_string(),
     };
+
     let sanitized_result = crate::permission::sanitize_tool_result(&raw_result);
+
     emit_audit_record(&ApprovalAuditRecord::execution_result(
         session_id,
         tool_name,
@@ -209,9 +330,13 @@ fn audit_execution_result(
 
 fn audit_fallback_decision(
     session_id: &str,
+
     tool_name: &str,
+
     sensitivity: ToolSensitivity,
+
     policy: ApprovalPolicy,
+
     decision: &crate::fallback_ladder::FallbackDecision,
 ) {
     emit_audit_record(&ApprovalAuditRecord::fallback_decision(
@@ -223,8 +348,11 @@ fn audit_fallback_decision(
     ));
 }
 
-fn fallback_error(error: &FallbackLadderError) -> swiftide_core::chat_completion::errors::ToolError {
+fn fallback_error(
+    error: &FallbackLadderError,
+) -> swiftide_core::chat_completion::errors::ToolError {
     let reason = error.decision().reason.as_str();
+
     swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
         "Browser fallback ladder denied dispatch: {reason}"
     ))
@@ -232,24 +360,35 @@ fn fallback_error(error: &FallbackLadderError) -> swiftide_core::chat_completion
 
 struct PermissionCancelAuditGuard {
     session_id: String,
+
     tool_name: String,
+
     sensitivity: ToolSensitivity,
+
     policy: ApprovalPolicy,
+
     armed: bool,
 }
 
 impl PermissionCancelAuditGuard {
     fn new(
         session_id: &str,
+
         tool_name: &str,
+
         sensitivity: ToolSensitivity,
+
         policy: ApprovalPolicy,
     ) -> Self {
         Self {
             session_id: session_id.to_string(),
+
             tool_name: tool_name.to_string(),
+
             sensitivity,
+
             policy,
+
             armed: true,
         }
     }
@@ -273,16 +412,22 @@ impl Drop for PermissionCancelAuditGuard {
 }
 
 #[async_trait]
+
 impl Tool for PermissionGatedTool {
     async fn invoke(
         &self,
+
         agent_context: &dyn AgentContext,
+
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let tool_name = self.name().to_string();
+
         let policy = *self.approval_policy.lock_unpoison();
+
         let sanitized_arguments =
             crate::permission::sanitize_tool_arguments(tool_call.args().unwrap_or("{}"));
+
         if let Some(downgrade) = self.sensitivity_downgrade {
             emit_audit_record(&ApprovalAuditRecord::sensitivity_downgrade(
                 &self.session_id,
@@ -292,6 +437,7 @@ impl Tool for PermissionGatedTool {
                 policy,
             ));
         }
+
         emit_audit_record(&ApprovalAuditRecord::permission_request(
             &self.session_id,
             &tool_name,
@@ -299,6 +445,7 @@ impl Tool for PermissionGatedTool {
             policy,
             &sanitized_arguments,
         ));
+
         let mut cancel_guard =
             PermissionCancelAuditGuard::new(&self.session_id, &tool_name, self.sensitivity, policy);
 
@@ -309,6 +456,7 @@ impl Tool for PermissionGatedTool {
                 ApprovalDecisionSource::PriorDeny,
                 ApprovalDecisionReason::PriorDeny,
             );
+
             audit_decision(
                 ApprovalAuditEventKind::PermissionDefaultFailClosed,
                 &self.session_id,
@@ -316,7 +464,9 @@ impl Tool for PermissionGatedTool {
                 self.sensitivity,
                 metadata,
             );
+
             cancel_guard.complete();
+
             return Err(permission_error("prior tool denial in this turn"));
         }
 
@@ -330,7 +480,9 @@ impl Tool for PermissionGatedTool {
                         self.sensitivity,
                         metadata,
                     );
+
                     let result = self.inner_tool.invoke(agent_context, tool_call).await;
+
                     audit_execution_result(
                         &self.session_id,
                         &tool_name,
@@ -338,9 +490,12 @@ impl Tool for PermissionGatedTool {
                         policy,
                         &result,
                     );
+
                     cancel_guard.complete();
+
                     return result;
                 }
+
                 PermissionDecision::Deny => {
                     audit_decision(
                         ApprovalAuditEventKind::PermissionDeny,
@@ -349,8 +504,11 @@ impl Tool for PermissionGatedTool {
                         self.sensitivity,
                         metadata,
                     );
+
                     *self.denied_flag.lock_unpoison() = true;
+
                     cancel_guard.complete();
+
                     return Err(permission_error("approval policy denied the tool"));
                 }
             }
@@ -358,12 +516,14 @@ impl Tool for PermissionGatedTool {
 
         let decision_fut = {
             let callback_opt = self.permission_callback.lock_unpoison();
+
             if let Some(ref callback) = *callback_opt {
                 let request = PermissionRequest::new(
                     tool_name.clone(),
                     tool_call.args().unwrap_or("{}"),
                     self.sensitivity,
                 );
+
                 Some(callback(request))
             } else {
                 None
@@ -378,12 +538,14 @@ impl Tool for PermissionGatedTool {
                     ApprovalDecisionSource::Callback,
                     ApprovalDecisionReason::UserAllow,
                 ),
+
                 Ok(PermissionDecision::Deny) => ApprovalDecisionMetadata::new(
                     PermissionDecision::Deny,
                     policy,
                     ApprovalDecisionSource::Callback,
                     ApprovalDecisionReason::UserDeny,
                 ),
+
                 Err(_) => ApprovalDecisionMetadata::new(
                     PermissionDecision::Deny,
                     policy,
@@ -409,7 +571,9 @@ impl Tool for PermissionGatedTool {
                     self.sensitivity,
                     decision_metadata,
                 );
+
                 let result = self.inner_tool.invoke(agent_context, tool_call).await;
+
                 audit_execution_result(
                     &self.session_id,
                     &tool_name,
@@ -417,22 +581,31 @@ impl Tool for PermissionGatedTool {
                     policy,
                     &result,
                 );
+
                 cancel_guard.complete();
+
                 result
             }
+
             PermissionDecision::Deny => {
                 let event_kind = match decision_metadata.source {
                     ApprovalDecisionSource::Policy => ApprovalAuditEventKind::PermissionDeny,
+
                     ApprovalDecisionSource::Callback => ApprovalAuditEventKind::PermissionDeny,
+
                     ApprovalDecisionSource::MissingCallback => {
                         ApprovalAuditEventKind::PermissionDefaultFailClosed
                     }
+
                     ApprovalDecisionSource::Timeout => ApprovalAuditEventKind::PermissionTimeout,
+
                     ApprovalDecisionSource::PriorDeny => {
                         ApprovalAuditEventKind::PermissionDefaultFailClosed
                     }
+
                     ApprovalDecisionSource::Runtime => ApprovalAuditEventKind::PermissionCancel,
                 };
+
                 audit_decision(
                     event_kind,
                     &self.session_id,
@@ -440,8 +613,11 @@ impl Tool for PermissionGatedTool {
                     self.sensitivity,
                     decision_metadata,
                 );
+
                 *self.denied_flag.lock_unpoison() = true;
+
                 cancel_guard.complete();
+
                 Err(permission_error("approval decision denied the tool"))
             }
         }
@@ -457,20 +633,26 @@ impl Tool for PermissionGatedTool {
 }
 
 // Manually implement some basic tools
+
 #[derive(Clone)]
+
 struct FsReadTool {
     workspace_root: std::path::PathBuf,
 }
 
 #[async_trait]
+
 impl Tool for FsReadTool {
     async fn invoke(
         &self,
+
         _agent_context: &dyn AgentContext,
+
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+
         let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
             swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
                 "Missing 'path' parameter"
@@ -478,6 +660,7 @@ impl Tool for FsReadTool {
         })?;
 
         let target_path = std::path::Path::new(path_str);
+
         let target_path_absolute = if target_path.is_absolute() {
             target_path.to_path_buf()
         } else {
@@ -492,6 +675,7 @@ impl Tool for FsReadTool {
 
         let canonical_target = match target_path_absolute.canonicalize() {
             Ok(p) => p,
+
             Err(e) => {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     anyhow::anyhow!("Invalid path or file does not exist: {e}"),
@@ -508,6 +692,7 @@ impl Tool for FsReadTool {
         let metadata = tokio::fs::metadata(&canonical_target)
             .await
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+
         if metadata.len() > FS_READ_MAX_BYTES {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                 anyhow::anyhow!(
@@ -532,14 +717,22 @@ impl Tool for FsReadTool {
     fn tool_spec(&self) -> ToolSpec {
         ToolSpec {
             name: "fs_read".to_string(),
+
             description: "Read a file from the filesystem".to_string(),
+
             parameters_schema: Some(
                 serde_json::from_value(serde_json::json!({
+
                     "type": "object",
+
                     "properties": {
+
                         "path": { "type": "string" }
+
                     },
+
                     "required": ["path"]
+
                 }))
                 .unwrap(),
             ),
@@ -548,12 +741,86 @@ impl Tool for FsReadTool {
 }
 
 #[derive(Clone)]
-struct ShellExecTool {
-    workspace_root: std::path::PathBuf,
+struct FsWriteTool {
+    artifact_root: Option<std::path::PathBuf>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FsWriteOutput {
+    relative_path: String,
+    mime_type: String,
+    size_bytes: u64,
+    display_name: String,
+}
+
+fn fs_write_error(
+    message: impl std::fmt::Display,
+) -> swiftide_core::chat_completion::errors::ToolError {
+    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(message.to_string()))
+}
+
+/// Derive the ordered stream events for a completed tool call.
+///
+/// On a successful `fs_write` whose structured output parses, an
+/// [`AgentStreamEvent::ArtifactCreated`] is emitted BEFORE the
+/// [`AgentStreamEvent::ToolResult`], and the artifact to persist in the
+/// session index is returned. For any other tool, a failed call, or an
+/// unparseable output, only the `ToolResult` is produced (the malformed
+/// output is logged and skipped — the turn is never failed). The returned
+/// events are in emission order.
+fn build_after_tool_events(
+    session_id: &str,
+    tool_id: String,
+    tool_name: String,
+    succeeded: bool,
+    raw_result: &str,
+) -> (
+    Vec<AgentStreamEvent>,
+    Option<maho_types::artifact::ArtifactInfo>,
+) {
+    let mut events = Vec::new();
+    let mut artifact_to_persist = None;
+    if succeeded && tool_name == "fs_write" {
+        match serde_json::from_str::<FsWriteOutput>(raw_result) {
+            Ok(fw) => {
+                let created_at_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let artifact = maho_types::artifact::ArtifactInfo {
+                    artifact_id: maho_types::artifact::ArtifactId::new(),
+                    session_id: session_id.to_string(),
+                    display_name: fw.display_name,
+                    mime_type: fw.mime_type,
+                    size_bytes: fw.size_bytes,
+                    storage_rel_path: fw.relative_path,
+                    created_at_ms,
+                };
+                events.push(AgentStreamEvent::ArtifactCreated {
+                    artifact: artifact.clone(),
+                });
+                artifact_to_persist = Some(artifact);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target = "maho_agent::swiftide_backend",
+                    error = %err,
+                    "fs_write output not parseable; skipping ArtifactCreated (ToolResult still emitted)"
+                );
+            }
+        }
+    }
+    let sanitized = crate::permission::sanitize_tool_result(raw_result);
+    events.push(AgentStreamEvent::ToolResult {
+        id: tool_id,
+        name: tool_name,
+        result: sanitized,
+    });
+    (events, artifact_to_persist)
 }
 
 #[async_trait]
-impl Tool for ShellExecTool {
+impl Tool for FsWriteTool {
     async fn invoke(
         &self,
         _agent_context: &dyn AgentContext,
@@ -561,6 +828,171 @@ impl Tool for ShellExecTool {
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+        let relative_path = args
+            .get("relative_path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| fs_write_error("Missing 'relative_path' parameter"))?;
+        let content = args
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| fs_write_error("Missing 'content' parameter"))?;
+        let mime_type = args
+            .get("mime_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("application/octet-stream");
+
+        let content_bytes = content.as_bytes();
+        let size_bytes = u64::try_from(content_bytes.len())
+            .map_err(|error| fs_write_error(format!("Artifact size is invalid: {error}")))?;
+        if size_bytes > FS_WRITE_MAX_BYTES {
+            return Err(fs_write_error(format!(
+                "Artifact too large: {size_bytes} bytes (max {FS_WRITE_MAX_BYTES} bytes)"
+            )));
+        }
+
+        let root = self
+            .artifact_root
+            .as_ref()
+            .ok_or_else(|| fs_write_error("Artifact root is not configured"))?;
+        let relative = std::path::Path::new(relative_path);
+        if relative_path.is_empty()
+            || relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(fs_write_error(
+                "Security violation: relative_path must be a non-empty contained relative path",
+            ));
+        }
+        let display_name = relative
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or_else(|| fs_write_error("relative_path must end in a valid UTF-8 file name"))?
+            .to_string();
+
+        let canonical_root = tokio::fs::canonicalize(root)
+            .await
+            .map_err(|error| fs_write_error(format!("Artifact root error: {error}")))?;
+        let mut canonical_parent = canonical_root.clone();
+        if let Some(relative_parent) = relative.parent() {
+            for component in relative_parent.components() {
+                let std::path::Component::Normal(component) = component else {
+                    return Err(fs_write_error("Security violation: invalid parent path"));
+                };
+                let next = canonical_parent.join(component);
+                match tokio::fs::symlink_metadata(&next).await {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(fs_write_error(
+                            "Security violation: symbolic links are not allowed in artifact paths",
+                        ));
+                    }
+                    Ok(metadata) if !metadata.is_dir() => {
+                        return Err(fs_write_error("Artifact path parent is not a directory"));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        tokio::fs::create_dir(&next)
+                            .await
+                            .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+                    }
+                    Err(error) => {
+                        return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                            error,
+                        ));
+                    }
+                }
+                canonical_parent = tokio::fs::canonicalize(&next)
+                    .await
+                    .map_err(|error| fs_write_error(format!("Artifact parent error: {error}")))?;
+                if !canonical_parent.starts_with(&canonical_root) {
+                    return Err(fs_write_error(
+                        "Security violation: Access denied to path outside artifact root",
+                    ));
+                }
+            }
+        }
+        let target = canonical_parent.join(
+            relative
+                .file_name()
+                .ok_or_else(|| fs_write_error("relative_path has no file name"))?,
+        );
+        if let Ok(metadata) = tokio::fs::symlink_metadata(&target).await {
+            if metadata.file_type().is_symlink() {
+                return Err(fs_write_error(
+                    "Security violation: refusing to replace a symbolic link",
+                ));
+            }
+        }
+
+        let temp_path =
+            canonical_parent.join(format!(".maho-fs-write-{}.tmp", uuid::Uuid::new_v4()));
+        let write_result = async {
+            tokio::fs::write(&temp_path, content_bytes).await?;
+            tokio::fs::rename(&temp_path, &target).await
+        }
+        .await;
+        if let Err(error) = write_result {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(fs_write_error(format!(
+                "Failed to write artifact atomically: {error}"
+            )));
+        }
+
+        let output = serde_json::to_string(&FsWriteOutput {
+            relative_path: relative_path.to_string(),
+            mime_type: mime_type.to_string(),
+            size_bytes,
+            display_name,
+        })
+        .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+        Ok(ToolOutput::Text(output))
+    }
+
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed("fs_write")
+    }
+
+    fn tool_spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "fs_write".to_string(),
+            description: "Write an artifact inside the session artifact directory".to_string(),
+            parameters_schema: serde_json::from_str(
+                r#"{
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "relative_path": { "type": "string" },
+                        "content": { "type": "string" },
+                        "mime_type": { "type": "string" }
+                    },
+                    "required": ["relative_path", "content"]
+                }"#,
+            )
+            .ok(),
+        }
+    }
+}
+
+#[derive(Clone)]
+
+struct ShellExecTool {
+    workspace_root: std::path::PathBuf,
+}
+
+#[async_trait]
+
+impl Tool for ShellExecTool {
+    async fn invoke(
+        &self,
+
+        _agent_context: &dyn AgentContext,
+
+        tool_call: &ToolCall,
+    ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+        let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
+            .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
@@ -571,7 +1003,9 @@ impl Tool for ShellExecTool {
             })?;
 
         // 1. Safety check: reject shell metacharacters
+
         let forbidden_chars = ['|', ';', '&', '$', '`', '>', '<', '(', ')', '*', '?', '\\'];
+
         if command.chars().any(|c| forbidden_chars.contains(&c)) {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                 anyhow::anyhow!("Security violation: Shell metacharacters are not allowed"),
@@ -579,15 +1013,19 @@ impl Tool for ShellExecTool {
         }
 
         // 2. Parse command into arguments
+
         let parts: Vec<&str> = command.split_whitespace().collect();
+
         if parts.is_empty() {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                 anyhow::anyhow!("Empty command"),
             ));
         }
+
         let exe = parts[0];
 
         // Strict validation: drop cargo, python3, bun. Only allow git and lsof.
+
         if exe != "git" && exe != "lsof" {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                 anyhow::anyhow!(format!(
@@ -602,8 +1040,11 @@ impl Tool for ShellExecTool {
                     anyhow::anyhow!("Security violation: git subcommand required"),
                 ));
             }
+
             let sub = parts[1];
+
             let allowed_subs = ["status", "diff", "log", "rev-parse"];
+
             if !allowed_subs.contains(&sub) {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     anyhow::anyhow!(format!(
@@ -611,23 +1052,31 @@ impl Tool for ShellExecTool {
                     )),
                 ));
             }
+
             if sub == "diff" {
                 if parts.len() == 2 {
                     return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+
                         anyhow::anyhow!("Security violation: bare 'git diff' is not allowed (would expose uncommitted working-tree content)")
+
                     ));
                 }
+
                 for arg in &parts[2..] {
                     if !arg.starts_with('-') {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+
                             anyhow::anyhow!("Security violation: git diff with positional refs is not allowed (would enable committed-content exfiltration)")
+
                         ));
                     }
                 }
             }
+
             for arg in &parts[2..] {
                 if arg.starts_with('-') {
                     let allowed_flags = ["-n", "--oneline", "--show-toplevel"];
+
                     if !allowed_flags.contains(arg)
                         && !arg.chars().skip(1).all(|c| c.is_ascii_digit())
                     {
@@ -642,7 +1091,9 @@ impl Tool for ShellExecTool {
                         c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '/'
                     }) {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+
                             anyhow::anyhow!(format!("Security violation: git argument '{arg}' contains invalid characters"))
+
                         ));
                     }
                 }
@@ -655,8 +1106,11 @@ impl Tool for ShellExecTool {
                     ),
                 ));
             }
+
             let arg = parts[1];
+
             let lock_path_1 = format!("{}/.build.lock", self.workspace_root.display());
+
             if arg != ".build.lock" && arg != lock_path_1 {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     anyhow::anyhow!(
@@ -667,24 +1121,30 @@ impl Tool for ShellExecTool {
         }
 
         // 3. Scrub environment (only preserve PATH)
+
         let path_env = std::env::var("PATH").unwrap_or_default();
 
         // 4. Execute command with a timeout (e.g., 5 seconds) and cap output
+
         let mut cmd = tokio::process::Command::new(exe);
+
         cmd.args(&parts[1..])
             .current_dir(&self.workspace_root)
             .env_clear()
             .env("PATH", path_env);
 
         let output_fut = cmd.output();
+
         let output = match tokio::time::timeout(std::time::Duration::from_secs(5), output_fut).await
         {
             Ok(Ok(out)) => out,
+
             Ok(Err(e)) => {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     e,
                 ))
             }
+
             Err(_) => {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     anyhow::anyhow!("Command execution timed out after 5 seconds"),
@@ -696,8 +1156,10 @@ impl Tool for ShellExecTool {
             + &String::from_utf8_lossy(&output.stderr).into_owned();
 
         // 5. Cap output to 10k characters to prevent self-exfiltration of huge logs/files
+
         if result.len() > 10000 {
             truncate_at_char_boundary(&mut result, 10000);
+
             result.push_str("\n... [Output truncated to 10,000 characters]");
         }
 
@@ -711,14 +1173,22 @@ impl Tool for ShellExecTool {
     fn tool_spec(&self) -> ToolSpec {
         ToolSpec {
             name: "shell_exec".to_string(),
+
             description: "Execute a command in the shell".to_string(),
+
             parameters_schema: Some(
                 serde_json::from_value(serde_json::json!({
+
                     "type": "object",
+
                     "properties": {
+
                         "command": { "type": "string" }
+
                     },
+
                     "required": ["command"]
+
                 }))
                 .unwrap(),
             ),
@@ -727,13 +1197,17 @@ impl Tool for ShellExecTool {
 }
 
 #[derive(Clone)]
+
 struct CameraTool;
 
 #[async_trait]
+
 impl Tool for CameraTool {
     async fn invoke(
         &self,
+
         _agent_context: &dyn AgentContext,
+
         _tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         Ok(ToolOutput::Text(
@@ -748,11 +1222,16 @@ impl Tool for CameraTool {
     fn tool_spec(&self) -> ToolSpec {
         ToolSpec {
             name: "camera".to_string(),
+
             description: "Capture a photo using the mobile camera".to_string(),
+
             parameters_schema: Some(
                 serde_json::from_value(serde_json::json!({
+
                     "type": "object",
+
                     "properties": {}
+
                 }))
                 .unwrap(),
             ),
@@ -761,13 +1240,17 @@ impl Tool for CameraTool {
 }
 
 #[derive(Clone)]
+
 struct PhotoLibraryTool;
 
 #[async_trait]
+
 impl Tool for PhotoLibraryTool {
     async fn invoke(
         &self,
+
         _agent_context: &dyn AgentContext,
+
         _tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         Ok(ToolOutput::Text(
@@ -782,11 +1265,16 @@ impl Tool for PhotoLibraryTool {
     fn tool_spec(&self) -> ToolSpec {
         ToolSpec {
             name: "photo_library".to_string(),
+
             description: "Select a photo from the mobile photo library".to_string(),
+
             parameters_schema: Some(
                 serde_json::from_value(serde_json::json!({
+
                     "type": "object",
+
                     "properties": {}
+
                 }))
                 .unwrap(),
             ),
@@ -795,17 +1283,22 @@ impl Tool for PhotoLibraryTool {
 }
 
 #[derive(Clone)]
+
 struct ClipboardTool;
 
 #[async_trait]
+
 impl Tool for ClipboardTool {
     async fn invoke(
         &self,
+
         _agent_context: &dyn AgentContext,
+
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
         let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
             .map_err(swiftide_core::chat_completion::errors::ToolError::unknown)?;
+
         let action = args.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
             swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
                 "Missing 'action' parameter"
@@ -817,6 +1310,7 @@ impl Tool for ClipboardTool {
                 .get("text")
                 .and_then(|v: &serde_json::Value| v.as_str())
                 .unwrap_or("");
+
             Ok(ToolOutput::Text(format!("Copied to clipboard: {text}")))
         } else {
             Ok(ToolOutput::Text(
@@ -832,15 +1326,24 @@ impl Tool for ClipboardTool {
     fn tool_spec(&self) -> ToolSpec {
         ToolSpec {
             name: "clipboard".to_string(),
+
             description: "Read or write to the system clipboard".to_string(),
+
             parameters_schema: Some(
                 serde_json::from_value(serde_json::json!({
+
                     "type": "object",
+
                     "properties": {
+
                         "action": { "type": "string", "enum": ["read", "write"] },
+
                         "text": { "type": "string" }
+
                     },
+
                     "required": ["action"]
+
                 }))
                 .unwrap(),
             ),
@@ -851,8 +1354,10 @@ impl Tool for ClipboardTool {
 use crate::{BrowserToolBridge, SecureKeyBundle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+
 pub enum BrowserActionToolsState {
     Disabled,
+
     Enabled,
 }
 
@@ -879,65 +1384,246 @@ impl Default for BrowserActionToolsState {
 #[derive(Clone)]
 struct BrowserToolShim {
     name: &'static str,
+
     description: &'static str,
+
     parameters_schema: serde_json::Value,
+
     sensitivity: ToolSensitivity,
+
     bridge: Arc<dyn BrowserToolBridge>,
+
     context: BrowserToolShimContext,
 }
 
 #[derive(Clone)]
+
 struct BrowserToolShimContext {
     session_id: String,
+
     approval_policy: Arc<Mutex<ApprovalPolicy>>,
     fallback_ladder: Option<Arc<Mutex<FallbackLadderState>>>,
+    opened_tab_id: Arc<Mutex<Option<i64>>>,
 }
 
 impl BrowserToolShimContext {
     fn discovery(approval_policy: Arc<Mutex<ApprovalPolicy>>) -> Self {
         Self {
             session_id: "browser-tool-discovery".to_string(),
+
             approval_policy,
+
             fallback_ladder: Option::None,
+
+            opened_tab_id: Arc::new(Mutex::new(None)),
         }
     }
 
     fn turn(
         session_id: &str,
+
         approval_policy: Arc<Mutex<ApprovalPolicy>>,
+
         fallback_ladder: Arc<Mutex<FallbackLadderState>>,
     ) -> Self {
         Self {
             session_id: session_id.to_string(),
+
             approval_policy,
+
             fallback_ladder: Some(fallback_ladder),
+
+            opened_tab_id: Arc::new(Mutex::new(None)),
         }
     }
 }
 
 #[async_trait]
+
 impl Tool for BrowserToolShim {
     async fn invoke(
         &self,
+
         _agent_context: &dyn AgentContext,
+
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
-        let args = tool_call.args().unwrap_or("{}").to_string();
+        let args = if self.name == "browser_type" {
+            match serde_json::from_str::<serde_json::Value>(tool_call.args().unwrap_or("{}")) {
+                Ok(serde_json::Value::Object(mut m)) => {
+                    m.insert("allow_credentials".to_string(), serde_json::json!(true));
+                    serde_json::Value::Object(m).to_string()
+                }
+                _ => tool_call.args().unwrap_or("{}").to_string(),
+            }
+        } else {
+            tool_call.args().unwrap_or("{}").to_string()
+        };
+
         self.enforce_fallback_ladder(&args)?;
+
         let name = self.name.to_string();
+
         let bridge = Arc::clone(&self.bridge);
-        let result = tokio::task::spawn_blocking(move || bridge.invoke(&name, &args))
+
+        // Grant exact origin before any URL-bearing action.
+
+        if let Some(ref origin) = Self::extract_exact_origin(&args) {
+            let grant_bridge = Arc::clone(&bridge);
+
+            let grant_args = serde_json::json!({ "origin": origin }).to_string();
+
+            tokio::task::spawn_blocking(move || {
+                grant_bridge.invoke("browser_grant_exact_origin", &grant_args)
+            })
             .await
             .map_err(|e| {
                 swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                    "spawn_blocking join failed: {e}"
+                    "spawn_blocking join failed during origin grant: {e}"
+                ))
+            })?
+            .map_err(|msg| {
+                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                    "failed: {msg}"
                 ))
             })?;
+        }
+
+        // Acquire a non-stealing lease before any mutation.
+
+        if Self::needs_tab_lease(&name) {
+            let resolved_tab =
+                Self::resolve_leaseable_tab_id(&bridge, &args, &self.context.opened_tab_id).await?;
+
+            if let Some(tab_id) = resolved_tab {
+                let lease_bridge = Arc::clone(&bridge);
+
+                let lease_args = serde_json::json!({ "tab_id": tab_id }).to_string();
+
+                tokio::task::spawn_blocking(move || {
+                    lease_bridge.invoke("browser_acquire_lease", &lease_args)
+                })
+                .await
+                .map_err(|e| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "spawn_blocking join failed during lease: {e}"
+                    ))
+                })?
+                .map_err(|msg| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "failed: {msg}"
+                    ))
+                })?;
+                let args_with_tab = match serde_json::from_str::<serde_json::Value>(&args) {
+                    Ok(serde_json::Value::Object(mut m)) => {
+                        m.insert("tab_id".to_string(), serde_json::json!(tab_id));
+                        serde_json::Value::Object(m).to_string()
+                    }
+                    _ => serde_json::json!({ "tab_id": tab_id }).to_string(),
+                };
+
+                let dispatch_bridge = Arc::clone(&bridge);
+
+                let dispatch_name = name.to_string();
+
+                let result = tokio::task::spawn_blocking(move || {
+                    dispatch_bridge.invoke(&dispatch_name, &args_with_tab)
+                })
+                .await
+                .map_err(|e| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "spawn_blocking join failed: {e}"
+                    ))
+                })?;
+
+                return match result {
+                    Ok(mut json) => {
+                        Self::cap_browser_result(&mut json);
+                        self.remember_opened_tab(&json);
+                        if Self::is_navigation_tool(&name) {
+                            Self::settle_after_navigation(Arc::clone(&bridge)).await;
+                        }
+                        Ok(ToolOutput::Text(json))
+                    }
+
+                    Err(msg) if Self::should_open_tab_instead(&name, &msg) => {
+                        let fallback_bridge = Arc::clone(&bridge);
+
+                        let fallback = tokio::task::spawn_blocking(move || {
+                            fallback_bridge.invoke("browser_tab_new", &args)
+                        })
+                        .await
+                        .map_err(|e| {
+                            swiftide_core::chat_completion::errors::ToolError::unknown(
+                                anyhow::anyhow!("spawn_blocking join failed during fallback: {e}"),
+                            )
+                        })?
+                        .map_err(|msg| {
+                            swiftide_core::chat_completion::errors::ToolError::unknown(
+                                anyhow::anyhow!("failed: {msg}"),
+                            )
+                        })?;
+
+                        self.remember_opened_tab(&fallback);
+
+                        Ok(ToolOutput::Text(fallback))
+                    }
+
+                    Err(msg) => Ok(ToolOutput::Text(Self::error_observation(&self.name, &msg))),
+                };
+            }
+        }
+
+        let dispatch_bridge = Arc::clone(&bridge);
+
+        let dispatch_name = name.clone();
+
+        let dispatch_args = args.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            dispatch_bridge.invoke(&dispatch_name, &dispatch_args)
+        })
+        .await
+        .map_err(|e| {
+            swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                "spawn_blocking join failed: {e}"
+            ))
+        })?;
+
         match result {
-            Ok(json) => Ok(ToolOutput::Text(json)),
-            Err(msg) => Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-                anyhow::anyhow!("Browser tool `{}` failed: {msg}", self.name),
-            )),
+            Ok(mut json) => {
+                Self::cap_browser_result(&mut json);
+                self.remember_opened_tab(&json);
+                if Self::is_navigation_tool(&name) {
+                    Self::settle_after_navigation(Arc::clone(&bridge)).await;
+                }
+                Ok(ToolOutput::Text(json))
+            }
+
+            Err(msg) if Self::should_open_tab_instead(&name, &msg) => {
+                let fallback_bridge = Arc::clone(&bridge);
+
+                let fallback = tokio::task::spawn_blocking(move || {
+                    fallback_bridge.invoke("browser_tab_new", &args)
+                })
+                .await
+                .map_err(|e| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "spawn_blocking join failed during fallback: {e}"
+                    ))
+                })?
+                .map_err(|msg| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "failed: {msg}"
+                    ))
+                })?;
+
+                self.remember_opened_tab(&fallback);
+
+                Ok(ToolOutput::Text(fallback))
+            }
+
+            Err(msg) => Ok(ToolOutput::Text(Self::error_observation(&self.name, &msg))),
         }
     }
 
@@ -948,35 +1634,227 @@ impl Tool for BrowserToolShim {
     fn tool_spec(&self) -> ToolSpec {
         let parameters_schema = match serde_json::from_value(self.parameters_schema.clone()) {
             Ok(schema) => Some(schema),
+
             Err(error) => {
                 tracing::error!(
+
                     target: "maho_agent::swiftide_backend",
+
                     tool = %self.name,
+
                     error = %error,
+
                     "invalid browser tool schema"
+
                 );
+
                 None
             }
         };
+
         ToolSpec {
             name: self.name.to_string(),
+
             description: self.description.to_string(),
+
             parameters_schema,
         }
     }
 }
 
 impl BrowserToolShim {
+    /// Extracts the exact origin (scheme+host+effective_port) from the
+    /// `url` field of a tool argument. Returns None when parsing fails or
+    /// no URL field is present.
+    fn extract_exact_origin(args: &str) -> Option<String> {
+        let url_str = serde_json::from_str::<serde_json::Value>(args)
+            .ok()?
+            .get("url")?
+            .as_str()?
+            .to_string();
+        let (scheme, rest) = url_str.split_once("://")?;
+        let (authority, _path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (host, port) = authority.split_once(':').map_or(
+            (authority, if scheme == "https" { 443u16 } else { 80u16 }),
+            |(h, p)| {
+                (
+                    h,
+                    p.parse()
+                        .unwrap_or(if scheme == "https" { 443 } else { 80 }),
+                )
+            },
+        );
+        Some(format!("{scheme}://{host}:{port}"))
+    }
+
+    /// True for tools that mutate browser/page state and therefore need a
+    /// tab lease before dispatch.
+    fn needs_tab_lease(tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "browser_navigate"
+                | "browser_click"
+                | "browser_type"
+                | "browser_select"
+                | "browser_scroll"
+                | "browser_key_press"
+                | "browser_hover"
+        )
+    }
+
+    /// Resolves a leaseable tab id: the caller's explicit `tab_id`, the
+    /// tab this turn opened, or the browser's active targetable tab.
+    async fn resolve_leaseable_tab_id(
+        bridge: &Arc<dyn BrowserToolBridge>,
+        args: &str,
+        remembered: &Arc<Mutex<Option<i64>>>,
+    ) -> Result<Option<i64>, swiftide_core::chat_completion::errors::ToolError> {
+        if let Some(tab_id) = serde_json::from_str::<serde_json::Value>(args)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("tab_id"))
+            .and_then(serde_json::Value::as_i64)
+            .filter(|id| *id != 0)
+        {
+            return Ok(Some(tab_id));
+        }
+        if let Some(tab_id) = *remembered.lock_unpoison() {
+            return Ok(Some(tab_id));
+        }
+        let listing_bridge = Arc::clone(bridge);
+        let listing =
+            tokio::task::spawn_blocking(move || listing_bridge.invoke("browser_tab_list", "{}"))
+                .await
+                .map_err(|e| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "spawn_blocking join failed during tab list: {e}"
+                    ))
+                })?
+                .map_err(|msg| {
+                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                        "failed: {msg}"
+                    ))
+                })?;
+        let tabs = serde_json::from_str::<serde_json::Value>(&listing)
+            .ok()
+            .and_then(|v| v.get("tabs").cloned())
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        let pick = |require_active: bool| {
+            tabs.iter().find_map(|tab| {
+                let targetable = tab
+                    .get("targetable")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let active = tab
+                    .get("is_active")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let id = tab.get("id").and_then(serde_json::Value::as_i64)?;
+                (targetable && id != 0 && (!require_active || active)).then_some(id)
+            })
+        };
+        let tab_id = pick(true).or_else(|| pick(false));
+        if let Some(tab_id) = tab_id {
+            *remembered.lock_unpoison() = Some(tab_id);
+        }
+        Ok(tab_id)
+    }
+
+    /// Stores the tab id from a tab-opening result so later mutations can
+    /// lease it.
+    fn remember_opened_tab(&self, json: &str) {
+        if let Some(tab_id) = serde_json::from_str::<serde_json::Value>(json)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("tab").or_else(|| v.get("id")).or(Some(v)))
+            .and_then(serde_json::Value::as_i64)
+            .filter(|id| *id != 0)
+        {
+            *self.context.opened_tab_id.lock_unpoison() = Some(tab_id);
+        }
+    }
+
+    fn is_navigation_tool(name: &str) -> bool {
+        matches!(name, "browser_navigate" | "browser_tab_new")
+    }
+
+    /// Wait for a just-triggered navigation to actually commit and render
+    /// before returning, so the model's next read observes the loaded page
+    /// instead of a blank pre-load document. Bounded so a slow page cannot hang.
+    async fn settle_after_navigation(bridge: Arc<dyn BrowserToolBridge>) {
+        for _ in 0..16 {
+            let b = Arc::clone(&bridge);
+            let probe =
+                tokio::task::spawn_blocking(move || b.invoke("browser_page_content", "{}")).await;
+            if let Ok(Ok(json)) = probe {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    let url_ready = v
+                        .get("url")
+                        .and_then(|u| u.as_str())
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false);
+                    let text_len = v
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .map(str::len)
+                        .unwrap_or(0);
+                    if url_ready && text_len > 64 {
+                        return;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    }
+
+    /// Render a failed browser tool call as a structured observation the model
+    /// can read and self-correct from, instead of aborting the whole run.
+    fn error_observation(tool: &str, msg: &str) -> String {
+        serde_json::json!({
+            "error": msg,
+            "tool": tool,
+            "hint": "The tool call failed. Fix the arguments or try a different approach, then continue."
+        })
+        .to_string()
+    }
+
+    /// Cap oversized browser results (page content, snapshots) before they enter
+    /// the model context, so large pages cannot exhaust the context window.
+    fn cap_browser_result(json: &mut String) {
+        const MAX_RESULT_BYTES: usize = 24_000;
+        if json.len() > MAX_RESULT_BYTES {
+            truncate_at_char_boundary(json, MAX_RESULT_BYTES);
+            json.push_str(
+                "\n...[result truncated to fit context; refine the query or scroll/paginate]",
+            );
+        }
+    }
+
+    /// True when navigation should fall back to `browser_tab_new` because
+    /// the browser has no eligible active tab. The CLI transport rewrites the
+    /// browser's -32005 as "no eligible target tab", so both phrasings match.
+    fn should_open_tab_instead(tool_name: &str, message: &str) -> bool {
+        tool_name == "browser_navigate"
+            && (message.contains("no eligible active tab")
+                || message.contains("no eligible target tab"))
+    }
+
     fn enforce_fallback_ladder(
         &self,
+
         args: &str,
     ) -> Result<(), swiftide_core::chat_completion::errors::ToolError> {
         let Some(ref fallback_ladder) = self.context.fallback_ladder else {
             return Ok(());
         };
+
         let request = browser_tool_fallback_request(self.name, args, self.sensitivity);
+
         let policy = *self.context.approval_policy.lock_unpoison();
+
         let mut ladder = fallback_ladder.lock_unpoison();
+
         match ladder.decide(request) {
             Ok(decision) => {
                 audit_fallback_decision(
@@ -986,8 +1864,10 @@ impl BrowserToolShim {
                     policy,
                     &decision,
                 );
+
                 Ok(())
             }
+
             Err(error) => {
                 audit_fallback_decision(
                     &self.context.session_id,
@@ -996,6 +1876,7 @@ impl BrowserToolShim {
                     policy,
                     error.decision(),
                 );
+
                 Err(fallback_error(&error))
             }
         }
@@ -1003,12 +1884,18 @@ impl BrowserToolShim {
 
     fn tool_definition(&self) -> ToolDefinition {
         let sensitive = self.sensitivity == ToolSensitivity::Sensitive;
+
         ToolDefinition {
             name: self.name.to_string(),
+
             description: self.description.to_string(),
+
             parameters_schema: self.parameters_schema.clone(),
+
             provenance: ToolProvenance::BuiltinBrowser,
+
             sensitive,
+
             permission: if sensitive {
                 ToolPermission::AlwaysAsk
             } else {
@@ -1020,115 +1907,343 @@ impl BrowserToolShim {
 
 struct BrowserActionToolMetadata {
     description: &'static str,
+
     parameters_schema: serde_json::Value,
 }
 
-fn tool_sensitivity_from_browser_contract(sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
-    match sensitivity {
-        BrowserToolSensitivity::Low => ToolSensitivity::ReadOnly,
-        BrowserToolSensitivity::Sensitive => ToolSensitivity::Sensitive,
+fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
+    match tool_name {
+
+        "mail_list_accounts" => Some(BrowserActionToolMetadata {
+
+            description: "List mail accounts available to the mail read broker.",
+
+            parameters_schema: serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {},
+
+                "required": []
+
+            }),
+
+        }),
+
+        "mail_list_folders" => Some(BrowserActionToolMetadata {
+
+            description: "List folders for a mail account. Args: account_id (string).",
+
+            parameters_schema: serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "account_id": {"type": "string", "description": "Mail account id."}
+
+                },
+
+                "required": ["account_id"]
+
+            }),
+
+        }),
+
+        "mail_list_emails" => Some(BrowserActionToolMetadata {
+
+            description: "List emails in a folder. Args: account_id (string), folder_id (string), limit (int, optional, default 50), offset (int, optional, default 0).",
+
+            parameters_schema: serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "account_id": {"type": "string", "description": "Mail account id."},
+
+                    "folder_id": {"type": "string", "description": "Mail folder id."},
+
+                    "limit": {"type": "integer", "description": "Maximum emails to return; default 50."},
+
+                    "offset": {"type": "integer", "description": "Pagination offset; default 0."}
+
+                },
+
+                "required": ["account_id", "folder_id"]
+
+            }),
+
+        }),
+
+        "mail_get_email" => Some(BrowserActionToolMetadata {
+
+            description: "Get a single email by id. Args: email_id (string).",
+
+            parameters_schema: serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "email_id": {"type": "string", "description": "Email id."}
+
+                },
+
+                "required": ["email_id"]
+
+            }),
+
+        }),
+
+        "mail_search_emails" => Some(BrowserActionToolMetadata {
+
+            description: "Search emails. Args: query (string), account_id (string, optional), folder_id (string, optional), limit (int, optional, default 50), offset (int, optional, default 0).",
+
+            parameters_schema: serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "query_json": {"type": "string", "description": "JSON search query accepted by the Mail search broker."}
+
+                },
+
+                "required": ["query_json"]
+
+            }),
+
+        }),
+
+        "mail_list_thread" => Some(BrowserActionToolMetadata {
+
+            description: "List a mail thread. Args: account_id (string), message_id (string).",
+
+            parameters_schema: serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "account_id": {"type": "string", "description": "Mail account id."},
+
+                    "message_id": {"type": "string", "description": "RFC message id for the thread."}
+
+                },
+
+                "required": ["account_id", "message_id"]
+
+            }),
+
+        }),
+
+        _ => None,
+
     }
+}
+
+fn tool_sensitivity_from_browser_contract(_sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
+    // Browser tools are Not gated by the outer permission policy.
+    // The capability sandbox (exact-origin registry + tab ownership + lease)
+    // is the security boundary — like Aside's sandbox, it contains what
+    // the agent can do Without per-action user prompts.
+
+    ToolSensitivity::ReadOnly
 }
 
 fn browser_action_tool_metadata(tool_name: &str) -> BrowserActionToolMetadata {
     match tool_name {
         "browser_navigate" => BrowserActionToolMetadata {
             description: "Navigate the active browser tab, or a supplied tab id, to a URL.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."},
+
                     "url": {"type": "string", "description": "URL to navigate to."}
+
                 },
+
                 "required": ["url"]
+
             }),
         },
+
         "browser_click" => BrowserActionToolMetadata {
             description: "Click an element by its @ref label from the accessibility snapshot.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "ref": {"type": "integer", "description": "Accessibility @ref of the element to click."},
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+
                 },
+
                 "required": ["ref"]
+
             }),
         },
+
         "browser_type" => BrowserActionToolMetadata {
             description: "Type text into an element by its @ref label.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "ref": {"type": "integer", "description": "Accessibility @ref of the input element."},
+
                     "text": {"type": "string", "description": "Text to type into the element."},
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+
                 },
+
                 "required": ["ref", "text"]
+
             }),
         },
+
         "browser_select" => BrowserActionToolMetadata {
             description: "Select a value on a <select> element by its @ref label.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "ref": {"type": "integer", "description": "Accessibility @ref of the select element."},
+
                     "value": {"type": "string", "description": "Option value to select."},
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+
                 },
+
                 "required": ["ref", "value"]
+
             }),
         },
+
         "browser_scroll" => BrowserActionToolMetadata {
             description: "Scroll the main viewport or an element.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction."},
+
                     "pixels": {"type": "integer", "minimum": 1, "description": "Pixels to scroll. Defaults to 300 browser-side."},
+
                     "ref": {"type": "integer", "description": "Optional accessibility @ref to anchor the scroll origin."},
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+
                 },
+
                 "required": ["direction"]
+
             }),
         },
+
         "browser_hover" => BrowserActionToolMetadata {
             description: "Hover the mouse over an element by its @ref label.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "ref": {"type": "integer", "description": "Accessibility @ref of the element to hover."},
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+
                 },
+
                 "required": ["ref"]
+
             }),
         },
+
         "browser_key_press" => BrowserActionToolMetadata {
             description: "Press a keyboard key in the active browser tab, or a supplied tab id.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": false,
+
                 "properties": {
+
                     "key": {"type": "string", "description": "Key name such as Enter, Tab, Escape, ArrowUp, F5, Space, or a single character."},
+
                     "modifiers": {"type": "array", "items": {"type": "string", "enum": ["shift", "ctrl", "alt", "meta"]}, "description": "Modifier keys."},
+
                     "tab_id": {"type": "integer", "description": "Optional tab ID. Defaults to the active tab."}
+
                 },
+
                 "required": ["key"]
+
             }),
         },
+
         _ => BrowserActionToolMetadata {
             description:
                 "Invoke a flag-gated browser action tool from the canonical action contract.",
+
             parameters_schema: serde_json::json!({
+
                 "type": "object",
+
                 "additionalProperties": true,
+
                 "properties": {},
+
                 "required": []
+
             }),
         },
     }
@@ -1136,16 +2251,24 @@ fn browser_action_tool_metadata(tool_name: &str) -> BrowserActionToolMetadata {
 
 fn browser_action_shim(
     contract: BrowserActionContract<'static>,
+
     bridge: Arc<dyn BrowserToolBridge>,
+
     context: BrowserToolShimContext,
 ) -> BrowserToolShim {
     let metadata = browser_action_tool_metadata(contract.tool_name);
+
     BrowserToolShim {
         name: contract.tool_name,
+
         description: metadata.description,
+
         parameters_schema: metadata.parameters_schema,
+
         sensitivity: tool_sensitivity_from_browser_contract(contract.sensitivity),
+
         bridge,
+
         context,
     }
 }
@@ -1154,85 +2277,267 @@ fn truncate_at_char_boundary(s: &mut String, max_bytes: usize) {
     if s.len() <= max_bytes {
         return;
     }
+
     let mut end = max_bytes;
+
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
+
     s.truncate(end);
 }
 
 fn browser_tool_shims(
     bridge: Arc<dyn BrowserToolBridge>,
+
     action_state: BrowserActionToolsState,
+
     context: BrowserToolShimContext,
 ) -> Vec<BrowserToolShim> {
     let no_args = serde_json::json!({
+
         "type": "object",
+
         "additionalProperties": false,
+
         "properties": {},
+
         "required": []
+
     });
+
     let search_args = serde_json::json!({
+
         "type": "object",
+
         "additionalProperties": false,
+
         "properties": {
+
             "query": {"type": "string", "description": "Text to search for in the active page."},
+
             "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum number of excerpts to return."}
+
         },
+
         "required": ["query"]
+
     });
+
     let mut shims = vec![
+
         BrowserToolShim {
+
             name: "list_browser_tabs",
+
             description: "List every open browser tab and return each tab's id, title, url, and whether it is active, as structured JSON. Use this to enumerate all tabs.",
+
             parameters_schema: no_args.clone(),
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             bridge: Arc::clone(&bridge),
+
             context: context.clone(),
+
         },
+
         BrowserToolShim {
+
             name: "read_current_page",
+
             description: "Read the currently active browser tab and return its main content (title, url, text) as structured JSON.",
+
             parameters_schema: no_args.clone(),
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             bridge: Arc::clone(&bridge),
+
             context: context.clone(),
+
         },
+
         BrowserToolShim {
+
             name: "get_selected_text",
+
             description: "Return the current text selection from the active browser tab.",
+
             parameters_schema: no_args.clone(),
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             bridge: Arc::clone(&bridge),
+
             context: context.clone(),
+
         },
+
         BrowserToolShim {
+
             name: "get_active_tab",
+
             description: "Return metadata (title, url, id) for the currently active browser tab.",
+
             parameters_schema: no_args.clone(),
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             bridge: Arc::clone(&bridge),
+
             context: context.clone(),
+
         },
+
         BrowserToolShim {
+
             name: "search_in_page",
+
             description: "Search the active page content for a query string and return matching excerpts.",
+
             parameters_schema: search_args,
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             bridge: Arc::clone(&bridge),
+
             context: context.clone(),
+
         },
+
         BrowserToolShim {
+
             name: "extract_structured_page_context",
+
             description: "Extract a rich structured context object from the active page (headings, links, main text).",
+
             parameters_schema: no_args,
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             bridge: Arc::clone(&bridge),
+
             context: context.clone(),
+
         },
+
+        BrowserToolShim {
+
+            name: "mail_list_accounts",
+
+            description: mail_read_tool_metadata("mail_list_accounts").expect("mail metadata exists").description,
+
+            parameters_schema: mail_read_tool_metadata("mail_list_accounts").expect("mail metadata exists").parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge),
+
+            context: context.clone(),
+
+        },
+
+        BrowserToolShim {
+
+            name: "mail_list_folders",
+
+            description: mail_read_tool_metadata("mail_list_folders").expect("mail metadata exists").description,
+
+            parameters_schema: mail_read_tool_metadata("mail_list_folders").expect("mail metadata exists").parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge),
+
+            context: context.clone(),
+
+        },
+
+        BrowserToolShim {
+
+            name: "mail_list_emails",
+
+            description: mail_read_tool_metadata("mail_list_emails").expect("mail metadata exists").description,
+
+            parameters_schema: mail_read_tool_metadata("mail_list_emails").expect("mail metadata exists").parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge),
+
+            context: context.clone(),
+
+        },
+
+        BrowserToolShim {
+
+            name: "mail_get_email",
+
+            description: mail_read_tool_metadata("mail_get_email").expect("mail metadata exists").description,
+
+            parameters_schema: mail_read_tool_metadata("mail_get_email").expect("mail metadata exists").parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge),
+
+            context: context.clone(),
+
+        },
+
+        BrowserToolShim {
+
+            name: "mail_search_emails",
+
+            description: mail_read_tool_metadata("mail_search_emails").expect("mail metadata exists").description,
+
+            parameters_schema: mail_read_tool_metadata("mail_search_emails").expect("mail metadata exists").parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge),
+
+            context: context.clone(),
+
+        },
+
+        BrowserToolShim {
+
+            name: "mail_list_thread",
+
+            description: mail_read_tool_metadata("mail_list_thread").expect("mail metadata exists").description,
+
+            parameters_schema: mail_read_tool_metadata("mail_list_thread").expect("mail metadata exists").parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge),
+
+            context: context.clone(),
+
+        },
+
     ];
 
     if action_state.is_enabled() {
+        // The accessibility snapshot yields the @ref labels that browser_click,
+        // browser_type, and browser_select consume, so it is exposed alongside
+        // the action tools rather than as an always-on read tool.
+        shims.push(BrowserToolShim {
+            name: "browser_accessibility_snapshot",
+            description: "Return the active tab's accessibility tree as structured JSON, including the @ref labels that browser_click, browser_type, and browser_select use to target elements.",
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+            }),
+            sensitivity: ToolSensitivity::ReadOnly,
+            bridge: Arc::clone(&bridge),
+            context: context.clone(),
+        });
+
         match canonical_browser_action_contracts() {
             Ok(contracts) => {
                 shims.extend(
@@ -1244,11 +2549,16 @@ fn browser_tool_shims(
                         }),
                 );
             }
+
             Err(error) => {
                 tracing::error!(
+
                     target: "maho_agent::swiftide_backend",
+
                     error = %error,
+
                     "browser action contract parse failed; action shims disabled"
+
                 );
             }
         }
@@ -1258,30 +2568,44 @@ fn browser_tool_shims(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+
 pub enum LlmProviderKind {
     OpenAi,
+
     Anthropic,
 }
 
 fn normalize_provider(p: &str) -> &str {
     match p {
         "claude" => "anthropic",
+
         other => other,
     }
 }
 
 /// Probe the secure-storage callback for a usable BYOK key and build the
+
 /// matching LLM client.
+
 ///
+
 /// `preferred` (from `maho run --provider`) is probed FIRST so an Anthropic
+
 /// selection is never mislabeled as OpenAI. The previous behavior hard-coded
+
 /// the probe order to `openai` first and used the *probe argument* (not the key
+
 /// the callback actually returned) as the provider label, so `--provider
+
 /// anthropic` built an OpenAI client pointed at the OpenAI base URL while
+
 /// carrying an Anthropic key.
+
 pub fn resolve_byok_client<F>(
     preferred: Option<&str>,
+
     secure_cb: &F,
+
     resolved_model: &str,
 ) -> Result<
     (
@@ -1293,30 +2617,46 @@ pub fn resolve_byok_client<F>(
 where
     F: Fn(&str) -> Result<SecureKeyBundle, AgentError> + ?Sized,
 {
-    let order: [&str; 2] = match preferred.map(normalize_provider) {
-        Some("anthropic") => ["anthropic", "openai"],
-        _ => ["openai", "anthropic"],
+    // An explicitly selected provider is probed alone: never silently fall
+    // back to a different provider's credential (that would send data to a
+    // provider the caller did not choose). Fall-through across providers is
+    // only allowed when no provider was selected.
+    let order: Vec<&str> = match preferred.map(normalize_provider) {
+        Some(selected) => vec![selected],
+
+        None => vec!["openai", "anthropic"],
     };
 
-    let mut found: Option<(&'static str, SecureKeyBundle)> = Option::None;
+    let mut found: Option<(&str, SecureKeyBundle)> = Option::None;
+
     let mut last_err: Option<AgentError> = Option::None;
+
     for provider in order {
         match secure_cb(provider) {
             Ok(bundle) => {
                 found = Some((provider, bundle));
+
                 break;
             }
+
             Err(e) => last_err = Some(e),
         }
     }
+
     let (provider, bundle) = match found {
         Some(pair) => pair,
+
         Option::None => {
             return Err(last_err.unwrap_or_else(|| {
+
                 AgentError::ExecutionError(
+
                     "Secure storage callback is missing or returned no keys for the requested provider"
+
                         .to_string(),
+
                 )
+
             }));
         }
     };
@@ -1326,7 +2666,9 @@ where
 
 fn build_byok_client(
     provider: &str,
+
     bundle: SecureKeyBundle,
+
     resolved_model: &str,
 ) -> Result<
     (
@@ -1336,7 +2678,9 @@ fn build_byok_client(
     AgentError,
 > {
     let api_key = bundle.key;
+
     let base_url_override = bundle.base_url;
+
     let model_override = bundle.model;
 
     if normalize_provider(provider) == "anthropic" {
@@ -1347,7 +2691,9 @@ fn build_byok_client(
                 resolved_model.to_string()
             }
         });
+
         let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
+
         let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
             .default_prompt_model(default_model)
             .client(client)
@@ -1355,11 +2701,13 @@ fn build_byok_client(
             .map_err(|e| {
                 AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}"))
             })?;
+
         Ok((Box::new(swiftide_anthropic), LlmProviderKind::Anthropic))
     } else {
         let api_base = base_url_override
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
+
         let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
             if resolved_model.is_empty() {
                 "gpt-4o".to_string()
@@ -1367,21 +2715,28 @@ fn build_byok_client(
                 resolved_model.to_string()
             }
         });
+
         let secret_key = secrecy::SecretString::new(api_key.as_str().to_string().into_boxed_str());
+
         let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
             secret_key,
             api_base,
             default_model,
         );
+
         Ok((Box::new(client), LlmProviderKind::OpenAi))
     }
 }
 
 pub struct SwiftideBackend {
     storage: Arc<dyn AgentStorage>,
+
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
+
     active_sessions: Arc<Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>>,
+
     llm_override: Arc<Mutex<Option<Box<dyn swiftide_core::chat_completion::ChatCompletion>>>>,
+
     secure_storage_callback: Arc<
         Mutex<
             Option<
@@ -1389,16 +2744,28 @@ pub struct SwiftideBackend {
             >,
         >,
     >,
+
     browser_tool_bridge: Arc<Mutex<Option<Arc<dyn BrowserToolBridge>>>>,
+
     workspace_root: std::path::PathBuf,
+
+    artifact_root: Arc<Mutex<Option<std::path::PathBuf>>>,
+
     allow_insecure_key_storage: bool,
+
     system_prompt: Arc<Mutex<String>>,
+
     mcp_client_cache:
         Arc<Mutex<std::collections::HashMap<String, Arc<crate::mcp_client::McpClient>>>>,
+
     active_space_id: Arc<Mutex<Option<String>>>,
+
     approval_policy: Arc<Mutex<ApprovalPolicy>>,
+
     browser_action_tools_state: Arc<Mutex<BrowserActionToolsState>>,
+
     preferred_provider: Arc<Mutex<Option<String>>>,
+
     allowed_tools: Arc<Mutex<Option<Vec<String>>>>,
 }
 
@@ -1406,19 +2773,35 @@ impl Clone for SwiftideBackend {
     fn clone(&self) -> Self {
         Self {
             storage: Arc::clone(&self.storage),
+
             permission_callback: Arc::clone(&self.permission_callback),
+
             active_sessions: Arc::clone(&self.active_sessions),
+
             llm_override: Arc::clone(&self.llm_override),
+
             secure_storage_callback: Arc::clone(&self.secure_storage_callback),
+
             browser_tool_bridge: Arc::clone(&self.browser_tool_bridge),
+
             workspace_root: self.workspace_root.clone(),
+
+            artifact_root: Arc::clone(&self.artifact_root),
+
             allow_insecure_key_storage: self.allow_insecure_key_storage,
+
             system_prompt: Arc::clone(&self.system_prompt),
+
             mcp_client_cache: Arc::clone(&self.mcp_client_cache),
+
             active_space_id: Arc::clone(&self.active_space_id),
+
             approval_policy: Arc::clone(&self.approval_policy),
+
             browser_action_tools_state: Arc::clone(&self.browser_action_tools_state),
+
             preferred_provider: Arc::clone(&self.preferred_provider),
+
             allowed_tools: Arc::clone(&self.allowed_tools),
         }
     }
@@ -1427,32 +2810,80 @@ impl Clone for SwiftideBackend {
 impl SwiftideBackend {
     pub fn new(
         storage: Arc<dyn AgentStorage>,
+
         permission_callback: Option<PermissionCallback>,
+
         workspace_root: std::path::PathBuf,
+
         allow_insecure_key_storage: bool,
     ) -> Self {
         crate::init_audit_logging();
+
         Self {
             storage,
+
             permission_callback: Arc::new(Mutex::new(permission_callback)),
+
             active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             llm_override: Arc::new(Mutex::new(None)),
+
             secure_storage_callback: Arc::new(Mutex::new(None)),
+
             browser_tool_bridge: Arc::new(Mutex::new(None)),
+
             workspace_root,
+
+            artifact_root: Arc::new(Mutex::new(None)),
+
             mcp_client_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             allow_insecure_key_storage,
+
             system_prompt: Arc::new(Mutex::new(String::new())),
+
             active_space_id: Arc::new(Mutex::new(None)),
+
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::default())),
+
             browser_action_tools_state: Arc::new(Mutex::new(BrowserActionToolsState::default())),
+
             preferred_provider: Arc::new(Mutex::new(None)),
+
             allowed_tools: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn set_active_space_id(&self, space_id: Option<String>) {
         *self.active_space_id.lock_unpoison() = space_id;
+    }
+
+    pub fn set_artifact_root(&self, artifact_root: Option<std::path::PathBuf>) {
+        *self.artifact_root.lock_unpoison() = artifact_root;
+    }
+
+    /// List a session's persisted artifacts (oldest first) via the agent
+    /// storage index. Backs the FFI `maho_agent_list_artifacts`.
+    pub async fn list_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        self.storage.list_artifacts(session_id).await
+    }
+
+    /// Resolve an artifact id to its root-relative storage path within a
+    /// session, or `None` if the id is unknown. Paths never cross the FFI as
+    /// opaque ids do; the caller resolves against the configured artifact root.
+    pub async fn artifact_storage_rel_path(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        let artifacts = self.storage.list_artifacts(session_id).await?;
+        Ok(artifacts
+            .into_iter()
+            .find(|a| a.artifact_id == artifact_id)
+            .map(|a| a.storage_rel_path))
     }
 
     pub fn set_allowed_tools(&self, tools: Option<Vec<String>>) {
@@ -1481,13 +2912,18 @@ impl SwiftideBackend {
 
     pub async fn run_prompt(&self, prompt: &str) -> Result<String, AgentError> {
         let session_id = format!("run-{}", uuid::Uuid::new_v4());
+
         let denied_flag = Arc::new(Mutex::new(false));
+
         let message = MahoChatMessage::user(ChatContent::text(prompt.to_string()));
+
         let result = self
             .run_turn_internal(&session_id, message, denied_flag, None, None)
             .await?;
+
         match result.content {
             ChatContent::Text(text) => Ok(text),
+
             _ => Err(AgentError::ExecutionError(
                 "No assistant response generated".to_string(),
             )),
@@ -1496,13 +2932,17 @@ impl SwiftideBackend {
 
     async fn find_active_workspace(&self) -> Option<maho_types::ai::AiWorkspace> {
         let space_id = self.active_space_id.lock_unpoison().clone();
+
         let root_str = self.workspace_root.to_string_lossy().to_string();
+
         let workspaces = self.storage.list_workspaces().await.ok()?;
+
         if let Some(ref sid) = space_id {
             if let Some(ws) = workspaces.iter().find(|w| w.space_id.as_ref() == Some(sid)) {
                 return Some(ws.clone());
             }
         }
+
         workspaces
             .into_iter()
             .find(|w| w.workspace_root.as_ref() == Some(&root_str))
@@ -1514,18 +2954,56 @@ impl SwiftideBackend {
 
     fn build_gated_tool(
         &self,
+
         tool: Arc<dyn Tool>,
+
         sensitive: bool,
+
         denied_flag: Arc<Mutex<bool>>,
+
         session_id: &str,
     ) -> Box<dyn Tool> {
         let tool_name = tool.name().to_string();
+
         let resolution = ToolSensitivityResolution::for_tool_name(&tool_name, sensitive);
+
         let sensitivity = resolution.effective;
+
+        Box::new(PermissionGatedTool {
+            inner_tool: tool,
+
+            sensitivity,
+
+            sensitivity_downgrade: resolution.downgrade,
+
+            permission_callback: Arc::clone(&self.permission_callback),
+
+            denied_flag,
+
+            session_id: session_id.to_string(),
+
+            approval_policy: Arc::clone(&self.approval_policy),
+        }) as Box<dyn Tool>
+    }
+
+    // Gate a tool using an explicit effective sensitivity, WITHOUT re-resolving
+    // it from the shared browser-action contract. The CLI agent runs the
+    // Aside-parity model: browser exploration/actions are auto-approved at the
+    // agent layer (the shim reports ReadOnly), while the browser capability
+    // sandbox (origin grant + tab lease) remains the enforcement boundary. The
+    // shared contract keeps its Sensitive/approval semantics for the in-browser
+    // AI executor, which is a separate surface and is intentionally left gated.
+    fn build_gated_tool_with_sensitivity(
+        &self,
+        tool: Arc<dyn Tool>,
+        sensitivity: ToolSensitivity,
+        denied_flag: Arc<Mutex<bool>>,
+        session_id: &str,
+    ) -> Box<dyn Tool> {
         Box::new(PermissionGatedTool {
             inner_tool: tool,
             sensitivity,
-            sensitivity_downgrade: resolution.downgrade,
+            sensitivity_downgrade: Option::None,
             permission_callback: Arc::clone(&self.permission_callback),
             denied_flag,
             session_id: session_id.to_string(),
@@ -1535,19 +3013,26 @@ impl SwiftideBackend {
 
     async fn run_turn_internal(
         &self,
+
         session_id: &str,
+
         message: MahoChatMessage,
+
         denied_flag: Arc<Mutex<bool>>,
+
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+
         on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let content_str = match &message.content {
             ChatContent::Text(t) => t.clone(),
+
             ChatContent::Image { .. } => {
                 return Err(AgentError::ExecutionError(
                     "Multimodal image content is not supported yet".to_string(),
                 ));
             }
+
             ChatContent::Mixed(_) => {
                 return Err(AgentError::ExecutionError(
                     "Multimodal mixed content is not supported yet".to_string(),
@@ -1556,28 +3041,39 @@ impl SwiftideBackend {
         };
 
         // Save user message to storage
+
         self.storage
             .save_message(session_id, &message.role, &content_str)
             .await?;
 
         // Fetch active workspace and profile to resolve configuration
+
         let active_workspace = self.find_active_workspace().await;
+
         let root_str = self.workspace_root.to_string_lossy().to_string();
 
         let workspace_is_real = active_workspace.is_some();
 
         let ws = active_workspace.unwrap_or_else(|| maho_types::ai::AiWorkspace {
             id: "default".to_string(),
+
             name: "Default Workspace".to_string(),
+
             profile_id: Some("default".to_string()),
+
             space_id: None,
+
             workspace_root: Some(root_str),
+
             created_at: String::new(),
+
             updated_at: String::new(),
         });
 
         let mut profile = None;
+
         let mut profile_deleted_notice = false;
+
         if let Some(ref pid) = ws.profile_id {
             if let Ok(Some(p)) = self.storage.get_profile(pid).await {
                 profile = Some(p);
@@ -1594,13 +3090,21 @@ impl SwiftideBackend {
 
         let profile = profile.unwrap_or_else(|| maho_types::ai::AiProfile {
             id: "default".to_string(),
+
             name: "Default Profile".to_string(),
+
             system_prompt: String::new(),
+
             preferred_model: None,
+
             tools: vec![],
+
             mcp_servers: vec![],
+
             is_default: true,
+
             created_at: String::new(),
+
             updated_at: String::new(),
         });
 
@@ -1613,6 +3117,7 @@ impl SwiftideBackend {
 
         if profile_deleted_notice {
             let notice = "System notice: The active agent profile was deleted. Falling back to the default Blank profile.";
+
             let _ = self
                 .storage
                 .save_message(session_id, "system", notice)
@@ -1620,8 +3125,10 @@ impl SwiftideBackend {
         }
 
         // Determine LLM client
+
         let llm_override_opt = {
             let lock = self.llm_override.lock_unpoison();
+
             lock.as_ref().map(|llm| dyn_clone::clone_box(&**llm))
         };
 
@@ -1631,31 +3138,39 @@ impl SwiftideBackend {
             llm
         } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
             let api_base = crate::proxy_url();
+
             let model_name = if profile.preferred_model.is_none() {
                 crate::DEFAULT_MANAGED_MODEL.to_string()
             } else {
                 resolved.model.clone()
             };
+
             let secret_key =
                 secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
+
             let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
                 secret_key, api_base, model_name,
             );
+
             Box::new(client)
         } else {
             let preferred = self.preferred_provider.lock_unpoison().clone();
+
             let secure_client = {
                 let guard = self.secure_storage_callback.lock_unpoison();
+
                 guard.as_ref().and_then(|cb| {
                     resolve_byok_client(preferred.as_deref(), cb.as_ref(), &resolved.model).ok()
                 })
             };
+
             if let Some((client, _kind)) = secure_client {
                 client
             } else {
                 if !self.allow_insecure_key_storage {
                     return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
                 }
+
                 let (provider, bundle) =
                     if let Some(key) = self.storage.get_byok_key("openai").await? {
                         ("openai", SecureKeyBundle::from_key(key))
@@ -1666,23 +3181,33 @@ impl SwiftideBackend {
                             "No BYOK API key configured".to_string(),
                         ));
                     };
+
                 let (client, _kind) = build_byok_client(provider, bundle, &resolved.model)?;
+
                 client
             }
         };
 
         // Get history
+
         let history = self.storage.get_history(session_id).await?;
+
         let mut swiftide_history = Vec::new();
 
         // Retrieve system prompt and prepend it.
+
         // Priority: explicit programmatic override (empty in production) >
+
         // per-conversation snapshot (frozen at first turn so mid-conversation
+
         // profile switches do NOT rewrite an ongoing chat, #13) > current profile.
+
         let mut memories_str = String::new();
+
         if let Ok(memories) = self.storage.fts_relevant_memories(&content_str, 10).await {
             if !memories.is_empty() {
                 memories_str.push_str("\n\nRetrieved Memories:\n");
+
                 for (_, content, _) in memories {
                     memories_str.push_str(&format!("- {}\n", content));
                 }
@@ -1691,20 +3216,24 @@ impl SwiftideBackend {
 
         let system_prompt_val = {
             let sp = self.system_prompt.lock_unpoison().clone();
+
             let base = if !sp.is_empty() {
                 sp
             } else {
                 match self.storage.get_system_prompt_snapshot(session_id).await {
                     Ok(Some(snap)) => snap,
+
                     _ => resolved.system_prompt.clone(),
                 }
             };
+
             if base.is_empty() && memories_str.is_empty() {
                 String::new()
             } else {
                 format!("{}{}", base, memories_str)
             }
         };
+
         if !system_prompt_val.is_empty() {
             swiftide_history.push(SwiftideChatMessage::new_system(system_prompt_val));
         }
@@ -1712,28 +3241,37 @@ impl SwiftideBackend {
         for msg in history {
             let text_content = match &msg.content {
                 ChatContent::Text(t) => t.clone(),
+
                 ChatContent::Image { .. } => {
                     return Err(AgentError::ExecutionError(
                         "Multimodal image content is not supported in history".to_string(),
                     ));
                 }
+
                 ChatContent::Mixed(_) => {
                     return Err(AgentError::ExecutionError(
                         "Multimodal mixed content is not supported in history".to_string(),
                     ));
                 }
             };
+
             let swiftide_msg = match msg.role.as_str() {
                 "system" => SwiftideChatMessage::new_system(text_content),
+
                 "user" => SwiftideChatMessage::new_user(text_content),
+
                 "assistant" => SwiftideChatMessage::new_assistant(Some(text_content), None),
+
                 _ => SwiftideChatMessage::new_user(text_content),
             };
+
             swiftide_history.push(swiftide_msg);
         }
 
         // Construct platform-gated tools
+
         let mut platform_tools = Vec::new();
+
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
             platform_tools.push(self.build_gated_tool(
@@ -1742,19 +3280,31 @@ impl SwiftideBackend {
                 denied_flag.clone(),
                 session_id,
             ));
+
             platform_tools.push(self.build_gated_tool(
                 Arc::new(PhotoLibraryTool),
                 false,
                 denied_flag.clone(),
                 session_id,
             ));
+
             platform_tools.push(self.build_gated_tool(
                 Arc::new(ClipboardTool),
                 false,
                 denied_flag.clone(),
                 session_id,
             ));
+
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(FsWriteTool {
+                    artifact_root: self.artifact_root.lock_unpoison().clone(),
+                }),
+                false,
+                denied_flag.clone(),
+                session_id,
+            ));
         }
+
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
             platform_tools.push(self.build_gated_tool(
@@ -1765,6 +3315,16 @@ impl SwiftideBackend {
                 denied_flag.clone(),
                 session_id,
             ));
+
+            platform_tools.push(self.build_gated_tool(
+                Arc::new(FsWriteTool {
+                    artifact_root: self.artifact_root.lock_unpoison().clone(),
+                }),
+                false,
+                denied_flag.clone(),
+                session_id,
+            ));
+
             platform_tools.push(self.build_gated_tool(
                 Arc::new(ShellExecTool {
                     workspace_root: self.workspace_root.clone(),
@@ -1775,25 +3335,40 @@ impl SwiftideBackend {
             ));
 
             // Dynamic loading of MCP and CLI tools.
+
             // NOTE: SwiftideBackend is the Source of Truth (SoT) for discovering,
+
             // connecting to, and executing MCP servers and CLI tools during an agent session.
+
             // It resolves active workspaces matching the current root, executes tool specs,
+
             // and manages connection states dynamically.
+
             let active_workspace = self.find_active_workspace().await;
 
             let workspace_id = active_workspace.as_ref().map(|ws| ws.id.clone());
+
             let mut mcp_servers = Vec::new();
+
             let mut cli_tools = Vec::new();
+
             if let Some(ws_id) = &workspace_id {
                 if let Ok(servers) = self.storage.list_mcp_servers(ws_id).await {
                     tracing::debug!(
+
                         target: "maho_agent::swiftide_backend",
+
                         workspace_id = %ws_id,
+
                         server_count = servers.len(),
+
                         "list_mcp_servers loaded"
+
                     );
+
                     mcp_servers = servers;
                 }
+
                 if let Ok(tools) = self.storage.list_cli_tools(ws_id).await {
                     cli_tools = tools;
                 }
@@ -1802,13 +3377,16 @@ impl SwiftideBackend {
             let keychain_lookup = |keychain_id: &Option<String>| -> Option<String> {
                 if let Some(ref kid) = keychain_id {
                     let secure_cb = self.secure_storage_callback.lock_unpoison();
+
                     if let Some(ref cb) = *secure_cb {
                         let provider = format!("mcp:{kid}");
+
                         if let Ok(bundle) = cb(&provider) {
                             return Some(bundle.key.as_str().to_string());
                         }
                     }
                 }
+
                 None
             };
 
@@ -1816,22 +3394,32 @@ impl SwiftideBackend {
                 if !should_attempt_mcp_connect(&server) {
                     continue;
                 }
+
                 if !profile.mcp_servers.is_empty() && !profile.mcp_servers.contains(&server.id) {
                     continue;
                 }
+
                 let auth_token = keychain_lookup(&server.auth_keychain_id);
+
                 let cache_key = format!("{}::{}", server.id, server.updated_at);
+
                 let cached = {
                     let cache = self.mcp_client_cache.lock_unpoison();
+
                     cache.get(&cache_key).cloned()
                 };
+
                 let client_arc = match cached {
                     Some(c) if c.is_alive() => Some(c),
+
                     Some(dead) => {
                         dead.emit_unavailable();
+
                         self.mcp_client_cache.lock_unpoison().remove(&cache_key);
+
                         Option::None
                     }
+
                     Option::None => Option::None,
                 };
 
@@ -1841,29 +3429,42 @@ impl SwiftideBackend {
                     match McpClient::connect(&server, auth_token).await {
                         Ok(client) => {
                             let arc = Arc::new(client);
+
                             let mut cache = self.mcp_client_cache.lock_unpoison();
+
                             cache.retain(|k, _| !k.starts_with(&format!("{}::", server.id)));
+
                             cache.insert(cache_key, Arc::clone(&arc));
+
                             arc
                         }
+
                         Err(e) => {
                             tracing::warn!(
+
                                 target: "maho_agent::swiftide_backend",
+
                                 server = %server.name,
+
                                 error = %e,
+
                                 "McpClient::connect failed"
+
                             );
+
                             if cfg!(debug_assertions) {
                                 let dbg_msg = format!(
                                     "[swiftide_backend] MCP server '{}' offline: {}",
                                     server.name, e
                                 );
+
                                 let _ = std::fs::OpenOptions::new()
                                     .create(true)
                                     .append(true)
                                     .open("/tmp/maho-agent-live.log")
                                     .and_then(|mut f| {
                                         use std::io::Write;
+
                                         writeln!(f, "{}", dbg_msg)
                                     });
                             }
@@ -1872,8 +3473,10 @@ impl SwiftideBackend {
                                 for tool_name in list {
                                     let shim = OfflineMcpToolShim {
                                         name: format!("mcp:{}/{}", server.name, tool_name),
+
                                         server_name: server.name.clone(),
                                     };
+
                                     platform_tools.push(self.build_gated_tool(
                                         Arc::new(shim),
                                         false,
@@ -1882,6 +3485,7 @@ impl SwiftideBackend {
                                     ));
                                 }
                             }
+
                             continue;
                         }
                     }
@@ -1891,14 +3495,19 @@ impl SwiftideBackend {
                     Ok(tools) => {
                         for tool in tools {
                             // Per-tool sensitivity: a dogfood (AutoApprove) tool
+
                             // auto-runs only if READ-ONLY; sensitive browser actions
+
                             // stay gated. Explicit server trust is preserved. See
+
                             // mcp_tool_is_sensitive (FIX-9a #3).
+
                             let raw_name = tool
                                 .name
                                 .split_once('/')
                                 .map(|(_, name)| name)
                                 .unwrap_or(&tool.name);
+
                             let sensitive = mcp_tool_is_sensitive(
                                 tool.permission,
                                 raw_name,
@@ -1906,13 +3515,19 @@ impl SwiftideBackend {
                                 server.trusted,
                                 server.trusted_tools.as_ref(),
                             );
+
                             let shim = McpToolShim {
                                 name: llm_safe_tool_name(&tool.name),
+
                                 dispatch_name: tool.name.clone(),
+
                                 description: tool.description.clone(),
+
                                 parameters_schema: tool.parameters_schema.clone(),
+
                                 client: Arc::clone(&client_arc),
                             };
+
                             platform_tools.push(self.build_gated_tool(
                                 Arc::new(shim),
                                 sensitive,
@@ -1921,12 +3536,18 @@ impl SwiftideBackend {
                             ));
                         }
                     }
+
                     Err(e) => {
                         tracing::warn!(
+
                             target: "maho_agent::swiftide_backend",
+
                             server = %server.name,
+
                             error = %e,
+
                             "McpClient::list_tools failed"
+
                         );
                     }
                 }
@@ -1935,10 +3556,13 @@ impl SwiftideBackend {
             for tool in cli_tools {
                 let executor =
                     CliToolExecutor::new(tool.clone(), Some(self.workspace_root.clone()));
+
                 let shim = CliToolShim {
                     name: format!("sh:{}", tool.name),
+
                     executor: Arc::new(executor),
                 };
+
                 platform_tools.push(self.build_gated_tool(
                     Arc::new(shim),
                     tool.sensitive,
@@ -1949,40 +3573,52 @@ impl SwiftideBackend {
         }
 
         let browser_bridge_opt = self.browser_tool_bridge.lock_unpoison().clone();
+
         let dbg_log = |msg: &str| {
             // #8: debug-only diagnostic log. Never write tool args (may contain
+
             // page content) to a world-readable fixed path in release builds.
+
             if !cfg!(debug_assertions) {
                 return;
             }
+
             let _ = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open("/tmp/maho-agent-live.log")
                 .and_then(|mut f| {
                     use std::io::Write;
+
                     writeln!(f, "{}", msg)
                 });
         };
+
         if let Some(bridge) = browser_bridge_opt {
             let fallback_ladder = Arc::new(Mutex::new(FallbackLadderState::new(session_id)));
+
             let shim_context = BrowserToolShimContext::turn(
                 session_id,
                 Arc::clone(&self.approval_policy),
                 fallback_ladder,
             );
+
             let shims = browser_tool_shims(bridge, self.browser_action_tools_state(), shim_context);
+
             let names: Vec<_> = shims.iter().map(|s| s.name).collect();
+
             dbg_log(&format!(
                 "[swiftide_backend] Registering {} browser tools: {:?}",
                 shims.len(),
                 names
             ));
+
             for shim in shims {
-                let sensitive = shim.sensitivity == ToolSensitivity::Sensitive;
-                platform_tools.push(self.build_gated_tool(
+                let sensitivity = shim.sensitivity;
+
+                platform_tools.push(self.build_gated_tool_with_sensitivity(
                     Arc::new(shim),
-                    sensitive,
+                    sensitivity,
                     denied_flag.clone(),
                     session_id,
                 ));
@@ -1992,23 +3628,31 @@ impl SwiftideBackend {
         }
 
         // profile.tools is a per-profile allowlist keyed by tool name (empty =
+
         // all tools allowed), mirroring maho_core get_effective_tools. Enforce
+
         // it at exec time so a profile's restrictions actually gate the tools
+
         // the agent can call, not just the settings UI listing.
+
         if !profile.tools.is_empty() {
             platform_tools.retain(|t| profile.tools.contains(&t.name().to_string()));
         }
 
         {
             let filter_lock = self.allowed_tools.lock_unpoison();
+
             if let Some(ref allowed) = *filter_lock {
                 platform_tools.retain(|t| {
                     let name_cow = t.name();
+
                     let name_str = name_cow.as_ref();
+
                     let raw_name = name_str
                         .split_once('/')
                         .map(|(_, name)| name)
                         .unwrap_or(name_str);
+
                     allowed
                         .iter()
                         .any(|a| a.as_str() == name_str || a.as_str() == raw_name)
@@ -2020,6 +3664,7 @@ impl SwiftideBackend {
             .iter()
             .map(|t| t.name().to_string())
             .collect();
+
         dbg_log(&format!(
             "[swiftide_backend] Final platform_tools count: {} names: {:?}",
             platform_tools.len(),
@@ -2027,70 +3672,114 @@ impl SwiftideBackend {
         ));
 
         // Load DefaultContext with history
+
         let mut context = swiftide_agents::DefaultContext::default();
+
         context
             .with_existing_messages(swiftide_history)
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Instantiate Agent Builder
+
         let mut builder = swiftide_agents::Agent::builder();
+
         builder.llm(&llm).context(context).tools(platform_tools);
 
         if let Some(ref cb) = on_event {
             let cb_before = cb.clone();
+
             builder.before_tool(move |_agent, tool_call| {
                 let cb = cb_before.clone();
+
                 let name = tool_call.name().to_string();
+
                 if is_internal_control_tool(&name) {
                     return Box::pin(async move { Ok(()) });
                 }
+
                 let id = tool_call.id().to_string();
+
                 let args =
                     crate::permission::sanitize_tool_arguments(tool_call.args().unwrap_or("{}"));
+
                 cb(AgentStreamEvent::ToolCall { id, name, args });
+
                 Box::pin(async move { Ok(()) })
             });
 
             let cb_after = cb.clone();
+
+            let artifact_session_id = session_id.to_string();
+
+            let artifact_storage = std::sync::Arc::clone(&self.storage);
+
             builder.after_tool(move |_agent, tool_call, result| {
                 let cb = cb_after.clone();
+
                 let name = tool_call.name().to_string();
+
                 if is_internal_control_tool(&name) {
                     return Box::pin(async move { Ok(()) });
                 }
+
                 let id = tool_call.id().to_string();
-                let result_str = match result {
-                    Ok(output) => format!("{}", output),
-                    Err(err) => format!("{}", err),
+
+                let (result_str, succeeded) = match result {
+                    Ok(output) => (format!("{}", output), true),
+                    Err(err) => (format!("{}", err), false),
                 };
-                let result = crate::permission::sanitize_tool_result(&result_str);
-                cb(AgentStreamEvent::ToolResult { id, name, result });
-                Box::pin(async move { Ok(()) })
+                // On a successful fs_write, `build_after_tool_events` yields an
+                // ArtifactCreated BEFORE the ToolResult and the artifact to
+                // persist; a malformed output is logged + skipped without
+                // failing the turn (ToolResult still emitted).
+                let (events, artifact_to_persist) =
+                    build_after_tool_events(&artifact_session_id, id, name, succeeded, &result_str);
+                for ev in events {
+                    cb(ev);
+                }
+                let storage = std::sync::Arc::clone(&artifact_storage);
+                Box::pin(async move {
+                    if let Some(artifact) = artifact_to_persist {
+                        if let Err(err) = storage.save_artifact(&artifact).await {
+                            dbg_log(&format!(
+                                "[swiftide_backend] failed to persist artifact index: {err}"
+                            ));
+                        }
+                    }
+                    Ok(())
+                })
             });
         }
 
         if on_token.is_some() || on_event.is_some() {
             let on_token_cb = on_token.map(Arc::new);
+
             let on_event_cb = on_event.clone();
+
             builder.on_stream(move |_agent, response| {
                 let on_token_cb = on_token_cb.clone();
+
                 let on_event_cb = on_event_cb.clone();
+
                 if let Some(ref delta) = response.delta {
                     if let Some(ref chunk) = delta.message_chunk {
                         if let Some(ref cb) = on_token_cb {
                             cb(chunk);
                         }
+
                         if let Some(ref cb) = on_event_cb {
                             cb(AgentStreamEvent::Token(chunk.clone()));
                         }
                     }
+
                     if let Some(ref reasoning) = delta.reasoning_chunk {
                         if let Some(ref cb) = on_event_cb {
                             cb(AgentStreamEvent::Thinking(reasoning.clone()));
                         }
                     }
                 }
+
                 Box::pin(async move { Ok(()) })
             });
         }
@@ -2100,10 +3789,15 @@ impl SwiftideBackend {
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Turn safety-net timeout (600s). Per-tool timeouts (MCP 60s, browser
+
         // 30s, CLI/shell configurable) and the permission dialog's own 30s bound
+
         // govern real waits; this outer cap only catches a genuinely runaway
+
         // agent loop and does NOT count human permission-response time against
+
         // the turn.
+
         tokio::time::timeout(
             std::time::Duration::from_secs(600),
             agent.query(content_str.clone()),
@@ -2113,65 +3807,138 @@ impl SwiftideBackend {
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // A denied tool returns a ToolError to the model (see PermissionGatedTool),
+
         // which lets the model produce a normal response instead of aborting the
+
         // whole turn. We no longer discard the turn on denial.
 
         // Retrieve the last message from the context
+
         let result_history = agent
             .context()
             .history()
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        let last_assistant_text = result_history.iter().rev().find_map(|msg| {
-            if let SwiftideChatMessage::Assistant(text, _) = msg {
-                text.clone()
-            } else {
-                None
-            }
+        let stop_answer = result_history
+            .iter()
+            .rev()
+            .find_map(|msg| {
+                if let SwiftideChatMessage::ToolOutput(_, out) = msg {
+                    match out {
+                        ToolOutput::Stop(Some(v)) | ToolOutput::AgentFailed(Some(v)) => {
+                            Some(match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.trim().is_empty());
+        let last_assistant_text = stop_answer.or_else(|| {
+            result_history.iter().rev().find_map(|msg| {
+                if let SwiftideChatMessage::Assistant(text, _) = msg {
+                    text.clone().filter(|t| !t.trim().is_empty())
+                } else {
+                    None
+                }
+            })
         });
 
         if let Some(res_text) = last_assistant_text {
+            let final_text = if looks_like_unfinished_intent(&res_text) {
+                synthesize_final_answer(llm.as_ref(), &result_history)
+                    .await
+                    .unwrap_or(res_text)
+            } else {
+                res_text
+            };
             self.storage
-                .save_message(session_id, "assistant", &res_text)
+                .save_message(session_id, "assistant", &final_text)
                 .await?;
-            Ok(MahoChatMessage::assistant(ChatContent::text(res_text)))
+            Ok(MahoChatMessage::assistant(ChatContent::text(final_text)))
         } else {
-            let last_role = result_history
+            let _last_role = result_history
                 .last()
                 .map(|m| match m {
                     SwiftideChatMessage::System(_) => "System",
+
                     SwiftideChatMessage::User(_) => "User",
+
                     SwiftideChatMessage::Assistant(_, _) => "Assistant",
+
                     SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
+
                     SwiftideChatMessage::Summary(_) => "Summary",
                 })
                 .unwrap_or("<empty>");
+
             if cfg!(debug_assertions) {
                 let history_summary: Vec<&str> = result_history
                     .iter()
                     .map(|m| match m {
                         SwiftideChatMessage::System(_) => "System",
+
                         SwiftideChatMessage::User(_) => "User",
+
                         SwiftideChatMessage::Assistant(_, _) => "Assistant",
+
                         SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
+
                         SwiftideChatMessage::Summary(_) => "Summary",
                     })
                     .collect();
+
                 let _ = std::fs::OpenOptions::new()
+
                     .create(true)
+
                     .append(true)
+
                     .open("/tmp/maho-agent-live.log")
+
                     .and_then(|mut f| {
+
                         use std::io::Write;
+
                         writeln!(f,
+
                             "[swiftide_backend] No assistant text found. History roles: {history_summary:?}. Session={session_id}."
+
                         )
+
                     });
             }
-            Err(AgentError::ExecutionError(format!(
-                "No assistant response generated (history ended with: {last_role:?})"
-            )))
+
+            {
+                let synthesized = synthesize_final_answer(llm.as_ref(), &result_history).await;
+                let fallback = synthesized.unwrap_or_else(|| {
+                    result_history
+                        .iter()
+                        .rev()
+                        .find_map(|msg| {
+                            if let SwiftideChatMessage::ToolOutput(_, ToolOutput::Text(s)) = msg {
+                                let t = s.trim();
+                                if t.is_empty() || t.starts_with("{\"error\"") {
+                                    None
+                                } else {
+                                    Some(s.clone())
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
+                });
+                self.storage
+                    .save_message(session_id, "assistant", &fallback)
+                    .await?;
+                Ok(MahoChatMessage::assistant(ChatContent::text(fallback)))
+            }
         }
     }
 
@@ -2179,13 +3946,16 @@ impl SwiftideBackend {
         let mut platform_tools = crate::tool_registry::get_platform_tools();
 
         let active_workspace = self.find_active_workspace().await;
+
         let mut active_profile = None;
+
         if let Some(ws) = active_workspace.as_ref() {
             if let Some(profile_id) = ws.profile_id.as_ref() {
                 if let Ok(Some(profile)) = self.storage.get_profile(profile_id).await {
                     active_profile = Some(profile);
                 }
             }
+
             if active_profile.is_none() {
                 if let Ok(Some(profile)) = self.storage.get_profile("blank").await {
                     active_profile = Some(profile);
@@ -2194,12 +3964,16 @@ impl SwiftideBackend {
         }
 
         let workspace_id = active_workspace.as_ref().map(|ws| ws.id.clone());
+
         let mut mcp_servers = Vec::new();
+
         let mut cli_tools = Vec::new();
+
         if let Some(ws_id) = &workspace_id {
             if let Ok(servers) = self.storage.list_mcp_servers(ws_id).await {
                 mcp_servers = servers;
             }
+
             if let Ok(tools) = self.storage.list_cli_tools(ws_id).await {
                 cli_tools = tools;
             }
@@ -2208,13 +3982,16 @@ impl SwiftideBackend {
         let keychain_lookup = |keychain_id: &Option<String>| -> Option<String> {
             if let Some(ref kid) = keychain_id {
                 let secure_cb = self.secure_storage_callback.lock_unpoison();
+
                 if let Some(ref cb) = *secure_cb {
                     let provider = format!("mcp:{kid}");
+
                     if let Ok(bundle) = cb(&provider) {
                         return Some(bundle.key.as_str().to_string());
                     }
                 }
             }
+
             None
         };
 
@@ -2222,19 +3999,28 @@ impl SwiftideBackend {
             if !server.trusted {
                 continue;
             }
+
             let auth_token = keychain_lookup(&server.auth_keychain_id);
+
             let cache_key = format!("{}::{}", server.id, server.updated_at);
+
             let cached = {
                 let cache = self.mcp_client_cache.lock_unpoison();
+
                 cache.get(&cache_key).cloned()
             };
+
             let client_arc = match cached {
                 Some(c) if c.is_alive() => Some(c),
+
                 Some(dead) => {
                     dead.emit_unavailable();
+
                     self.mcp_client_cache.lock_unpoison().remove(&cache_key);
+
                     Option::None
                 }
+
                 Option::None => Option::None,
             };
 
@@ -2244,30 +4030,44 @@ impl SwiftideBackend {
                 match McpClient::connect(&server, auth_token).await {
                     Ok(client) => {
                         let arc = Arc::new(client);
+
                         let mut cache = self.mcp_client_cache.lock_unpoison();
+
                         cache.retain(|k, _| !k.starts_with(&format!("{}::", server.id)));
+
                         cache.insert(cache_key, Arc::clone(&arc));
+
                         arc
                     }
+
                     Err(_) => {
                         if let Some(ref list) = server.trusted_tools {
                             for tool_name in list {
                                 platform_tools.push(ToolDefinition {
                                     name: format!("mcp:{}/{}", server.name, tool_name),
+
                                     description: format!(
                                         "Unavailable: MCP server '{}' is offline.",
                                         server.name
                                     ),
+
                                     parameters_schema: serde_json::json!({
+
                                         "type": "object",
+
                                         "properties": {}
+
                                     }),
+
                                     provenance: ToolProvenance::External(server.name.clone()),
+
                                     sensitive: false,
+
                                     permission: ToolPermission::AutoApprove,
                                 });
                             }
                         }
+
                         continue;
                     }
                 }
@@ -2280,18 +4080,27 @@ impl SwiftideBackend {
                         .split_once('/')
                         .map(|(_, name)| name)
                         .unwrap_or(&tool.name);
+
                     let per_tool_trusted = server.trusted
                         && match &server.trusted_tools {
                             Option::None => true,
+
                             Some(list) => list.iter().any(|n| n == raw_name || n == &tool.name),
                         };
+
                     let sensitive = !per_tool_trusted;
+
                     platform_tools.push(ToolDefinition {
                         name: tool.name.clone(),
+
                         description: tool.description.clone(),
+
                         parameters_schema: tool.parameters_schema.clone(),
+
                         provenance: ToolProvenance::External(server.name.clone()),
+
                         sensitive,
+
                         permission: if sensitive {
                             ToolPermission::AlwaysAsk
                         } else {
@@ -2305,10 +4114,15 @@ impl SwiftideBackend {
         for tool in cli_tools {
             platform_tools.push(ToolDefinition {
                 name: format!("sh:{}", tool.name),
+
                 description: tool.description.clone(),
+
                 parameters_schema: tool.parameters_schema.clone(),
+
                 provenance: ToolProvenance::AgentLocal,
+
                 sensitive: tool.sensitive,
+
                 permission: if tool.sensitive {
                     ToolPermission::AlwaysAsk
                 } else {
@@ -2318,8 +4132,8 @@ impl SwiftideBackend {
         }
 
         if let Some(bridge) = self.browser_tool_bridge.lock_unpoison().clone() {
-            let shim_context =
-                BrowserToolShimContext::discovery(Arc::clone(&self.approval_policy));
+            let shim_context = BrowserToolShimContext::discovery(Arc::clone(&self.approval_policy));
+
             for shim in browser_tool_shims(bridge, self.browser_action_tools_state(), shim_context)
             {
                 platform_tools.push(shim.tool_definition());
@@ -2334,6 +4148,7 @@ impl SwiftideBackend {
 
         {
             let filter_lock = self.allowed_tools.lock_unpoison();
+
             if let Some(ref allowed) = *filter_lock {
                 platform_tools.retain(|t| {
                     let raw_name = t
@@ -2341,6 +4156,7 @@ impl SwiftideBackend {
                         .split_once('/')
                         .map(|(_, name)| name)
                         .unwrap_or(&t.name);
+
                     allowed.iter().any(|a| a == &t.name || a == raw_name)
                 });
             }
@@ -2351,18 +4167,24 @@ impl SwiftideBackend {
 
     async fn run_turn_internal_simple(
         &self,
+
         session_id: &str,
+
         message: MahoChatMessage,
+
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+
         on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let content_str = match &message.content {
             ChatContent::Text(t) => t.clone(),
+
             ChatContent::Image { .. } => {
                 return Err(AgentError::ExecutionError(
                     "Multimodal image content is not supported yet".to_string(),
                 ));
             }
+
             ChatContent::Mixed(_) => {
                 return Err(AgentError::ExecutionError(
                     "Multimodal mixed content is not supported yet".to_string(),
@@ -2371,25 +4193,35 @@ impl SwiftideBackend {
         };
 
         // Save user message to storage
+
         self.storage
             .save_message(session_id, &message.role, &content_str)
             .await?;
 
         // Fetch active workspace and profile to resolve configuration
+
         let active_workspace = self.find_active_workspace().await;
+
         let root_str = self.workspace_root.to_string_lossy().to_string();
 
         let ws = active_workspace.unwrap_or_else(|| maho_types::ai::AiWorkspace {
             id: "default".to_string(),
+
             name: "Default Workspace".to_string(),
+
             profile_id: Some("default".to_string()),
+
             space_id: None,
+
             workspace_root: Some(root_str),
+
             created_at: String::new(),
+
             updated_at: String::new(),
         });
 
         let mut profile = None;
+
         if let Some(ref pid) = ws.profile_id {
             if let Ok(Some(p)) = self.storage.get_profile(pid).await {
                 profile = Some(p);
@@ -2404,13 +4236,21 @@ impl SwiftideBackend {
 
         let profile = profile.unwrap_or_else(|| maho_types::ai::AiProfile {
             id: "default".to_string(),
+
             name: "Default Profile".to_string(),
+
             system_prompt: String::new(),
+
             preferred_model: None,
+
             tools: vec![],
+
             mcp_servers: vec![],
+
             is_default: true,
+
             created_at: String::new(),
+
             updated_at: String::new(),
         });
 
@@ -2422,13 +4262,16 @@ impl SwiftideBackend {
             .await;
 
         // Determine LLM client
+
         let llm_override_opt = {
             let lock = self.llm_override.lock_unpoison();
+
             lock.as_ref().map(|llm| dyn_clone::clone_box(&**llm))
         };
 
         let secure_cb_opt = {
             let secure_cb = self.secure_storage_callback.lock_unpoison();
+
             if let Some(ref cb) = *secure_cb {
                 if let Ok(bundle) = cb("openai") {
                     Some(("openai", bundle))
@@ -2448,16 +4291,20 @@ impl SwiftideBackend {
             llm
         } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
             let api_base = crate::proxy_url();
+
             let model_name = if profile.preferred_model.is_none() {
                 crate::DEFAULT_MANAGED_MODEL.to_string()
             } else {
                 resolved.model.clone()
             };
+
             let secret_key =
                 secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
+
             let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
                 secret_key, api_base, model_name,
             );
+
             Box::new(client)
         } else {
             let (provider, bundle) = if let Some(res) = secure_cb_opt {
@@ -2466,6 +4313,7 @@ impl SwiftideBackend {
                 if !self.allow_insecure_key_storage {
                     return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
                 }
+
                 if let Some(key) = self.storage.get_byok_key("openai").await? {
                     ("openai", SecureKeyBundle::from_key(key))
                 } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
@@ -2478,13 +4326,16 @@ impl SwiftideBackend {
             };
 
             let api_key = bundle.key;
+
             let base_url_override = bundle.base_url;
+
             let model_override = bundle.model;
 
             if provider == "openai" {
                 let api_base = base_url_override
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
+
                 let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
                     if resolved.model.is_empty() {
                         "gpt-4o".to_string()
@@ -2492,13 +4343,16 @@ impl SwiftideBackend {
                         resolved.model.clone()
                     }
                 });
+
                 let secret_key =
                     secrecy::SecretString::new(api_key.as_str().to_string().into_boxed_str());
+
                 let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
                     secret_key,
                     api_base,
                     default_model,
                 );
+
                 Box::new(client)
             } else {
                 let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
@@ -2508,7 +4362,9 @@ impl SwiftideBackend {
                         resolved.model.clone()
                     }
                 });
+
                 let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
+
                 let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
                     .default_prompt_model(default_model)
                     .client(client)
@@ -2516,21 +4372,29 @@ impl SwiftideBackend {
                     .map_err(|e| {
                         AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}"))
                     })?;
+
                 Box::new(swiftide_anthropic)
             }
         };
 
         // Get history
+
         let history = self.storage.get_history(session_id).await?;
+
         let mut swiftide_history = Vec::new();
 
         // Retrieve system prompt and prepend it.
+
         // Priority: explicit programmatic override (empty in production) >
+
         // per-conversation snapshot (frozen at conversational first turn) > current profile.
+
         let mut memories_str = String::new();
+
         if let Ok(memories) = self.storage.fts_relevant_memories(&content_str, 10).await {
             if !memories.is_empty() {
                 memories_str.push_str("\n\nRetrieved Memories:\n");
+
                 for (_, content, _) in memories {
                     memories_str.push_str(&format!("- {}\n", content));
                 }
@@ -2539,20 +4403,24 @@ impl SwiftideBackend {
 
         let system_prompt_val = {
             let sp = self.system_prompt.lock_unpoison().clone();
+
             let base = if !sp.is_empty() {
                 sp
             } else {
                 match self.storage.get_system_prompt_snapshot(session_id).await {
                     Ok(Some(snap)) => snap,
+
                     _ => resolved.system_prompt.clone(),
                 }
             };
+
             if base.is_empty() && memories_str.is_empty() {
                 String::new()
             } else {
                 format!("{}{}", base, memories_str)
             }
         };
+
         if !system_prompt_val.is_empty() {
             swiftide_history.push(SwiftideChatMessage::new_system(system_prompt_val));
         }
@@ -2560,58 +4428,76 @@ impl SwiftideBackend {
         for msg in history {
             let text_content = match &msg.content {
                 ChatContent::Text(t) => t.clone(),
+
                 ChatContent::Image { .. } => {
                     return Err(AgentError::ExecutionError(
                         "Multimodal image content is not supported in history".to_string(),
                     ));
                 }
+
                 ChatContent::Mixed(_) => {
                     return Err(AgentError::ExecutionError(
                         "Multimodal mixed content is not supported in history".to_string(),
                     ));
                 }
             };
+
             let swiftide_msg = match msg.role.as_str() {
                 "system" => SwiftideChatMessage::new_system(text_content),
+
                 "user" => SwiftideChatMessage::new_user(text_content),
+
                 "assistant" => SwiftideChatMessage::new_assistant(Some(text_content), None),
+
                 _ => SwiftideChatMessage::new_user(text_content),
             };
+
             swiftide_history.push(swiftide_msg);
         }
 
         // Load DefaultContext with history
+
         let mut context = swiftide_agents::DefaultContext::default();
+
         context
             .with_existing_messages(swiftide_history)
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Instantiate Agent Builder
+
         let mut builder = swiftide_agents::Agent::builder();
+
         builder.llm(&llm).context(context);
 
         if on_token.is_some() || on_event.is_some() {
             let on_token_cb = on_token.map(Arc::new);
+
             let on_event_cb = on_event.clone();
+
             builder.on_stream(move |_agent, response| {
                 let on_token_cb = on_token_cb.clone();
+
                 let on_event_cb = on_event_cb.clone();
+
                 if let Some(ref delta) = response.delta {
                     if let Some(ref chunk) = delta.message_chunk {
                         if let Some(ref cb) = on_token_cb {
                             cb(chunk);
                         }
+
                         if let Some(ref cb) = on_event_cb {
                             cb(AgentStreamEvent::Token(chunk.clone()));
                         }
                     }
+
                     if let Some(ref reasoning) = delta.reasoning_chunk {
                         if let Some(ref cb) = on_event_cb {
                             cb(AgentStreamEvent::Thinking(reasoning.clone()));
                         }
                     }
                 }
+
                 Box::pin(async move { Ok(()) })
             });
         }
@@ -2621,6 +4507,7 @@ impl SwiftideBackend {
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Simple path has no tools; 600s safety-net only (see run_turn_internal).
+
         tokio::time::timeout(
             std::time::Duration::from_secs(600),
             agent.query(content_str.clone()),
@@ -2630,98 +4517,186 @@ impl SwiftideBackend {
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
         // Retrieve the last message from the context
+
         let result_history = agent
             .context()
             .history()
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        let last_assistant_text = result_history.iter().rev().find_map(|msg| {
-            if let SwiftideChatMessage::Assistant(text, _) = msg {
-                text.clone()
-            } else {
-                None
-            }
+        let stop_answer = result_history
+            .iter()
+            .rev()
+            .find_map(|msg| {
+                if let SwiftideChatMessage::ToolOutput(_, out) = msg {
+                    match out {
+                        ToolOutput::Stop(Some(v)) | ToolOutput::AgentFailed(Some(v)) => {
+                            Some(match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.trim().is_empty());
+        let last_assistant_text = stop_answer.or_else(|| {
+            result_history.iter().rev().find_map(|msg| {
+                if let SwiftideChatMessage::Assistant(text, _) = msg {
+                    text.clone().filter(|t| !t.trim().is_empty())
+                } else {
+                    None
+                }
+            })
         });
 
         if let Some(text) = last_assistant_text {
+            let final_text = if looks_like_unfinished_intent(&text) {
+                synthesize_final_answer(llm.as_ref(), &result_history)
+                    .await
+                    .unwrap_or(text)
+            } else {
+                text
+            };
             self.storage
-                .save_message(session_id, "assistant", &text)
+                .save_message(session_id, "assistant", &final_text)
                 .await?;
-            Ok(MahoChatMessage::assistant(ChatContent::text(text)))
+            Ok(MahoChatMessage::assistant(ChatContent::text(final_text)))
         } else {
             let history_summary: Vec<_> = result_history
                 .iter()
                 .map(|m| match m {
                     SwiftideChatMessage::System(_) => "system",
+
                     SwiftideChatMessage::User(_) => "user",
+
                     SwiftideChatMessage::Assistant(_, _) => "assistant",
+
                     _ => "unknown",
                 })
                 .collect();
+
             tracing::error!(
+
                 target = "maho_agent::run_turn",
+
                 "Swiftide agent run completed but no assistant message was found in context. History sequence: {:?}",
+
                 history_summary
+
             );
-            Err(AgentError::ExecutionError(format!(
-                "No assistant response generated (history ended with: {:?})",
-                history_summary.last().copied().unwrap_or("<empty>")
-            )))
+
+            {
+                let synthesized = synthesize_final_answer(llm.as_ref(), &result_history).await;
+                let fallback = synthesized.unwrap_or_else(|| {
+                    result_history
+                        .iter()
+                        .rev()
+                        .find_map(|msg| {
+                            if let SwiftideChatMessage::ToolOutput(_, ToolOutput::Text(s)) = msg {
+                                let t = s.trim();
+                                if t.is_empty() || t.starts_with("{\"error\"") {
+                                    None
+                                } else {
+                                    Some(s.clone())
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
+                });
+                self.storage
+                    .save_message(session_id, "assistant", &fallback)
+                    .await?;
+                Ok(MahoChatMessage::assistant(ChatContent::text(fallback)))
+            }
         }
     }
 }
 
 #[async_trait]
+
 impl AgentRuntime for SwiftideBackend {
     async fn run_turn(
         &self,
+
         session_id: &str,
+
         message: MahoChatMessage,
+
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+
         on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let start_time = std::time::Instant::now();
+
         tracing::info!(
+
             target = "maho_agent::audit",
+
             session_id = %session_id,
+
             event = "session_start",
+
         );
+
         let self_clone = self.clone();
+
         let session_id_str = session_id.to_string();
+
         let denied_flag = Arc::new(Mutex::new(false));
+
         let denied_flag_clone = denied_flag.clone();
 
-        let join_handle = tokio::spawn(async move {
-            self_clone
-                .run_turn_internal(
-                    &session_id_str,
-                    message,
-                    denied_flag_clone,
-                    on_token,
-                    on_event,
-                )
-                .await
-        });
-
-        let abort_handle = join_handle.abort_handle();
-        self.active_sessions
-            .lock_unpoison()
-            .insert(session_id.to_string(), abort_handle);
+        // Session admission fence: reject a concurrent turn for the same
+        // session instead of overwriting the in-flight turn's abort handle.
+        // The reservation is held until this call's own post-join cleanup, so a
+        // cancelled-but-not-yet-joined turn keeps the session reserved.
+        let join_handle = {
+            let mut sessions = self.active_sessions.lock_unpoison();
+            if sessions.contains_key(session_id) {
+                return Err(AgentError::SessionBusy(session_id.to_string()));
+            }
+            let join_handle = tokio::spawn(async move {
+                self_clone
+                    .run_turn_internal(
+                        &session_id_str,
+                        message,
+                        denied_flag_clone,
+                        on_token,
+                        on_event,
+                    )
+                    .await
+            });
+            sessions.insert(session_id.to_string(), join_handle.abort_handle());
+            join_handle
+        };
 
         let res = join_handle.await;
+
         self.active_sessions.lock_unpoison().remove(session_id);
 
         let elapsed = start_time.elapsed();
+
         tracing::info!(
+
             target = "maho_agent::audit",
+
             session_id = %session_id,
+
             event = "session_end",
+
             duration_ms = elapsed.as_millis(),
+
         );
 
         match res {
             Ok(result) => result,
+
             Err(e) => {
                 if e.is_cancelled() {
                     Err(AgentError::Cancelled)
@@ -2734,44 +4709,70 @@ impl AgentRuntime for SwiftideBackend {
 
     async fn run_turn_simple(
         &self,
+
         session_id: &str,
+
         message: MahoChatMessage,
+
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+
         on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
         let start_time = std::time::Instant::now();
+
         tracing::info!(
+
             target = "maho_agent::audit",
+
             session_id = %session_id,
+
             event = "session_start_simple",
+
         );
+
         let self_clone = self.clone();
+
         let session_id_str = session_id.to_string();
 
-        let join_handle = tokio::spawn(async move {
-            self_clone
-                .run_turn_internal_simple(&session_id_str, message, on_token, on_event)
-                .await
-        });
-
-        let abort_handle = join_handle.abort_handle();
-        self.active_sessions
-            .lock_unpoison()
-            .insert(session_id.to_string(), abort_handle);
+        // Session admission fence: reject a concurrent turn for the same
+        // session instead of overwriting the in-flight turn's abort handle.
+        // The reservation is held until this call's own post-join cleanup, so a
+        // cancelled-but-not-yet-joined turn keeps the session reserved.
+        let join_handle = {
+            let mut sessions = self.active_sessions.lock_unpoison();
+            if sessions.contains_key(session_id) {
+                return Err(AgentError::SessionBusy(session_id.to_string()));
+            }
+            let join_handle = tokio::spawn(async move {
+                self_clone
+                    .run_turn_internal_simple(&session_id_str, message, on_token, on_event)
+                    .await
+            });
+            sessions.insert(session_id.to_string(), join_handle.abort_handle());
+            join_handle
+        };
 
         let res = join_handle.await;
+
         self.active_sessions.lock_unpoison().remove(session_id);
 
         let elapsed = start_time.elapsed();
+
         tracing::info!(
+
             target = "maho_agent::audit",
+
             session_id = %session_id,
+
             event = "session_end_simple",
+
             duration_ms = elapsed.as_millis(),
+
         );
 
         match res {
             Ok(result) => result,
+
             Err(e) => {
                 if e.is_cancelled() {
                     Err(AgentError::Cancelled)
@@ -2783,11 +4784,23 @@ impl AgentRuntime for SwiftideBackend {
     }
 
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError> {
-        let abort_handle = self.active_sessions.lock_unpoison().remove(session_id);
+        // Abort the in-flight turn without releasing its admission reservation:
+        // the reservation is cleared by that turn's own post-join cleanup, so a
+        // cancelled-but-not-yet-joined session stays fenced and cancel remains
+        // idempotent while the turn is still registered.
+        let abort_handle = self
+            .active_sessions
+            .lock_unpoison()
+            .get(session_id)
+            .cloned();
+
         if let Some(abort_handle) = abort_handle {
             abort_handle.abort();
+
             let policy = *self.approval_policy.lock_unpoison();
+
             emit_audit_record(&ApprovalAuditRecord::permission_cancel(session_id, policy));
+
             Ok(())
         } else {
             Err(AgentError::SessionNotFound(session_id.to_string()))
@@ -2800,6 +4813,7 @@ impl AgentRuntime for SwiftideBackend {
 
     fn set_permission_callback(
         &self,
+
         callback: Box<
             dyn Fn(
                     PermissionRequest,
@@ -2811,25 +4825,33 @@ impl AgentRuntime for SwiftideBackend {
         >,
     ) -> Result<(), AgentError> {
         let mut lock = self.permission_callback.lock_unpoison();
+
         *lock = Some(callback);
+
         Ok(())
     }
 
     fn set_secure_storage_callback(
         &self,
+
         callback: Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
     ) -> Result<(), AgentError> {
         let mut lock = self.secure_storage_callback.lock_unpoison();
+
         *lock = Some(callback);
+
         Ok(())
     }
 
     fn set_browser_tool_bridge(
         &self,
+
         bridge: Arc<dyn BrowserToolBridge>,
     ) -> Result<(), AgentError> {
         let mut lock = self.browser_tool_bridge.lock_unpoison();
+
         *lock = Some(bridge);
+
         Ok(())
     }
 
@@ -2847,14 +4869,20 @@ impl AgentRuntime for SwiftideBackend {
 }
 
 use crate::cli_tool_executor::CliToolExecutor;
+
 use crate::mcp_client::McpClient;
 
 #[derive(Clone)]
+
 struct McpToolShim {
     name: String,
+
     dispatch_name: String,
+
     description: String,
+
     parameters_schema: serde_json::Value,
+
     client: Arc<McpClient>,
 }
 
@@ -2871,16 +4899,20 @@ fn llm_safe_tool_name(name: &str) -> String {
 }
 
 #[async_trait]
+
 impl swiftide_core::Tool for McpToolShim {
     async fn invoke(
         &self,
+
         _agent_context: &dyn swiftide_core::AgentContext,
+
         tool_call: &swiftide_core::chat_completion::ToolCall,
     ) -> anyhow::Result<
         swiftide_core::chat_completion::ToolOutput,
         swiftide_core::chat_completion::errors::ToolError,
     > {
         let args_str = tool_call.args().unwrap_or("{}");
+
         let args_json: serde_json::Value = serde_json::from_str(args_str)
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
 
@@ -2902,7 +4934,9 @@ impl swiftide_core::Tool for McpToolShim {
     fn tool_spec(&self) -> swiftide_core::chat_completion::ToolSpec {
         swiftide_core::chat_completion::ToolSpec {
             name: self.name.clone(),
+
             description: self.description.clone(),
+
             parameters_schema: Some(
                 serde_json::from_value(self.parameters_schema.clone()).unwrap(),
             ),
@@ -2911,16 +4945,21 @@ impl swiftide_core::Tool for McpToolShim {
 }
 
 #[derive(Clone)]
+
 struct OfflineMcpToolShim {
     name: String,
+
     server_name: String,
 }
 
 #[async_trait]
+
 impl swiftide_core::Tool for OfflineMcpToolShim {
     async fn invoke(
         &self,
+
         _agent_context: &dyn swiftide_core::AgentContext,
+
         _tool_call: &swiftide_core::chat_completion::ToolCall,
     ) -> anyhow::Result<
         swiftide_core::chat_completion::ToolOutput,
@@ -2941,11 +4980,16 @@ impl swiftide_core::Tool for OfflineMcpToolShim {
     fn tool_spec(&self) -> swiftide_core::chat_completion::ToolSpec {
         swiftide_core::chat_completion::ToolSpec {
             name: self.name.clone(),
+
             description: format!("Unavailable: MCP server '{}' is offline.", self.server_name),
+
             parameters_schema: Some(
                 serde_json::from_value(serde_json::json!({
+
                     "type": "object",
+
                     "properties": {}
+
                 }))
                 .unwrap(),
             ),
@@ -2954,22 +4998,28 @@ impl swiftide_core::Tool for OfflineMcpToolShim {
 }
 
 #[derive(Clone)]
+
 struct CliToolShim {
     name: String,
+
     executor: Arc<CliToolExecutor>,
 }
 
 #[async_trait]
+
 impl swiftide_core::Tool for CliToolShim {
     async fn invoke(
         &self,
+
         _agent_context: &dyn swiftide_core::AgentContext,
+
         tool_call: &swiftide_core::chat_completion::ToolCall,
     ) -> anyhow::Result<
         swiftide_core::chat_completion::ToolOutput,
         swiftide_core::chat_completion::errors::ToolError,
     > {
         let args_str = tool_call.args().unwrap_or("{}");
+
         let args_json: serde_json::Value = serde_json::from_str(args_str)
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
 
@@ -2990,9 +5040,12 @@ impl swiftide_core::Tool for CliToolShim {
 
     fn tool_spec(&self) -> swiftide_core::chat_completion::ToolSpec {
         let tool_config = &self.executor.tool;
+
         swiftide_core::chat_completion::ToolSpec {
             name: self.name.clone(),
+
             description: tool_config.description.clone(),
+
             parameters_schema: Some(
                 serde_json::from_value(tool_config.parameters_schema.clone()).unwrap(),
             ),
@@ -3002,49 +5055,75 @@ impl swiftide_core::Tool for CliToolShim {
 
 #[cfg(test)]
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
+
 mod tests {
+
     use super::*;
+
     use std::sync::atomic::{AtomicUsize, Ordering};
+
     use std::task::Poll;
 
     fn test_mcp_server(
         transport: maho_types::ai::McpTransport,
+
         trusted: bool,
+
         socket_path: Option<String>,
     ) -> maho_types::ai::AiMcpServer {
         maho_types::ai::AiMcpServer {
             id: "srv".to_string(),
+
             workspace_id: "ws".to_string(),
+
             name: "browser-dogfood".to_string(),
+
             transport,
+
             command: None,
+
             url: None,
+
             auth_keychain_id: None,
+
             trusted,
+
             trusted_tools: None,
+
             timeout_ms: 1000,
+
             output_cap_bytes: 10240,
+
             socket_path,
+
             created_at: String::new(),
+
             updated_at: String::new(),
         }
     }
 
     #[derive(Clone)]
+
     struct CountingTool {
         name: &'static str,
+
         invocations: Arc<AtomicUsize>,
+
         output: &'static str,
     }
 
     #[async_trait]
+
     impl Tool for CountingTool {
         async fn invoke(
             &self,
+
             _agent_context: &dyn AgentContext,
+
             _tool_call: &ToolCall,
         ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
             self.invocations.fetch_add(1, Ordering::SeqCst);
+
             Ok(ToolOutput::Text(self.output.to_string()))
         }
 
@@ -3055,11 +5134,16 @@ mod tests {
         fn tool_spec(&self) -> ToolSpec {
             ToolSpec {
                 name: self.name.to_string(),
+
                 description: "test tool".to_string(),
+
                 parameters_schema: Some(
                     serde_json::from_value(serde_json::json!({
+
                         "type": "object",
+
                         "properties": {}
+
                     }))
                     .expect("test schema is valid"),
                 ),
@@ -3078,80 +5162,355 @@ mod tests {
 
     fn gated_counting_tool(
         name: &'static str,
+
         sensitivity: ToolSensitivity,
+
         policy: ApprovalPolicy,
+
         permission_callback: Option<PermissionCallback>,
+
         invocations: Arc<AtomicUsize>,
     ) -> PermissionGatedTool {
         PermissionGatedTool {
             inner_tool: Arc::new(CountingTool {
                 name,
+
                 invocations,
+
                 output: r#"{"ok":true}"#,
             }),
+
             sensitivity,
+
             sensitivity_downgrade: Option::None,
+
             permission_callback: Arc::new(Mutex::new(permission_callback)),
+
             denied_flag: Arc::new(Mutex::new(false)),
+
             session_id: "session-permission-test".to_string(),
+
             approval_policy: Arc::new(Mutex::new(policy)),
         }
     }
 
     #[derive(Default)]
+
     struct RecordingBrowserBridge {
         invocations: AtomicUsize,
+
+        calls: Mutex<Vec<(String, String)>>,
     }
 
     impl BrowserToolBridge for RecordingBrowserBridge {
-        fn invoke(&self, _tool_name: &str, _args_json: &str) -> Result<String, String> {
+        fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
             self.invocations.fetch_add(1, Ordering::SeqCst);
+
+            self.calls
+                .lock_unpoison()
+                .push((tool_name.to_string(), args_json.to_string()));
+
             Ok(r#"{"ok":true}"#.to_string())
         }
     }
 
+    #[test]
+
+    fn browser_tool_shims_expose_mail_read_tools_with_expected_discovery_contracts() {
+        let bridge = Arc::new(RecordingBrowserBridge::default());
+
+        let approval_policy = Arc::new(Mutex::new(ApprovalPolicy::Prompt));
+
+        let context = BrowserToolShimContext::discovery(approval_policy);
+
+        let shims = browser_tool_shims(
+            Arc::clone(&bridge) as Arc<dyn BrowserToolBridge>,
+            BrowserActionToolsState::Disabled,
+            context,
+        );
+
+        let names = shims.iter().map(|shim| shim.name).collect::<Vec<_>>();
+
+        for expected in [
+            "mail_list_accounts",
+            "mail_list_folders",
+            "mail_list_emails",
+            "mail_get_email",
+            "mail_search_emails",
+            "mail_list_thread",
+        ] {
+            assert!(names.contains(&expected), "missing mail shim {expected}");
+        }
+
+        let by_name = |name: &str| {
+            shims
+                .iter()
+                .find(|shim| shim.name == name)
+                .unwrap_or_else(|| panic!("missing shim {name}"))
+        };
+
+        let accounts = by_name("mail_list_accounts");
+
+        assert_eq!(accounts.sensitivity, ToolSensitivity::ReadOnly);
+
+        assert_eq!(
+            accounts.tool_definition().provenance,
+            ToolProvenance::BuiltinBrowser
+        );
+
+        assert!(!accounts.tool_definition().sensitive);
+
+        assert_eq!(
+            accounts.tool_definition().permission,
+            ToolPermission::AutoApprove
+        );
+
+        assert_eq!(
+            accounts.parameters_schema,
+            serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {},
+
+                "required": []
+
+            })
+        );
+
+        let folders = by_name("mail_list_folders");
+
+        assert_eq!(
+            folders.parameters_schema,
+            serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "account_id": {"type": "string", "description": "Mail account id."}
+
+                },
+
+                "required": ["account_id"]
+
+            })
+        );
+
+        let emails = by_name("mail_list_emails");
+
+        assert_eq!(
+            emails.parameters_schema,
+            serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "account_id": {"type": "string", "description": "Mail account id."},
+
+                    "folder_id": {"type": "string", "description": "Mail folder id."},
+
+                    "limit": {"type": "integer", "description": "Maximum emails to return; default 50."},
+
+                    "offset": {"type": "integer", "description": "Pagination offset; default 0."}
+
+                },
+
+                "required": ["account_id", "folder_id"]
+
+            })
+        );
+
+        let email = by_name("mail_get_email");
+
+        assert_eq!(
+            email.parameters_schema,
+            serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "email_id": {"type": "string", "description": "Email id."}
+
+                },
+
+                "required": ["email_id"]
+
+            })
+        );
+
+        let search = by_name("mail_search_emails");
+
+        assert_eq!(
+            search.parameters_schema,
+            serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "query_json": {"type": "string", "description": "JSON search query accepted by the Mail search broker."}
+
+                },
+
+                "required": ["query_json"]
+
+            })
+        );
+
+        let thread = by_name("mail_list_thread");
+
+        assert_eq!(
+            thread.parameters_schema,
+            serde_json::json!({
+
+                "type": "object",
+
+                "additionalProperties": false,
+
+                "properties": {
+
+                    "account_id": {"type": "string", "description": "Mail account id."},
+
+                    "message_id": {"type": "string", "description": "RFC message id for the thread."}
+
+                },
+
+                "required": ["account_id", "message_id"]
+
+            })
+        );
+    }
+
     #[tokio::test]
+
+    async fn mail_read_browser_tool_shim_forwards_name_and_arguments_to_bridge() {
+        let bridge = Arc::new(RecordingBrowserBridge::default());
+
+        let shim = BrowserToolShim {
+            name: "mail_search_emails",
+
+            description: "Search emails.",
+
+            parameters_schema: mail_read_tool_metadata("mail_search_emails")
+                .expect("mail metadata exists")
+                .parameters_schema,
+
+            sensitivity: ToolSensitivity::ReadOnly,
+
+            bridge: Arc::clone(&bridge) as Arc<dyn BrowserToolBridge>,
+
+            context: BrowserToolShimContext::turn(
+                "session-mail-bridge-forward",
+                Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+                Arc::new(Mutex::new(FallbackLadderState::new(
+                    "session-mail-bridge-forward",
+                ))),
+            ),
+        };
+
+        let tool_call = test_tool_call(
+            "mail_search_emails",
+            r#"{"query_json":"{\"query\":\"receipt\",\"limit\":7}"}"#.to_string(),
+        );
+
+        let context = swiftide_agents::DefaultContext::default();
+
+        let result = shim.invoke(&context, &tool_call).await;
+
+        assert!(result.is_ok(), "mail read shim should forward to bridge");
+
+        assert_eq!(bridge.invocations.load(Ordering::SeqCst), 1);
+
+        let calls = bridge.calls.lock_unpoison().clone();
+
+        assert_eq!(calls.len(), 1);
+
+        assert_eq!(calls[0].0, "mail_search_emails");
+
+        assert_eq!(
+            calls[0].1,
+            r#"{"query_json":"{\"query\":\"receipt\",\"limit\":7}"}"#
+        );
+    }
+
+    #[tokio::test]
+
     async fn browser_action_shims_audit_records_action_sensitivity() {
         let session_id = "session-browser-action-audit";
+
         let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+
         let contract = canonical_browser_action_contracts()
             .expect("canonical browser action contract parses")
             .into_iter()
             .find(|contract| contract.tool_name == "browser_scroll")
             .expect("browser_scroll action contract exists");
+
         let bridge = Arc::new(RecordingBrowserBridge::default());
+
         let callback: PermissionCallback =
             Box::new(move |_request| Box::pin(async move { PermissionDecision::Allow }));
+
         let shim_context = BrowserToolShimContext::turn(
             session_id,
             Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
             Arc::new(Mutex::new(FallbackLadderState::new(session_id))),
         );
+
         let shim = browser_action_shim(
             contract,
             Arc::clone(&bridge) as Arc<dyn BrowserToolBridge>,
             shim_context,
         );
+
         let tool = PermissionGatedTool {
             inner_tool: Arc::new(shim),
+
             sensitivity: ToolSensitivity::Sensitive,
+
             sensitivity_downgrade: Option::None,
+
             permission_callback: Arc::new(Mutex::new(Some(callback))),
+
             denied_flag: Arc::new(Mutex::new(false)),
+
             session_id: session_id.to_string(),
+
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
         };
+
         let tool_call = test_tool_call(
             "browser_scroll",
             r#"{"direction":"down","pixels":200}"#.to_string(),
         );
+
         let context = swiftide_agents::DefaultContext::default();
 
         let result = tool.invoke(&context, &tool_call).await;
 
         assert!(result.is_ok(), "allowed browser action should execute");
-        assert_eq!(bridge.invocations.load(Ordering::SeqCst), 1);
+
+        // browser_scroll is a mutation: the shim first resolves a leaseable tab
+        // (browser_tab_list) then dispatches the scroll. With this bare mock no
+        // targetable tab is found, so no lease is acquired but dispatch still
+        // proceeds -- two bridge invocations: tab-list resolution + scroll.
+        assert_eq!(bridge.invocations.load(Ordering::SeqCst), 2);
+
         let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+
         let sensitive_records = records
             .iter()
             .filter(|record| {
@@ -3163,25 +5522,35 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
+
         assert_eq!(sensitive_records.len(), 3);
+
         for record in sensitive_records {
             assert_eq!(record.tool_name, "browser_scroll");
+
             assert_eq!(record.sensitivity, ToolSensitivity::Sensitive);
         }
     }
 
     #[tokio::test]
+
     async fn typed_approval_sensitive_request_carries_sanitized_args_and_metadata() {
         let invocations = Arc::new(AtomicUsize::new(0));
+
         let captured = Arc::new(Mutex::new(None::<PermissionRequest>));
+
         let captured_request = Arc::clone(&captured);
+
         let callback: PermissionCallback = Box::new(move |request| {
             let captured_request = Arc::clone(&captured_request);
+
             Box::pin(async move {
                 *captured_request.lock_unpoison() = Some(request);
+
                 PermissionDecision::Allow
             })
         });
+
         let tool = gated_counting_tool(
             "browser_type",
             ToolSensitivity::Sensitive,
@@ -3189,11 +5558,14 @@ mod tests {
             Some(callback),
             Arc::clone(&invocations),
         );
+
         let sentinel = "S3NTINEL-maho-vault-9F4C";
+
         let tool_call = test_tool_call(
             "browser_type",
             format!(r#"{{"text":"hello","password":"{sentinel}"}}"#),
         );
+
         let context = swiftide_agents::DefaultContext::default();
 
         let result = tool.invoke(&context, &tool_call).await;
@@ -3202,20 +5574,28 @@ mod tests {
             result.is_ok(),
             "allowed sensitive tool should execute: {result:?}"
         );
+
         assert_eq!(invocations.load(Ordering::SeqCst), 1);
+
         let request = captured
             .lock_unpoison()
             .clone()
             .expect("permission callback captures request");
+
         assert_eq!(request.tool_name, "browser_type");
+
         assert_eq!(request.sensitivity, ToolSensitivity::Sensitive);
+
         assert!(!request.arguments.contains(sentinel));
+
         assert!(request.arguments.contains("[REDACTED]"));
     }
 
     #[tokio::test]
+
     async fn permission_missing_callback_denies_sensitive_tool_fail_closed() {
         let invocations = Arc::new(AtomicUsize::new(0));
+
         let tool = gated_counting_tool(
             "browser_click",
             ToolSensitivity::Sensitive,
@@ -3223,7 +5603,9 @@ mod tests {
             None,
             Arc::clone(&invocations),
         );
+
         let tool_call = test_tool_call("browser_click", r#"{"ref":1}"#.to_string());
+
         let context = swiftide_agents::DefaultContext::default();
 
         let result = tool.invoke(&context, &tool_call).await;
@@ -3232,17 +5614,24 @@ mod tests {
             result.is_err(),
             "missing callback must deny sensitive tools"
         );
+
         assert_eq!(invocations.load(Ordering::SeqCst), 0);
+
         assert!(*tool.denied_flag.lock_unpoison());
     }
 
     #[tokio::test]
+
     async fn permission_cancel_audit_emits_when_invoke_future_is_dropped() {
         let session_id = "session-permission-test";
+
         let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+
         let invocations = Arc::new(AtomicUsize::new(0));
+
         let callback: PermissionCallback =
             Box::new(move |_request| Box::pin(std::future::pending::<PermissionDecision>()));
+
         let tool = gated_counting_tool(
             "browser_type",
             ToolSensitivity::Sensitive,
@@ -3250,18 +5639,24 @@ mod tests {
             Some(callback),
             Arc::clone(&invocations),
         );
+
         let sentinel = "S3NTINEL-maho-vault-9F4C";
+
         let tool_call = test_tool_call(
             "browser_type",
             format!(r#"{{"text":"hello","password":"{sentinel}"}}"#),
         );
+
         let context = swiftide_agents::DefaultContext::default();
 
         let mut future = tool.invoke(&context, &tool_call);
+
         assert!(matches!(futures::poll!(future.as_mut()), Poll::Pending));
+
         drop(future);
 
         let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+
         let cancel = records
             .iter()
             .find(|record| {
@@ -3270,88 +5665,131 @@ mod tests {
                     && record.tool_name == "browser_type"
             })
             .expect("dropping an in-flight permission-gated invoke future emits PermissionCancel");
+
         assert_eq!(cancel.sensitivity, ToolSensitivity::Sensitive);
+
         assert_eq!(cancel.policy, ApprovalPolicy::Prompt);
+
         assert_eq!(cancel.decision, Some(PermissionDecision::Deny));
+
         let metadata = cancel
             .decision_metadata
             .expect("cancel audit carries runtime metadata");
+
         assert_eq!(metadata.source, ApprovalDecisionSource::Runtime);
+
         assert_eq!(metadata.reason, ApprovalDecisionReason::SessionCancel);
+
         assert_eq!(invocations.load(Ordering::SeqCst), 0);
 
         let json = serde_json::to_string(cancel).expect("cancel audit record serializes");
+
         assert!(!json.contains(sentinel));
     }
 
     #[tokio::test]
+
     async fn permission_downgrade_audit_emits_on_invocation_before_decision() {
         let session_id = "session-downgrade-invoke";
+
         let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+
         let invocations = Arc::new(AtomicUsize::new(0));
+
         let tool = PermissionGatedTool {
             inner_tool: Arc::new(CountingTool {
                 name: "browser_accessibility_snapshot",
+
                 invocations: Arc::clone(&invocations),
+
                 output: r#"{"snapshot":true}"#,
             }),
+
             sensitivity: ToolSensitivity::ReadOnly,
+
             sensitivity_downgrade: Some(ToolSensitivityDowngrade {
                 from: ToolSensitivity::Sensitive,
+
                 to: ToolSensitivity::ReadOnly,
             }),
+
             permission_callback: Arc::new(Mutex::new(None)),
+
             denied_flag: Arc::new(Mutex::new(false)),
+
             session_id: session_id.to_string(),
+
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
         };
+
         let sentinel = "S3NTINEL-maho-vault-9F4C";
+
         let tool_call = test_tool_call(
             "browser_accessibility_snapshot",
             format!(r#"{{"password":"{sentinel}"}}"#),
         );
+
         let context = swiftide_agents::DefaultContext::default();
 
         let result = tool.invoke(&context, &tool_call).await;
 
         assert!(result.is_ok(), "read-only downgraded tool should execute");
+
         assert_eq!(invocations.load(Ordering::SeqCst), 1);
+
         let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+
         let downgrade_index = records
             .iter()
             .position(|record| record.kind == ApprovalAuditEventKind::PermissionDowngrade)
             .expect("downgrade audit record is emitted");
+
         let request_index = records
             .iter()
             .position(|record| record.kind == ApprovalAuditEventKind::PermissionRequest)
             .expect("permission request audit record is emitted");
+
         let allow_index = records
             .iter()
             .position(|record| record.kind == ApprovalAuditEventKind::PermissionAllow)
             .expect("permission allow audit record is emitted");
+
         assert!(downgrade_index < request_index);
+
         assert!(downgrade_index < allow_index);
+
         let downgrade = &records[downgrade_index];
+
         assert_eq!(downgrade.tool_name, "browser_accessibility_snapshot");
+
         assert_eq!(downgrade.session_id, "session-downgrade-invoke");
+
         assert_eq!(downgrade.sensitivity, ToolSensitivity::ReadOnly);
+
         assert_eq!(
             downgrade.attempted_sensitivity,
             Some(ToolSensitivity::Sensitive)
         );
+
         assert_eq!(
             downgrade.selected_sensitivity,
             Some(ToolSensitivity::ReadOnly)
         );
+
         assert_eq!(downgrade.decision, Option::None);
+
         let json = serde_json::to_string(&records).expect("audit records serialize");
+
         assert!(!json.contains(sentinel));
     }
 
     #[tokio::test]
+
     async fn permission_read_only_auto_runs_only_when_policy_allows() {
         let context = swiftide_agents::DefaultContext::default();
+
         let allowed_invocations = Arc::new(AtomicUsize::new(0));
+
         let allowed_tool = gated_counting_tool(
             "fs_read",
             ToolSensitivity::ReadOnly,
@@ -3359,6 +5797,7 @@ mod tests {
             None,
             Arc::clone(&allowed_invocations),
         );
+
         let tool_call = test_tool_call("fs_read", r#"{"path":"Cargo.toml"}"#.to_string());
 
         let allowed = allowed_tool.invoke(&context, &tool_call).await;
@@ -3367,9 +5806,11 @@ mod tests {
             allowed.is_ok(),
             "read-only tools auto-run under prompt policy"
         );
+
         assert_eq!(allowed_invocations.load(Ordering::SeqCst), 1);
 
         let denied_invocations = Arc::new(AtomicUsize::new(0));
+
         let denied_tool = gated_counting_tool(
             "fs_read",
             ToolSensitivity::ReadOnly,
@@ -3381,24 +5822,57 @@ mod tests {
         let denied = denied_tool.invoke(&context, &tool_call).await;
 
         assert!(denied.is_err(), "deny-all blocks even read-only tools");
+
         assert_eq!(denied_invocations.load(Ordering::SeqCst), 0);
     }
 
     #[test]
+
+    fn navigate_fallback_matches_both_no_eligible_tab_phrasings() {
+        assert!(BrowserToolShim::should_open_tab_instead(
+            "browser_navigate",
+            "rpc error -32005: no eligible active tab"
+        ));
+
+        assert!(BrowserToolShim::should_open_tab_instead(
+            "browser_navigate",
+            "no eligible target tab for `browser_navigate`"
+        ));
+
+        assert!(!BrowserToolShim::should_open_tab_instead(
+            "browser_click",
+            "no eligible target tab for `browser_click`"
+        ));
+
+        assert!(!BrowserToolShim::should_open_tab_instead(
+            "browser_navigate",
+            "lease conflict"
+        ));
+    }
+
+    #[test]
+
     fn internal_control_tools_are_filtered_from_ui_events() {
         assert!(is_internal_control_tool("stop"));
+
         assert!(is_internal_control_tool("task_failed"));
+
         assert!(!is_internal_control_tool("clipboard"));
+
         assert!(!is_internal_control_tool("camera"));
+
         assert!(!is_internal_control_tool("photo_library"));
+
         assert!(!is_internal_control_tool("Stop"));
     }
 
     #[test]
+
     fn default_browser_uds_is_connectable_without_trusted_flag() {
         let socket_path = maho_browser_mcp::paths::default_socket_path()
             .to_string_lossy()
             .to_string();
+
         let server = test_mcp_server(maho_types::ai::McpTransport::Uds, false, Some(socket_path));
 
         assert!(
@@ -3408,6 +5882,7 @@ mod tests {
     }
 
     #[test]
+
     fn arbitrary_untrusted_uds_remains_blocked_before_connect() {
         let server = test_mcp_server(
             maho_types::ai::McpTransport::Uds,
@@ -3419,6 +5894,7 @@ mod tests {
     }
 
     #[test]
+
     fn untrusted_stdio_remains_blocked_before_connect() {
         let server = test_mcp_server(maho_types::ai::McpTransport::Stdio, false, None);
 
@@ -3426,6 +5902,7 @@ mod tests {
     }
 
     #[test]
+
     fn dogfood_readonly_tool_auto_runs() {
         assert!(
             !mcp_tool_is_sensitive(
@@ -3440,6 +5917,7 @@ mod tests {
     }
 
     #[test]
+
     fn dogfood_sensitive_action_stays_gated() {
         for name in [
             "browser_click",
@@ -3461,6 +5939,7 @@ mod tests {
     }
 
     #[test]
+
     fn explicit_server_trust_still_trusts_any_tool() {
         assert!(
             !mcp_tool_is_sensitive(
@@ -3472,6 +5951,7 @@ mod tests {
             ),
             "an explicitly trusted server (trusted_tools=None) trusts all its tools"
         );
+
         assert!(
             !mcp_tool_is_sensitive(
                 ToolPermission::AlwaysAsk,
@@ -3482,6 +5962,7 @@ mod tests {
             ),
             "a tool explicitly listed in trusted_tools is trusted"
         );
+
         assert!(
             mcp_tool_is_sensitive(
                 ToolPermission::AlwaysAsk,
@@ -3495,6 +5976,7 @@ mod tests {
     }
 
     #[test]
+
     fn non_dogfood_sensitive_tool_is_gated() {
         assert!(
             mcp_tool_is_sensitive(
@@ -3509,10 +5991,14 @@ mod tests {
     }
 
     #[tokio::test]
+
     async fn test_fsread_size_cap_rejection() {
         let temp_dir = tempfile::tempdir().unwrap();
+
         let big_path = temp_dir.path().join("big.txt");
+
         let big_content = vec![b'X'; (FS_READ_MAX_BYTES as usize) + 1];
+
         tokio::fs::write(&big_path, &big_content).await.unwrap();
 
         let tool = FsReadTool {
@@ -3527,10 +6013,13 @@ mod tests {
             .unwrap();
 
         let context = swiftide_agents::DefaultContext::default();
+
         let result = tool.invoke(&context, &tool_call).await;
 
         let err = result.expect_err("fs_read should reject files larger than FS_READ_MAX_BYTES");
+
         let msg = err.to_string();
+
         assert!(
             msg.contains("File too large"),
             "Error should mention size cap; got: {msg}"
@@ -3538,9 +6027,12 @@ mod tests {
     }
 
     #[tokio::test]
+
     async fn test_fsread_within_size_cap_succeeds() {
         let temp_dir = tempfile::tempdir().unwrap();
+
         let small_path = temp_dir.path().join("small.txt");
+
         tokio::fs::write(&small_path, b"hello world").await.unwrap();
 
         let tool = FsReadTool {
@@ -3555,38 +6047,386 @@ mod tests {
             .unwrap();
 
         let context = swiftide_agents::DefaultContext::default();
+
         let result = tool.invoke(&context, &tool_call).await;
 
         let output = result.expect("fs_read should succeed for files under the cap");
+
         let text = match output {
             ToolOutput::Text(t) => t,
+
             other => panic!("Expected text output; got {other:?}"),
         };
+
         assert_eq!(text, "hello world");
     }
 
+    fn fs_write_call(relative_path: &str, content: &str, mime_type: Option<&str>) -> ToolCall {
+        let mut args = serde_json::json!({
+            "relative_path": relative_path,
+            "content": content,
+        });
+        if let Some(mime_type) = mime_type {
+            args["mime_type"] = serde_json::Value::String(mime_type.to_string());
+        }
+        ToolCall::builder()
+            .id("fs-write-test".to_string())
+            .name("fs_write".to_string())
+            .args(args.to_string())
+            .build()
+            .unwrap()
+    }
+
+    async fn invoke_fs_write(
+        tool: &FsWriteTool,
+        relative_path: &str,
+        content: &str,
+        mime_type: Option<&str>,
+    ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+        let context = swiftide_agents::DefaultContext::default();
+        tool.invoke(&context, &fs_write_call(relative_path, content, mime_type))
+            .await
+    }
+
+    #[tokio::test]
+    async fn fs_write_rejects_path_traversal_without_writing_outside_root() {
+        let container = tempfile::tempdir().unwrap();
+        let root = container.path().join("artifacts");
+        tokio::fs::create_dir(&root).await.unwrap();
+        let tool = FsWriteTool {
+            artifact_root: Some(root),
+        };
+
+        let result = invoke_fs_write(&tool, "../evil.txt", "blocked", None).await;
+
+        assert!(result.is_err());
+        assert!(!container.path().join("evil.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn fs_write_rejects_absolute_empty_and_unconfigured_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let configured = FsWriteTool {
+            artifact_root: Some(root.path().to_path_buf()),
+        };
+        let absolute = root.path().join("absolute.txt");
+
+        assert!(
+            invoke_fs_write(&configured, absolute.to_string_lossy().as_ref(), "x", None)
+                .await
+                .is_err()
+        );
+        assert!(invoke_fs_write(&configured, "", "x", None).await.is_err());
+        assert!(invoke_fs_write(
+            &FsWriteTool {
+                artifact_root: None,
+            },
+            "file.txt",
+            "x",
+            None,
+        )
+        .await
+        .is_err());
+        assert!(!absolute.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fs_write_rejects_symlink_parent_escape() {
+        use std::os::unix::fs::symlink;
+
+        let container = tempfile::tempdir().unwrap();
+        let root = container.path().join("artifacts");
+        let outside = container.path().join("outside");
+        tokio::fs::create_dir(&root).await.unwrap();
+        tokio::fs::create_dir(&outside).await.unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+        let tool = FsWriteTool {
+            artifact_root: Some(root),
+        };
+
+        let result = invoke_fs_write(&tool, "escape/evil.txt", "blocked", None).await;
+
+        assert!(result.is_err());
+        assert!(!outside.join("evil.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn fs_write_writes_unicode_path_and_returns_structured_output() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = FsWriteTool {
+            artifact_root: Some(root.path().to_path_buf()),
+        };
+
+        let output = invoke_fs_write(&tool, "보고서.txt", "hello", Some("text/plain"))
+            .await
+            .expect("fs_write should accept a contained Unicode filename");
+        let text = match output {
+            ToolOutput::Text(text) => text,
+            other => panic!("expected text output, got {other:?}"),
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(value["relative_path"], "보고서.txt");
+        assert_eq!(value["mime_type"], "text/plain");
+        assert_eq!(value["size_bytes"], 5);
+        assert_eq!(value["display_name"], "보고서.txt");
+        assert_eq!(
+            tokio::fs::read(root.path().join("보고서.txt"))
+                .await
+                .unwrap(),
+            b"hello"
+        );
+    }
+
     #[test]
+    fn build_after_tool_events_orders_artifact_before_tool_result() {
+        let raw = serde_json::json!({
+            "relative_path": "report.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 5u64,
+            "display_name": "report.txt",
+        })
+        .to_string();
+        let (events, artifact) = build_after_tool_events(
+            "session-1",
+            "tc-1".to_string(),
+            "fs_write".to_string(),
+            true,
+            &raw,
+        );
+        assert_eq!(events.len(), 2, "expected ArtifactCreated + ToolResult");
+        match &events[0] {
+            AgentStreamEvent::ArtifactCreated { artifact } => {
+                assert_eq!(artifact.session_id, "session-1");
+                assert_eq!(artifact.display_name, "report.txt");
+                assert_eq!(artifact.mime_type, "text/plain");
+                assert_eq!(artifact.size_bytes, 5);
+                assert_eq!(artifact.storage_rel_path, "report.txt");
+                assert!(!artifact.artifact_id.is_empty());
+            }
+            other => panic!("expected ArtifactCreated first, got {other:?}"),
+        }
+        match &events[1] {
+            AgentStreamEvent::ToolResult { name, .. } => assert_eq!(name, "fs_write"),
+            other => panic!("expected ToolResult second, got {other:?}"),
+        }
+        assert_eq!(
+            artifact.expect("artifact to persist").storage_rel_path,
+            "report.txt"
+        );
+    }
+
+    #[test]
+    fn build_after_tool_events_skips_malformed_fs_write() {
+        let (events, artifact) = build_after_tool_events(
+            "session-1",
+            "tc-2".to_string(),
+            "fs_write".to_string(),
+            true,
+            "not-json{{",
+        );
+        assert_eq!(events.len(), 1, "malformed output emits only ToolResult");
+        assert!(matches!(events[0], AgentStreamEvent::ToolResult { .. }));
+        assert!(artifact.is_none());
+    }
+
+    #[test]
+    fn build_after_tool_events_ignores_non_fs_write_and_failures() {
+        let ok_json = serde_json::json!({
+            "relative_path": "x",
+            "mime_type": "text/plain",
+            "size_bytes": 1u64,
+            "display_name": "x",
+        })
+        .to_string();
+        let (events, artifact) = build_after_tool_events(
+            "s",
+            "tc".to_string(),
+            "http_get".to_string(),
+            true,
+            &ok_json,
+        );
+        assert_eq!(events.len(), 1);
+        assert!(artifact.is_none());
+        let (events, artifact) = build_after_tool_events(
+            "s",
+            "tc".to_string(),
+            "fs_write".to_string(),
+            false,
+            "\"boom\"",
+        );
+        assert_eq!(events.len(), 1);
+        assert!(artifact.is_none());
+        match &events[0] {
+            AgentStreamEvent::ToolResult { result, .. } => assert!(result.contains("boom")),
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_lists_and_resolves_artifacts_by_id() {
+        use std::sync::Arc;
+        let sqlite = maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("todo4-key")
+            .expect("in-memory sqlite");
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
+        let a1 = maho_types::artifact::ArtifactInfo {
+            artifact_id: "art-1".to_string(),
+            session_id: "sess-A".to_string(),
+            display_name: "a.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 3,
+            storage_rel_path: "sess-A/a.txt".to_string(),
+            created_at_ms: 1,
+        };
+        let a2 = maho_types::artifact::ArtifactInfo {
+            artifact_id: "art-2".to_string(),
+            storage_rel_path: "sess-A/b.txt".to_string(),
+            created_at_ms: 2,
+            ..a1.clone()
+        };
+        {
+            use crate::AgentStorage;
+            storage.save_artifact(&a1).await.unwrap();
+            storage.save_artifact(&a2).await.unwrap();
+        }
+        let backend = SwiftideBackend::new(
+            storage,
+            None,
+            std::path::PathBuf::from("/tmp/todo4-ws"),
+            true,
+        );
+        let listed = backend.list_artifacts("sess-A").await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].artifact_id, "art-1");
+        assert_eq!(
+            backend
+                .artifact_storage_rel_path("sess-A", "art-2")
+                .await
+                .unwrap(),
+            Some("sess-A/b.txt".to_string())
+        );
+        // Unknown id resolves to None, not an error.
+        assert_eq!(
+            backend
+                .artifact_storage_rel_path("sess-A", "nope")
+                .await
+                .unwrap(),
+            None
+        );
+        // Unknown session lists empty.
+        assert!(backend.list_artifacts("other").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fs_write_rejects_oversize_without_partial_file() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = FsWriteTool {
+            artifact_root: Some(root.path().to_path_buf()),
+        };
+        let oversized = "x".repeat((FS_WRITE_MAX_BYTES as usize) + 1);
+
+        let result = invoke_fs_write(&tool, "large.txt", &oversized, None).await;
+
+        assert!(result.is_err());
+        assert!(!root.path().join("large.txt").exists());
+        let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
+        assert!(entries.is_empty(), "failed write must not leave temp files");
+    }
+
+    #[tokio::test]
+    async fn fs_write_success_through_gate_emits_audit_record() {
+        let session_id = "session-fs-write-audit";
+        let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let root = tempfile::tempdir().unwrap();
+        let tool = PermissionGatedTool {
+            inner_tool: Arc::new(FsWriteTool {
+                artifact_root: Some(root.path().to_path_buf()),
+            }),
+            sensitivity: ToolSensitivity::ReadOnly,
+            sensitivity_downgrade: Option::None,
+            permission_callback: Arc::new(Mutex::new(None)),
+            denied_flag: Arc::new(Mutex::new(false)),
+            session_id: session_id.to_string(),
+            approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+        };
+        let context = swiftide_agents::DefaultContext::default();
+
+        let result = tool
+            .invoke(
+                &context,
+                &fs_write_call("audited.txt", "written", Some("text/plain")),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let records = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        assert!(records.iter().any(|record| {
+            record.tool_name == "fs_write"
+                && record.kind == ApprovalAuditEventKind::ToolExecutionResult
+        }));
+    }
+
+    #[tokio::test]
+    async fn fs_write_atomic_rename_failure_removes_temp_file() {
+        let root = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir(root.path().join("occupied"))
+            .await
+            .unwrap();
+        let tool = FsWriteTool {
+            artifact_root: Some(root.path().to_path_buf()),
+        };
+
+        let result = invoke_fs_write(&tool, "occupied", "cannot replace directory", None).await;
+
+        assert!(result.is_err());
+        assert!(root.path().join("occupied").is_dir());
+        let names = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![std::ffi::OsString::from("occupied")]);
+    }
+
+    #[test]
+
     fn test_truncate_at_char_boundary() {
         // Under the limit: unchanged.
+
         let mut s = "hi".to_string();
+
         truncate_at_char_boundary(&mut s, 100);
+
         assert_eq!(s, "hi");
 
         // "日本語" = 3 chars x 3 bytes = 9 bytes. A 4-byte cut lands mid-"本";
+
         // must back off to the 3-byte boundary after "日" (never panic).
+
         let mut s = "日本語".to_string();
+
         truncate_at_char_boundary(&mut s, 4);
+
         assert_eq!(s, "日");
+
         assert!(s.len() <= 4);
 
         // Exact boundary is preserved.
+
         let mut s = "日本語".to_string();
+
         truncate_at_char_boundary(&mut s, 3);
+
         assert_eq!(s, "日");
 
         // 4-byte emoji: "a😀b" = 1 + 4 + 1 bytes; a 3-byte cut lands mid-emoji.
+
         let mut s = "a😀b".to_string();
+
         truncate_at_char_boundary(&mut s, 3);
+
         assert_eq!(s, "a");
     }
 }
