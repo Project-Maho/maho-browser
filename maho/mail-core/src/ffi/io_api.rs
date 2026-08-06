@@ -548,6 +548,7 @@ mod tests {
 
     #[test]
     fn test_md5_hash() {
+        let _ctx_guard = crate::test_support::global_ctx_guard();
         let capture = Capture::new();
         let input = CString::new("hello").unwrap();
         let _rt = crate::runtime::runtime().unwrap();
@@ -563,6 +564,7 @@ mod tests {
 
     #[test]
     fn test_app_settings() {
+        let _ctx_guard = crate::test_support::global_ctx_guard();
         let _rt = crate::runtime::runtime().unwrap();
         let pool = crate::test_support::pool_with_seeded_data();
         let ctx = crate::test_support::ctx_arc(pool);

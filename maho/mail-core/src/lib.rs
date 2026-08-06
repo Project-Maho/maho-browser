@@ -56,6 +56,23 @@ pub(crate) mod test_support {
         Arc::new(ctx(pool))
     }
 
+    /// Serializes tests that install the process-global [`AppCtx`] via
+    /// [`crate::state::set_ctx`]. That ctx lives behind a single
+    /// `RwLock<Option<Arc<AppCtx>>>`, so two such tests running concurrently in
+    /// the same test binary can clobber each other's ctx between FFI calls (e.g.
+    /// one test's Set-then-Get would read a different pool and see stale/empty
+    /// data). Every test that calls `set_ctx` must hold this guard for its whole
+    /// body. Poison is recovered because a panicking test only leaves the unit
+    /// `()` behind.
+    pub(crate) fn global_ctx_guard() -> std::sync::MutexGuard<'static, ()> {
+        static GLOBAL_CTX_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+            std::sync::OnceLock::new();
+        GLOBAL_CTX_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn db_path() -> PathBuf {
         std::env::temp_dir().join(format!("maho-mail-ffi-test-{}.db", uuid::Uuid::new_v4()))
     }

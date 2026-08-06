@@ -861,15 +861,17 @@ mod tests {
         capture.cv.notify_all();
     }
 
-    fn setup_test_ctx() {
+    fn setup_test_ctx() -> std::sync::MutexGuard<'static, ()> {
+        let guard = crate::test_support::global_ctx_guard();
         let pool = crate::test_support::pool_with_seeded_data();
         let ctx = crate::test_support::ctx_arc(pool);
         let _ = crate::state::set_ctx(ctx);
+        guard
     }
 
     #[test]
     fn test_signatures_crud() {
-        setup_test_ctx();
+        let _ctx_guard = setup_test_ctx();
 
         // 1. List initially empty
         let capture = Capture::new();
@@ -942,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_templates_crud() {
-        setup_test_ctx();
+        let _ctx_guard = setup_test_ctx();
 
         // 1. List initially empty
         let capture = Capture::new();
@@ -1009,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_contacts_crud() {
-        setup_test_ctx();
+        let _ctx_guard = setup_test_ctx();
 
         // 1. Create a contact group
         let member_emails = vec!["a@example.com".to_string(), "b@example.com".to_string()];

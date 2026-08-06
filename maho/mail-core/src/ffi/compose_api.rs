@@ -1208,6 +1208,7 @@ mod tests {
 
     #[test]
     fn test_save_and_update_draft_and_reply_context() {
+        let _ctx_guard = crate::test_support::global_ctx_guard();
         let _rt = crate::runtime::runtime().expect("runtime");
         let pool = crate::test_support::pool_with_seeded_data();
         let ctx = crate::test_support::ctx_arc(pool);
@@ -1285,6 +1286,7 @@ mod tests {
 
     #[test]
     fn test_outbox_operations() {
+        let _ctx_guard = crate::test_support::global_ctx_guard();
         let _rt = crate::runtime::runtime().expect("runtime");
         let pool = crate::test_support::pool_with_seeded_data();
         let ctx = crate::test_support::ctx_arc(pool);

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-07-14
-**Commit:** 4fd48142
+**Generated:** 2026-07-29
+**Commit:** bb3dd286
 **Branch:** main
 
 ## OVERVIEW
@@ -60,6 +60,16 @@ maho-workspace/
 | Icon system (canonical) | `docs/icon-system.md` + `maho/assets/icons/sf-to-lucide-mapping.json` | Lucide is the unified icon library across all surfaces. Per-platform: `lucide-react` (Mail; canonical for new WebUI surfaces, see `maho-chromium/docs/webui-shadcn-conventions.md`), legacy vendored SVGs at `browser/resources/<feature>/icons/` for pre-shadcn surfaces, `aggregate_vector_icons` GN target at `maho-chromium/browser/ui/views/maho_lucide_icons/` (Native Views; auto-generated from `manifest.json` via `maho-chromium/build/scripts/lucide_icons/generate.py`), `lucide-icons-swift` SwiftPM (macOS/iOS), AVDs at `maho/android-shell/app/src/main/res/drawable/ic_*.xml`. License: `LICENSES/lucide.txt` |
 | Reference screenshots (Arc/design target) | `maho/reference_screenshots/` | Ground-truth UI targets. e.g. `arc-library-space.jpeg` = Arc's Spaces library view reference for Maho's Archive-Spaces overlay. ALWAYS consult before claiming visual parity. |
 
+## CODE MAP
+| Symbol | Type | Location | Role |
+|--------|------|----------|------|
+| `MahoBrowserMainExtraParts` | C++ Class | `maho-chromium/browser/maho_browser_main_extra_parts.h` | Chromium startup lifecycle hook, FFI init, relay client |
+| `MahoCore` | C FFI Struct | `maho/crates/maho-ffi/src/lib.rs` | Rust core engine handle passed to C++ bridge |
+| `maho-cli` | Rust Binary | `maho/crates/maho-cli/src/main.rs` | Main CLI entry point for browser/mail/mcp commands |
+| `build-queue` | Rust Binary | `maho/build-queue/src/main.rs` | Local socket daemon managing lock-backed Chromium builds |
+| `relay` | WASM / Worker | `maho/relay/src/lib.rs` | Cloudflare Workers sync relay server entry point (`fetch`) |
+| `web-ai` | Preact App | `maho/web-ai/src/main.tsx` | Cross-platform WebView bundle entry for AI surface |
+
 ## CONVENTIONS
 - `bun run` for repo scripts, `bunx` for one-off CLIs
 - `bun run test` / `bun run typecheck` proxy to Cargo at maho/ root
@@ -72,8 +82,19 @@ maho-workspace/
 
 ## CURRENT SHIP STATUS
 - **Maho Mail is deferred from the current ship.** Do not expose or reactivate Mail without explicit user approval and a completed security/integrity remediation pass.
-- Runtime defer gates are intentionally left in place while the bundle may still build: sidebar Mail entry hidden in `maho_sidebar_top_bar_view.cc`, `chrome://maho-mail` disabled via `MahoMailUIConfig::IsWebUIEnabled()`, helper launch blocked by `kMahoMailDeferred`, and Maho Mail settings panes hidden by `MAIL_DEFERRED`.
+- **Reactivated on the current working branch under explicit user approval (2026-08-06).** The Mail feature set was implemented and runtime-verified here: (A) Gmail new-mail sync into Inbox, (B) sidebar mail-icon unread badge + macOS Dock badge with a `maho.mail.badge_enabled` toggle, (C) OS new-mail notification gated by `maho.mail.notifications_enabled`, (D) remote image loading via the sanitizing `chrome://image` proxy, and (E) main Maho Agent Mail-broker access. The login profile runs with `maho.mail.enabled=true`. Because this reactivation is intentional and user-approved, do NOT treat the now-visible sidebar Mail entry, the badge, or the enabled state as a defect and do NOT re-hide them. The formal security/integrity remediation sign-off remains the gate before shipping Mail enabled in the public build — enabling it here does not by itself lift that ship-level gate.
+- Runtime defer gates are intentionally left in place while the bundle may still build: sidebar Mail entry hidden in `maho_sidebar_top_bar_view.cc`, `chrome://maho-mail` disabled via `MahoMailUIConfig::IsWebUIEnabled()`, helper launch blocked by `kMahoMailDeferred`, and Maho Mail settings panes hidden by `MAIL_DEFERRED`. (Where the reactivation branch above enables these surfaces via `maho.mail.enabled=true`, that override is deliberate; the gates remain the default-off ship posture.)
 - Keeping the WebUI/resources/helper targets in the bundle is acceptable for now; they are unreachable dead weight. Removing them from GN/build scripts is a separate cleanup requiring explicit approval because it touches shared build infrastructure.
+
+## LOCALIZATION — ENGLISH ONLY (i18n SHELVED)
+- **Maho ships English only.** This matches Maho Browser's product policy. Localization / i18n is **indefinitely shelved** as of 2026-07-30.
+- **Hardcoded English user-facing strings are NOT a defect.** Do not open work, file findings, or "fix" surfaces just because they contain literal English strings. `chrome://maho-settings` in particular has zero localization call sites by design under this policy.
+- **Do not build new localization infrastructure.** No `.grd`/`.grdp` files, no new `GetLocalizedStrings` mojom seams, no per-surface JSON locale bundles. Adding one requires explicit user approval reversing this decision.
+- Existing localization assets are left in place, not extended:
+  - `maho_welcome` has a mojom `GetLocalizedStrings` seam (201 `IDS_MAHO_WELCOME_*` keys). It works; leave it alone. Do not replicate the pattern elsewhere.
+  - `maho_mail` carries `react/i18n/locales/{en,ko}.json` (846 lines each, translated). Mail is deferred, so this is unreachable dead weight. Do not act on it.
+  - The built app bundles 456 upstream Chromium locale `.pak` files including `ko.lproj`. That is inherited upstream behavior, **not** a Maho localization commitment.
+- Shelving record: `plan/settings-i18n-localization-seam-2026-07-30.md` (marked SHELVED) retains the string-surface sizing (~400-500 occurrences) and the two candidate mechanisms, should localization ever be revived.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - **No adding relay/ or mail/ crates to root workspace members** (libsqlite3-sys conflict)
@@ -81,8 +102,10 @@ maho-workspace/
 - No domain types in `maho-core`; use `maho-types`
 - No direct FFI/business-logic mixing in `maho-ffi`
 - **NEVER delete `.build.lock`** — see BUILD LOCK below
+- **No i18n/localization work** — Maho is English-only; hardcoded English strings are not defects. See LOCALIZATION section above.
 - **빌드 실패 시 GN 파일 강제 수정 금지** — 빌드 (특히 `build_maho.py`) 가 GN regen 단계 또는 그 이후에서 실패하면 즉시 중단하고 사용자에게 보고. `chromium/src/**/BUILD.gn`, `maho-chromium/**/BUILD.gn`, `chromium/src/chrome/test/BUILD.gn` 등의 GN 파일을 우회 fix 목적으로 직접 수정하지 말 것. 다른 세션의 미완 작업이나 working tree dirty state 인 경우가 많고, 임의 cleanup 은 추후 충돌·revert·데이터 손실을 부른다. fix 가 필요해 보여도 **사용자 명시 승인 없이는 GN 편집·삭제 금지**.
 - **Chromium/GN/build feature flags 또는 build flags 추가·변경 전에는 반드시 사용자 명시 승인을 받을 것.**
+- **브랜치 생성/체크아웃, 워크트리 생성 절대 금지** — `git branch`, `git checkout -b`, `git switch -c`, `git switch <other-branch>`, `git worktree add` 등 브랜치를 새로 만들거나 다른 브랜치로 이동하거나 워크트리를 추가하는 작업을 하지 말 것. 항상 사용자가 현재 체크아웃해 둔 브랜치에서 그대로 작업한다. 별도 브랜치나 워크트리가 필요해 보이면 작업을 멈추고 사용자에게 보고할 것.
 
 ## BUILD LOCK — `.build.lock`
 
@@ -134,8 +157,14 @@ python3 maho-chromium/build/scripts/build_maho.py --skip-rust --skip-lucide-chec
 # actually need to run that whole suite. To just check a change compiles, build `chrome` or
 # the single affected target.
 
+# Builds via build_maho.py auto-enqueue through the build-queue daemon: it serializes
+# all builds on out/Default (one at a time — prevents RAM/swap thrash) with crash-safe
+# auto-release and queue visibility, over a .build.lock fallback.
+# Check the queue: printf 'STATUS\n' | nc -U .build-queue.sock
+# Full details: docs/operations/build-queue.md
+#
 # DO NOT run raw `autoninja -C out/Default ...` on the shared build machine — it BYPASSES the
-# build lock, so parallel agents build at once, blow past RAM, and everything swap-thrashes.
+# queue/lock, so parallel agents build at once, blow past RAM, and everything swap-thrashes.
 # If you truly need raw ninja, wrap it in the lock:
 #   python3 maho/scripts/build_lock.py -- autoninja -C out/Default <target>
 
@@ -152,4 +181,4 @@ cd maho/relay && cargo test && cargo clippy -- -D warnings
 - Symlink setup: `ln -s ../../maho-chromium chromium/src/maho`
 - **Three Cargo workspaces**: `maho/Cargo.toml` (main), `maho/relay/Cargo.toml` (isolated), and `mail/Cargo.toml` (isolated).
 - See `maho/AGENTS.md` for crate-level detail; `maho-chromium/AGENTS.md` for overlay detail
-- New subdirectory AGENTS.md added: `maho/relay/`, `maho-chromium/browser/ai/`, `maho-chromium/browser/ui/views/`, `maho-chromium/browser/ui/webui/`, `maho-chromium/browser/resources/`
+- Subdirectory AGENTS.md files take precedence over this root guide
