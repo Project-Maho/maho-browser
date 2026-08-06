@@ -585,8 +585,12 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     action_result = maho::MahoMcpBrowserActionHandler::HandleClick(
         delegate, browser_action_refs_, tab_id, &arguments);
   } else if (tool_name == "browser_type") {
+    // The shared Rust shim marks credential typing for the CLI MCP path. The
+    // in-browser agent retains its separate approval-and-Vault-only boundary.
+    base::DictValue sanitized_arguments = arguments.Clone();
+    sanitized_arguments.Remove("allow_credentials");
     action_result = maho::MahoMcpBrowserActionHandler::HandleType(
-        delegate, browser_action_refs_, tab_id, &arguments);
+        delegate, browser_action_refs_, tab_id, &sanitized_arguments);
   } else if (tool_name == "browser_select") {
     action_result = maho::MahoMcpBrowserActionHandler::HandleSelect(
         delegate, browser_action_refs_, tab_id, &arguments);

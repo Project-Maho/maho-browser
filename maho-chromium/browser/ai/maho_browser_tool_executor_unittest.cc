@@ -484,6 +484,26 @@ TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
   EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
+TEST_F(MahoBrowserToolExecutorTest,
+       CredentialFieldRejectsAllowCredentialsAfterApproval) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  PopulateRef(executor, 2, 202);
+  maho::MahoMcpFieldMetadata metadata;
+  metadata.classified = true;
+  metadata.is_protected = true;
+  delegate_.field_metadata[202] = metadata;
+
+  base::DictValue arguments;
+  arguments.Set("ref", 2);
+  arguments.Set("text", "S3NTINEL-approved-password");
+  arguments.Set("allow_credentials", true);
+  base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.type_count, 0);
+  EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
+}
+
 TEST_F(MahoBrowserToolExecutorTest, InvalidDirectionAndKeyFailBeforeDispatch) {
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
 
