@@ -1,10 +1,10 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use std::ffi::{c_void, CStr};
 use std::os::raw::c_char;
 use uuid::Uuid;
-use rusqlite::params;
-use serde::{Deserialize, Serialize};
 
 use crate::error::{MailFfiError, Result};
 use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
@@ -81,7 +81,10 @@ pub extern "C" fn MahoMailSnoozeEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE emails SET snoozed_until = ?1 WHERE id = ?2",
                     params![snooze_until, email_id],
@@ -104,7 +107,10 @@ pub extern "C" fn MahoMailUnsnoozeEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE emails SET snoozed_until = NULL WHERE id = ?1",
                     params![email_id],
@@ -128,7 +134,10 @@ pub extern "C" fn MahoMailListSnoozedEmails(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if let Some(ref aid) = account_id {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, folder_id, uid, message_id, subject, from_address, from_name,
@@ -179,7 +188,10 @@ pub extern "C" fn MahoMailSetReminder(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE emails SET reminder_at = ?1 WHERE id = ?2",
                     params![reminder_at, email_id],
@@ -202,7 +214,10 @@ pub extern "C" fn MahoMailClearReminder(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE emails SET reminder_at = NULL WHERE id = ?1",
                     params![email_id],
@@ -226,7 +241,10 @@ pub extern "C" fn MahoMailListReminders(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if let Some(ref aid) = account_id {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, folder_id, uid, message_id, subject, from_address, from_name,
@@ -285,7 +303,10 @@ pub extern "C" fn MahoMailMuteThread(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let id = Uuid::new_v4().to_string();
                 conn.execute(
                     "INSERT OR IGNORE INTO muted_threads (id, account_id, thread_id) VALUES (?1, ?2, ?3)",
@@ -313,7 +334,10 @@ pub extern "C" fn MahoMailUnmuteThread(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "DELETE FROM muted_threads WHERE account_id = ?1 AND thread_id = ?2",
                     params![account_id, message_id],
@@ -340,7 +364,10 @@ pub extern "C" fn MahoMailIsThreadMuted(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let count: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM muted_threads WHERE account_id = ?1 AND thread_id = ?2",
                     params![account_id, message_id],
@@ -364,7 +391,10 @@ pub extern "C" fn MahoMailListMutedThreads(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, thread_id, created_at FROM muted_threads WHERE account_id = ?1 ORDER BY created_at DESC",
                 )?;
@@ -403,9 +433,13 @@ pub extern "C" fn MahoMailFilterMutedMessageIds(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let muted: std::collections::HashSet<String> = {
-                    let mut stmt = conn.prepare("SELECT thread_id FROM muted_threads WHERE account_id = ?1")?;
+                    let mut stmt =
+                        conn.prepare("SELECT thread_id FROM muted_threads WHERE account_id = ?1")?;
                     let rows = stmt.query_map([&account_id], |row| row.get::<_, String>(0))?;
                     rows.filter_map(|r| r.ok()).collect()
                 };
@@ -435,7 +469,10 @@ pub extern "C" fn MahoMailPinEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE emails SET is_pinned = 1 WHERE id = ?1",
                     params![email_id],
@@ -458,7 +495,10 @@ pub extern "C" fn MahoMailUnpinEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE emails SET is_pinned = 0 WHERE id = ?1",
                     params![email_id],
@@ -482,7 +522,10 @@ pub extern "C" fn MahoMailListPinnedEmails(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if let Some(ref aid) = account_id {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, folder_id, uid, message_id, subject, from_address, from_name,
@@ -602,11 +645,18 @@ pub extern "C" fn MahoMailCreateMailRule(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let id = Uuid::new_v4().to_string();
                 let conditions_json = serde_json::to_string(&rule.conditions)?;
                 let actions_json = serde_json::to_string(&rule.actions)?;
-                let stop = if rule.stop_processing.unwrap_or(false) { 1 } else { 0 };
+                let stop = if rule.stop_processing.unwrap_or(false) {
+                    1
+                } else {
+                    0
+                };
 
                 let max_priority: i64 = conn
                     .query_row(
@@ -657,15 +707,22 @@ pub extern "C" fn MahoMailUpdateMailRule(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+
                 let _exists: String = conn
                     .query_row(
                         "SELECT id FROM mail_rules WHERE id = ?1",
                         params![rule.id],
                         |row| row.get(0),
                     )
-                    .map_err(|_| MailFfiError::Core(maho_core::error::AppError::NotFound("Rule not found".to_string())))?;
+                    .map_err(|_| {
+                        MailFfiError::Core(maho_core::error::AppError::NotFound(
+                            "Rule not found".to_string(),
+                        ))
+                    })?;
 
                 let mut set_clauses: Vec<String> = Vec::new();
                 let mut param_values: Vec<rusqlite::types::Value> = Vec::new();
@@ -676,7 +733,11 @@ pub extern "C" fn MahoMailUpdateMailRule(
                 }
                 if let Some(is_enabled) = rule.is_enabled {
                     set_clauses.push("is_enabled = ?".to_string());
-                    param_values.push(rusqlite::types::Value::Integer(if is_enabled { 1 } else { 0 }));
+                    param_values.push(rusqlite::types::Value::Integer(if is_enabled {
+                        1
+                    } else {
+                        0
+                    }));
                 }
                 if let Some(ref conditions) = rule.conditions {
                     let json = serde_json::to_string(conditions)?;
@@ -731,7 +792,10 @@ pub extern "C" fn MahoMailDeleteMailRule(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute("DELETE FROM mail_rules WHERE id = ?1", params![rule_id])?;
                 Ok("{}".to_string())
             })
@@ -751,7 +815,10 @@ pub extern "C" fn MahoMailListMailRules(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, name, priority, is_enabled, conditions_json, actions_json, stop_processing, created_at, updated_at
                      FROM mail_rules WHERE account_id = ?1 ORDER BY priority ASC",
@@ -784,7 +851,10 @@ pub extern "C" fn MahoMailReorderMailRules(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let mut conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let mut conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let tx = conn.transaction()?;
                 for (idx, rule_id) in rule_ids.iter().enumerate() {
                     tx.execute(
@@ -845,7 +915,10 @@ pub fn evaluate_rules_for_email(
                 Err(e) => {
                     log::warn!(
                         "Rule '{}' action {:?} failed for email {}: {}",
-                        rule.name, action.action_type, email_id, e
+                        rule.name,
+                        action.action_type,
+                        email_id,
+                        e
                     );
                 }
             }
@@ -867,7 +940,10 @@ struct EmailForRules {
     has_attachments: bool,
 }
 
-fn load_email_for_rules(db: &rusqlite::Connection, email_id: &str) -> std::result::Result<EmailForRules, maho_core::error::AppError> {
+fn load_email_for_rules(
+    db: &rusqlite::Connection,
+    email_id: &str,
+) -> std::result::Result<EmailForRules, maho_core::error::AppError> {
     db.query_row(
         "SELECT from_address, to_addresses, subject, body_text, has_attachments FROM emails WHERE id = ?1",
         params![email_id],
@@ -933,7 +1009,11 @@ fn match_field_value(field_value: &str, operator: &str, value: &str) -> bool {
     }
 }
 
-fn execute_action(db: &rusqlite::Connection, email_id: &str, action: &RuleAction) -> std::result::Result<bool, maho_core::error::AppError> {
+fn execute_action(
+    db: &rusqlite::Connection,
+    email_id: &str,
+    action: &RuleAction,
+) -> std::result::Result<bool, maho_core::error::AppError> {
     match action.action_type.as_str() {
         "mark_read" => {
             db.execute(
@@ -981,7 +1061,8 @@ fn execute_action(db: &rusqlite::Connection, email_id: &str, action: &RuleAction
                 } else {
                     log::warn!(
                         "Rule action move_to_folder: folder '{}' not found for email {}",
-                        folder_name, email_id
+                        folder_name,
+                        email_id
                     );
                 }
             }
@@ -1035,7 +1116,10 @@ pub extern "C" fn MahoMailListLabels(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, name, color, created_at FROM labels WHERE account_id = ?1 ORDER BY name ASC",
                 )?;
@@ -1063,7 +1147,10 @@ pub extern "C" fn MahoMailCreateLabel(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let id = Uuid::new_v4().to_string();
                 let color = request.color.unwrap_or_else(|| "#3b82f6".to_string());
                 conn.execute(
@@ -1094,7 +1181,10 @@ pub extern "C" fn MahoMailDeleteLabel(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute("DELETE FROM labels WHERE id = ?1", params![id])?;
                 Ok("{}".to_string())
             })
@@ -1118,7 +1208,10 @@ pub extern "C" fn MahoMailAddLabelToEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "INSERT OR IGNORE INTO email_labels (email_id, label_id) VALUES (?1, ?2)",
                     params![email_id, label_id],
@@ -1145,7 +1238,10 @@ pub extern "C" fn MahoMailRemoveLabelFromEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "DELETE FROM email_labels WHERE email_id = ?1 AND label_id = ?2",
                     params![email_id, label_id],
@@ -1168,7 +1264,10 @@ pub extern "C" fn MahoMailListEmailLabels(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT l.id, l.account_id, l.name, l.color, l.created_at
                      FROM labels l
@@ -1210,7 +1309,10 @@ pub extern "C" fn MahoMailSaveSearch(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let result = maho_core::services::saved_search::save_search(
                     &conn,
                     &name,
@@ -1236,7 +1338,10 @@ pub extern "C" fn MahoMailListSavedSearches(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let result = maho_core::services::saved_search::list_saved_searches(
                     &conn,
                     account_id.as_deref(),
@@ -1259,7 +1364,10 @@ pub extern "C" fn MahoMailDeleteSavedSearch(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 maho_core::services::saved_search::delete_saved_search(&conn, &id)?;
                 Ok("{}".to_string())
             })
@@ -1361,7 +1469,10 @@ pub extern "C" fn MahoMailScheduleSend(
                 let attachments_json = serde_json::to_string(&request.attachments).ok();
                 let read_receipt: Option<i64> = request.read_receipt.map(|v| if v { 1 } else { 0 });
 
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "INSERT INTO send_later (id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, scheduled_at, attachments_json, read_receipt, in_reply_to, email_references)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
@@ -1406,7 +1517,10 @@ pub extern "C" fn MahoMailCancelScheduledSend(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE send_later SET status = 'cancelled' WHERE id = ?1 AND status = 'pending'",
                     params![id],
@@ -1430,7 +1544,10 @@ pub extern "C" fn MahoMailListScheduledSends(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if let Some(ref aid) = account_id {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, scheduled_at, status, created_at
@@ -1479,7 +1596,11 @@ pub extern "C" fn MahoMailStartScheduler(
                 Some(rt) => rt,
                 None => {
                     SCHEDULER_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
-                    return Box::pin(async { Err(MailFfiError::Internal("tokio runtime unavailable".to_string())) });
+                    return Box::pin(async {
+                        Err(MailFfiError::Internal(
+                            "tokio runtime unavailable".to_string(),
+                        ))
+                    });
                 }
             };
 
@@ -1522,7 +1643,6 @@ pub extern "C" fn MahoMailStopScheduler(
     })
 }
 
-
 // === [W-E] ===
 
 #[no_mangle]
@@ -1538,21 +1658,28 @@ pub extern "C" fn MahoMailClassifyEmailsSmart(
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
                 let emails = {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                    let mut stmt = db.prepare(
-                        "SELECT id, from_address, subject, snippet FROM emails
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let mut stmt = db
+                        .prepare(
+                            "SELECT id, from_address, subject, snippet FROM emails
                          WHERE account_id = ?1 AND smart_category IS NULL
                          LIMIT 200",
-                    ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                        )
+                        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
-                    let rows = stmt.query_map([&account_id], |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, String>(3)?,
-                        ))
-                    }).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                    let rows = stmt
+                        .query_map([&account_id], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                            ))
+                        })
+                        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                     let mut res = Vec::new();
                     for r in rows {
@@ -1568,7 +1695,10 @@ pub extern "C" fn MahoMailClassifyEmailsSmart(
                 }
 
                 if let Ok(ai_results) = try_ai_classify_impl(&ctx, &emails).await {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     for (id, category) in &ai_results {
                         let _ = db.execute(
                             "UPDATE emails SET smart_category = ?1 WHERE id = ?2",
@@ -1593,7 +1723,10 @@ pub extern "C" fn MahoMailClassifyEmailsSmart(
                         }
                     }
                 } else {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     for (id, from_addr, subject, _) in &emails {
                         let category = heuristic_classify(from_addr, subject);
                         let _ = db.execute(
@@ -1744,15 +1877,19 @@ pub extern "C" fn MahoMailListBySmartCategory(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+
                 let mut sql = "SELECT id, account_id, folder_id, uid, message_id, subject, from_address, from_name,
                                       date, snippet, is_read, is_starred, is_draft, has_attachments
                                FROM emails
                                WHERE smart_category = ?1".to_string();
-                
-                let mut params: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::Text(category)];
-                
+
+                let mut params: Vec<rusqlite::types::Value> =
+                    vec![rusqlite::types::Value::Text(category)];
+
                 if let Some(ref aid) = account_id {
                     sql.push_str(" AND account_id = ?2");
                     params.push(rusqlite::types::Value::Text(aid.clone()));
@@ -1760,15 +1897,18 @@ pub extern "C" fn MahoMailListBySmartCategory(
                     sql.push_str(" AND (1=1 OR ?2 IS NULL)");
                     params.push(rusqlite::types::Value::Null);
                 }
-                
+
                 sql.push_str(" ORDER BY date DESC LIMIT ?3 OFFSET ?4");
                 params.push(rusqlite::types::Value::Integer(limit));
                 params.push(rusqlite::types::Value::Integer(offset));
-                
-                let mut stmt = db.prepare(&sql).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(params), map_email_summary)
+
+                let mut stmt = db
+                    .prepare(&sql)
                     .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
-                
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(params), map_email_summary)
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+
                 let mut res = Vec::new();
                 for r in rows {
                     if let Ok(val) = r {
@@ -1780,4 +1920,3 @@ pub extern "C" fn MahoMailListBySmartCategory(
         })
     })
 }
-

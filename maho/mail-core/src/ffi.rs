@@ -11,17 +11,17 @@ use crate::error::{MailFfiError, Result};
 use crate::state::{self, AppCtx, InitInfo};
 use crate::sync::start_sync_worker;
 
-pub mod read_api;
-pub mod onboarding_api;
-pub mod write_api;
-pub mod compose_api;
-pub mod otp_api;
-pub mod organize_api;
-pub mod data_api;
 pub mod ai_api;
-pub mod crypto_api;
 pub mod calendar_api;
+pub mod compose_api;
+pub mod crypto_api;
+pub mod data_api;
 pub mod io_api;
+pub mod onboarding_api;
+pub mod organize_api;
+pub mod otp_api;
+pub mod read_api;
+pub mod write_api;
 
 struct StderrLogger;
 impl log::Log for StderrLogger {
@@ -97,11 +97,18 @@ pub extern "C" fn MahoMailStartAllAccountSync() -> bool {
 /// accounts for which a new sync worker was spawned.
 fn start_all_account_sync(ctx: &Arc<AppCtx>, rt: &tokio::runtime::Runtime) -> Result<usize> {
     let accounts = crate::read::list_accounts(ctx)?;
-    log::info!("[mail-ffi] start_all_account_sync: {} account(s)", accounts.len());
+    log::info!(
+        "[mail-ffi] start_all_account_sync: {} account(s)",
+        accounts.len()
+    );
     let mut spawned = 0usize;
     for account in accounts {
         let (sync, _backfill) = state::start_account_workers(rt, ctx, &account.id);
-        log::info!("[mail-ffi] worker start account={} sync={}", account.id, sync);
+        log::info!(
+            "[mail-ffi] worker start account={} sync={}",
+            account.id,
+            sync
+        );
         if sync {
             spawned += 1;
         }
@@ -215,9 +222,7 @@ pub type MahoMailEventCallback = unsafe extern "C" fn(
 static EVENT_CALLBACK: std::sync::OnceLock<MahoMailEventCallback> = std::sync::OnceLock::new();
 
 #[no_mangle]
-pub extern "C" fn MahoMailRegisterEventCallback(
-    callback: MahoMailEventCallback,
-) -> bool {
+pub extern "C" fn MahoMailRegisterEventCallback(callback: MahoMailEventCallback) -> bool {
     EVENT_CALLBACK.set(callback).is_ok()
 }
 
@@ -259,6 +264,10 @@ pub fn emit_refresh_succeeded_event(account_id: &str) {
 
 pub fn emit_accounts_changed_event(account_id: &str) {
     emit_event("accounts-changed", account_id, "", "");
+}
+
+pub fn emit_new_mail_event(account_id: &str) {
+    emit_event("new-mail", account_id, "", "");
 }
 
 #[cfg(test)]

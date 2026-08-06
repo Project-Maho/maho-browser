@@ -65,6 +65,7 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
                      const std::string& redirect_uri,
                      OAuthStartUrlCallback callback) override;
   void BeginOAuth(const std::string& provider,
+                  const std::string& reauthorize_account_id,
                   BeginOAuthCallback callback) override;
   void OAuthComplete(const std::string& state,
                      const std::string& code,
@@ -178,12 +179,6 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
   void GetAiConfig(const std::string& feature, GetAiConfigCallback callback) override;
   void DeleteAiConfig(const std::string& feature, DeleteAiConfigCallback callback) override;
   void TestAiConnection(const std::string& config_json, TestAiConnectionCallback callback) override;
-  void ListAgentSessions(const std::string& account_id, ListAgentSessionsCallback callback) override;
-  void GetAgentMessages(const std::string& account_id, const std::string& session_id, GetAgentMessagesCallback callback) override;
-  void CreateAgentSession(const std::string& account_id, CreateAgentSessionCallback callback) override;
-  void DeleteAgentSession(const std::string& account_id, const std::string& session_id, DeleteAgentSessionCallback callback) override;
-  void SendAgentMessage(const std::string& account_id, const std::string& session_id, const std::string& content, SendAgentMessageCallback callback) override;
-  void CancelAgentMessage(const std::string& account_id, const std::string& session_id, CancelAgentMessageCallback callback) override;
   void GetAutoDraftForEmail(const std::string& account_id, const std::string& email_id, GetAutoDraftForEmailCallback callback) override;
   void UpdateAutoDraftStatus(const std::string& draft_id, const std::string& status, UpdateAutoDraftStatusCallback callback) override;
   void TranslateText(const std::string& text, const std::string& target_lang, const std::string& source_lang, TranslateTextCallback callback) override;

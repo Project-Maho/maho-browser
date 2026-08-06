@@ -39,6 +39,9 @@ class ParkingMailHelper : public mojom::MahoMailHelperInterceptorForTesting {
   void DropConnection() { receiver_.reset(); }
 
   int read_calls() const { return read_calls_; }
+  void ReplyListAccounts(bool ok, const std::string& result_json) {
+    std::move(parked_list_accounts_).Run(ok, result_json);
+  }
   void set_inject_keys_result(bool success) { inject_keys_result_ = success; }
 
   // mojom::MahoMailHelper: non-read methods are unused by these tests.
@@ -118,7 +121,9 @@ class ParkingMailHelper : public mojom::MahoMailHelperInterceptorForTesting {
     ++read_calls_;
     parked_delete_account_ = std::move(callback);
   }
-  void OAuthStartUrl(const std::string&, const std::string&, const std::string&, OAuthStartUrlCallback callback) override {
+  void OAuthStartUrl(const std::string&, const std::string&,
+                     const std::string&, const std::string&,
+                     OAuthStartUrlCallback callback) override {
     ++read_calls_;
     parked_oauth_start_url_ = std::move(callback);
   }
@@ -139,7 +144,8 @@ class ParkingMailHelper : public mojom::MahoMailHelperInterceptorForTesting {
     std::move(callback).Run(true);
   }
 
-  void OAuthLoopbackSignIn(const std::string&, OAuthLoopbackSignInCallback callback) override {
+  void OAuthLoopbackSignIn(const std::string&, const std::string&,
+                           OAuthLoopbackSignInCallback callback) override {
     std::move(callback).Run(true, "{}");
   }
 
@@ -206,6 +212,24 @@ TEST_F(MahoMailServiceTest, InjectKeysTransitionsToReady) {
   launcher.InjectDatabaseKeys("sql_key", "cred_key");
   task_environment_.RunUntilIdle();
   EXPECT_NE(nullptr, launcher.GetHelper());
+}
+
+TEST_F(MahoMailServiceTest, HelperReadyRefreshesRestoredAccounts) {
+  ParkingMailHelper helper;
+  auto launcher = std::make_unique<MahoMailHelperLauncher>();
+  MahoMailHelperLauncher* launcher_ptr = launcher.get();
+  launcher->BindHelperForTesting(helper.BindNewPipe(), false);
+
+  MahoMailService service;
+  service.SetLauncherForTesting(std::move(launcher));
+  EXPECT_EQ(helper.read_calls(), 0);
+
+  launcher_ptr->InjectDatabaseKeys("sql_key", "cred_key");
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(helper.read_calls(), 1);
+  helper.ReplyListAccounts(true, "[]");
+  task_environment_.RunUntilIdle();
 }
 
 // Each read proxy must resolve its callback exactly once with the
@@ -396,6 +420,68 @@ TEST_F(MahoMailServiceTest, InjectKeysFailureDoesNotTransitionToReady) {
   launcher.InjectDatabaseKeys("sql_key", "cred_key");
   task_environment_.RunUntilIdle();
   EXPECT_EQ(nullptr, launcher.GetHelper());
+}
+
+// Badge unread computation (pure function; no Profile needed).
+TEST(MahoMailBadgeComputeTest, SumsInboxUnreadAndPicksFirstInboxId) {
+  std::string inbox_id;
+  const int64_t unread = ComputeInboxUnreadForBadge(
+      R"json([
+        {"id":"f1","folder_type":"Sent","unread_count":3},
+        {"id":"f2","folder_type":"Inbox","unread_count":5},
+        {"id":"f3","folder_type":"Inbox","unread_count":2}
+      ])json",
+      &inbox_id);
+  EXPECT_EQ(unread, 7);
+  EXPECT_EQ(inbox_id, "f2");
+}
+
+TEST(MahoMailBadgeComputeTest, ZeroWhenNoInboxOrInvalid) {
+  std::string id = "stale";
+  EXPECT_EQ(ComputeInboxUnreadForBadge("not json", &id), 0);
+  EXPECT_TRUE(id.empty());
+
+  id = "stale";
+  EXPECT_EQ(
+      ComputeInboxUnreadForBadge(
+          R"json([{"id":"f1","folder_type":"Sent","unread_count":4}])json", &id),
+      0);
+  EXPECT_TRUE(id.empty());
+
+  // Missing unread_count defaults to 0 but the Inbox id is still captured.
+  id.clear();
+  EXPECT_EQ(ComputeInboxUnreadForBadge(
+                R"json([{"id":"in","folder_type":"Inbox"}])json", &id),
+            0);
+  EXPECT_EQ(id, "in");
+}
+
+TEST(MahoMailPreferenceTest, ParsesDesktopNotificationPreference) {
+  EXPECT_EQ(GetDesktopNotificationPreference(
+                R"json({"desktop_notifications":true})json"),
+            std::optional<bool>(true));
+  EXPECT_EQ(GetDesktopNotificationPreference(
+                R"json({"desktop_notifications":false})json"),
+            std::optional<bool>(false));
+  EXPECT_EQ(GetDesktopNotificationPreference("{}"), std::nullopt);
+  EXPECT_EQ(GetDesktopNotificationPreference(
+                R"json({"desktop_notifications":"false"})json"),
+            std::nullopt);
+  EXPECT_EQ(GetDesktopNotificationPreference("not json"), std::nullopt);
+}
+
+TEST(MahoMailPreferenceTest, ParsesUnreadBadgePreference) {
+  EXPECT_EQ(GetUnreadBadgePreference(
+                R"json({"unread_badge_enabled":true})json"),
+            std::optional<bool>(true));
+  EXPECT_EQ(GetUnreadBadgePreference(
+                R"json({"unread_badge_enabled":false})json"),
+            std::optional<bool>(false));
+  EXPECT_EQ(GetUnreadBadgePreference("{}"), std::nullopt);
+  EXPECT_EQ(GetUnreadBadgePreference(
+                R"json({"unread_badge_enabled":"false"})json"),
+            std::nullopt);
+  EXPECT_EQ(GetUnreadBadgePreference("not json"), std::nullopt);
 }
 
 }  // namespace

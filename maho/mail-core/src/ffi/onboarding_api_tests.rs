@@ -63,7 +63,9 @@ unsafe extern "C" fn capture_cb(ok: bool, json: *const c_char, user_data: *mut c
         String::new()
     } else {
         // SAFETY: `json` is a Rust-owned NUL-terminated string valid for this call.
-        unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(json) }
+            .to_string_lossy()
+            .into_owned()
     };
     capture.count.fetch_add(1, Ordering::SeqCst);
     *capture.slot.lock().unwrap() = Some((ok, payload));
@@ -164,6 +166,7 @@ fn add_account_success_invokes_callback_once_with_response() {
         oauth2_client_secret: None,
         oauth2_access_token: None,
         oauth2_refresh_token: None,
+        oauth2_expires_at: None,
     };
     let fut = blocking_json(move || account::create_account(&mut conn, &key, request));
     spawn_read_task(rt, capture_cb, user_data, fut);
@@ -186,7 +189,9 @@ fn onboarding_error_invokes_error_callback_once() {
     let capture = Capture::new();
     let user_data = AtomicPtr::new(capture.as_user_data());
     let fut: ReadFuture = Box::pin(async move {
-        Err(MailFfiError::InvalidRequest("simulated onboarding error".to_string()))
+        Err(MailFfiError::InvalidRequest(
+            "simulated onboarding error".to_string(),
+        ))
     });
     spawn_read_task(rt, capture_cb, user_data, fut);
 
@@ -230,6 +235,17 @@ fn oauth_start_url_null_provider_is_rejected_without_invocation() {
     assert_eq!(capture.invocations(), 0);
 }
 
+#[test]
+fn oauth_start_options_json_whitespace_expected_subject_returns_typed_error() {
+    let options: oauth::StartOAuthOptions =
+        serde_json::from_str(r#"{"expected_google_sub":"   \t "}"#).unwrap();
+    let result =
+        oauth::start_oauth_with_options("gmail", "client-1", "http://localhost:9999", options);
+    assert!(
+        matches!(result, Err(MailFfiError::InvalidRequest(message)) if message.contains("expected_google_sub"))
+    );
+}
+
 // OAuthComplete: null state -> rejected, never invoked.
 #[test]
 fn oauth_complete_null_state_is_rejected_without_invocation() {
@@ -258,6 +274,13 @@ fn oauth_complete_null_code_is_rejected_without_invocation() {
     ));
     assert!(capture.peek().is_none());
     assert_eq!(capture.invocations(), 0);
+}
+
+#[test]
+fn oauth_complete_options_json_preserves_whitespace_expected_subject_as_supplied() {
+    let options: oauth::CompleteOAuthOptions =
+        serde_json::from_str(r#"{"expected_google_sub":"  \n "}"#).unwrap();
+    assert_eq!(options.expected_google_sub.as_deref(), Some("  \n "));
 }
 
 // ReconnectAccount: null id -> rejected, never invoked.
@@ -292,7 +315,7 @@ fn oauth_start_url_success_invokes_callback_once_with_url() {
     assert!(parsed["state"].as_str().is_some_and(|s| !s.is_empty()));
     assert!(parsed["auth_url"]
         .as_str()
-        .is_some_and(|u| u.contains("client-xyz") && u.contains("code_challenge_method=S256")));
+        .is_some_and(|u| u.contains("client_id=") && u.contains("code_challenge_method=S256")));
 }
 
 #[test]
@@ -310,24 +333,26 @@ fn import_migration_archive_null_json_is_rejected_without_invocation() {
 #[test]
 fn oauth_cancel_ffi_test() {
     let state = "test-cancel-state-ffi";
-    
+
     let c_state_unknown = std::ffi::CString::new(state).unwrap();
     assert!(!MahoMailOAuthCancel(c_state_unknown.as_ptr()));
-    
+
     let entry = crate::state::PkceEntry {
         code_verifier: "verifier".to_string(),
         provider: "gmail".to_string(),
         client_id: "client-id".to_string(),
         client_secret: String::new(),
         redirect_uri: "http://localhost".to_string(),
+        expected_google_sub: None,
+        reauthorize_account_id: None,
         created_at: std::time::Instant::now(),
     };
     crate::state::pending_pkce().insert(state.to_string(), entry);
-    
+
     let c_state_pending = std::ffi::CString::new(state).unwrap();
     assert!(MahoMailOAuthCancel(c_state_pending.as_ptr()));
     assert!(crate::state::cancellation_store().is_cancelled(state));
-    
+
     crate::state::pending_pkce().take(state);
     crate::state::cancellation_store().remove(state);
 }

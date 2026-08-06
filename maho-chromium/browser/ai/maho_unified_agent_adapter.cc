@@ -224,6 +224,48 @@ const MahoAgentFfi* GetProductionMahoAgentFfi() {
   return &kProductionFfi;
 }
 
+PermissionCallState::PermissionCallState() = default;
+PermissionCallState::~PermissionCallState() = default;
+
+BrowserToolCallState::BrowserToolCallState() = default;
+BrowserToolCallState::~BrowserToolCallState() = default;
+
+MahoUnifiedAgentAdapter::ByokSnapshot::ByokSnapshot(
+    const ByokSnapshot&) = default;
+MahoUnifiedAgentAdapter::ByokSnapshot::ByokSnapshot(ByokSnapshot&&) =
+    default;
+MahoUnifiedAgentAdapter::ByokSnapshot&
+MahoUnifiedAgentAdapter::ByokSnapshot::operator=(const ByokSnapshot&) =
+    default;
+MahoUnifiedAgentAdapter::ByokSnapshot&
+MahoUnifiedAgentAdapter::ByokSnapshot::operator=(ByokSnapshot&&) = default;
+
+MahoUnifiedAgentAdapter::TurnFfiResources::TurnFfiResources() = default;
+MahoUnifiedAgentAdapter::TurnFfiResources::TurnFfiResources(
+    TurnFfiResources&&) = default;
+MahoUnifiedAgentAdapter::TurnFfiResources&
+MahoUnifiedAgentAdapter::TurnFfiResources::operator=(TurnFfiResources&&) =
+    default;
+MahoUnifiedAgentAdapter::TurnFfiResources::~TurnFfiResources() = default;
+
+MahoUnifiedAgentAdapter::ByokBridge::ByokBridge() = default;
+MahoUnifiedAgentAdapter::ByokBridge::~ByokBridge() = default;
+
+MahoUnifiedAgentAdapter::SessionFfiResources::SessionFfiResources() = default;
+MahoUnifiedAgentAdapter::SessionFfiResources::SessionFfiResources(
+    SessionFfiResources&&) = default;
+MahoUnifiedAgentAdapter::SessionFfiResources&
+MahoUnifiedAgentAdapter::SessionFfiResources::operator=(
+    SessionFfiResources&&) = default;
+MahoUnifiedAgentAdapter::SessionFfiResources::~SessionFfiResources() =
+    default;
+
+MahoUnifiedAgentAdapter::ActiveTurn::ActiveTurn() = default;
+MahoUnifiedAgentAdapter::ActiveTurn::ActiveTurn(ActiveTurn&&) = default;
+MahoUnifiedAgentAdapter::ActiveTurn&
+MahoUnifiedAgentAdapter::ActiveTurn::operator=(ActiveTurn&&) = default;
+MahoUnifiedAgentAdapter::ActiveTurn::~ActiveTurn() = default;
+
 namespace {
 base::Lock& GetActiveAdaptersLock() {
   static base::NoDestructor<base::Lock> lock;
@@ -346,10 +388,8 @@ MahoUnifiedAgentAdapter::~MahoUnifiedAgentAdapter() {
   }
 
   if (tool_availability_callback_token_ != 0) {
-    if (MahoCore* core = maho::GetCore()) {
-      maho_core_unregister_tool_availability_callback(
-          core, tool_availability_callback_token_);
-    }
+    maho_core_unregister_tool_availability_callback(
+        maho::GetCore(), tool_availability_callback_token_);
     tool_availability_callback_token_ = 0;
   }
 
@@ -1350,7 +1390,23 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
          std::string tool_name, std::string args_json_in,
          std::shared_ptr<BrowserToolCallState> state,
          bool browser_action_preapproved) {
-        if (!adapter || !adapter->IsActiveGeneration(generation)) {
+        if (!adapter) {
+          if (!state->cancelled.load()) {
+            state->result_error = "Agent browser tool callback is stale";
+          }
+          state->done.Signal();
+          return;
+        }
+        // The Rust session owns one browser-tool bridge for its lifetime, so
+        // its callback handle has no per-turn generation. Resolve that
+        // session-level sentinel only after crossing onto the adapter's
+        // owning sequence. Per-turn callbacks retain their explicit
+        // generation and still reject after Reset().
+        if (generation == 0 && adapter->active_turn_ &&
+            !adapter->active_turn_->cancelled) {
+          generation = adapter->active_turn_->generation;
+        }
+        if (!adapter->IsActiveGeneration(generation)) {
           if (!state->cancelled.load()) {
             state->result_error = "Agent browser tool callback is stale";
           }

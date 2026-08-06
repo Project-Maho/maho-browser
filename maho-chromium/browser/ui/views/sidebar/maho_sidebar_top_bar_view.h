@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/models/image_model.h"
@@ -17,6 +18,10 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
+
+namespace views {
+class DotIndicator;
+}  // namespace views
 
 class AppMenu;
 class AppMenuModel;
@@ -33,8 +38,7 @@ class View;
 
 namespace maho {
 
-class MahoSidebarTopBarView : public views::View {
-  METADATA_HEADER(MahoSidebarTopBarView, views::View)
+class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarTopBarView, views::View)
 
  public:
   explicit MahoSidebarTopBarView(Browser* browser);
@@ -94,6 +98,9 @@ class MahoSidebarTopBarView : public views::View {
   void OnReloadPressed(const ui::Event& event);
   void OnAiPressed(const ui::Event& event);
   void OnMailPressed(const ui::Event& event);
+  // Shows/hides the unread dot on the Mail button from the
+  // `maho.mail.unread_count` pref.
+  void UpdateMailUnreadBadge();
   void OnToggleSidebarPressed(const ui::Event& event);
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   void OnMenuPressed(const ui::Event& event);
@@ -114,6 +121,8 @@ class MahoSidebarTopBarView : public views::View {
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
   raw_ptr<views::ImageButton> mail_button_ = nullptr;
+  raw_ptr<views::DotIndicator> mail_unread_dot_ = nullptr;
+  PrefChangeRegistrar mail_pref_registrar_;
   MahoSidebarPalette palette_;
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   raw_ptr<views::ImageButton> ellipsis_button_ = nullptr;

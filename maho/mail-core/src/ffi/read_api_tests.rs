@@ -59,7 +59,9 @@ unsafe extern "C" fn capture_cb(ok: bool, json: *const c_char, user_data: *mut c
         String::new()
     } else {
         // SAFETY: `json` is a Rust-owned NUL-terminated string valid for this call.
-        unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(json) }
+            .to_string_lossy()
+            .into_owned()
     };
     capture.count.fetch_add(1, Ordering::SeqCst);
     *capture.slot.lock().unwrap() = Some((ok, payload));
@@ -108,7 +110,10 @@ fn malformed_search_json_is_rejected_without_invocation() {
 fn uninitialized_state_is_rejected_without_invocation() {
     crate::state::clear_ctx_for_test();
     let capture = Capture::new();
-    assert!(!MahoMailListAccounts(Some(capture_cb), capture.as_user_data()));
+    assert!(!MahoMailListAccounts(
+        Some(capture_cb),
+        capture.as_user_data()
+    ));
     assert!(capture.peek().is_none());
     assert_eq!(capture.invocations(), 0);
 }

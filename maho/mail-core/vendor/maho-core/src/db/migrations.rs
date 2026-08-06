@@ -75,6 +75,8 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     run_mig!(48, migrate_v48);
     run_mig!(49, migrate_v49);
     run_mig!(50, migrate_v50);
+    run_mig!(51, migrate_v51);
+    run_mig!(52, migrate_v52);
 
     let _ = ver;
     Ok(())
@@ -153,15 +155,18 @@ fn migrate_v1(conn: &Connection) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_emails_account_folder ON emails(account_id, folder_id);
         CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC);
         CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_folder_uid ON emails(folder_id, uid);
 
         CREATE TABLE IF NOT EXISTS attachments (
             id TEXT PRIMARY KEY,
             email_id TEXT NOT NULL,
+            part_id TEXT NOT NULL DEFAULT '',
             filename TEXT,
             mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
             size INTEGER NOT NULL DEFAULT 0,
             content_id TEXT,
-            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+            UNIQUE(email_id, part_id)
         );
 
         CREATE TABLE IF NOT EXISTS ai_configs (
@@ -1468,7 +1473,10 @@ mod tests {
             .prepare("SELECT 1 FROM pragma_table_info('ai_configs') WHERE name = 'use_browser_key'")
             .and_then(|mut s| s.exists([]))
             .unwrap_or(false);
-        assert!(has_col, "ai_configs.use_browser_key column must exist after v50");
+        assert!(
+            has_col,
+            "ai_configs.use_browser_key column must exist after v50"
+        );
 
         conn.execute(
             "INSERT INTO ai_configs (id, provider, model, feature) VALUES ('cfg1', 'openai', 'gpt-4o', 'default')",
@@ -1489,7 +1497,11 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert!(version >= 50, "schema_version should be >= 50, got {}", version);
+        assert!(
+            version >= 50,
+            "schema_version should be >= 50, got {}",
+            version
+        );
     }
 
     #[test]
@@ -1586,6 +1598,69 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pending_mutations", [], |r| r.get(0))
             .unwrap();
         assert!(count >= 0);
+    }
+
+    #[test]
+    fn test_migrate_v52_adds_attachment_part_id_and_folder_uid_uniqueness() {
+        let conn = setup_test_db();
+
+        let has_part_id: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('attachments') WHERE name = 'part_id'")
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
+        assert!(has_part_id, "attachments.part_id column must exist after v52");
+
+        let has_folder_uid_index: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_emails_folder_uid'")
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
+        assert!(has_folder_uid_index, "emails(folder_id, uid) unique index must exist after v52");
+    }
+
+    #[test]
+    fn test_migrate_v52_backfills_attachment_part_id_from_legacy_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "key", "test-key-not-for-production")
+            .unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+        migrate_v1(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type)
+             VALUES ('fold1', 'acc1', 'INBOX', 'INBOX', 'inbox')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, folder_id, uid, subject, from_address, date)
+             VALUES ('em1', 'acc1', 'fold1', 1, 'Subject', 'sender@example.com', '2026-08-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO attachments (id, email_id, filename, mime_type, size) VALUES ('2.1', 'em1', 'f.pdf', 'application/pdf', 1)",
+            [],
+        )
+        .unwrap();
+
+        migrate_v52(&conn).unwrap();
+
+        let (id, part_id): (String, String) = conn
+            .query_row(
+                "SELECT id, part_id FROM attachments WHERE email_id = 'em1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "2.1");
+        assert_eq!(part_id, "2.1");
     }
 }
 
@@ -1993,5 +2068,57 @@ pub(crate) fn migrate_v50(conn: &Connection) -> Result<(), AppError> {
         [],
     )?;
 
+    Ok(())
+}
+
+pub(crate) fn migrate_v51(conn: &Connection) -> Result<(), AppError> {
+    conn.execute("UPDATE folders SET last_synced_uid = 0", [])?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_version (version) VALUES (51);",
+        [],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn migrate_v52(conn: &Connection) -> Result<(), AppError> {
+    let has_part_id: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('attachments') WHERE name = 'part_id'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+
+    if !has_part_id {
+        conn.execute_batch(
+            "ALTER TABLE attachments RENAME TO attachments_old;
+             CREATE TABLE attachments (
+                 id TEXT PRIMARY KEY,
+                 email_id TEXT NOT NULL,
+                 part_id TEXT NOT NULL DEFAULT '',
+                 filename TEXT,
+                 mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                 size INTEGER NOT NULL DEFAULT 0,
+                 content_id TEXT,
+                 FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+                 UNIQUE(email_id, part_id)
+             );
+             INSERT INTO attachments (id, email_id, part_id, filename, mime_type, size, content_id)
+             SELECT id, email_id, id, filename, mime_type, size, content_id FROM attachments_old;
+             DROP TABLE attachments_old;",
+        )?;
+    }
+
+    conn.execute(
+        "UPDATE attachments SET part_id = id WHERE part_id = ''",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_folder_uid ON emails(folder_id, uid)",
+        [],
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_version (version) VALUES (52);",
+        [],
+    )?;
     Ok(())
 }

@@ -110,8 +110,8 @@ fn backfill_batch_blocking(ctx: &AppCtx, account_id: &str) -> Result<usize> {
     let resolved = resolve_account_auth(&conn, &ctx.credential_key, account_id)?;
     let mut client = connect_imap(&resolved)?;
     let mut fetched = 0usize;
-    for (email_id, message_id, folder_path, _uid) in emails {
-        match client.fetch_body_by_message_id(&folder_path, &message_id)? {
+    for (email_id, folder_path, uid) in emails {
+        match client.fetch_body_by_uid(&folder_path, uid as u32)? {
             Some((body_text, body_html)) => {
                 maho_core::services::email::update_email_body(
                     &conn, &email_id, body_text, body_html,

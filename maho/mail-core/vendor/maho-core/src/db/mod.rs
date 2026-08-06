@@ -381,8 +381,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO attachments (id, email_id, filename, mime_type, size) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params!["att1", "e1", "file.pdf", "application/pdf", 1024],
+            "INSERT INTO attachments (id, email_id, part_id, filename, mime_type, size) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params!["att1", "e1", "1", "file.pdf", "application/pdf", 1024],
         )
         .unwrap();
 

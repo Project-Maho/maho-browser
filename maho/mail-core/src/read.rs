@@ -55,11 +55,7 @@ pub fn list_local_emails(
         .map_err(Into::into)
 }
 
-pub fn list_thread(
-    ctx: &AppCtx,
-    account_id: &str,
-    message_id: &str,
-) -> Result<Vec<EmailSummary>> {
+pub fn list_thread(ctx: &AppCtx, account_id: &str, message_id: &str) -> Result<Vec<EmailSummary>> {
     let conn = ctx
         .pool
         .get()
@@ -113,7 +109,7 @@ fn get_email_blocking(ctx: &AppCtx, email_id: &str) -> Result<EmailDetailRespons
             .map_err(|_| MailFfiError::Internal("email folder missing".to_string()))?;
         let resolved = resolve_account_auth(&conn, &ctx.credential_key, &email.account_id)?;
         let mut client = connect_imap(&resolved)?;
-        if let Some(fetched) = client.fetch_body_with_mdn(&folder_path, &email.message_id)? {
+        if let Some(fetched) = client.fetch_body_with_mdn_by_uid(&folder_path, email.uid as u32)? {
             maho_core::services::email::update_email_body_with_mdn(
                 &conn,
                 email_id,
@@ -247,5 +243,4 @@ mod tests {
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.offset, None);
     }
-
 }

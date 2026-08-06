@@ -261,6 +261,9 @@ void MahoMailHelperLauncher::OnKeysInjected(bool success) {
   if (success) {
     ready_ = true;
     LOG(INFO) << "[MahoMailHelperLauncher] Key injection/re-injection result: SUCCESS. Launcher is now ready.";
+    if (observer_) {
+      observer_->OnHelperReady();
+    }
   } else {
     LOG(ERROR) << "[MahoMailHelperLauncher] Key injection/re-injection failed; relaunching helper.";
     HandleFailureAndMaybeRelaunch();

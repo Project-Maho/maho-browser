@@ -75,8 +75,8 @@ pub mod test_helpers {
         ).unwrap();
 
         conn.execute(
-            "INSERT INTO attachments (id, email_id, filename, mime_type, size, content_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params!["att1", "em1", "report.pdf", "application/pdf", 2048, Option::<String>::None],
+            "INSERT INTO attachments (id, email_id, part_id, filename, mime_type, size, content_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params!["att1", "em1", "1", "report.pdf", "application/pdf", 2048, Option::<String>::None],
         ).unwrap();
     }
 }

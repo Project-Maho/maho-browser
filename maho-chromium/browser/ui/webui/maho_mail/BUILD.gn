@@ -26,6 +26,7 @@ source_set("maho_mail") {
 
   deps = [
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/webui/sanitized_image:sanitized_image_source",
     "//maho/browser/mail_helper:maho_mail_service",
     "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser/resources/maho_mail:resources",

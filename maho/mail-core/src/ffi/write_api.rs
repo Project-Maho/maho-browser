@@ -3,13 +3,16 @@
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
+use crate::account::{connect_imap, resolve_account_auth, safe_logout};
 use crate::error::{MailFfiError, Result};
-use crate::account::{resolve_account_auth, connect_imap, safe_logout};
 
 use super::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use super::{c_string, non_empty};
 
-fn get_email_imap_info(conn: &rusqlite::Connection, email_id: &str) -> Result<Option<(String, String, u32)>> {
+fn get_email_imap_info(
+    conn: &rusqlite::Connection,
+    email_id: &str,
+) -> Result<Option<(String, String, u32)>> {
     let result = conn.query_row(
         "SELECT e.account_id, f.path, e.uid FROM emails e JOIN folders f ON e.folder_id = f.id WHERE e.id = ?1",
         [email_id],
@@ -39,10 +42,14 @@ pub extern "C" fn MahoMailMarkRead(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 maho_core::services::email::mark_read(&conn, &email_id)?;
-                
-                if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, &email_id)? {
+
+                if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, &email_id)?
+                {
                     let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                     if let Ok(mut client) = connect_imap(&resolved) {
                         let res = client.set_flags(&folder_path, uid, "\\Seen");
@@ -86,10 +93,14 @@ pub extern "C" fn MahoMailMarkUnread(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 maho_core::services::email::mark_unread(&conn, &email_id)?;
-                
-                if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, &email_id)? {
+
+                if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, &email_id)?
+                {
                     let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                     if let Ok(mut client) = connect_imap(&resolved) {
                         let res = client.remove_flags(&folder_path, uid, "\\Seen");
@@ -133,16 +144,22 @@ pub extern "C" fn MahoMailToggleStar(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 maho_core::services::email::toggle_star(&conn, &email_id)?;
-                
-                let is_starred: bool = conn.query_row(
-                    "SELECT is_starred FROM emails WHERE id = ?1",
-                    [&email_id],
-                    |row| row.get(0)
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
-                if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, &email_id)? {
+                let is_starred: bool = conn
+                    .query_row(
+                        "SELECT is_starred FROM emails WHERE id = ?1",
+                        [&email_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+
+                if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, &email_id)?
+                {
                     let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                     if let Ok(mut client) = connect_imap(&resolved) {
                         let res = if is_starred {
@@ -190,10 +207,13 @@ pub extern "C" fn MahoMailDeleteEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let imap_info = get_email_imap_info(&conn, &email_id)?;
                 maho_core::services::email::delete_email(&conn, &email_id)?;
-                
+
                 if let Some((account_id, folder_path, uid)) = imap_info {
                     let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                     if let Ok(mut client) = connect_imap(&resolved) {
@@ -233,16 +253,21 @@ pub extern "C" fn MahoMailMoveEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let target_folder_path: String = conn.query_row(
-                    "SELECT path FROM folders WHERE id = ?1",
-                    [&target_folder_id],
-                    |row| row.get(0)
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let target_folder_path: String = conn
+                    .query_row(
+                        "SELECT path FROM folders WHERE id = ?1",
+                        [&target_folder_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 let imap_info = get_email_imap_info(&conn, &email_id)?;
                 maho_core::services::email::move_email(&conn, &email_id, &target_folder_id)?;
-                
+
                 if let Some((account_id, folder_path, uid)) = imap_info {
                     let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                     if let Ok(mut client) = connect_imap(&resolved) {
@@ -276,17 +301,23 @@ pub extern "C" fn MahoMailBatchMarkRead(
             return false;
         };
         #[derive(serde::Deserialize)]
-        struct Req { email_ids: Vec<String> }
+        struct Req {
+            email_ids: Vec<String>,
+        }
         let Ok(req) = serde_json::from_str::<Req>(&raw) else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 for id in &req.email_ids {
                     maho_core::services::email::mark_read(&conn, id)?;
                     if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, id)? {
-                        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let resolved =
+                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                         if let Ok(mut client) = connect_imap(&resolved) {
                             let _ = client.set_flags(&folder_path, uid, "\\Seen");
                             safe_logout(client);
@@ -319,17 +350,23 @@ pub extern "C" fn MahoMailBatchMarkUnread(
             return false;
         };
         #[derive(serde::Deserialize)]
-        struct Req { email_ids: Vec<String> }
+        struct Req {
+            email_ids: Vec<String>,
+        }
         let Ok(req) = serde_json::from_str::<Req>(&raw) else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 for id in &req.email_ids {
                     maho_core::services::email::mark_unread(&conn, id)?;
                     if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, id)? {
-                        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let resolved =
+                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                         if let Ok(mut client) = connect_imap(&resolved) {
                             let _ = client.remove_flags(&folder_path, uid, "\\Seen");
                             safe_logout(client);
@@ -362,18 +399,24 @@ pub extern "C" fn MahoMailBatchDelete(
             return false;
         };
         #[derive(serde::Deserialize)]
-        struct Req { email_ids: Vec<String> }
+        struct Req {
+            email_ids: Vec<String>,
+        }
         let Ok(req) = serde_json::from_str::<Req>(&raw) else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 for id in &req.email_ids {
                     let imap_info = get_email_imap_info(&conn, id)?;
                     maho_core::services::email::delete_email(&conn, id)?;
                     if let Some((account_id, folder_path, uid)) = imap_info {
-                        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let resolved =
+                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                         if let Ok(mut client) = connect_imap(&resolved) {
                             let _ = client.set_flags(&folder_path, uid, "\\Deleted");
                             let _ = client.expunge();
@@ -407,24 +450,33 @@ pub extern "C" fn MahoMailBatchMove(
             return false;
         };
         #[derive(serde::Deserialize)]
-        struct Req { email_ids: Vec<String>, target_folder_id: String }
+        struct Req {
+            email_ids: Vec<String>,
+            target_folder_id: String,
+        }
         let Ok(req) = serde_json::from_str::<Req>(&raw) else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let target_folder_path: String = conn.query_row(
-                    "SELECT path FROM folders WHERE id = ?1",
-                    [&req.target_folder_id],
-                    |row| row.get(0)
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let target_folder_path: String = conn
+                    .query_row(
+                        "SELECT path FROM folders WHERE id = ?1",
+                        [&req.target_folder_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 for id in &req.email_ids {
                     let imap_info = get_email_imap_info(&conn, id)?;
                     maho_core::services::email::move_email(&conn, id, &req.target_folder_id)?;
                     if let Some((account_id, folder_path, uid)) = imap_info {
-                        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let resolved =
+                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                         if let Ok(mut client) = connect_imap(&resolved) {
                             let _ = client.move_email(&folder_path, uid, &target_folder_path);
                             safe_logout(client);
@@ -457,23 +509,29 @@ pub extern "C" fn MahoMailBatchToggleStar(
             return false;
         };
         #[derive(serde::Deserialize)]
-        struct Req { email_ids: Vec<String> }
+        struct Req {
+            email_ids: Vec<String>,
+        }
         let Ok(req) = serde_json::from_str::<Req>(&raw) else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 for id in &req.email_ids {
                     maho_core::services::email::toggle_star(&conn, id)?;
-                    let is_starred: bool = conn.query_row(
-                        "SELECT is_starred FROM emails WHERE id = ?1",
-                        [id],
-                        |row| row.get(0)
-                    ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                    let is_starred: bool = conn
+                        .query_row("SELECT is_starred FROM emails WHERE id = ?1", [id], |row| {
+                            row.get(0)
+                        })
+                        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                     if let Some((account_id, folder_path, uid)) = get_email_imap_info(&conn, id)? {
-                        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let resolved =
+                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                         if let Ok(mut client) = connect_imap(&resolved) {
                             let _ = if is_starred {
                                 client.set_flags(&folder_path, uid, "\\Flagged")
@@ -544,10 +602,15 @@ pub extern "C" fn MahoMailCreateFolder(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                 let mut client = connect_imap(&resolved)?;
-                client.create_folder(&folder_name).map_err(|e| MailFfiError::Core(e))?;
+                client
+                    .create_folder(&folder_name)
+                    .map_err(|e| MailFfiError::Core(e))?;
                 safe_logout(client);
 
                 let id = uuid::Uuid::new_v4().to_string();
@@ -587,16 +650,21 @@ pub extern "C" fn MahoMailRenameFolder(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (old_path, folder_type): (String, String) = conn.query_row(
-                    "SELECT path, folder_type FROM folders WHERE id = ?1 AND account_id = ?2",
-                    rusqlite::params![folder_id, account_id],
-                    |row| Ok((row.get(0)?, row.get(1)?))
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (old_path, folder_type): (String, String) = conn
+                    .query_row(
+                        "SELECT path, folder_type FROM folders WHERE id = ?1 AND account_id = ?2",
+                        rusqlite::params![folder_id, account_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 if folder_type != "custom" {
                     return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
-                        "Cannot rename system folders".to_string()
+                        "Cannot rename system folders".to_string(),
                     )));
                 }
 
@@ -610,7 +678,9 @@ pub extern "C" fn MahoMailRenameFolder(
 
                 let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                 let mut client = connect_imap(&resolved)?;
-                client.rename_folder(&old_path, &new_path).map_err(|e| MailFfiError::Core(e))?;
+                client
+                    .rename_folder(&old_path, &new_path)
+                    .map_err(|e| MailFfiError::Core(e))?;
                 safe_logout(client);
 
                 conn.execute(
@@ -643,22 +713,29 @@ pub extern "C" fn MahoMailDeleteFolder(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (folder_path, folder_type): (String, String) = conn.query_row(
-                    "SELECT path, folder_type FROM folders WHERE id = ?1 AND account_id = ?2",
-                    rusqlite::params![folder_id, account_id],
-                    |row| Ok((row.get(0)?, row.get(1)?))
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (folder_path, folder_type): (String, String) = conn
+                    .query_row(
+                        "SELECT path, folder_type FROM folders WHERE id = ?1 AND account_id = ?2",
+                        rusqlite::params![folder_id, account_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 if folder_type != "custom" {
                     return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
-                        "Cannot delete system folders".to_string()
+                        "Cannot delete system folders".to_string(),
                     )));
                 }
 
                 let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                 let mut client = connect_imap(&resolved)?;
-                client.delete_folder(&folder_path).map_err(|e| MailFfiError::Core(e))?;
+                client
+                    .delete_folder(&folder_path)
+                    .map_err(|e| MailFfiError::Core(e))?;
                 safe_logout(client);
 
                 conn.execute(
@@ -691,7 +768,10 @@ pub extern "C" fn MahoMailGetFolderCounts(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let counts = maho_core::services::folder::get_folder_counts(&conn, &account_id)?;
                 Ok(counts)
             })
@@ -710,9 +790,7 @@ pub extern "C" fn MahoMailFlushPendingMutations(
             return false;
         };
         accept_read(callback, user_data, move |_ctx| {
-            Box::pin(async move {
-                Ok("0".to_string())
-            })
+            Box::pin(async move { Ok("0".to_string()) })
         })
     })
 }
@@ -725,7 +803,10 @@ pub extern "C" fn MahoMailGetPendingMutationCount(
     accept_read_call(move || {
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let count = maho_core::services::offline_queue::count_pending_mutations(&conn)?;
                 Ok(count)
             })
@@ -745,8 +826,12 @@ pub extern "C" fn MahoMailListPendingMutations(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let mutations = maho_core::services::offline_queue::list_pending_mutations(&conn, &account_id)?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let mutations =
+                    maho_core::services::offline_queue::list_pending_mutations(&conn, &account_id)?;
                 Ok(mutations)
             })
         })

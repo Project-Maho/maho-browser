@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Attachment {
     pub id: String,
     pub email_id: String,
+    pub part_id: String,
     pub filename: Option<String>,
     pub mime_type: String,
     pub size: i64,

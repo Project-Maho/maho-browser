@@ -22,6 +22,7 @@ import { DelegateEmailDialog } from "../common/DelegateEmailDialog";
 import { CalendarInviteCard, hasCalendarInviteContent } from "../calendar/CalendarInviteCard";
 import { AutoDraftBanner } from "../email/AutoDraftBanner";
 import { EmailBodyView } from "./EmailBodyView";
+import { ConversationThread } from "./ConversationThread";
 import { AIActionsMenu } from "../email/AIActionsMenu";
 import { TranslationStatusBar } from "../email/TranslationStatusBar";
 import { EmailActionsToolbar } from "../email/EmailActionsToolbar";
@@ -953,63 +954,9 @@ export function EmailContent({
       )}
 
       {threadEmails.length > 1 && (
-        <div className="border-b border-border px-6 py-3">
-          <button
-            type="button"
-            onClick={() => setThreadExpanded(!threadExpanded)}
-            aria-expanded={threadExpanded}
-            aria-label={t("a11y.threadMessages")}
-            className="flex w-full items-center gap-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <MessageSquare className="h-4 w-4" />
-            <span>{threadEmails.length} messages in thread</span>
-            {threadExpanded ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-          </button>
-
-          {threadExpanded && (
-            <ul className="mt-3 space-y-1" aria-label={t("a11y.threadMessages")}>
-              {threadEmails.map((threadEmail) => (
-                <li key={threadEmail.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (threadEmail.id === email.id) return;
-                    if (onSelectEmail) {
-                      onSelectEmail(threadEmail.id);
-                    }
-                  }}
-                  aria-current={threadEmail.id === email.id ? "true" : undefined}
-                  aria-label={`${threadEmail.from_name || threadEmail.from_address}, ${new Date(threadEmail.date).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                    threadEmail.id === email.id
-                      ? "bg-card text-foreground"
-                      : "text-muted-foreground hover:bg-card/50 hover:text-foreground"
-                  }`}
-                >
-                  <span
-                    className={`min-w-0 flex-1 truncate ${
-                      threadEmail.is_read ? "font-normal" : "font-semibold text-foreground"
-                    }`}
-                  >
-                    {threadEmail.from_name || threadEmail.from_address}
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {new Date(threadEmail.date).toLocaleString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </span>
-                </button>
-                </li>
-              ))}
-            </ul>
-          )}
+        <div className="flex items-center gap-2 border-b border-border px-6 py-3 text-sm text-muted-foreground">
+          <MessageSquare className="h-4 w-4" />
+          <span>{threadEmails.length} messages in thread</span>
         </div>
       )}
 
@@ -1072,16 +1019,31 @@ export function EmailContent({
             />
           </div>
         )}
-        <EmailBodyView
-          emailDetail={emailDetail}
-          pgpDecryptedText={pgpDecryptedText}
-          smimeDecryptedText={smimeDecryptedText}
-          translatedText={translatedText}
-          translatedHtml={translatedHtml}
-          showOriginalBody={showOriginalBody}
-          onToggleShowOriginal={() => setShowOriginalBody((v) => !v)}
-          onEmailAddressClick={onComposeToRecipient}
-        />
+        {threadEmails.length > 1 ? (
+          <ConversationThread
+            threadEmails={threadEmails}
+            selectedEmailId={email.id}
+            selectedDetail={emailDetail}
+            pgpDecryptedText={pgpDecryptedText}
+            smimeDecryptedText={smimeDecryptedText}
+            translatedText={translatedText}
+            translatedHtml={translatedHtml}
+            showOriginalBody={showOriginalBody}
+            onToggleShowOriginal={() => setShowOriginalBody((v) => !v)}
+            onEmailAddressClick={onComposeToRecipient}
+          />
+        ) : (
+          <EmailBodyView
+            emailDetail={emailDetail}
+            pgpDecryptedText={pgpDecryptedText}
+            smimeDecryptedText={smimeDecryptedText}
+            translatedText={translatedText}
+            translatedHtml={translatedHtml}
+            showOriginalBody={showOriginalBody}
+            onToggleShowOriginal={() => setShowOriginalBody((v) => !v)}
+            onEmailAddressClick={onComposeToRecipient}
+          />
+        )}
       </div>
 
       <AutoDraftBanner

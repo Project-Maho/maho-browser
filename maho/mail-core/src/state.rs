@@ -293,7 +293,7 @@ impl SyncRegistry {
 }
 
 /// Pending PKCE entries older than this are evicted on the next store access.
-const PKCE_TTL: Duration = Duration::from_secs(600);
+const PKCE_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// One in-flight OAuth2 PKCE authorization, keyed by the opaque `state` token
 /// returned to the browser. Holds the verifier and the parameters needed to
@@ -305,6 +305,8 @@ pub struct PkceEntry {
     pub client_id: String,
     pub client_secret: String,
     pub redirect_uri: String,
+    pub expected_google_sub: Option<String>,
+    pub reauthorize_account_id: Option<String>,
     pub created_at: Instant,
 }
 
@@ -515,6 +517,8 @@ mod pkce_tests {
             client_id: "client-id".to_string(),
             client_secret: "client-secret".to_string(),
             redirect_uri: "http://localhost".to_string(),
+            expected_google_sub: None,
+            reauthorize_account_id: None,
             created_at: Instant::now(),
         }
     }
@@ -540,11 +544,19 @@ mod pkce_tests {
     }
 
     #[test]
+    fn pkce_ttl_covers_oauth_loopback_window() {
+        assert!(
+            PKCE_TTL >= Duration::from_secs(30 * 60),
+            "PKCE state must outlive the 30-minute loopback callback window"
+        );
+    }
+
+    #[test]
     fn expired_entry_is_purged_on_take() {
         let store = PkceStore::default();
         let mut stale = entry("gmail");
         stale.created_at = Instant::now()
-            .checked_sub(Duration::from_secs(700))
+            .checked_sub(PKCE_TTL + Duration::from_secs(1))
             .expect("past instant");
         store.insert("old".to_string(), stale);
 

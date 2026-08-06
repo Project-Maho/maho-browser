@@ -87,6 +87,56 @@ base::DictValue BuildObjectSchema(base::DictValue properties,
   return schema;
 }
 
+base::DictValue BuildMailAccountSchema() {
+  base::DictValue properties;
+  properties.Set("account_id", BuildStringSchema("Mail account id."));
+  base::ListValue required;
+  required.Append("account_id");
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
+base::DictValue BuildMailListEmailsSchema() {
+  base::DictValue properties;
+  properties.Set("account_id", BuildStringSchema("Mail account id."));
+  properties.Set("folder_id", BuildStringSchema("Mail folder id."));
+  properties.Set("limit", BuildIntegerSchema(
+                              "Maximum emails to return; default 50."));
+  properties.Set("offset",
+                 BuildIntegerSchema("Pagination offset; default 0."));
+  base::ListValue required;
+  required.Append("account_id");
+  required.Append("folder_id");
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
+base::DictValue BuildMailIdSchema(std::string key, std::string description) {
+  base::DictValue properties;
+  properties.Set(key, BuildStringSchema(std::move(description)));
+  base::ListValue required;
+  required.Append(key);
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
+base::DictValue BuildMailSearchSchema() {
+  base::DictValue properties;
+  properties.Set("query_json", BuildStringSchema(
+      "JSON search query accepted by the Mail search broker."));
+  base::ListValue required;
+  required.Append("query_json");
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
+base::DictValue BuildMailThreadSchema() {
+  base::DictValue properties;
+  properties.Set("account_id", BuildStringSchema("Mail account id."));
+  properties.Set("message_id",
+                 BuildStringSchema("RFC message id for the thread."));
+  base::ListValue required;
+  required.Append("account_id");
+  required.Append("message_id");
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
 void AddOptionalTabId(base::DictValue& properties) {
   properties.Set("tab_id", BuildIntegerSchema(
                                "Browser tab id. Omit or pass 0 for the active tab."));
@@ -221,51 +271,76 @@ base::DictValue BuildApprovalMetadata(
   return metadata;
 }
 
+MahoBrowserToolRegistry::ToolSchema MakeToolSchema(
+    std::string name,
+    std::string description,
+    base::DictValue input_schema,
+    const maho::ai::BrowserActionContract* browser_action_contract = nullptr) {
+  MahoBrowserToolRegistry::ToolSchema schema;
+  schema.name = std::move(name);
+  schema.description = std::move(description);
+  schema.input_schema = std::move(input_schema);
+  schema.browser_action_contract = browser_action_contract;
+  return schema;
+}
+
 std::vector<MahoBrowserToolRegistry::ToolSchema> BuildPhase1ToolSchemas() {
   std::vector<MahoBrowserToolRegistry::ToolSchema> tools;
-  tools.push_back({
-      .name = "read_current_page",
-      .description =
-          "Read the currently active page and return browser-ready page context.",
-      .input_schema = BuildNoArgSchema(),
-  });
-  tools.push_back({
-      .name = "get_selected_text",
-      .description =
-          "Return the current text selection from the active browser tab.",
-      .input_schema = BuildNoArgSchema(),
-  });
-  tools.push_back({
-      .name = "get_active_tab",
-      .description =
-          "Return metadata for the active browser tab in the current window.",
-      .input_schema = BuildNoArgSchema(),
-  });
-  tools.push_back({
-      .name = "search_in_page",
-      .description =
-          "Search the active page content and return matching excerpts.",
-      .input_schema = BuildSearchSchema(),
-  });
-  tools.push_back({
-      .name = "extract_structured_page_context",
-      .description =
-          "Extract structured context from the active page for browser chat orchestration.",
-      .input_schema = BuildNoArgSchema(),
-  });
+  tools.push_back(MakeToolSchema(
+      "read_current_page",
+      "Read the currently active page and return browser-ready page context.",
+      BuildNoArgSchema()));
+  tools.push_back(MakeToolSchema(
+      "get_selected_text",
+      "Return the current text selection from the active browser tab.",
+      BuildNoArgSchema()));
+  tools.push_back(MakeToolSchema(
+      "get_active_tab",
+      "Return metadata for the active browser tab in the current window.",
+      BuildNoArgSchema()));
+  tools.push_back(MakeToolSchema(
+      "search_in_page",
+      "Search the active page content and return matching excerpts.",
+      BuildSearchSchema()));
+  tools.push_back(MakeToolSchema(
+      "extract_structured_page_context",
+      "Extract structured context from the active page for browser chat "
+      "orchestration.",
+      BuildNoArgSchema()));
+  tools.push_back(MakeToolSchema(
+      "mail_list_accounts", "List Mail accounts available to Maho Mail.",
+      BuildNoArgSchema()));
+  tools.push_back(MakeToolSchema("mail_list_folders",
+                                 "List folders for a Mail account.",
+                                 BuildMailAccountSchema()));
+  tools.push_back(MakeToolSchema("mail_list_emails",
+                                 "List emails in a Mail account folder.",
+                                 BuildMailListEmailsSchema()));
+  tools.push_back(MakeToolSchema("mail_get_email", "Read a single email by id.",
+                                 BuildMailIdSchema("email_id", "Email id.")));
+  tools.push_back(MakeToolSchema(
+      "mail_search_emails",
+      "Search emails using a Mail search query JSON object.",
+      BuildMailSearchSchema()));
+  tools.push_back(MakeToolSchema("mail_list_thread",
+                                 "List all emails in a Mail thread.",
+                                 BuildMailThreadSchema()));
   for (const maho::ai::BrowserActionContract& contract :
        maho::ai::kMahoBrowserActionContracts) {
-    tools.push_back({
-        .name = std::string(contract.tool_name),
-        .description = BrowserActionDescription(contract),
-        .input_schema = BuildBrowserActionInputSchema(contract.tool_name),
-        .browser_action_contract = &contract,
-    });
+    tools.push_back(MakeToolSchema(
+        std::string(contract.tool_name), BrowserActionDescription(contract),
+        BuildBrowserActionInputSchema(contract.tool_name), &contract));
   }
   return tools;
 }
 
 }  // namespace
+
+MahoBrowserToolRegistry::ToolSchema::ToolSchema() = default;
+MahoBrowserToolRegistry::ToolSchema::ToolSchema(ToolSchema&&) = default;
+MahoBrowserToolRegistry::ToolSchema&
+MahoBrowserToolRegistry::ToolSchema::operator=(ToolSchema&&) = default;
+MahoBrowserToolRegistry::ToolSchema::~ToolSchema() = default;
 
 // static
 const std::vector<MahoBrowserToolRegistry::ToolSchema>&

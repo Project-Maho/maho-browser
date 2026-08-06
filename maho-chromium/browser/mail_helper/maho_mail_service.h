@@ -4,12 +4,14 @@
 #define MAHO_BROWSER_MAIL_HELPER_MAHO_MAIL_SERVICE_H_
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <optional>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -74,6 +76,7 @@ class MahoMailService : public KeyedService,
                       const std::string& reason) override;
   void OnAuthRefreshSucceeded(const std::string& account_id) override;
   void OnAccountsChanged() override;
+  void OnHelperReady() override;
   void OnSyncEvent(const std::string& event_type, const std::string& payload) override;
   void OnBackfillEvent(const std::string& event_type, const std::string& payload) override;
   void OnStatusChanged(const std::string& account_id, bool connected) override;
@@ -129,8 +132,11 @@ class MahoMailService : public KeyedService,
   void OAuthStartUrl(const std::string& provider,
                      const std::string& client_id,
                      const std::string& redirect_uri,
+                     const std::string& options_json,
                      ReadCallback callback);
-  void OAuthLoopbackSignIn(const std::string& provider, ReadCallback callback);
+  void OAuthLoopbackSignIn(const std::string& provider,
+                           const std::string& options_json,
+                           ReadCallback callback);
   void OAuthComplete(const std::string& state,
                      const std::string& code,
                      ReadCallback callback);
@@ -232,12 +238,6 @@ class MahoMailService : public KeyedService,
   void GetAiConfig(const std::string& feature, MailReadCallback callback);
   void DeleteAiConfig(const std::string& feature, MailReadCallback callback);
   void TestAiConnection(const std::string& config_json, MailReadCallback callback);
-  void ListAgentSessions(const std::string& account_id, MailReadCallback callback);
-  void GetAgentMessages(const std::string& account_id, const std::string& session_id, MailReadCallback callback);
-  void CreateAgentSession(const std::string& account_id, MailReadCallback callback);
-  void DeleteAgentSession(const std::string& account_id, const std::string& session_id, MailReadCallback callback);
-  void SendAgentMessage(const std::string& account_id, const std::string& session_id, const std::string& content, MailReadCallback callback);
-  void CancelAgentMessage(const std::string& account_id, const std::string& session_id, MailReadCallback callback);
   void GetAutoDraftForEmail(const std::string& account_id, const std::string& email_id, MailReadCallback callback);
   void UpdateAutoDraftStatus(const std::string& draft_id, const std::string& status, MailReadCallback callback);
   void TranslateText(const std::string& text, const std::string& target_lang, const std::string& source_lang, MailReadCallback callback);
@@ -313,6 +313,25 @@ class MahoMailService : public KeyedService,
   // renderer). No-op without a profile or a ready encryptor.
   void PushBrowserAiKeys(mojom::MahoMailHelper* helper);
 
+  // Unread-badge + new-mail-notification pipeline. All no-op without a profile.
+  // RefreshMailBadge fetches the account's folders, recomputes the inbox unread
+  // total, and writes it to the `maho.mail.unread_count` pref (summed across
+  // accounts). When `notify` is true and notifications are enabled it also
+  // surfaces an OS notification for the newest inbox message.
+  void RefreshMailBadge(const std::string& account_id, bool notify);
+  void RefreshBadgesForAccounts(const std::string& result_json);
+  void OnFoldersForBadge(const std::string& account_id,
+                         bool notify,
+                         bool ok,
+                         std::string result_json);
+  void OnLatestInboxEmailForNotify(const std::string& account_id,
+                                   bool ok,
+                                   std::string result_json);
+  void UpdateUnreadCountPref();
+
+  // Per-account inbox unread counts, summed into the pref. Keyed by account id.
+  std::map<std::string, int64_t> account_unread_counts_;
+
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
   SEQUENCE_CHECKER(sequence_checker_);
@@ -332,6 +351,31 @@ class MahoMailService : public KeyedService,
   base::WeakPtrFactory<MahoMailService> weak_ptr_factory_{this};
 };
 
+// Process-wide hook used to surface OS notifications for newly arrived mail.
+// The mail service invokes this instead of calling NotificationDisplayService
+// directly, so the mail_service GN target does not depend on
+// //chrome/browser/notifications (which forms a dependency cycle). The browser
+// layer installs the concrete implementation at startup.
+using MailNotificationCallback =
+    base::RepeatingCallback<void(Profile* profile,
+                                 const std::string& title,
+                                 const std::string& body,
+                                 const std::string& notification_id)>;
+void SetMahoMailNotificationCallback(MailNotificationCallback callback);
+
+// Parses a ListFolders JSON array and returns the summed unread_count across
+// Inbox-type folders. When `out_inbox_folder_id` is non-null it receives the id
+// of the first Inbox folder (cleared/empty if none). Pure free function so the
+// sidebar badge computation is unit-testable without a Profile.
+int64_t ComputeInboxUnreadForBadge(const std::string& folders_json,
+                                   std::string* out_inbox_folder_id);
+
+std::optional<bool> GetDesktopNotificationPreference(
+    const std::string& behavior_prefs_json);
+
+std::optional<bool> GetUnreadBadgePreference(
+    const std::string& behavior_prefs_json);
+
 }  // namespace maho
 
-#endif  // MAHO_BROWSER_MAIL_HELPER_MAHO_MAIL_SERVICE_H_
+#endif  // MAHO_BROWSER_MAIL_HELPER_MAHO_MAIL_SERVICE_H_  // MAHO_BROWSER_MAIL_HELPER_MAHO_MAIL_SERVICE_H_

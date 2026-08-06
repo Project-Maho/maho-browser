@@ -23,6 +23,9 @@
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -45,12 +48,17 @@
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/notifications/notification_common.h"
+#include "chrome/browser/notifications/notification_display_service.h"
+#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/exit_type_service.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/simple_message_box.h"
@@ -96,6 +104,7 @@
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
@@ -112,7 +121,13 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/ax_tree_update.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/message_center/public/cpp/notification.h"
+#include "ui/message_center/public/cpp/notification_delegate.h"
+#include "ui/message_center/public/cpp/notifier_id.h"
+#include "url/gurl.h"
 
 namespace {
 MahoBrowserMainExtraParts* g_instance = nullptr;
@@ -137,6 +152,63 @@ namespace {
 
 constexpr int kIsolatedWorldIdForMcpAction =
     content::ISOLATED_WORLD_ID_CONTENT_END + 6;
+
+constexpr char kMahoMailNotificationOrigin[] = "chrome://maho-mail";
+constexpr char kMahoMailNotifierId[] = "maho.mail";
+
+void OpenMahoMailFromNotification(base::WeakPtr<Profile> profile,
+                                  std::optional<int> button_index) {
+  if (!profile || button_index.has_value()) {
+    return;
+  }
+
+  NavigateParams params(profile.get(), GURL(kMahoMailNotificationOrigin),
+                        ui::PAGE_TRANSITION_GENERATED);
+  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Navigate(&params);
+}
+
+void ShowMahoMailNotification(Profile* profile,
+                              const std::string& sender,
+                              const std::string& subject,
+                              const std::string& notification_id) {
+  if (!profile || !profile->IsRegularProfile()) {
+    return;
+  }
+
+  PrefService* prefs = profile->GetPrefs();
+  if (!maho::sidebar_prefs::IsMahoMailEnabled(prefs) ||
+      !prefs->GetBoolean("maho.mail.notifications_enabled")) {
+    return;
+  }
+
+  NotificationDisplayService* notification_service =
+      NotificationDisplayServiceFactory::GetForProfile(profile);
+  if (!notification_service) {
+    return;
+  }
+
+  auto delegate =
+      base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
+          base::BindRepeating(&OpenMahoMailFromNotification,
+                              profile->GetWeakPtr()));
+  message_center::Notification notification(
+      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
+      base::UTF8ToUTF16(sender), base::UTF8ToUTF16(subject), ui::ImageModel(),
+      std::u16string(), GURL(kMahoMailNotificationOrigin),
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kMahoMailNotifierId),
+      {}, std::move(delegate));
+  notification_service->Display(NotificationHandler::Type::TRANSIENT,
+                                notification, nullptr);
+}
+
+bool CreateDirectoryOnThreadPool(base::FilePath path) {
+  if (path.empty()) {
+    return true;
+  }
+  return base::CreateDirectory(path);
+}
 
 std::string ExecuteMcpActionJsBlocking(content::WebContents* wc,
                                        const std::string& script) {
@@ -227,51 +299,17 @@ std::string DecodeActiveSpaceId(char* active_id_cstr) {
 
 void PopulateBridgeFromCore(MahoCore* core) {
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-
-  char* json_str = maho_core_get_space_view_models(core);
-  if (!json_str) {
+  if (!core || !bridge->HydrateFromCore()) {
     return;
   }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return;
-  }
-
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* id = dict->FindString("id");
-    if (!id) {
-      continue;
-    }
-    const std::string* profile_id = dict->FindString("profile_id");
-    std::string pid_str = profile_id ? *profile_id : std::string();
-    std::optional<base::FilePath> resolved_path =
-        maho::MahoSpaceProfileBridge::ProfileBasenameForId(pid_str);
-    if (!resolved_path) {
-      LOG(WARNING) << "Maho: Skipping hydration for space id: " << *id
-                   << " due to invalid profile_id: " << pid_str;
-      continue;
-    }
-
-    bridge->RegisterSpace(*id, *resolved_path);
-  }
-
-  bridge->SetActiveSpaceId(
-      DecodeActiveSpaceId(maho_core_get_active_space_id(core)));
 
   auto apply_initial_theme = []() {
-    MahoSpaceThemeState::UpdateFromCore();
-    // Reset the color cache so the first window's ColorProvider picks up the
-    // restored Space theme; otherwise the initial paint uses the un-themed base
-    // colors until an unrelated theme event resets it.
-    ui::ColorProviderManager::Get().ResetColorProviderCache();
+    const MahoSpaceThemeState::ChangedSpaceIds changed_spaces =
+        MahoSpaceThemeState::UpdateFromCore();
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    for (Browser* browser : bridge->GetBrowsersForSpaces(changed_spaces)) {
+      maho::MahoSidebarView::RefreshSpaceThemeForBrowser(browser);
+    }
   };
   if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
     apply_initial_theme();
@@ -449,7 +487,7 @@ void MahoBrowserMainExtraParts::MaybeInitializeForBrowser(
     return;
   }
 
-  if (core_) {
+  if (core_ || regular_services_initializing_) {
     LOG(INFO)
         << "MAHO_INIT_AUDIT: class=" << ClassToString(cls)
         << ", decision=already_initialized, stage=MaybeInitializeForBrowser";
@@ -899,7 +937,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       std::move(callback).Run(false, "Mail service unavailable");
       return;
     }
-    service->OAuthStartUrl(provider, client_id, redirect_uri,
+    service->OAuthStartUrl(provider, client_id, redirect_uri, "{}",
                            std::move(callback));
   }
 
@@ -1354,6 +1392,128 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
           FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(100));
       run_loop.Run();
     }
+  }
+
+  void SameOriginFetch(
+      int tab_id,
+      const GURL& url,
+      const std::string& method,
+      const std::string& body,
+      const std::string& headers_json,
+      maho::MahoMcpBrowserDelegate::SameOriginFetchCallback callback) override {
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc || !wc->GetPrimaryMainFrame()) {
+      maho::MahoMcpBrowserDelegate::SameOriginFetchResult result;
+      result.error = "No WebContents available for same-origin fetch";
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+    const GURL page_url = wc->GetLastCommittedURL();
+    if (!page_url.is_valid() ||
+        page_url.DeprecatedGetOriginAsURL() != url.DeprecatedGetOriginAsURL()) {
+      maho::MahoMcpBrowserDelegate::SameOriginFetchResult result;
+      result.error = "Same-origin fetch blocked: URL origin does not match target tab";
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+
+    constexpr size_t kMaxFetchTextBytes = 1024 * 1024;
+    const std::string fetch_id =
+        base::Uuid::GenerateRandomV4().AsLowercaseString();
+    const std::string fetch_id_json = base::GetQuotedJSONString(fetch_id);
+    const std::string start_script =
+        "(()=>{window.__maho_mcp_fetches=window.__maho_mcp_fetches||{};"
+        "const id=" + fetch_id_json +
+        ";window.__maho_mcp_fetches[id]={done:false};"
+        "(async()=>{try{"
+        "const response=await fetch(" +
+        base::GetQuotedJSONString(url.spec()) +
+        ",{method:" + base::GetQuotedJSONString(method) +
+        ",credentials:'include',redirect:'error',headers:" + headers_json +
+        (method == "POST"
+             ? ",body:" + base::GetQuotedJSONString(body)
+             : std::string()) +
+        "});"
+        "if(new URL(response.url).origin!==location.origin)throw new Error('cross-origin response blocked');"
+        "const full=await response.text();"
+        "const text=full.slice(0," +
+        base::NumberToString(kMaxFetchTextBytes) +
+        ");"
+        "window.__maho_mcp_fetches[id]={done:true,value:JSON.stringify({success:true,status:response.status,final_url:response.url,content_type:response.headers.get('content-type')||'',text,truncated:text.length<full.length})};"
+        "}catch(error){window.__maho_mcp_fetches[id]={done:true,value:JSON.stringify({success:false,error:String(error&&error.message||error)})};}})();"
+        "return 'started';})()";
+    if (ExecuteMcpActionJsBlocking(wc, start_script) != "started") {
+      maho::MahoMcpBrowserDelegate::SameOriginFetchResult result;
+      result.error = "Same-origin fetch failed to start";
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+
+    const std::string poll_script =
+        "(()=>{const entry=window.__maho_mcp_fetches&&window.__maho_mcp_fetches[" +
+        fetch_id_json +
+        "];if(!entry||!entry.done)return '';const value=entry.value||'';delete window.__maho_mcp_fetches[" +
+        fetch_id_json + "];return value;})()";
+    const base::TimeTicks deadline =
+        base::TimeTicks::Now() + base::Seconds(30);
+    std::string serialized;
+    while (base::TimeTicks::Now() < deadline) {
+      content::WebContents* current =
+          (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+      if (!current) {
+        break;
+      }
+      serialized = ExecuteMcpActionJsBlocking(current, poll_script);
+      if (!serialized.empty()) {
+        break;
+      }
+      base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+      run_loop.Run();
+    }
+
+    maho::MahoMcpBrowserDelegate::SameOriginFetchResult result;
+    if (serialized.empty()) {
+      result.error = "Same-origin fetch timed out after 30 seconds";
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(serialized, base::JSON_PARSE_RFC);
+    if (!parsed || !parsed->is_dict()) {
+      result.error = "Same-origin fetch returned invalid JSON";
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+    const base::DictValue& dict = parsed->GetDict();
+    result.success = dict.FindBool("success").value_or(false);
+    result.error =
+        dict.FindString("error") ? *dict.FindString("error") : std::string();
+    if (result.success) {
+      result.status = dict.FindInt("status").value_or(0);
+      result.final_url = dict.FindString("final_url")
+                             ? *dict.FindString("final_url")
+                             : std::string();
+      result.content_type = dict.FindString("content_type")
+                                ? *dict.FindString("content_type")
+                                : std::string();
+      result.text =
+          dict.FindString("text") ? *dict.FindString("text") : std::string();
+      result.truncated = dict.FindBool("truncated").value_or(false);
+      const GURL final_url(result.final_url);
+      if (!final_url.is_valid() ||
+          final_url.DeprecatedGetOriginAsURL() !=
+              url.DeprecatedGetOriginAsURL()) {
+        result = {};
+        result.error = "Same-origin fetch blocked a cross-origin response";
+      } else if (result.text.size() > kMaxFetchTextBytes) {
+        result.text.resize(kMaxFetchTextBytes);
+        result.truncated = true;
+      }
+    }
+    std::move(callback).Run(std::move(result));
   }
 
   int CreateNewTab(const GURL& url) override {
@@ -2724,16 +2884,40 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
   base::WeakPtrFactory<MahoMcpBrowserDelegateImpl> weak_factory_{this};
 };
 
+MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
+  static base::NoDestructor<MahoMcpBrowserDelegateImpl> mcp_delegate;
+  return mcp_delegate.get();
+}
+
 }  // namespace
 
 void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                 bool is_initial_profile) {
+  const bool is_regular = profile ? profile->IsRegularProfile() : false;
+  const bool incognito_switch =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kIncognito);
+
   // Must be startup-time (not browser-triggered): the login gate suppresses
   // the startup browser, so browser-triggered init would deadlock.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kIncognito)) {
+  if (incognito_switch) {
     return;
   }
-  if (is_initial_profile && profile && profile->IsRegularProfile() && !core_) {
+  if (profile && is_regular) {
+    maho::MahoMcpSession::SetBrowserDelegate(GetMcpBrowserDelegate());
+  }
+  if (is_initial_profile && profile && is_regular && !core_ &&
+      !regular_services_initializing_) {
+    PrefService* prefs = profile->GetPrefs();
+    const bool login_gate_bypassed =
+        base::CommandLine::ForCurrentProcess()->HasSwitch(
+            "maho-disable-login-gate");
+    const bool has_valid_relay_session =
+        maho::auth::HasValidRelaySession(prefs);
+    const bool gate_value = maho::welcome::IsLoginGateActive(
+        login_gate_bypassed, has_valid_relay_session);
+
+    prefs->SetBoolean(maho::welcome::kLoginGateActive, gate_value);
+
     InitializeRegularServicesOnce(profile);
   }
 }
@@ -2845,6 +3029,7 @@ void MahoBrowserMainExtraParts::ShutdownCoreAndServices() {
   }
   routines_scheduler_.reset();
   maho::core::SaveState(core_);
+  maho::QuiesceCoreTasksAndWait();
   maho::SetCore(nullptr);
   maho::core::Destroy(core_);
   core_ = nullptr;
@@ -2856,10 +3041,30 @@ void MahoBrowserMainExtraParts::MaybeLaunchMailHelper(Profile* profile) {
     return;
   }
 
-  PrefService* prefs = profile->GetPrefs();
-  if (!prefs || !maho::auth::HasValidRelaySession(prefs)) {
-    LOG(INFO) << "[MahoMailService] Skipping launch; profile has no "
-                 "valid mail session.";
+  base::FilePath crashpad_database;
+  base::FilePath user_data_dir;
+  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
+    crashpad_database = user_data_dir.AppendASCII("Crashpad");
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&CreateDirectoryOnThreadPool, crashpad_database),
+      base::BindOnce(&MahoBrowserMainExtraParts::OnMailHelperCrashpadReady,
+                     weak_factory_.GetWeakPtr(), profile, crashpad_database));
+}
+
+void MahoBrowserMainExtraParts::OnMailHelperCrashpadReady(
+    Profile* profile,
+    const base::FilePath& crashpad_database,
+    bool crashpad_directory_ready) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!crashpad_directory_ready && !crashpad_database.empty()) {
+    LOG(WARNING) << "Maho mail helper Crashpad directory creation failed: "
+                 << crashpad_database.value();
+  }
+
+  if (!profile || !profile->IsRegularProfile()) {
     return;
   }
 
@@ -2867,13 +3072,6 @@ void MahoBrowserMainExtraParts::MaybeLaunchMailHelper(Profile* profile) {
       maho::MahoMailServiceFactory::GetForProfile(profile);
   if (!service) {
     return;
-  }
-
-  base::FilePath crashpad_database;
-  base::FilePath user_data_dir;
-  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
-    crashpad_database = user_data_dir.AppendASCII("Crashpad");
-    base::CreateDirectory(crashpad_database);
   }
 
   service->EnsureHelperLaunched(maho::mail_helper::kMahoMailHelperVersion,
@@ -2884,7 +3082,13 @@ void MahoBrowserMainExtraParts::MaybeLaunchMailHelper(Profile* profile) {
 void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
     Profile* profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (core_ || regular_services_initializing_) {
+    return;
+  }
+  regular_services_initializing_ = true;
   regular_profile_ = profile;
+  maho::SetMahoMailNotificationCallback(
+      base::BindRepeating(&ShowMahoMailNotification));
 
 #if BUILDFLAG(IS_MAC)
   // Ensure the Mach-port rendezvous server exists before launching the mail
@@ -2900,7 +3104,30 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
                "stage=core_init_begin";
 
-  base::CreateDirectory(storage_path_);
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&CreateDirectoryOnThreadPool, storage_path_),
+      base::BindOnce(
+          &MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady,
+          weak_factory_.GetWeakPtr(), profile));
+}
+
+void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
+    Profile* profile,
+    bool storage_directory_ready) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (!regular_services_initializing_) {
+    return;
+  }
+  if (!profile || !profile->IsRegularProfile()) {
+    regular_services_initializing_ = false;
+    return;
+  }
+  if (!storage_directory_ready) {
+    LOG(WARNING) << "Maho storage directory creation failed: "
+                 << storage_path_.value();
+  }
 
   base::FilePath key_path = storage_path_.AppendASCII("maho_storage.key");
   if (maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe())) {
@@ -2970,18 +3197,21 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   // --maho-disable-login-gate so the onboarding gate does not suppress the
   // initial browser window (which would leave InProcessBrowserTest::browser()
   // null). Default behavior is unchanged when the switch is absent.
-  const bool needs_login_gate =
-      !base::CommandLine::ForCurrentProcess()->HasSwitch(
-          "maho-disable-login-gate") &&
-      !maho::auth::HasValidRelaySession(prefs);
+  const bool login_gate_bypassed =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          "maho-disable-login-gate");
+  const bool has_valid_relay_session =
+      maho::auth::HasValidRelaySession(prefs);
+  const bool needs_login_gate = maho::welcome::IsLoginGateActive(
+      login_gate_bypassed, has_valid_relay_session);
+
   prefs->SetBoolean(maho::welcome::kLoginGateActive, needs_login_gate);
+
   if (needs_login_gate) {
     maho::MahoWelcomeWindow::Show(profile);
   }
 
-  // Register MCP browser delegate
-  static base::NoDestructor<MahoMcpBrowserDelegateImpl> mcp_delegate;
-  maho::MahoMcpSession::SetBrowserDelegate(mcp_delegate.get());
+  maho::MahoMcpSession::SetBrowserDelegate(GetMcpBrowserDelegate());
 
   sync_relay_client_ = std::make_unique<maho::MahoSyncRelayClient>(profile);
   sync_relay_client_->StartPolling();
@@ -3036,4 +3266,5 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
                "stage=profile_init_complete";
+  regular_services_initializing_ = false;
 }

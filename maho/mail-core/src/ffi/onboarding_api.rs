@@ -135,8 +135,11 @@ pub extern "C" fn MahoMailOAuthStartUrl(
 }
 
 #[no_mangle]
-pub extern "C" fn MahoMailOAuthLoopbackSignIn(
+pub extern "C" fn MahoMailOAuthStartUrlWithOptions(
     provider: *const c_char,
+    client_id: *const c_char,
+    redirect_uri: *const c_char,
+    options_json: *const c_char,
     callback: MahoMailReadCallback,
     user_data: *mut std::ffi::c_void,
 ) -> bool {
@@ -144,8 +147,57 @@ pub extern "C" fn MahoMailOAuthLoopbackSignIn(
         let Ok(provider) = non_empty(provider, "provider") else {
             return false;
         };
+        let Ok(client_id) = c_string(client_id, "client_id") else {
+            return false;
+        };
+        let Ok(redirect_uri) = non_empty(redirect_uri, "redirect_uri") else {
+            return false;
+        };
+        let Ok(options_json) = non_empty(options_json, "options_json") else {
+            return false;
+        };
+        let Ok(options) = serde_json::from_str::<oauth::StartOAuthOptions>(&options_json) else {
+            return false;
+        };
         accept_read(callback, user_data, move |_ctx| {
-            blocking_json(move || oauth::sign_in_with_oauth_loopback(&provider))
+            blocking_json(move || {
+                oauth::start_oauth_with_options(&provider, &client_id, &redirect_uri, options)
+            })
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn MahoMailOAuthLoopbackSignIn(
+    provider: *const c_char,
+    options_json: *const c_char,
+    callback: MahoMailReadCallback,
+    user_data: *mut std::ffi::c_void,
+) -> bool {
+    accept_read_call(move || {
+        let Ok(provider) = non_empty(provider, "provider") else {
+            return false;
+        };
+        let Ok(options_json) = non_empty(options_json, "options_json") else {
+            return false;
+        };
+        let Ok(options) = serde_json::from_str::<oauth::StartOAuthOptions>(&options_json) else {
+            return false;
+        };
+        accept_read(callback, user_data, move |ctx| {
+            blocking_json(move || {
+                let mut options = options;
+                if let Some(account_id) = options.reauthorize_account_id.as_deref() {
+                    let conn = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    options.login_hint =
+                        Some(account::oauth_reauthorization_email(&conn, account_id)?);
+                    options.expected_google_sub = None;
+                }
+                oauth::sign_in_with_oauth_loopback_with_options(&provider, options)
+            })
         })
     })
 }
@@ -171,6 +223,45 @@ pub extern "C" fn MahoMailOAuthComplete(
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 oauth::complete_oauth(&mut conn, &ctx.credential_key, &state, &code)
+            })
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn MahoMailOAuthCompleteWithOptions(
+    state: *const c_char,
+    code: *const c_char,
+    options_json: *const c_char,
+    callback: MahoMailReadCallback,
+    user_data: *mut std::ffi::c_void,
+) -> bool {
+    accept_read_call(move || {
+        let Ok(state) = non_empty(state, "state") else {
+            return false;
+        };
+        let Ok(code) = non_empty(code, "code") else {
+            return false;
+        };
+        let Ok(options_json) = non_empty(options_json, "options_json") else {
+            return false;
+        };
+        let Ok(options) = serde_json::from_str::<oauth::CompleteOAuthOptions>(&options_json) else {
+            return false;
+        };
+        accept_read(callback, user_data, move |ctx| {
+            blocking_json(move || {
+                let mut conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                oauth::complete_oauth_with_options(
+                    &mut conn,
+                    &ctx.credential_key,
+                    &state,
+                    &code,
+                    options,
+                )
             })
         })
     })
@@ -208,9 +299,7 @@ pub extern "C" fn MahoMailImportMigrationArchive(
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
-            blocking_json(move || {
-                crate::transfer::import_migration_archive(&ctx, &archive_json)
-            })
+            blocking_json(move || crate::transfer::import_migration_archive(&ctx, &archive_json))
         })
     })
 }
@@ -228,7 +317,6 @@ pub extern "C" fn MahoMailOAuthCancel(state: *const c_char) -> bool {
     }
 }
 
-
 // === [W-C.Additional] ===
 
 #[no_mangle]
@@ -243,8 +331,11 @@ pub extern "C" fn MahoMailGetAccount(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+
                 let row = db.query_row(
                     "SELECT id, email, display_name, auth_type, imap_host, imap_port, imap_encryption, smtp_host, smtp_port, smtp_encryption, username, oauth2_client_id, created_at, updated_at FROM accounts WHERE id = ?1",
                     [&account_id],
@@ -271,7 +362,7 @@ pub extern "C" fn MahoMailGetAccount(
                         })
                     }
                 ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
-                
+
                 serde_json::to_string(&row).map_err(MailFfiError::from)
             })
         })
@@ -288,18 +379,25 @@ pub extern "C" fn MahoMailUpdateAccount(
         let Ok(raw) = c_string(request_json, "request_json") else {
             return false;
         };
-        let Ok(request) = serde_json::from_str::<maho_core::models::account::UpdateAccountRequest>(&raw) else {
+        let Ok(request) =
+            serde_json::from_str::<maho_core::models::account::UpdateAccountRequest>(&raw)
+        else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                
-                let exists: bool = db.query_row(
-                    "SELECT COUNT(*) > 0 FROM accounts WHERE id = ?1",
-                    [&request.id],
-                    |row| row.get(0),
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+
+                let exists: bool = db
+                    .query_row(
+                        "SELECT COUNT(*) > 0 FROM accounts WHERE id = ?1",
+                        [&request.id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
                 if !exists {
                     return Err(MailFfiError::AccountNotFound(request.id));
                 }
@@ -345,7 +443,13 @@ pub extern "C" fn MahoMailUpdateAccount(
                     params.push(Box::new(username.clone()));
                 }
                 if let Some(ref password) = request.password {
-                    crate::credentials::store_encrypted_credential(&db, &ctx.credential_key, &request.id, "password", password)?;
+                    crate::credentials::store_encrypted_credential(
+                        &db,
+                        &ctx.credential_key,
+                        &request.id,
+                        "password",
+                        password,
+                    )?;
                     set_clauses.push("password = ?".to_string());
                     params.push(Box::new(Option::<String>::None));
                 }
@@ -359,8 +463,10 @@ pub extern "C" fn MahoMailUpdateAccount(
                 );
                 params.push(Box::new(request.id.clone()));
 
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-                db.execute(&sql, param_refs.as_slice()).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+                db.execute(&sql, param_refs.as_slice())
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 let row = db.query_row(
                     "SELECT id, email, display_name, auth_type, imap_host, imap_port, imap_encryption, smtp_host, smtp_port, smtp_encryption, username, oauth2_client_id, created_at, updated_at FROM accounts WHERE id = ?1",
@@ -395,8 +501,6 @@ pub extern "C" fn MahoMailUpdateAccount(
     })
 }
 
-
-
 // === [W-C.Additional.Refresh] ===
 
 #[no_mangle]
@@ -411,8 +515,12 @@ pub extern "C" fn MahoMailRefreshOAuthToken(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let auth = crate::account::resolve_account_auth(&db, &ctx.credential_key, &account_id)?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let auth =
+                    crate::account::resolve_account_auth(&db, &ctx.credential_key, &account_id)?;
                 let token = match auth.auth {
                     crate::account::ImapAuth::OAuth2 { access_token } => access_token,
                     _ => return Err(MailFfiError::OAuth2Refresh("not an oauth2 account".into())),
@@ -423,7 +531,6 @@ pub extern "C" fn MahoMailRefreshOAuthToken(
         })
     })
 }
-
 
 #[cfg(test)]
 #[path = "onboarding_api_tests.rs"]

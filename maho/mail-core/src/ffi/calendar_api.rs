@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::account::resolve_account_auth;
 use crate::error::{MailFfiError, Result};
-use crate::state::AppCtx;
 use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
+use crate::state::AppCtx;
 
 fn c_string(ptr: *const c_char, name: &'static str) -> Result<String> {
     if ptr.is_null() {
@@ -641,10 +641,7 @@ pub(crate) fn subject_prefix_for_partstat(partstat: &str) -> &'static str {
 }
 
 // --- SMTP / RSVP Send Helper ---
-pub(crate) async fn send_ics_rsvp_reply(
-    ctx: &AppCtx,
-    rsvp_ctx: IcsRsvpContext,
-) -> Result<()> {
+pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) -> Result<()> {
     let partstat = partstat_from_rsvp_status(&rsvp_ctx.rsvp_status).ok_or_else(|| {
         maho_core::error::AppError::Validation(format!(
             "invalid rsvp_status for reply: {}",
@@ -674,7 +671,10 @@ pub(crate) async fn send_ics_rsvp_reply(
     };
 
     let (in_reply_to_header, references_header, creds, display_name, use_xoauth2) = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
         let (in_reply_to_header, references_header) = if let Some(ref eid) = rsvp_ctx.email_id {
             let row: Option<(Option<String>, Option<String>)> = db
@@ -699,7 +699,11 @@ pub(crate) async fn send_ics_rsvp_reply(
             (None, None)
         };
 
-        let creds = crate::ffi::compose_api::get_smtp_credentials(&db, &ctx.credential_key, &rsvp_ctx.account_id)?;
+        let creds = crate::ffi::compose_api::get_smtp_credentials(
+            &db,
+            &ctx.credential_key,
+            &rsvp_ctx.account_id,
+        )?;
 
         let (display_name, auth_type): (Option<String>, String) = db.query_row(
             "SELECT display_name, auth_type FROM accounts WHERE id = ?1",
@@ -719,7 +723,11 @@ pub(crate) async fn send_ics_rsvp_reply(
     };
 
     let from = match display_name.as_deref().filter(|s| !s.is_empty()) {
-        Some(name) => format!("\"{}\" <{}>", name.replace('"', "\\\""), rsvp_ctx.attendee_email),
+        Some(name) => format!(
+            "\"{}\" <{}>",
+            name.replace('"', "\\\""),
+            rsvp_ctx.attendee_email
+        ),
         None => rsvp_ctx.attendee_email.clone(),
     };
 
@@ -759,7 +767,10 @@ pub(crate) async fn send_ics_rsvp_reply(
                     "rsvp_status": rsvp_ctx.rsvp_status,
                 });
                 let payload_str = serde_json::to_string(&payload)?;
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 maho_core::services::offline_queue::queue_calendar_mutation(
                     &db,
                     &rsvp_ctx.account_id,
@@ -780,13 +791,18 @@ async fn get_client_and_token(
     ctx: &AppCtx,
     account_id: &str,
 ) -> std::result::Result<(reqwest::Client, String), MailFfiError> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let resolved = resolve_account_auth(&db, &ctx.credential_key, account_id)?;
     let access_token = match resolved.auth {
         crate::account::ImapAuth::OAuth2 { access_token } => access_token,
-        _ => return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
-            "Google Calendar sync is only available for Gmail OAuth accounts".to_string(),
-        ))),
+        _ => {
+            return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                "Google Calendar sync is only available for Gmail OAuth accounts".to_string(),
+            )))
+        }
     };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -814,19 +830,27 @@ pub(crate) async fn google_calendar_create_event_internal(
         .json(&body)
         .send()
         .await
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("create event request: {}", e))))?;
+        .map_err(|e| {
+            MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                "create event request: {}",
+                e
+            )))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-            "create event HTTP {}: {}",
-            status, text
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("create event HTTP {}: {}", status, text),
+        )));
     }
 
-    let parsed: GEvent = serde_json::from_str(&text)
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("create event JSON: {}", e))))?;
+    let parsed: GEvent = serde_json::from_str(&text).map_err(|e| {
+        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+            "create event JSON: {}",
+            e
+        )))
+    })?;
 
     Ok(parsed)
 }
@@ -852,19 +876,27 @@ pub(crate) async fn google_calendar_update_event_internal(
         .json(&patch)
         .send()
         .await
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("patch event request: {}", e))))?;
+        .map_err(|e| {
+            MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                "patch event request: {}",
+                e
+            )))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-            "patch event HTTP {}: {}",
-            status, text
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("patch event HTTP {}: {}", status, text),
+        )));
     }
 
-    let parsed: GEvent = serde_json::from_str(&text)
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("patch event JSON: {}", e))))?;
+    let parsed: GEvent = serde_json::from_str(&text).map_err(|e| {
+        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+            "patch event JSON: {}",
+            e
+        )))
+    })?;
 
     Ok(parsed)
 }
@@ -888,15 +920,19 @@ pub(crate) async fn google_calendar_delete_event_internal(
         .bearer_auth(&token)
         .send()
         .await
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("delete event request: {}", e))))?;
+        .map_err(|e| {
+            MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                "delete event request: {}",
+                e
+            )))
+        })?;
 
     let status = resp.status();
     if !status.is_success() && status.as_u16() != 404 {
         let text = resp.text().await.unwrap_or_default();
-        return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-            "delete event HTTP {}: {}",
-            status, text
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("delete event HTTP {}: {}", status, text),
+        )));
     }
 
     Ok(())
@@ -962,18 +998,26 @@ pub(crate) async fn google_calendar_update_rsvp_internal(
         .bearer_auth(&token)
         .send()
         .await
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("get event request: {}", e))))?;
+        .map_err(|e| {
+            MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                "get event request: {}",
+                e
+            )))
+        })?;
     let get_status = get_resp.status();
     let get_text = get_resp.text().await.unwrap_or_default();
     if !get_status.is_success() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-            "get event HTTP {}: {}",
-            get_status, get_text
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("get event HTTP {}: {}", get_status, get_text),
+        )));
     }
 
-    let raw: serde_json::Value = serde_json::from_str(&get_text)
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("get event JSON: {}", e))))?;
+    let raw: serde_json::Value = serde_json::from_str(&get_text).map_err(|e| {
+        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+            "get event JSON: {}",
+            e
+        )))
+    })?;
 
     let existing_attendees = raw
         .get("attendees")
@@ -1007,19 +1051,27 @@ pub(crate) async fn google_calendar_move_event_internal(
         .bearer_auth(&token)
         .send()
         .await
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("move event request: {}", e))))?;
+        .map_err(|e| {
+            MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                "move event request: {}",
+                e
+            )))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-            "move event HTTP {}: {}",
-            status, text
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("move event HTTP {}: {}", status, text),
+        )));
     }
 
-    let parsed: GEvent = serde_json::from_str(&text)
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("move event JSON: {}", e))))?;
+    let parsed: GEvent = serde_json::from_str(&text).map_err(|e| {
+        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+            "move event JSON: {}",
+            e
+        )))
+    })?;
 
     Ok(parsed)
 }
@@ -1039,14 +1091,16 @@ async fn fetch_calendars(
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-            "calendarList HTTP {}: {}",
-            status,
-            truncate(&text, 300)
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("calendarList HTTP {}: {}", status, truncate(&text, 300)),
+        )));
     }
-    let parsed: GCalListResponse = serde_json::from_str(&text)
-        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("calendarList JSON: {}", e))))?;
+    let parsed: GCalListResponse = serde_json::from_str(&text).map_err(|e| {
+        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+            "calendarList JSON: {}",
+            e
+        )))
+    })?;
     Ok(parsed
         .items
         .into_iter()
@@ -1097,7 +1151,12 @@ async fn fetch_events(
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("events.list request: {}", e))))?;
+            .map_err(|e| {
+                MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                    "events.list request: {}",
+                    e
+                )))
+            })?;
 
         let status = resp.status();
         if status.as_u16() == 410 {
@@ -1105,15 +1164,17 @@ async fn fetch_events(
         }
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-                "events.list HTTP {}: {}",
-                status,
-                truncate(&text, 300)
-            ))));
+            return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+                format!("events.list HTTP {}: {}", status, truncate(&text, 300)),
+            )));
         }
 
-        let parsed: GEventsResponse = serde_json::from_str(&text)
-            .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("events.list JSON: {}", e))))?;
+        let parsed: GEventsResponse = serde_json::from_str(&text).map_err(|e| {
+            MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                "events.list JSON: {}",
+                e
+            )))
+        })?;
 
         all_events.extend(parsed.items);
         if let Some(npt) = parsed.next_page_token {
@@ -1338,11 +1399,7 @@ pub(crate) enum UpsertOutcome {
     AutoDeclined,
 }
 
-fn upsert_calendar(
-    db: &rusqlite::Connection,
-    account_id: &str,
-    cal: &GCalListItem,
-) -> Result<()> {
+fn upsert_calendar(db: &rusqlite::Connection, account_id: &str, cal: &GCalListItem) -> Result<()> {
     let summary = cal.summary.clone().unwrap_or_default();
     let is_primary = cal.primary.unwrap_or(false);
     let now = chrono::Utc::now().to_rfc3339();
@@ -1399,7 +1456,10 @@ pub(crate) async fn sync_internal(
     account_id: &str,
 ) -> std::result::Result<GoogleCalendarSyncResult, MailFfiError> {
     {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS calendar_sync_state (
                 account_id TEXT NOT NULL,
@@ -1423,7 +1483,10 @@ pub(crate) async fn sync_internal(
     }
 
     let (auth_type, account_email): (String, Option<String>) = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         db.query_row(
             "SELECT auth_type, email FROM accounts WHERE id = ?1",
             params![account_id],
@@ -1446,8 +1509,13 @@ pub(crate) async fn sync_internal(
 
     let calendars = match fetch_calendars(&client, &access_token).await {
         Ok(c) => c,
-        Err(MailFfiError::Core(maho_core::error::AppError::Network(msg))) if msg.contains("HTTP 401") || msg.contains("HTTP 403") => {
-            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        Err(MailFfiError::Core(maho_core::error::AppError::Network(msg)))
+            if msg.contains("HTTP 401") || msg.contains("HTTP 403") =>
+        {
+            let db = ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
             let _ = db.execute(
                 "INSERT INTO calendar_sync_state (account_id, calendar_id, sync_token, last_synced_at, last_error)
                  VALUES (?1, '*', NULL, ?2, ?3)
@@ -1469,12 +1537,18 @@ pub(crate) async fn sync_internal(
 
     for cal in &calendars {
         {
-            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            let db = ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
             let _ = upsert_calendar(&db, account_id, cal);
         }
 
         let stored_token: Option<String> = {
-            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            let db = ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
             db.query_row(
                 "SELECT sync_token FROM calendar_sync_state WHERE account_id = ?1 AND calendar_id = ?2",
                 params![account_id, cal.id],
@@ -1484,10 +1558,15 @@ pub(crate) async fn sync_internal(
             .flatten()
         };
 
-        let outcome = match fetch_events(&client, &access_token, &cal.id, stored_token.as_deref()).await {
+        let outcome = match fetch_events(&client, &access_token, &cal.id, stored_token.as_deref())
+            .await
+        {
             Ok(o) => o,
             Err(e) => {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let _ = db.execute(
                     "INSERT INTO calendar_sync_state (account_id, calendar_id, sync_token, last_synced_at, last_error)
                      VALUES (?1, ?2, ?3, ?4, ?5)
@@ -1515,12 +1594,15 @@ pub(crate) async fn sync_internal(
         };
 
         {
-            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            let db = ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
             for event in &events {
                 match upsert_event(&db, account_id, account_email.as_deref(), &cal.id, event) {
-                    Ok(UpsertOutcome::Inserted) | Ok(UpsertOutcome::Updated) | Ok(UpsertOutcome::AutoDeclined) => {
-                        events_upserted += 1
-                    }
+                    Ok(UpsertOutcome::Inserted)
+                    | Ok(UpsertOutcome::Updated)
+                    | Ok(UpsertOutcome::AutoDeclined) => events_upserted += 1,
                     Ok(UpsertOutcome::Deleted) => events_deleted += 1,
                     _ => {}
                 }
@@ -1549,7 +1631,6 @@ pub(crate) async fn sync_internal(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarEventRecord {
-
     pub id: String,
     pub account_id: String,
     pub email_id: Option<String>,
@@ -1793,7 +1874,6 @@ fn unescape_ics(value: String) -> String {
         .replace("\\\\", "\\")
 }
 
-
 fn insert_event(
     db: &rusqlite::Connection,
     account_id: &str,
@@ -1921,7 +2001,10 @@ pub extern "C" fn MahoMailImportCalendarEvent(
                     )));
                 }
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let record = insert_event(&db, &account_id, email_id.as_deref(), ev)?;
                 Ok(record)
             })
@@ -1949,7 +2032,10 @@ pub extern "C" fn MahoMailListCalendarEvents(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let show_birthdays = {
                     let value: Option<String> = db
                         .query_row(
@@ -2054,7 +2140,8 @@ pub extern "C" fn MahoMailListCalendarEvents(
                                 (None, None) => true,
                             };
                             if in_range {
-                                let summary = format!("🎂 {}'s birthday", name.as_deref().unwrap_or(&email));
+                                let summary =
+                                    format!("🎂 {}'s birthday", name.as_deref().unwrap_or(&email));
                                 let record = CalendarEventRecord {
                                     id: format!("birthday-{}-{}", id, year),
                                     account_id: account_id.clone(),
@@ -2110,7 +2197,10 @@ pub extern "C" fn MahoMailGetCalendarEvent(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let record = db.query_row(
                     "SELECT ce.id, ce.account_id, ce.email_id, ce.uid, ce.summary, ce.description, \
                             ce.dtstart, ce.dtend, ce.location, ce.organizer, ce.status, ce.rsvp_status, \
@@ -2152,10 +2242,12 @@ pub extern "C" fn MahoMailUpdateRsvp(
             Box::pin(async move {
                 let valid = ["accepted", "declined", "tentative"];
                 if !valid.contains(&rsvp_status.as_str()) {
-                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!(
+                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                        format!(
                         "Invalid RSVP status '{}'. Must be one of: accepted, declined, tentative",
                         rsvp_status
-                    ))));
+                    ),
+                    )));
                 }
 
                 type RsvpRow = (
@@ -2172,7 +2264,10 @@ pub extern "C" fn MahoMailUpdateRsvp(
                     Option<String>,
                 );
                 let row: Option<RsvpRow> = {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     db.query_row(
                         "SELECT account_id, google_calendar_id, source, external_id, uid, summary, dtstart, dtend, organizer, email_id, sequence FROM calendar_events WHERE id = ?1",
                         params![event_id],
@@ -2198,7 +2293,10 @@ pub extern "C" fn MahoMailUpdateRsvp(
                         if let Some(cal_id) = google_calendar_id {
                             if let Some(ext_id) = external_id {
                                 let account_email: String = {
-                                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                    let db = ctx
+                                        .pool
+                                        .get()
+                                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                     db.query_row(
                                         "SELECT email FROM accounts WHERE id = ?1",
                                         [&account_id],
@@ -2216,16 +2314,27 @@ pub extern "C" fn MahoMailUpdateRsvp(
                                 )
                                 .await;
 
-                                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                let db = ctx
+                                    .pool
+                                    .get()
+                                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                 match gevent_result {
                                     Ok(gevent) => {
                                         let _ = db.execute(
                                             "DELETE FROM pending_mutations WHERE account_id = ?1 AND calendar_event_id = ?2 AND mutation_type IN ('calendar_rsvp', 'calendar_rsvp_reply')",
                                             params![account_id, event_id],
                                         );
-                                        upsert_event(&db, &account_id, Some(&account_email), &cal_id, &gevent)?;
+                                        upsert_event(
+                                            &db,
+                                            &account_id,
+                                            Some(&account_email),
+                                            &cal_id,
+                                            &gevent,
+                                        )?;
                                     }
-                                    Err(MailFfiError::Core(maho_core::error::AppError::Network(_))) => {
+                                    Err(MailFfiError::Core(
+                                        maho_core::error::AppError::Network(_),
+                                    )) => {
                                         maho_core::services::offline_queue::queue_calendar_mutation(
                                             &db,
                                             &account_id,
@@ -2244,16 +2353,21 @@ pub extern "C" fn MahoMailUpdateRsvp(
                         }
                     } else {
                         let rsvp_ctx = {
-                            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                            let db = ctx
+                                .pool
+                                .get()
+                                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                             let changed = db.execute(
                                 "UPDATE calendar_events SET rsvp_status = ?1, updated_at = datetime('now') WHERE id = ?2",
                                 params![rsvp_status, event_id],
                             )?;
 
                             if changed == 0 {
-                                return Err(MailFfiError::Core(maho_core::error::AppError::NotFound(format!(
-                                    "Calendar event {event_id} not found"
-                                ))));
+                                return Err(MailFfiError::Core(
+                                    maho_core::error::AppError::NotFound(format!(
+                                        "Calendar event {event_id} not found"
+                                    )),
+                                ));
                             }
 
                             let organizer_line = match organizer.filter(|s| !s.trim().is_empty()) {
@@ -2278,11 +2392,12 @@ pub extern "C" fn MahoMailUpdateRsvp(
 
                             let organizer_email = extract_bare_email(&organizer_line);
 
-                            let (attendee_email, attendee_name): (String, Option<String>) = db.query_row(
-                                "SELECT email, display_name FROM accounts WHERE id = ?1",
-                                [&account_id],
-                                |row| Ok((row.get(0)?, row.get(1)?)),
-                            )?;
+                            let (attendee_email, attendee_name): (String, Option<String>) = db
+                                .query_row(
+                                    "SELECT email, display_name FROM accounts WHERE id = ?1",
+                                    [&account_id],
+                                    |row| Ok((row.get(0)?, row.get(1)?)),
+                                )?;
 
                             IcsRsvpContext {
                                 account_id: account_id.clone(),
@@ -2306,12 +2421,15 @@ pub extern "C" fn MahoMailUpdateRsvp(
                         }
                     }
                 } else {
-                    return Err(MailFfiError::Core(maho_core::error::AppError::NotFound(format!(
-                        "Calendar event {event_id} not found"
-                    ))));
+                    return Err(MailFfiError::Core(maho_core::error::AppError::NotFound(
+                        format!("Calendar event {event_id} not found"),
+                    )));
                 }
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let record = db.query_row(
                     "SELECT ce.id, ce.account_id, ce.email_id, ce.uid, ce.summary, ce.description, \
                             ce.dtstart, ce.dtend, ce.location, ce.organizer, ce.status, ce.rsvp_status, \
@@ -2353,13 +2471,18 @@ pub extern "C" fn MahoMailGenerateRsvpReply(
             blocking_json(move || {
                 let valid = ["accepted", "declined", "tentative"];
                 if !valid.contains(&rsvp_status.as_str()) {
-                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!(
+                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                        format!(
                         "Invalid RSVP status '{}'. Must be one of: accepted, declined, tentative",
                         rsvp_status
-                    ))));
+                    ),
+                    )));
                 }
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let record = db.query_row(
                     "SELECT ce.id, ce.account_id, ce.email_id, ce.uid, ce.summary, ce.description, \
                             ce.dtstart, ce.dtend, ce.location, ce.organizer, ce.status, ce.rsvp_status, \
@@ -2385,7 +2508,8 @@ pub extern "C" fn MahoMailGenerateRsvpReply(
                     partstat: rsvp_status.to_uppercase(),
                 };
 
-                build_ics_reply(params).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Validation(e)))
+                build_ics_reply(params)
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Validation(e)))
             })
         })
     })
@@ -2414,7 +2538,10 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
                     Option<String>,
                     Option<String>,
                 )> = {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     db.query_row(
                         "SELECT account_id, google_calendar_id, source, external_id, recurring_event_id FROM calendar_events WHERE id = ?1",
                         params![event_id],
@@ -2422,12 +2549,22 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
                     ).ok()
                 };
 
-                if let Some((account_id, google_calendar_id, source, external_id, recurring_event_id)) = row {
+                if let Some((
+                    account_id,
+                    google_calendar_id,
+                    source,
+                    external_id,
+                    recurring_event_id,
+                )) = row
+                {
                     if source == "google" {
                         if let Some(cal_id) = google_calendar_id {
                             if let Some(ext_id) = external_id {
                                 let access_role: Option<String> = {
-                                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                    let db = ctx
+                                        .pool
+                                        .get()
+                                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                     db.query_row(
                                         "SELECT access_role FROM google_calendars WHERE account_id = ?1 AND calendar_id = ?2",
                                         [&account_id, &cal_id],
@@ -2435,7 +2572,8 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
                                     ).ok().flatten()
                                 };
 
-                                if !matches!(access_role.as_deref(), Some("owner") | Some("writer")) {
+                                if !matches!(access_role.as_deref(), Some("owner") | Some("writer"))
+                                {
                                     return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
                                         "This event is on a read-only calendar and cannot be deleted."
                                             .to_string(),
@@ -2457,8 +2595,13 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
                                 .await
                                 {
                                     Ok(()) => {}
-                                    Err(MailFfiError::Core(maho_core::error::AppError::Network(_))) => {
-                                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                    Err(MailFfiError::Core(
+                                        maho_core::error::AppError::Network(_),
+                                    )) => {
+                                        let db = ctx
+                                            .pool
+                                            .get()
+                                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                         maho_core::services::offline_queue::queue_calendar_mutation(
                                             &db,
                                             &account_id,
@@ -2474,7 +2617,10 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
                     }
                 }
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "DELETE FROM calendar_events WHERE id = ?1",
                     params![event_id],
@@ -2515,7 +2661,10 @@ pub extern "C" fn MahoMailAutoImportCalendarEvents(
                     return Ok(Vec::new());
                 }
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut results = Vec::new();
 
                 for block in &blocks {
@@ -2529,7 +2678,8 @@ pub extern "C" fn MahoMailAutoImportCalendarEvents(
                             Err(e) => {
                                 log::warn!(
                                     "Failed to import calendar event from email {}: {}",
-                                    email_id, e
+                                    email_id,
+                                    e
                                 );
                             }
                         }
@@ -2560,7 +2710,10 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
                 let calendar_id_res = match req.calendar_id.clone() {
                     Some(cid) if !cid.is_empty() => Some(cid),
                     _ => {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         db.query_row(
                             "SELECT calendar_id FROM google_calendars WHERE account_id = ?1 AND is_primary = 1",
                             [&req.account_id],
@@ -2572,7 +2725,10 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
 
                 if let Some(ref cal_id) = calendar_id_res {
                     let access_role: Option<String> = {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         db.query_row(
                             "SELECT access_role FROM google_calendars WHERE account_id = ?1 AND calendar_id = ?2",
                             [&req.account_id, cal_id],
@@ -2580,7 +2736,8 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
                         ).ok().flatten()
                     };
 
-                    let is_writable = matches!(access_role.as_deref(), Some("owner") | Some("writer"));
+                    let is_writable =
+                        matches!(access_role.as_deref(), Some("owner") | Some("writer"));
                     if is_writable {
                         let start_body = if req.all_day {
                             serde_json::json!({ "date": req.dtstart })
@@ -2668,7 +2825,10 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
                             Err(MailFfiError::Core(maho_core::error::AppError::Network(_))) => {
                                 let id = Uuid::new_v4().to_string();
                                 let uid = format!("maho-{}", Uuid::new_v4());
-                                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                let db = ctx
+                                    .pool
+                                    .get()
+                                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                 db.execute(
                                     "INSERT INTO calendar_events (id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, rsvp_status, recurrence_rule, all_day, color, google_calendar_id, start_tz, category, travel_time_minutes, event_type, reminders_json) \
                                      VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 'confirmed', NULL, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
@@ -2699,7 +2859,10 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
                             Err(e) => return Err(e),
                         };
                         let account_email: String = {
-                            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                            let db = ctx
+                                .pool
+                                .get()
+                                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                             db.query_row(
                                 "SELECT email FROM accounts WHERE id = ?1",
                                 [&req.account_id],
@@ -2707,7 +2870,10 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
                             )?
                         };
 
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         upsert_event(&db, &req.account_id, Some(&account_email), cal_id, &gevent)?;
 
                         db.execute(
@@ -2734,7 +2900,10 @@ pub extern "C" fn MahoMailCreateCalendarEvent(
 
                 let id = Uuid::new_v4().to_string();
                 let uid = format!("maho-{}", Uuid::new_v4());
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "INSERT INTO calendar_events (id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, rsvp_status, recurrence_rule, all_day, color, category, travel_time_minutes, event_type) \
                      VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 'confirmed', NULL, NULL, ?9, ?10, ?11, ?12, ?13)",
@@ -2781,7 +2950,10 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                     Option<String>,
                     Option<String>,
                 )> = {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     db.query_row(
                         "SELECT account_id, google_calendar_id, source, external_id, recurring_event_id FROM calendar_events WHERE id = ?1",
                         params![req.event_id],
@@ -2789,7 +2961,14 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                     ).ok()
                 };
 
-                if let Some((account_id, google_calendar_id, source, external_id, recurring_event_id)) = row {
+                if let Some((
+                    account_id,
+                    google_calendar_id,
+                    source,
+                    external_id,
+                    recurring_event_id,
+                )) = row
+                {
                     let mut final_category = req.category.clone();
                     if let Some(ref target_cal_id) = req.target_calendar_id {
                         if let Ok(db) = ctx.pool.get() {
@@ -2829,8 +3008,13 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                                 .await
                                 {
                                     Ok(_) => target_cal_id.clone(),
-                                    Err(MailFfiError::Core(maho_core::error::AppError::Network(_))) => {
-                                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                    Err(MailFfiError::Core(
+                                        maho_core::error::AppError::Network(_),
+                                    )) => {
+                                        let db = ctx
+                                            .pool
+                                            .get()
+                                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                         maho_core::services::offline_queue::queue_calendar_mutation(
                                             &db,
                                             &account_id,
@@ -2855,7 +3039,10 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
 
                         if !active_cal_id.is_empty() && !target_id.is_empty() {
                             let access_role: Option<String> = {
-                                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                let db = ctx
+                                    .pool
+                                    .get()
+                                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                 db.query_row(
                                     "SELECT access_role FROM google_calendars WHERE account_id = ?1 AND calendar_id = ?2",
                                     [&account_id, &active_cal_id],
@@ -2937,7 +3124,10 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                             {
                                 Ok(g) => g,
                                 Err(MailFfiError::Core(maho_core::error::AppError::Network(_))) => {
-                                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                    let db = ctx
+                                        .pool
+                                        .get()
+                                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                     db.execute(
                                         "UPDATE calendar_events SET summary = ?1, description = ?2, dtstart = ?3, dtend = ?4, location = ?5, all_day = ?6, color = ?7, start_tz = ?8, end_tz = ?8, category = ?9, travel_time_minutes = ?10, event_type = ?11, reminders_json = ?12, updated_at = datetime('now') WHERE id = ?13",
                                         params![req.summary, req.description, req.dtstart, req.dtend, req.location, req.all_day as i64, req.color, req.time_zone, final_category, req.travel_time_minutes, req.event_type, req.reminders.as_ref().map(|v| v.to_string()), req.event_id],
@@ -2967,7 +3157,10 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                                 Err(e) => return Err(e),
                             };
                             let account_email: String = {
-                                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                let db = ctx
+                                    .pool
+                                    .get()
+                                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                 db.query_row(
                                     "SELECT email FROM accounts WHERE id = ?1",
                                     [&account_id],
@@ -2975,7 +3168,10 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                                 )?
                             };
 
-                            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                            let db = ctx
+                                .pool
+                                .get()
+                                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                             upsert_event(
                                 &db,
                                 &account_id,
@@ -2990,19 +3186,28 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                             )?;
                         }
                     } else {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         db.execute(
                             "UPDATE calendar_events SET summary = ?1, description = ?2, dtstart = ?3, dtend = ?4, location = ?5, all_day = ?6, color = ?7, category = ?8, travel_time_minutes = ?9, event_type = ?10, reminders_json = ?11, updated_at = datetime('now') WHERE id = ?12",
                             params![req.summary, req.description, req.dtstart, req.dtend, req.location, req.all_day as i64, req.color, final_category, req.travel_time_minutes, req.event_type, req.reminders.as_ref().map(|v| v.to_string()), req.event_id],
                         )?;
                     }
                 } else {
-                    return Err(MailFfiError::Core(maho_core::error::AppError::NotFound(format!(
-                        "Calendar event {event_id} not found", event_id=req.event_id
-                    ))));
+                    return Err(MailFfiError::Core(maho_core::error::AppError::NotFound(
+                        format!(
+                            "Calendar event {event_id} not found",
+                            event_id = req.event_id
+                        ),
+                    )));
                 }
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let record = db.query_row(
                     "SELECT ce.id, ce.account_id, ce.email_id, ce.uid, ce.summary, ce.description, \
                             ce.dtstart, ce.dtend, ce.location, ce.organizer, ce.status, ce.rsvp_status, \
@@ -3039,7 +3244,10 @@ pub extern "C" fn MahoMailSearchCalendarEvents(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let limit_val = if limit <= 0 { 50 } else { limit as usize };
                 let like_query = format!("%{}%", query);
 
@@ -3101,7 +3309,10 @@ pub extern "C" fn MahoMailCheckEventConflict(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut sql = String::from(
                     "SELECT ce.id, ce.account_id, ce.email_id, ce.uid, ce.summary, ce.description, \
                             ce.dtstart, ce.dtend, ce.location, ce.organizer, ce.status, ce.rsvp_status, \
@@ -3159,7 +3370,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
                 let event = {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     db.query_row(
                         "SELECT id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, rsvp_status, recurrence_rule, all_day, created_at, updated_at, google_calendar_id, start_tz, end_tz, recurring_event_id, attendees_json, reminders_json, color, hangout_link, category, travel_time_minutes, event_type \
                          FROM calendar_events WHERE id = ?1",
@@ -3189,10 +3403,13 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
                 let shifted_end = event.4.map(|e| shift_datetime_by_1h(&e));
 
                 let atts: Option<Vec<String>> = event.9.and_then(|json| {
-                    let parsed: std::result::Result<Vec<serde_json::Value>, _> = serde_json::from_str(&json);
+                    let parsed: std::result::Result<Vec<serde_json::Value>, _> =
+                        serde_json::from_str(&json);
                     parsed.ok().map(|vec| {
                         vec.into_iter()
-                            .filter_map(|val| val.get("email").and_then(|e| e.as_str().map(String::from)))
+                            .filter_map(|val| {
+                                val.get("email").and_then(|e| e.as_str().map(String::from))
+                            })
                             .collect()
                     })
                 });
@@ -3222,7 +3439,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
                 let calendar_id_res = match req.calendar_id.clone() {
                     Some(cid) if !cid.is_empty() => Some(cid),
                     _ => {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         db.query_row(
                             "SELECT calendar_id FROM google_calendars WHERE account_id = ?1 AND is_primary = 1",
                             [&req.account_id],
@@ -3234,7 +3454,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
 
                 if let Some(ref cal_id) = calendar_id_res {
                     let access_role: Option<String> = {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         db.query_row(
                             "SELECT access_role FROM google_calendars WHERE account_id = ?1 AND calendar_id = ?2",
                             [&req.account_id, cal_id],
@@ -3242,7 +3465,8 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
                         ).ok().flatten()
                     };
 
-                    let is_writable = matches!(access_role.as_deref(), Some("owner") | Some("writer"));
+                    let is_writable =
+                        matches!(access_role.as_deref(), Some("owner") | Some("writer"));
                     if is_writable {
                         let start_body = if req.all_day {
                             serde_json::json!({ "date": req.dtstart })
@@ -3330,7 +3554,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
                             Err(MailFfiError::Core(maho_core::error::AppError::Network(_))) => {
                                 let id = Uuid::new_v4().to_string();
                                 let uid = format!("maho-{}", Uuid::new_v4());
-                                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                                let db = ctx
+                                    .pool
+                                    .get()
+                                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                                 db.execute(
                                     "INSERT INTO calendar_events (id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, rsvp_status, recurrence_rule, all_day, color, google_calendar_id, start_tz, category, travel_time_minutes, event_type, reminders_json) \
                                      VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 'confirmed', NULL, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
@@ -3361,7 +3588,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
                             Err(e) => return Err(e),
                         };
                         let account_email: String = {
-                            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                            let db = ctx
+                                .pool
+                                .get()
+                                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                             db.query_row(
                                 "SELECT email FROM accounts WHERE id = ?1",
                                 [&req.account_id],
@@ -3369,7 +3599,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
                             )?
                         };
 
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         upsert_event(&db, &req.account_id, Some(&account_email), cal_id, &gevent)?;
 
                         db.execute(
@@ -3396,7 +3629,10 @@ pub extern "C" fn MahoMailDuplicateCalendarEvent(
 
                 let id = Uuid::new_v4().to_string();
                 let uid = format!("maho-{}", Uuid::new_v4());
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "INSERT INTO calendar_events (id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, rsvp_status, recurrence_rule, all_day, color, category, travel_time_minutes, event_type) \
                      VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 'confirmed', NULL, NULL, ?9, ?10, ?11, ?12, ?13)",
@@ -3440,7 +3676,9 @@ pub extern "C" fn MahoMailGoogleCalendarMoveEvent(
         let Ok(event_id) = non_empty(event_id, "event_id") else {
             return false;
         };
-        let Ok(destination_calendar_id) = non_empty(destination_calendar_id, "destination_calendar_id") else {
+        let Ok(destination_calendar_id) =
+            non_empty(destination_calendar_id, "destination_calendar_id")
+        else {
             return false;
         };
         accept_read(callback, user_data, move |ctx| {
@@ -3475,7 +3713,10 @@ pub extern "C" fn MahoMailExportCalendarIcs(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut sql = String::from(
                     "SELECT id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, rsvp_status, recurrence_rule, all_day, created_at, updated_at, google_calendar_id, start_tz, end_tz, recurring_event_id, attendees_json, reminders_json, color, hangout_link, category, travel_time_minutes, event_type \
                      FROM calendar_events \
@@ -3510,8 +3751,9 @@ pub extern "C" fn MahoMailExportCalendarIcs(
                     });
                 }
 
-                let mut ics =
-                    String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Maho Mail//Calendar//EN\r\n");
+                let mut ics = String::from(
+                    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Maho Mail//Calendar//EN\r\n",
+                );
                 for ev in events {
                     ics.push_str("BEGIN:VEVENT\r\n");
                     ics.push_str(&format!("UID:{}\r\n", ev.uid));
@@ -3528,7 +3770,8 @@ pub extern "C" fn MahoMailExportCalendarIcs(
                             .collect::<String>();
                         ics.push_str(&format!("DTSTART;VALUE=DATE:{}\r\n", start_date));
                         if let Some(ref dtend) = ev.dtend {
-                            let end_date = dtend.replace("-", "").chars().take(8).collect::<String>();
+                            let end_date =
+                                dtend.replace("-", "").chars().take(8).collect::<String>();
                             ics.push_str(&format!("DTEND;VALUE=DATE:{}\r\n", end_date));
                         }
                     } else {
@@ -3575,7 +3818,10 @@ pub extern "C" fn MahoMailListCalendarCategories(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = db.prepare(
                     "SELECT id, account_id, name, color, created_at FROM calendar_categories WHERE account_id = ?1"
                 )?;
@@ -3617,7 +3863,10 @@ pub extern "C" fn MahoMailCreateCalendarCategory(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let id = Uuid::new_v4().to_string();
                 db.execute(
                     "INSERT INTO calendar_categories (id, account_id, name, color, created_at) VALUES (?1, ?2, ?3, ?4, datetime('now'))",
@@ -3657,7 +3906,10 @@ pub extern "C" fn MahoMailUpdateCalendarCategory(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "UPDATE calendar_categories SET name = ?1, color = ?2 WHERE id = ?3",
                     params![name, color, id],
@@ -3680,7 +3932,10 @@ pub extern "C" fn MahoMailDeleteCalendarCategory(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "UPDATE calendar_events SET category = NULL WHERE category = (SELECT name FROM calendar_categories WHERE id = ?1)",
                     params![id],
@@ -3725,7 +3980,10 @@ pub extern "C" fn MahoMailListAccountCalendars(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = db.prepare(
                     "SELECT id, account_id, calendar_id, summary, background_color, foreground_color, \
                             is_primary, access_role, visible \
@@ -3768,7 +4026,10 @@ pub extern "C" fn MahoMailSetCalendarVisibility(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "UPDATE google_calendars SET visible = ?1, updated_at = ?2 WHERE id = ?3",
                     params![
@@ -3809,15 +4070,19 @@ pub extern "C" fn MahoMailSubscribeHolidayCalendar(
                     .json(&body)
                     .send()
                     .await
-                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("calendarList.insert request: {}", e))))?;
+                    .map_err(|e| {
+                        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                            "calendarList.insert request: {}",
+                            e
+                        )))
+                    })?;
 
                 let status = resp.status();
                 if !status.is_success() && status.as_u16() != 409 {
                     let text = resp.text().await.unwrap_or_default();
-                    return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-                        "calendarList.insert HTTP {}: {}",
-                        status, text
-                    ))));
+                    return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+                        format!("calendarList.insert HTTP {}: {}", status, text),
+                    )));
                 }
 
                 let sync_res = sync_internal(&ctx, &account_id).await?;
@@ -3846,7 +4111,8 @@ pub extern "C" fn MahoMailGoogleCalendarFreeBusy(
                 let (client, token) = get_client_and_token(&ctx, &req.account_id).await?;
                 let url = "https://www.googleapis.com/calendar/v3/freeBusy";
 
-                let items: Vec<serde_json::Value> = req.emails
+                let items: Vec<serde_json::Value> = req
+                    .emails
                     .into_iter()
                     .map(|email| serde_json::json!({ "id": email }))
                     .collect();
@@ -3862,19 +4128,27 @@ pub extern "C" fn MahoMailGoogleCalendarFreeBusy(
                     .json(&body)
                     .send()
                     .await
-                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("freeBusy request: {}", e))))?;
+                    .map_err(|e| {
+                        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                            "freeBusy request: {}",
+                            e
+                        )))
+                    })?;
 
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 if !status.is_success() {
-                    return Err(MailFfiError::Core(maho_core::error::AppError::Network(format!(
-                        "freeBusy HTTP {}: {}",
-                        status, text
-                    ))));
+                    return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+                        format!("freeBusy HTTP {}: {}", status, text),
+                    )));
                 }
 
-                let parsed: serde_json::Value = serde_json::from_str(&text)
-                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("freeBusy JSON: {}", e))))?;
+                let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                    MailFfiError::Core(maho_core::error::AppError::Network(format!(
+                        "freeBusy JSON: {}",
+                        e
+                    )))
+                })?;
                 let json_res = serde_json::to_string(&parsed)?;
                 Ok(json_res)
             })
@@ -3927,7 +4201,11 @@ mod tests {
         assert!(output.contains("PRODID:-//Maho Mail//RSVP//EN\r\n"));
         assert!(!output.contains("\n\n"));
         let crlf_count = output.matches("\r\n").count();
-        assert!(crlf_count > 10, "expected >10 CRLF separators, got {}", crlf_count);
+        assert!(
+            crlf_count > 10,
+            "expected >10 CRLF separators, got {}",
+            crlf_count
+        );
         assert!(!output.contains("VALARM"));
         assert!(!output.contains("RRULE"));
         assert!(!output.contains("EXDATE"));
@@ -3978,7 +4256,10 @@ mod tests {
         let mut params = basic_params();
         params.summary = "x".repeat(200);
         let output = build_ics_reply(params).unwrap();
-        assert!(output.contains("\r\n "), "expected fold sequence (CRLF+SPACE)");
+        assert!(
+            output.contains("\r\n "),
+            "expected fold sequence (CRLF+SPACE)"
+        );
         for segment in output.split("\r\n") {
             if segment.is_empty() {
                 continue;
@@ -4097,7 +4378,9 @@ mod tests {
 
         let ics_text = build_ics_reply(params).unwrap();
         let encoded = base64::engine::general_purpose::STANDARD.encode(ics_text.as_bytes());
-        let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(&encoded).unwrap();
+        let decoded_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .unwrap();
         let decoded = String::from_utf8(decoded_bytes).unwrap();
         assert_eq!(decoded, ics_text);
 
@@ -4197,7 +4480,10 @@ mod tests {
 
         #[test]
         fn test_extract_bare_email_mailto_with_cn() {
-            assert_eq!(extract_bare_email("CN=Alice:mailto:alice@x.com"), "alice@x.com");
+            assert_eq!(
+                extract_bare_email("CN=Alice:mailto:alice@x.com"),
+                "alice@x.com"
+            );
         }
 
         #[test]
@@ -4234,22 +4520,37 @@ mod tests {
             let parsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
 
             assert_eq!(
-                parsed.get("ics_text").and_then(|v| v.as_str()).unwrap_or_default(),
+                parsed
+                    .get("ics_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
                 "BEGIN:VCALENDAR\r\nMETHOD:REPLY\r\nEND:VCALENDAR"
             );
             assert_eq!(
-                parsed.get("organizer_email").and_then(|v| v.as_str()).unwrap_or_default(),
+                parsed
+                    .get("organizer_email")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
                 "alice@example.com"
             );
             assert_eq!(
-                parsed.get("subject").and_then(|v| v.as_str()).unwrap_or_default(),
+                parsed
+                    .get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
                 "Accepted: Weekly Standup"
             );
             assert_eq!(
-                parsed.get("attendee_email").and_then(|v| v.as_str()).unwrap_or_default(),
+                parsed
+                    .get("attendee_email")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
                 "bob@example.com"
             );
-            assert_eq!(parsed.get("display_name").and_then(|v| v.as_str()), Some("Bob Smith"));
+            assert_eq!(
+                parsed.get("display_name").and_then(|v| v.as_str()),
+                Some("Bob Smith")
+            );
         }
     }
 
@@ -4262,7 +4563,11 @@ mod tests {
             let mut params = basic_params();
             params.organizer_line = "alice@x.com".into();
             let output = build_ics_reply(params).unwrap();
-            assert!(output.contains("ORGANIZER:mailto:alice@x.com"), "got: {}", output);
+            assert!(
+                output.contains("ORGANIZER:mailto:alice@x.com"),
+                "got: {}",
+                output
+            );
         }
 
         #[test]
@@ -4270,7 +4575,11 @@ mod tests {
             let mut params = basic_params();
             params.organizer_line = "CN=Alice:mailto:alice@x.com".into();
             let output = build_ics_reply(params).unwrap();
-            assert!(output.contains("ORGANIZER:CN=Alice:mailto:alice@x.com"), "got: {}", output);
+            assert!(
+                output.contains("ORGANIZER:CN=Alice:mailto:alice@x.com"),
+                "got: {}",
+                output
+            );
         }
 
         #[test]
@@ -4278,7 +4587,11 @@ mod tests {
             let mut params = basic_params();
             params.organizer_line = "Alice <alice@x.com>".into();
             let output = build_ics_reply(params).unwrap();
-            assert!(output.contains("ORGANIZER:CN=\"Alice\":mailto:alice@x.com"), "got: {}", output);
+            assert!(
+                output.contains("ORGANIZER:CN=\"Alice\":mailto:alice@x.com"),
+                "got: {}",
+                output
+            );
         }
 
         #[test]
@@ -4297,7 +4610,10 @@ mod tests {
 
         #[test]
         fn test_escape_ics_qstring_dquote_and_backslash() {
-            assert_eq!(escape_ics_qstring(r#"Bob "The Man" Smith"#), r#"Bob \"The Man\" Smith"#);
+            assert_eq!(
+                escape_ics_qstring(r#"Bob "The Man" Smith"#),
+                r#"Bob \"The Man\" Smith"#
+            );
             assert_eq!(escape_ics_qstring(r#"back\slash"#), r#"back\\slash"#);
         }
     }
@@ -4319,7 +4635,11 @@ mod tests {
                 partstat: "ACCEPTED".into(),
             };
             let output = build_ics_reply(params).unwrap();
-            assert!(output.contains(r#"CN="Bob \"The Man\" Smith""#), "got: {}", output);
+            assert!(
+                output.contains(r#"CN="Bob \"The Man\" Smith""#),
+                "got: {}",
+                output
+            );
         }
     }
 
@@ -4344,7 +4664,6 @@ mod tests {
     }
 }
 
-
 // === [W-I] ===
 
 #[no_mangle]
@@ -4360,8 +4679,12 @@ pub extern "C" fn MahoMailSnoozeCalendarEvent(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let snooze_until = (chrono::Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let snooze_until =
+                    (chrono::Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "INSERT OR REPLACE INTO calendar_event_snoozes (event_id, snooze_until) VALUES (?1, ?2)",
                     rusqlite::params![event_id, snooze_until],
@@ -4371,4 +4694,3 @@ pub extern "C" fn MahoMailSnoozeCalendarEvent(
         })
     })
 }
-

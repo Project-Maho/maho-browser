@@ -1,15 +1,15 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+use base64::Engine;
 use std::ffi::c_void;
 use std::os::raw::c_char;
-use base64::Engine;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{MailFfiError, Result};
-use crate::account::{resolve_account_auth, ImapAuth};
 use super::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use super::{c_string, non_empty};
+use crate::account::{resolve_account_auth, ImapAuth};
+use crate::error::{MailFfiError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComposeEmailRequest {
@@ -206,10 +206,7 @@ pub(crate) fn insert_outbox_item(
     Ok(item)
 }
 
-fn queue_to_outbox(
-    conn: &rusqlite::Connection,
-    request: &ComposeEmailRequest,
-) -> Result<()> {
+fn queue_to_outbox(conn: &rusqlite::Connection, request: &ComposeEmailRequest) -> Result<()> {
     let to_json = serde_json::to_string(&request.to)?;
     let cc_json = request
         .cc
@@ -397,7 +394,10 @@ pub extern "C" fn MahoMailSendEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let creds = get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id)?;
 
                 let to = request.to.clone();
@@ -442,7 +442,9 @@ pub extern "C" fn MahoMailSendEmail(
                             "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
                             [&request.account_id],
                         );
-                        if let Ok(refreshed_creds) = get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id) {
+                        if let Ok(refreshed_creds) =
+                            get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id)
+                        {
                             match send_smtp_message(
                                 refreshed_creds,
                                 true,
@@ -498,7 +500,10 @@ pub extern "C" fn MahoMailSaveDraft(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let drafts_folder_id: String = conn
                     .query_row(
                         "SELECT id FROM folders WHERE account_id = ?1 AND folder_type = 'drafts' LIMIT 1",
@@ -511,17 +516,19 @@ pub extern "C" fn MahoMailSaveDraft(
 
                 let id = uuid::Uuid::new_v4().to_string();
                 let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                let to_json = serde_json::to_string(&request.to).unwrap_or_else(|_| "[]".to_string());
+                let to_json =
+                    serde_json::to_string(&request.to).unwrap_or_else(|_| "[]".to_string());
                 let cc_json = request
                     .cc
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
 
-                let has_attachments: i32 = if request.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
-                    1
-                } else {
-                    0
-                };
+                let has_attachments: i32 =
+                    if request.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
+                        1
+                    } else {
+                        0
+                    };
                 let draft_attachments_json: Option<String> = request
                     .attachments
                     .as_ref()
@@ -575,18 +582,23 @@ pub extern "C" fn MahoMailUpdateDraft(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let to_json = serde_json::to_string(&request.to).unwrap_or_else(|_| "[]".to_string());
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let to_json =
+                    serde_json::to_string(&request.to).unwrap_or_else(|_| "[]".to_string());
                 let cc_json = request
                     .cc
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
                 let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                let has_attachments: i32 = if request.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
-                    1
-                } else {
-                    0
-                };
+                let has_attachments: i32 =
+                    if request.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
+                        1
+                    } else {
+                        0
+                    };
                 let draft_attachments_json: Option<String> = request
                     .attachments
                     .as_ref()
@@ -630,7 +642,10 @@ pub extern "C" fn MahoMailGetReplyContext(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.query_row(
                     "SELECT subject, from_address, date, body_text, body_html, to_addresses, cc_addresses, message_id, in_reply_to FROM emails WHERE id = ?1",
                     [&email_id],
@@ -672,7 +687,10 @@ pub extern "C" fn MahoMailQueueEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let to_json = serde_json::to_string(&request.to)?;
                 let cc_json = request
                     .cc
@@ -717,13 +735,22 @@ pub extern "C" fn MahoMailListOutbox(
             None
         } else {
             match c_string(account_id, "account_id") {
-                Ok(s) => if s.trim().is_empty() { None } else { Some(s) },
+                Ok(s) => {
+                    if s.trim().is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
                 Err(_) => return false,
             }
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if let Some(ref aid) = account_id_opt {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, status, retry_count, max_retries, last_error, created_at, updated_at
@@ -760,7 +787,10 @@ pub extern "C" fn MahoMailRetryOutboxItem(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE outbox SET status = 'queued', updated_at = datetime('now') WHERE id = ?1 AND status = 'failed'",
                     rusqlite::params![item_id],
@@ -783,8 +813,14 @@ pub extern "C" fn MahoMailDeleteOutboxItem(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                conn.execute("DELETE FROM outbox WHERE id = ?1", rusqlite::params![item_id])?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                conn.execute(
+                    "DELETE FROM outbox WHERE id = ?1",
+                    rusqlite::params![item_id],
+                )?;
                 Ok("{}".to_string())
             })
         })
@@ -799,7 +835,10 @@ pub extern "C" fn MahoMailFlushOutbox(
     accept_read_call(move || {
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let pending = {
                     let mut stmt = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, in_reply_to, email_references, attachments_json
@@ -882,10 +921,11 @@ pub extern "C" fn MahoMailFlushOutbox(
                             .as_ref()
                             .and_then(|s| serde_json::from_str(s).ok())
                             .unwrap_or_default();
-                        let attachments: Vec<maho_core::smtp_client::ComposeAttachment> = attachments_json
-                            .as_ref()
-                            .and_then(|s| serde_json::from_str(s).ok())
-                            .unwrap_or_default();
+                        let attachments: Vec<maho_core::smtp_client::ComposeAttachment> =
+                            attachments_json
+                                .as_ref()
+                                .and_then(|s| serde_json::from_str(s).ok())
+                                .unwrap_or_default();
 
                         let (creds, use_xoauth2, from) = {
                             let _ = conn.execute(
@@ -947,7 +987,8 @@ pub extern "C" fn MahoMailFlushOutbox(
                                     );
                                     log::warn!(
                                         "Outbox: auth error for email {}, exhausting retries: {}",
-                                        id, e
+                                        id,
+                                        e
                                     );
                                 } else {
                                     let _ = conn.execute(
@@ -997,12 +1038,17 @@ pub extern "C" fn MahoMailDownloadAttachment(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 let temp_dir = std::env::temp_dir().join("maho_mail_attachments");
-                std::fs::create_dir_all(&temp_dir).map_err(|e| MailFfiError::Internal(e.to_string()))?;
+                std::fs::create_dir_all(&temp_dir)
+                    .map_err(|e| MailFfiError::Internal(e.to_string()))?;
 
-                let safe_filename = filename.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+                let safe_filename =
+                    filename.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
                 let safe_part_id = sanitize_cache_component(&part_id);
                 let safe_account_id = sanitize_cache_component(&account_id);
                 let cache_key = format!(
@@ -1012,15 +1058,21 @@ pub extern "C" fn MahoMailDownloadAttachment(
                 let file_path = temp_dir.join(&cache_key);
 
                 if file_path.exists() {
-                    return serde_json::to_string(&file_path.to_string_lossy().to_string()).map_err(MailFfiError::from);
+                    return serde_json::to_string(&file_path.to_string_lossy().to_string())
+                        .map_err(MailFfiError::from);
                 }
 
-                let folder_path = conn.query_row(
-                    "SELECT path FROM folders WHERE id = ?1",
-                    [&folder_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .map_err(|_| MailFfiError::Core(maho_core::error::AppError::NotFound("Folder not found".to_string())))?;
+                let folder_path = conn
+                    .query_row(
+                        "SELECT path FROM folders WHERE id = ?1",
+                        [&folder_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|_| {
+                        MailFfiError::Core(maho_core::error::AppError::NotFound(
+                            "Folder not found".to_string(),
+                        ))
+                    })?;
 
                 let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
 
@@ -1034,21 +1086,30 @@ pub extern "C" fn MahoMailDownloadAttachment(
                     let part_id = part_id_clone.clone();
                     move || {
                         let mut client = crate::account::connect_imap(&resolved)?;
-                        client.fetch_attachment(&folder_path, uid, &part_id).map_err(MailFfiError::from)
+                        client
+                            .fetch_attachment(&folder_path, uid, &part_id)
+                            .map_err(MailFfiError::from)
                     }
                 })
                 .await
-                .map_err(|e| MailFfiError::Internal(e.to_string()))? {
+                .map_err(|e| MailFfiError::Internal(e.to_string()))?
+                {
                     Ok(data) => data,
-                    Err(err) if resolved.account.auth_type.starts_with("oauth2") && is_oauth_auth_error(&err) => {
+                    Err(err)
+                        if resolved.account.auth_type.starts_with("oauth2")
+                            && is_oauth_auth_error(&err) =>
+                    {
                         let _ = conn.execute(
                             "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
                             [&account_id],
                         );
-                        let refreshed = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let refreshed =
+                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
                         tokio::task::spawn_blocking(move || {
                             let mut client = crate::account::connect_imap(&refreshed)?;
-                            client.fetch_attachment(&folder_path_clone, uid, &part_id_clone).map_err(MailFfiError::from)
+                            client
+                                .fetch_attachment(&folder_path_clone, uid, &part_id_clone)
+                                .map_err(MailFfiError::from)
                         })
                         .await
                         .map_err(|e| MailFfiError::Internal(e.to_string()))??
@@ -1056,14 +1117,16 @@ pub extern "C" fn MahoMailDownloadAttachment(
                     Err(err) => return Err(err),
                 };
 
-                std::fs::write(&file_path, &raw_data).map_err(|e| MailFfiError::Internal(e.to_string()))?;
+                std::fs::write(&file_path, &raw_data)
+                    .map_err(|e| MailFfiError::Internal(e.to_string()))?;
 
                 let cache_dir = temp_dir.clone();
                 tokio::spawn(async move {
                     enforce_cache_limit(&cache_dir, DEFAULT_CACHE_LIMIT_BYTES);
                 });
 
-                serde_json::to_string(&file_path.to_string_lossy().to_string()).map_err(MailFfiError::from)
+                serde_json::to_string(&file_path.to_string_lossy().to_string())
+                    .map_err(MailFfiError::from)
             })
         })
     })
@@ -1124,7 +1187,9 @@ mod tests {
         let payload = if json.is_null() {
             String::new()
         } else {
-            unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()
+            unsafe { CStr::from_ptr(json) }
+                .to_string_lossy()
+                .into_owned()
         };
         capture.count.fetch_add(1, Ordering::SeqCst);
         *capture.slot.lock().unwrap() = Some((ok, payload));
@@ -1293,7 +1358,6 @@ mod tests {
     }
 }
 
-
 // === [W-D] ===
 
 #[derive(Deserialize)]
@@ -1319,8 +1383,11 @@ pub extern "C" fn MahoMailDelegateEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+
                 let (subject, from_address, body_text, body_html) = conn.query_row(
                     "SELECT subject, from_address, COALESCE(body_text, snippet), body_html FROM emails WHERE id = ?1",
                     [&request.email_id],
@@ -1443,17 +1510,23 @@ pub extern "C" fn MahoMailSendMdnReceipt(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (original_message_id, mdn_requested, from_address) = conn.query_row(
-                    "SELECT message_id, mdn_requested, from_address FROM emails WHERE id = ?1",
-                    [&request.email_id],
-                    |row| Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                    )),
-                )
-                .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (original_message_id, mdn_requested, from_address) = conn
+                    .query_row(
+                        "SELECT message_id, mdn_requested, from_address FROM emails WHERE id = ?1",
+                        [&request.email_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, String>(2)?,
+                            ))
+                        },
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 let report_to = match mdn_requested {
                     Some(addr) if !addr.is_empty() => addr,
@@ -1531,14 +1604,18 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let (folder_path, attachment_metas) = {
-                    let folder_path: String = conn.query_row(
-                        "SELECT path FROM folders WHERE id = ?1",
-                        [&request.folder_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                    let folder_path: String = conn
+                        .query_row(
+                            "SELECT path FROM folders WHERE id = ?1",
+                            [&request.folder_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                     let email_id: String = conn.query_row(
                         "SELECT id FROM emails WHERE account_id = ?1 AND uid = ?2 AND folder_id = ?3",
@@ -1547,18 +1624,24 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
                     )
                     .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
-                    let mut stmt = conn.prepare("SELECT id, filename, mime_type FROM attachments WHERE email_id = ?1")
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, filename, mime_type FROM attachments WHERE email_id = ?1",
+                        )
                         .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
-                    let metas: Vec<AttachmentMeta> = stmt.query_map([&email_id], |row| {
-                        Ok(AttachmentMeta {
-                            part_id: row.get("id")?,
-                            filename: row.get::<_, Option<String>>("filename")?.unwrap_or_else(|| "attachment".to_string()),
-                            mime_type: row.get("mime_type")?,
+                    let metas: Vec<AttachmentMeta> = stmt
+                        .query_map([&email_id], |row| {
+                            Ok(AttachmentMeta {
+                                part_id: row.get("id")?,
+                                filename: row
+                                    .get::<_, Option<String>>("filename")?
+                                    .unwrap_or_else(|| "attachment".to_string()),
+                                mime_type: row.get("mime_type")?,
+                            })
                         })
-                    })
-                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?
+                        .filter_map(|r| r.ok())
+                        .collect();
 
                     (folder_path, metas)
                 };
@@ -1567,7 +1650,8 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
                     return Ok("[]".to_string());
                 }
 
-                let resolved = resolve_account_auth(&conn, &ctx.credential_key, &request.account_id)?;
+                let resolved =
+                    resolve_account_auth(&conn, &ctx.credential_key, &request.account_id)?;
                 let uid = request.email_uid as u32;
                 let folder_path_clone = folder_path.clone();
                 let metas_clone = attachment_metas.clone();
@@ -1592,25 +1676,36 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
                     }
                 })
                 .await
-                .map_err(|e| MailFfiError::Internal(e.to_string()))? {
+                .map_err(|e| MailFfiError::Internal(e.to_string()))?
+                {
                     Ok(data) => data,
-                    Err(err) if resolved.account.auth_type.starts_with("oauth2") && is_oauth_auth_error(&err) => {
+                    Err(err)
+                        if resolved.account.auth_type.starts_with("oauth2")
+                            && is_oauth_auth_error(&err) =>
+                    {
                         let _ = conn.execute(
                             "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
                             [&request.account_id],
                         );
-                        let refreshed = resolve_account_auth(&conn, &ctx.credential_key, &request.account_id)?;
+                        let refreshed =
+                            resolve_account_auth(&conn, &ctx.credential_key, &request.account_id)?;
                         tokio::task::spawn_blocking(move || {
                             let mut client = crate::account::connect_imap(&refreshed)?;
                             let engine = base64::engine::general_purpose::STANDARD;
                             let mut compose_attachments = Vec::with_capacity(metas_clone.len());
                             for meta in &metas_clone {
-                                let data = client.fetch_attachment(&folder_path_clone, uid, &meta.part_id)?;
-                                compose_attachments.push(maho_core::smtp_client::ComposeAttachment {
-                                    filename: meta.filename.clone(),
-                                    mime_type: meta.mime_type.clone(),
-                                    data: engine.encode(&data),
-                                });
+                                let data = client.fetch_attachment(
+                                    &folder_path_clone,
+                                    uid,
+                                    &meta.part_id,
+                                )?;
+                                compose_attachments.push(
+                                    maho_core::smtp_client::ComposeAttachment {
+                                        filename: meta.filename.clone(),
+                                        mime_type: meta.mime_type.clone(),
+                                        data: engine.encode(&data),
+                                    },
+                                );
                             }
                             Ok::<_, MailFfiError>(compose_attachments)
                         })
@@ -1626,16 +1721,12 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
     })
 }
 
-
 /// Sanitize a value that will become part of an on-disk attachment cache key.
 /// Strips path separators, drive/scheme colons, wildcards and dots so a
 /// renderer-controlled component (e.g. account_id) cannot escape the cache dir
 /// via `../` traversal.
 fn sanitize_cache_component(s: &str) -> String {
-    s.replace(
-        ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '.'],
-        "_",
-    )
+    s.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '.'], "_")
 }
 
 #[cfg(test)]

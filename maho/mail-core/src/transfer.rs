@@ -38,10 +38,7 @@ pub fn open_imported_database(
     })
 }
 
-pub fn import_migration_archive(
-    ctx: &AppCtx,
-    archive_json_str: &str,
-) -> Result<serde_json::Value> {
+pub fn import_migration_archive(ctx: &AppCtx, archive_json_str: &str) -> Result<serde_json::Value> {
     #[derive(Debug, serde::Deserialize)]
     struct Request {
         artifact_base64: String,
@@ -55,62 +52,80 @@ pub fn import_migration_archive(
     use base64::Engine;
     let artifact_bytes = base64::prelude::BASE64_STANDARD
         .decode(&req.artifact_base64)
-        .map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to decode base64: {e}")))?;
+        .map_err(|e| {
+            crate::error::MailFfiError::Internal(format!("Failed to decode base64: {e}"))
+        })?;
 
     let db_path = Path::new(&req.db_path);
     if !db_path.exists() {
-        return Err(crate::error::MailFfiError::Internal(format!("Database file not found: {}", req.db_path)));
+        return Err(crate::error::MailFfiError::Internal(format!(
+            "Database file not found: {}",
+            req.db_path
+        )));
     }
 
     // Open the old database
     let old_ctx = open_imported_database(db_path, &artifact_bytes, &req.passphrase)?;
-    let old_conn = old_ctx.pool.get()
-        .map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to get connection to old DB: {e}")))?;
+    let old_conn = old_ctx.pool.get().map_err(|e| {
+        crate::error::MailFfiError::Internal(format!("Failed to get connection to old DB: {e}"))
+    })?;
 
     // Open current database
-    let mut current_conn = ctx.pool.get()
-        .map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to get connection to current DB: {e}")))?;
+    let mut current_conn = ctx.pool.get().map_err(|e| {
+        crate::error::MailFfiError::Internal(format!("Failed to get connection to current DB: {e}"))
+    })?;
 
     // Let's copy accounts and credentials
-    let tx = current_conn.transaction()
-        .map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to start transaction: {e}")))?;
+    let tx = current_conn.transaction().map_err(|e| {
+        crate::error::MailFfiError::Internal(format!("Failed to start transaction: {e}"))
+    })?;
 
     // 1. Read accounts from old DB
-    let mut stmt = old_conn.prepare(
-        "SELECT id, email, display_name, auth_type, imap_host, imap_port, imap_encryption,
+    let mut stmt = old_conn
+        .prepare(
+            "SELECT id, email, display_name, auth_type, imap_host, imap_port, imap_encryption,
                 smtp_host, smtp_port, smtp_encryption, username, oauth2_client_id,
                 oauth2_client_secret, oauth2_refresh_token, oauth2_access_token,
                 oauth2_expires_at, password, created_at, updated_at
-         FROM accounts"
-    ).map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to prepare accounts stmt: {e}")))?;
+         FROM accounts",
+        )
+        .map_err(|e| {
+            crate::error::MailFfiError::Internal(format!("Failed to prepare accounts stmt: {e}"))
+        })?;
 
-    let account_rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?, // id
-            row.get::<_, String>(1)?, // email
-            row.get::<_, Option<String>>(2)?, // display_name
-            row.get::<_, String>(3)?, // auth_type
-            row.get::<_, String>(4)?, // imap_host
-            row.get::<_, i32>(5)?, // imap_port
-            row.get::<_, String>(6)?, // imap_encryption
-            row.get::<_, String>(7)?, // smtp_host
-            row.get::<_, i32>(8)?, // smtp_port
-            row.get::<_, String>(9)?, // smtp_encryption
-            row.get::<_, String>(10)?, // username
-            row.get::<_, Option<String>>(11)?, // oauth2_client_id
-            row.get::<_, Option<String>>(12)?, // oauth2_client_secret
-            row.get::<_, Option<String>>(13)?, // oauth2_refresh_token
-            row.get::<_, Option<String>>(14)?, // oauth2_access_token
-            row.get::<_, Option<String>>(15)?, // oauth2_expires_at
-            row.get::<_, Option<String>>(16)?, // password
-            row.get::<_, String>(17)?, // created_at
-            row.get::<_, String>(18)?, // updated_at
-        ))
-    }).map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to query accounts: {e}")))?;
+    let account_rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,          // id
+                row.get::<_, String>(1)?,          // email
+                row.get::<_, Option<String>>(2)?,  // display_name
+                row.get::<_, String>(3)?,          // auth_type
+                row.get::<_, String>(4)?,          // imap_host
+                row.get::<_, i32>(5)?,             // imap_port
+                row.get::<_, String>(6)?,          // imap_encryption
+                row.get::<_, String>(7)?,          // smtp_host
+                row.get::<_, i32>(8)?,             // smtp_port
+                row.get::<_, String>(9)?,          // smtp_encryption
+                row.get::<_, String>(10)?,         // username
+                row.get::<_, Option<String>>(11)?, // oauth2_client_id
+                row.get::<_, Option<String>>(12)?, // oauth2_client_secret
+                row.get::<_, Option<String>>(13)?, // oauth2_refresh_token
+                row.get::<_, Option<String>>(14)?, // oauth2_access_token
+                row.get::<_, Option<String>>(15)?, // oauth2_expires_at
+                row.get::<_, Option<String>>(16)?, // password
+                row.get::<_, String>(17)?,         // created_at
+                row.get::<_, String>(18)?,         // updated_at
+            ))
+        })
+        .map_err(|e| {
+            crate::error::MailFfiError::Internal(format!("Failed to query accounts: {e}"))
+        })?;
 
     let mut imported_accounts_count = 0;
     for row_res in account_rows {
-        let r = row_res.map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to read account row: {e}")))?;
+        let r = row_res.map_err(|e| {
+            crate::error::MailFfiError::Internal(format!("Failed to read account row: {e}"))
+        })?;
         tx.execute(
             "INSERT OR REPLACE INTO accounts (id, email, display_name, auth_type, imap_host, imap_port, imap_encryption,
                                              smtp_host, smtp_port, smtp_encryption, username, oauth2_client_id,
@@ -137,21 +152,27 @@ pub fn import_migration_archive(
          FROM folders"
     ).map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to prepare folders stmt: {e}")))?;
 
-    let folder_rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?, // id
-            row.get::<_, String>(1)?, // account_id
-            row.get::<_, String>(2)?, // name
-            row.get::<_, String>(3)?, // path
-            row.get::<_, String>(4)?, // folder_type
-            row.get::<_, Option<String>>(5)?, // last_synced_at
-            row.get::<_, i32>(6)?, // unread_count
-            row.get::<_, i32>(7)?, // total_count
-        ))
-    }).map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to query folders: {e}")))?;
+    let folder_rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,         // id
+                row.get::<_, String>(1)?,         // account_id
+                row.get::<_, String>(2)?,         // name
+                row.get::<_, String>(3)?,         // path
+                row.get::<_, String>(4)?,         // folder_type
+                row.get::<_, Option<String>>(5)?, // last_synced_at
+                row.get::<_, i32>(6)?,            // unread_count
+                row.get::<_, i32>(7)?,            // total_count
+            ))
+        })
+        .map_err(|e| {
+            crate::error::MailFfiError::Internal(format!("Failed to query folders: {e}"))
+        })?;
 
     for row_res in folder_rows {
-        let r = row_res.map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to read folder row: {e}")))?;
+        let r = row_res.map_err(|e| {
+            crate::error::MailFfiError::Internal(format!("Failed to read folder row: {e}"))
+        })?;
         tx.execute(
             "INSERT OR REPLACE INTO folders (id, account_id, name, path, folder_type, last_synced_at, unread_count, total_count)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -173,7 +194,9 @@ pub fn import_migration_archive(
         )?;
     }
 
-    tx.commit().map_err(|e| crate::error::MailFfiError::Internal(format!("Failed to commit transaction: {e}")))?;
+    tx.commit().map_err(|e| {
+        crate::error::MailFfiError::Internal(format!("Failed to commit transaction: {e}"))
+    })?;
     crate::ffi::emit_accounts_changed_event("");
 
     let mut result = serde_json::Map::new();

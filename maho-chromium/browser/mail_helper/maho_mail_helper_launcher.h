@@ -29,6 +29,7 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
                                 const std::string& reason) = 0;
     virtual void OnAuthRefreshSucceeded(const std::string& account_id) = 0;
     virtual void OnAccountsChanged() = 0;
+    virtual void OnHelperReady() {}
     virtual void OnSyncEvent(const std::string& event_type, const std::string& payload) {}
     virtual void OnBackfillEvent(const std::string& event_type, const std::string& payload) {}
     virtual void OnStatusChanged(const std::string& account_id, bool connected) {}

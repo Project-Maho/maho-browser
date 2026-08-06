@@ -23,10 +23,10 @@ use serde::{Deserialize, Serialize};
 use smallvec::smallvec;
 use uuid::Uuid;
 
-use maho_core::error::AppError;
 use crate::credentials::{get_encrypted_credential, store_encrypted_credential};
 use crate::error::MailFfiError;
 use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
+use maho_core::error::AppError;
 
 // Local C-string helper implementations to avoid dependency on private ffi.rs helpers
 fn c_string(ptr: *const c_char, name: &'static str) -> Result<String, MailFfiError> {
@@ -112,7 +112,11 @@ fn store_private_key(
     armored_key: &str,
     is_pgp: bool,
 ) -> Result<(), MailFfiError> {
-    let credential_type = if is_pgp { "pgp_private_key" } else { "smime_private_key" };
+    let credential_type = if is_pgp {
+        "pgp_private_key"
+    } else {
+        "smime_private_key"
+    };
     store_encrypted_credential(conn, credential_key, key_id, credential_type, armored_key)
 }
 
@@ -122,7 +126,11 @@ fn get_private_key(
     key_id: &str,
     is_pgp: bool,
 ) -> Result<Option<String>, MailFfiError> {
-    let credential_type = if is_pgp { "pgp_private_key" } else { "smime_private_key" };
+    let credential_type = if is_pgp {
+        "pgp_private_key"
+    } else {
+        "smime_private_key"
+    };
     get_encrypted_credential(conn, credential_key, key_id, credential_type)
 }
 
@@ -131,7 +139,11 @@ fn delete_private_key(
     key_id: &str,
     is_pgp: bool,
 ) -> Result<(), MailFfiError> {
-    let credential_type = if is_pgp { "pgp_private_key" } else { "smime_private_key" };
+    let credential_type = if is_pgp {
+        "pgp_private_key"
+    } else {
+        "smime_private_key"
+    };
     conn.execute(
         "DELETE FROM encrypted_credentials WHERE account_id = ?1 AND credential_type = ?2",
         rusqlite::params![key_id, credential_type],
@@ -296,9 +308,7 @@ fn get_public_keys_for_emails(
                 rusqlite::params![email],
                 |row| row.get(0),
             )
-            .map_err(|_| {
-                not_found_err(format!("No public key found for recipient: {}", email))
-            })?;
+            .map_err(|_| not_found_err(format!("No public key found for recipient: {}", email)))?;
 
         let armor = String::from_utf8(key_data)
             .map_err(|e| internal_err(format!("Key data not valid UTF-8: {}", e)))?;
@@ -419,7 +429,10 @@ pub extern "C" fn MahoMailGeneratePgpKey(
                 let pub_id = Uuid::new_v4().to_string();
                 let priv_id = Uuid::new_v4().to_string();
 
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 store_private_key(&conn, &ctx.credential_key, &priv_id, &private_armor, true)?;
 
@@ -473,7 +486,10 @@ pub extern "C" fn MahoMailImportPgpKey(
                 let (any, _headers) = Any::from_string(&req.key_data)
                     .map_err(|e| validation_err(format!("Failed to parse key: {}", e)))?;
 
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 match any {
                     Any::PublicKey(pk) => {
@@ -505,17 +521,23 @@ pub extern "C" fn MahoMailImportPgpKey(
                         let key_type = detect_key_type_from_public(&pk);
                         let email = extract_email_from_public(&pk);
 
-                        let public_armor = pk
-                            .to_armored_string(None.into())
-                            .map_err(|e| internal_err(format!("Failed to armor public key: {}", e)))?;
-                        let private_armor = sk
-                            .to_armored_string(None.into())
-                            .map_err(|e| internal_err(format!("Failed to armor private key: {}", e)))?;
+                        let public_armor = pk.to_armored_string(None.into()).map_err(|e| {
+                            internal_err(format!("Failed to armor public key: {}", e))
+                        })?;
+                        let private_armor = sk.to_armored_string(None.into()).map_err(|e| {
+                            internal_err(format!("Failed to armor private key: {}", e))
+                        })?;
 
                         let pub_id = Uuid::new_v4().to_string();
                         let priv_id = Uuid::new_v4().to_string();
 
-                        store_private_key(&conn, &ctx.credential_key, &priv_id, &private_armor, true)?;
+                        store_private_key(
+                            &conn,
+                            &ctx.credential_key,
+                            &priv_id,
+                            &private_armor,
+                            true,
+                        )?;
 
                         conn.execute(
                             "INSERT INTO pgp_keys (id, account_id, email, key_type, fingerprint, key_data, is_private, is_default)
@@ -539,7 +561,8 @@ pub extern "C" fn MahoMailImportPgpKey(
                         Ok(info)
                     }
                     _ => Err(validation_err(
-                        "Input is not a PGP key. Expected a public or private key block.".to_string(),
+                        "Input is not a PGP key. Expected a public or private key block."
+                            .to_string(),
                     )),
                 }
             })
@@ -565,7 +588,10 @@ pub extern "C" fn MahoMailExportPgpKey(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 let (is_private, key_data): (bool, Vec<u8>) = conn.query_row(
                     "SELECT is_private, key_data FROM pgp_keys WHERE id = ?1",
@@ -576,17 +602,20 @@ pub extern "C" fn MahoMailExportPgpKey(
                 let exported = if is_private {
                     if include_private {
                         let armored = get_private_key(&conn, &ctx.credential_key, &key_id, true)?
-                            .ok_or_else(|| not_found_err("Private key data not found in credential store"))?;
+                            .ok_or_else(|| {
+                            not_found_err("Private key data not found in credential store")
+                        })?;
                         armored
                     } else {
                         let armored = get_private_key(&conn, &ctx.credential_key, &key_id, true)?
                             .ok_or_else(|| not_found_err("Private key data not found"))?;
-                        let (sk, _) = SignedSecretKey::from_string(&armored)
-                            .map_err(|e| internal_err(format!("Failed to parse private key: {}", e)))?;
+                        let (sk, _) = SignedSecretKey::from_string(&armored).map_err(|e| {
+                            internal_err(format!("Failed to parse private key: {}", e))
+                        })?;
                         let pk: SignedPublicKey = sk.into();
-                        let public_armor = pk
-                            .to_armored_string(None.into())
-                            .map_err(|e| internal_err(format!("Failed to armor public key: {}", e)))?;
+                        let public_armor = pk.to_armored_string(None.into()).map_err(|e| {
+                            internal_err(format!("Failed to armor public key: {}", e))
+                        })?;
                         public_armor
                     }
                 } else {
@@ -613,7 +642,10 @@ pub extern "C" fn MahoMailListPgpKeys(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, email, key_type, fingerprint, is_private, is_default, expires_at, created_at
                      FROM pgp_keys WHERE account_id = ?1 ORDER BY is_private DESC, email ASC",
@@ -639,7 +671,10 @@ pub extern "C" fn MahoMailDeletePgpKey(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 let is_private: bool = conn
                     .query_row(
@@ -676,7 +711,10 @@ pub extern "C" fn MahoMailSetDefaultPgpKey(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE pgp_keys SET is_default = 0 WHERE account_id = ?1 AND is_private = 1",
                     params![account_id],
@@ -718,7 +756,10 @@ pub extern "C" fn MahoMailEncryptEmailPgp(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let public_keys = {
                     let mut keys = get_public_keys_for_emails(&conn, &req.recipient_emails)?;
 
@@ -746,7 +787,9 @@ pub extern "C" fn MahoMailEncryptEmailPgp(
 
                 let armored = encrypted
                     .to_armored_string(Default::default())
-                    .map_err(|e| internal_err(format!("Failed to armor encrypted message: {}", e)))?;
+                    .map_err(|e| {
+                        internal_err(format!("Failed to armor encrypted message: {}", e))
+                    })?;
 
                 Ok(EncryptEmailPgpResponse { armored })
             })
@@ -781,9 +824,15 @@ pub extern "C" fn MahoMailEncryptAttachmentPgp(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let plaintext_bytes = base64::prelude::BASE64_STANDARD.decode(&req.plaintext)
-                    .map_err(|e| validation_err(format!("Failed to decode base64 plaintext: {}", e)))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let plaintext_bytes = base64::prelude::BASE64_STANDARD
+                    .decode(&req.plaintext)
+                    .map_err(|e| {
+                        validation_err(format!("Failed to decode base64 plaintext: {}", e))
+                    })?;
 
                 let public_keys = {
                     let mut keys = get_public_keys_for_emails(&conn, &req.recipient_emails)?;
@@ -804,7 +853,9 @@ pub extern "C" fn MahoMailEncryptAttachmentPgp(
                 let encrypted_bytes = encrypt_attachment_bytes(&plaintext_bytes, &enc_key_refs)?;
                 let b64_encrypted = base64::prelude::BASE64_STANDARD.encode(encrypted_bytes);
 
-                Ok(EncryptAttachmentPgpResponse { encrypted_data: b64_encrypted })
+                Ok(EncryptAttachmentPgpResponse {
+                    encrypted_data: b64_encrypted,
+                })
             })
         })
     })
@@ -836,11 +887,17 @@ pub extern "C" fn MahoMailDecryptEmailPgp(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (_key_id, secret_key) = get_default_private_key(&conn, &ctx.credential_key, &req.account_id)?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (_key_id, secret_key) =
+                    get_default_private_key(&conn, &ctx.credential_key, &req.account_id)?;
 
                 let (message, _headers) = Message::from_armor_single(req.ciphertext.as_bytes())
-                    .map_err(|e| internal_err(format!("Failed to parse encrypted message: {}", e)))?;
+                    .map_err(|e| {
+                        internal_err(format!("Failed to parse encrypted message: {}", e))
+                    })?;
 
                 let (decrypted, _key_ids) = message
                     .decrypt(String::new, &[&secret_key])
@@ -851,8 +908,9 @@ pub extern "C" fn MahoMailDecryptEmailPgp(
                     .map_err(|e| internal_err(format!("Failed to read decrypted data: {}", e)))?
                     .ok_or_else(|| internal_err("Decrypted message has no content"))?;
 
-                let plaintext = String::from_utf8(plaintext_bytes)
-                    .map_err(|e| internal_err(format!("Decrypted data is not valid UTF-8: {}", e)))?;
+                let plaintext = String::from_utf8(plaintext_bytes).map_err(|e| {
+                    internal_err(format!("Decrypted data is not valid UTF-8: {}", e))
+                })?;
 
                 Ok(DecryptEmailPgpResponse { plaintext })
             })
@@ -886,8 +944,12 @@ pub extern "C" fn MahoMailSignEmailPgp(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (_key_id, secret_key) = get_default_private_key(&conn, &ctx.credential_key, &req.account_id)?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (_key_id, secret_key) =
+                    get_default_private_key(&conn, &ctx.credential_key, &req.account_id)?;
 
                 let mut rng = rand::thread_rng();
                 let lit_msg = Message::new_literal_bytes("message.txt", req.message.as_bytes());
@@ -927,7 +989,10 @@ pub extern "C" fn MahoMailVerifyEmailPgp(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let key_data_result: Result<Vec<u8>, rusqlite::Error> = conn.query_row(
                     "SELECT key_data FROM pgp_keys WHERE email = ?1 AND is_private = 0 LIMIT 1",
                     params![req.sender_email],
@@ -983,7 +1048,8 @@ pub extern "C" fn MahoMailVerifyEmailPgp(
                 } else {
                     match StandaloneSignature::from_string(&req.signature) {
                         Ok((standalone_sig, _)) => {
-                            let is_valid = standalone_sig.verify(&pk, req.message.as_bytes()).is_ok();
+                            let is_valid =
+                                standalone_sig.verify(&pk, req.message.as_bytes()).is_ok();
                             Ok(PgpVerifyResult {
                                 is_valid,
                                 signer_email: Some(req.sender_email),
@@ -1076,9 +1142,7 @@ fn extract_email_from_cert(cert: &X509Ref) -> String {
 fn fingerprint_hex(cert: &X509) -> Result<String, MailFfiError> {
     let digest = cert
         .digest(openssl::hash::MessageDigest::sha256())
-        .map_err(|e| {
-            internal_err(format!("Failed to compute certificate fingerprint: {}", e))
-        })?;
+        .map_err(|e| internal_err(format!("Failed to compute certificate fingerprint: {}", e)))?;
     Ok(digest
         .iter()
         .map(|b| format!("{:02X}", b))
@@ -1134,8 +1198,11 @@ pub extern "C" fn MahoMailImportSmimeIdentity(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let p12_bytes = base64::prelude::BASE64_STANDARD.decode(&req.p12_data)
-                    .map_err(|e| validation_err(format!("Failed to decode base64 p12_data: {}", e)))?;
+                let p12_bytes = base64::prelude::BASE64_STANDARD
+                    .decode(&req.p12_data)
+                    .map_err(|e| {
+                        validation_err(format!("Failed to decode base64 p12_data: {}", e))
+                    })?;
 
                 let pkcs12 = Pkcs12::from_der(&p12_bytes)
                     .map_err(|e| validation_err(format!("Failed to parse P12/PFX file: {}", e)))?;
@@ -1144,25 +1211,27 @@ pub extern "C" fn MahoMailImportSmimeIdentity(
                     .parse2(&req.password)
                     .map_err(|e| validation_err(format!("Failed to decrypt P12/PFX: {}", e)))?;
 
-                let cert = parsed.cert.ok_or_else(|| {
-                    validation_err("P12/PFX file does not contain a certificate")
+                let cert = parsed
+                    .cert
+                    .ok_or_else(|| validation_err("P12/PFX file does not contain a certificate"))?;
+
+                let pkey = parsed
+                    .pkey
+                    .ok_or_else(|| validation_err("P12/PFX file does not contain a private key"))?;
+
+                let cert_pem_bytes = cert.to_pem().map_err(|e| {
+                    internal_err(format!("Failed to encode certificate PEM: {}", e))
+                })?;
+                let cert_pem = String::from_utf8(cert_pem_bytes).map_err(|e| {
+                    internal_err(format!("Certificate PEM is not valid UTF-8: {}", e))
                 })?;
 
-                let pkey = parsed.pkey.ok_or_else(|| {
-                    validation_err("P12/PFX file does not contain a private key")
+                let key_pem_bytes = pkey.private_key_to_pem_pkcs8().map_err(|e| {
+                    internal_err(format!("Failed to encode private key PEM: {}", e))
                 })?;
-
-                let cert_pem_bytes = cert
-                    .to_pem()
-                    .map_err(|e| internal_err(format!("Failed to encode certificate PEM: {}", e)))?;
-                let cert_pem = String::from_utf8(cert_pem_bytes)
-                    .map_err(|e| internal_err(format!("Certificate PEM is not valid UTF-8: {}", e)))?;
-
-                let key_pem_bytes = pkey
-                    .private_key_to_pem_pkcs8()
-                    .map_err(|e| internal_err(format!("Failed to encode private key PEM: {}", e)))?;
-                let key_pem = String::from_utf8(key_pem_bytes)
-                    .map_err(|e| internal_err(format!("Private key PEM is not valid UTF-8: {}", e)))?;
+                let key_pem = String::from_utf8(key_pem_bytes).map_err(|e| {
+                    internal_err(format!("Private key PEM is not valid UTF-8: {}", e))
+                })?;
 
                 let email = extract_email_from_cert(&cert);
                 let subject = x509_name_to_string(cert.subject_name());
@@ -1178,7 +1247,10 @@ pub extern "C" fn MahoMailImportSmimeIdentity(
 
                 let id = Uuid::new_v4().to_string();
 
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 store_private_key(&conn, &ctx.credential_key, &id, &key_pem, false)?;
 
@@ -1213,7 +1285,10 @@ pub extern "C" fn MahoMailListSmimeIdentities(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, email, subject, issuer, serial_number, fingerprint, not_before, not_after, is_default, created_at
                      FROM smime_identities WHERE account_id = ?1 ORDER BY is_default DESC, email ASC",
@@ -1239,7 +1314,10 @@ pub extern "C" fn MahoMailDeleteSmimeIdentity(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let _ = delete_private_key(&conn, &id, false);
                 conn.execute("DELETE FROM smime_identities WHERE id = ?1", params![id])?;
                 Ok("{}".to_string())
@@ -1264,7 +1342,10 @@ pub extern "C" fn MahoMailSetDefaultSmimeIdentity(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE smime_identities SET is_default = 0 WHERE account_id = ?1",
                     params![account_id],
@@ -1296,7 +1377,10 @@ pub extern "C" fn MahoMailExportSmimeCert(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let cert_pem: String = conn
                     .query_row(
                         "SELECT cert_pem FROM smime_identities WHERE id = ?1",
@@ -1336,11 +1420,17 @@ pub extern "C" fn MahoMailSignEmailSmime(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (identity_id, cert_pem, _) = get_default_smime_identity(&conn, &req.account_id)?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (identity_id, cert_pem, _) =
+                    get_default_smime_identity(&conn, &req.account_id)?;
 
                 let key_pem = get_private_key(&conn, &ctx.credential_key, &identity_id, false)?
-                    .ok_or_else(|| not_found_err("S/MIME private key not found in credential store"))?;
+                    .ok_or_else(|| {
+                        not_found_err("S/MIME private key not found in credential store")
+                    })?;
 
                 let cert = X509::from_pem(cert_pem.as_bytes())
                     .map_err(|e| internal_err(format!("Failed to parse certificate: {}", e)))?;
@@ -1359,8 +1449,9 @@ pub extern "C" fn MahoMailSignEmailSmime(
                     internal_err(format!("Failed to encode S/MIME signed message: {}", e))
                 })?;
 
-                let smime = String::from_utf8(smime_bytes)
-                    .map_err(|e| internal_err(format!("S/MIME output is not valid UTF-8: {}", e)))?;
+                let smime = String::from_utf8(smime_bytes).map_err(|e| {
+                    internal_err(format!("S/MIME output is not valid UTF-8: {}", e))
+                })?;
 
                 Ok(SignEmailSmimeResponse { smime })
             })
@@ -1395,7 +1486,10 @@ pub extern "C" fn MahoMailEncryptEmailSmime(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let sender_cert_pem = get_default_smime_identity(&conn, &req.account_id)
                     .ok()
                     .map(|(_, pem, _)| pem);
@@ -1450,8 +1544,9 @@ pub extern "C" fn MahoMailEncryptEmailSmime(
                     internal_err(format!("Failed to encode S/MIME encrypted message: {}", e))
                 })?;
 
-                let smime = String::from_utf8(smime_bytes)
-                    .map_err(|e| internal_err(format!("S/MIME output is not valid UTF-8: {}", e)))?;
+                let smime = String::from_utf8(smime_bytes).map_err(|e| {
+                    internal_err(format!("S/MIME output is not valid UTF-8: {}", e))
+                })?;
 
                 Ok(EncryptEmailSmimeResponse { smime })
             })
@@ -1485,11 +1580,17 @@ pub extern "C" fn MahoMailDecryptEmailSmime(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (identity_id, cert_pem, _) = get_default_smime_identity(&conn, &req.account_id)?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let (identity_id, cert_pem, _) =
+                    get_default_smime_identity(&conn, &req.account_id)?;
 
                 let key_pem = get_private_key(&conn, &ctx.credential_key, &identity_id, false)?
-                    .ok_or_else(|| not_found_err("S/MIME private key not found in credential store"))?;
+                    .ok_or_else(|| {
+                        not_found_err("S/MIME private key not found in credential store")
+                    })?;
 
                 let cert = X509::from_pem(cert_pem.as_bytes())
                     .map_err(|e| internal_err(format!("Failed to parse certificate: {}", e)))?;
@@ -1509,8 +1610,9 @@ pub extern "C" fn MahoMailDecryptEmailSmime(
                     .decrypt(&pkey, &cert, Pkcs7Flags::empty())
                     .map_err(|e| internal_err(format!("S/MIME decryption failed: {}", e)))?;
 
-                let decrypted = String::from_utf8(plaintext_bytes)
-                    .map_err(|e| internal_err(format!("Decrypted data is not valid UTF-8: {}", e)))?;
+                let decrypted = String::from_utf8(plaintext_bytes).map_err(|e| {
+                    internal_err(format!("Decrypted data is not valid UTF-8: {}", e))
+                })?;
 
                 Ok(DecryptEmailSmimeResponse { decrypted })
             })
@@ -1585,7 +1687,8 @@ pub extern "C" fn MahoMailVerifyEmailSmime(
                         )
                         .is_ok();
                     if sig_only {
-                        signer_subject = signer_subject.map(|s| format!("{} (certificate not trusted)", s));
+                        signer_subject =
+                            signer_subject.map(|s| format!("{} (certificate not trusted)", s));
                     }
                     (sig_only, false)
                 };
@@ -1613,8 +1716,12 @@ pub extern "C" fn MahoMailCleanupSmimeForAccount(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let mut stmt = conn.prepare("SELECT id FROM smime_identities WHERE account_id = ?1")?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let mut stmt =
+                    conn.prepare("SELECT id FROM smime_identities WHERE account_id = ?1")?;
                 let identities = stmt
                     .query_map([&account_id], |row| row.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;

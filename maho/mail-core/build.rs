@@ -46,14 +46,9 @@ fn main() {
     }
 }
 
-/// Bake the OAuth client identifiers into the binary via `option_env!`, read
-/// from the build environment (CI/secret store) rather than a checked-in file,
-/// so the build is reproducible without the discarded `mail/` tree. Absent
-/// variables leave the corresponding `option_env!(...)` as `None`.
-///
-/// Client SECRETS are deliberately NOT baked: a compiled-in secret is trivially
-/// extractable via `strings` and would let a third party impersonate Maho's
-/// OAuth consent screen. Sign-in uses PKCE (public/desktop client) instead.
+/// Bake only public desktop OAuth client identifiers. Client secrets must not
+/// be compiled into a distributable binary; these providers authenticate with
+/// PKCE and are intentionally configured as public clients.
 fn bake_oauth_client_ids() {
     for key in ["GMAIL_CLIENT_ID", "OUTLOOK_CLIENT_ID"] {
         println!("cargo:rerun-if-env-changed={key}");

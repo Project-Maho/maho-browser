@@ -107,6 +107,7 @@ pub struct CreateAccountRequest {
     pub oauth2_client_secret: Option<String>,
     pub oauth2_access_token: Option<String>,
     pub oauth2_refresh_token: Option<String>,
+    pub oauth2_expires_at: Option<String>,
 }
 
 /// Request payload for updating an existing account.

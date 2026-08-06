@@ -1,13 +1,13 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-use std::ffi::c_void;
-use std::os::raw::c_char;
 use chrono::{DateTime, Utc};
 use serde_json::json;
+use std::ffi::c_void;
+use std::os::raw::c_char;
 
 use crate::error::MailFfiError;
-use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use crate::ffi::non_empty;
+use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use crate::otp::{best_otp_candidate, OtpMessage};
 
 #[no_mangle]
@@ -38,18 +38,23 @@ pub extern "C" fn MahoMailExtractOtp(
 
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+
                 // Fetch emails newer than max_age_seconds
                 let cutoff = Utc::now() - chrono::Duration::seconds(max_age_seconds);
                 let cutoff_str = cutoff.to_rfc3339();
 
                 let mut sql = "SELECT subject, snippet, body_text, body_html, date, from_address 
                                FROM emails 
-                               WHERE date >= ?1".to_string();
-                
-                let mut params: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::Text(cutoff_str)];
-                
+                               WHERE date >= ?1"
+                    .to_string();
+
+                let mut params: Vec<rusqlite::types::Value> =
+                    vec![rusqlite::types::Value::Text(cutoff_str)];
+
                 if let Some(ref acc) = account_filter {
                     sql.push_str(" AND account_id = ?2");
                     params.push(rusqlite::types::Value::Text(acc.clone()));
@@ -76,26 +81,39 @@ pub extern "C" fn MahoMailExtractOtp(
 
                 sql.push_str(" ORDER BY date DESC LIMIT 20");
 
-                let mut stmt = conn.prepare(&sql).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
-                
-                let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
-                    let subject: String = row.get(0)?;
-                    let snippet: String = row.get(1)?;
-                    let body_text: Option<String> = row.get(2)?;
-                    let body_html: Option<String> = row.get(3)?;
-                    let date_str: String = row.get(4)?;
-                    let from_address: Option<String> = row.get(5)?;
-                    Ok((subject, snippet, body_text, body_html, date_str, from_address))
-                }).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(params), |row| {
+                        let subject: String = row.get(0)?;
+                        let snippet: String = row.get(1)?;
+                        let body_text: Option<String> = row.get(2)?;
+                        let body_html: Option<String> = row.get(3)?;
+                        let date_str: String = row.get(4)?;
+                        let from_address: Option<String> = row.get(5)?;
+                        Ok((
+                            subject,
+                            snippet,
+                            body_text,
+                            body_html,
+                            date_str,
+                            from_address,
+                        ))
+                    })
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 let mut best_candidate = None;
 
                 for row_res in rows {
-                    if let Ok((subject, snippet, body_text, body_html, date_str, from_address)) = row_res {
+                    if let Ok((subject, snippet, body_text, body_html, date_str, from_address)) =
+                        row_res
+                    {
                         let parsed_date = DateTime::parse_from_rfc3339(&date_str)
                             .map(|dt| dt.with_timezone(&Utc))
                             .unwrap_or(cutoff);
-                        
+
                         let body_t = body_text.unwrap_or(snippet);
                         let body_h = body_html.unwrap_or_default();
 

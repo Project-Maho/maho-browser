@@ -19,12 +19,12 @@
 mod loopback;
 mod transport;
 
-pub use loopback::sign_in_with_oauth_loopback;
+pub use loopback::{sign_in_with_oauth_loopback, sign_in_with_oauth_loopback_with_options};
 
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 use uuid::Uuid;
@@ -109,6 +109,40 @@ pub struct StartOAuthResponse {
     pub auth_url: String,
 }
 
+/// Optional identity-binding inputs supplied by the main Google sign-in flow.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct StartOAuthOptions {
+    #[serde(default)]
+    pub login_hint: Option<String>,
+    #[serde(default)]
+    pub expected_google_sub: Option<String>,
+    #[serde(default)]
+    pub reauthorize_account_id: Option<String>,
+}
+
+/// Optional completion input for platforms that complete outside the pending
+/// start flow. A value here overrides the subject captured at start.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CompleteOAuthOptions {
+    #[serde(default)]
+    pub expected_google_sub: Option<String>,
+}
+
+fn normalize_expected_google_sub(value: Option<String>) -> Result<Option<String>> {
+    match value {
+        Some(value) => {
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                return Err(MailFfiError::InvalidRequest(
+                    "expected_google_sub must not be empty or whitespace".to_string(),
+                ));
+            }
+            Ok(Some(normalized.to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Build the provider authorization URL with PKCE S256, correctly
 /// percent-encoded (via the `url` crate re-exported by reqwest — no extra dep).
 pub fn build_authorization_url(
@@ -119,22 +153,52 @@ pub fn build_authorization_url(
     state: &str,
     scopes: &str,
 ) -> Result<String> {
-    let config = provider_config(provider)?;
-    let url = reqwest::Url::parse_with_params(
-        config.auth_endpoint,
-        &[
-            ("client_id", client_id),
-            ("redirect_uri", redirect_uri),
-            ("response_type", "code"),
-            ("scope", scopes),
-            ("access_type", "offline"),
-            ("prompt", "consent"),
-            ("code_challenge", challenge),
-            ("code_challenge_method", "S256"),
-            ("state", state),
-        ],
+    build_authorization_url_with_options(
+        provider,
+        client_id,
+        redirect_uri,
+        challenge,
+        state,
+        scopes,
+        &StartOAuthOptions::default(),
     )
-    .map_err(|e| MailFfiError::OAuth(format!("authorization url build failed: {e}")))?;
+}
+
+pub fn build_authorization_url_with_options(
+    provider: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    challenge: &str,
+    state: &str,
+    scopes: &str,
+    options: &StartOAuthOptions,
+) -> Result<String> {
+    let config = provider_config(provider)?;
+    let mut url = reqwest::Url::parse(config.auth_endpoint)
+        .map_err(|e| MailFfiError::OAuth(format!("authorization url build failed: {e}")))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query
+            .append_pair("client_id", client_id)
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("response_type", "code")
+            .append_pair("scope", scopes)
+            .append_pair("access_type", "offline")
+            .append_pair("prompt", "consent")
+            .append_pair("code_challenge", challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("state", state);
+        if provider == "gmail" {
+            query.append_pair("include_granted_scopes", "true");
+        }
+        if let Some(login_hint) = options
+            .login_hint
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            query.append_pair("login_hint", login_hint);
+        }
+    }
     Ok(url.into())
 }
 
@@ -177,16 +241,24 @@ pub fn is_allowed_redirect_uri(redirect_uri: &str) -> bool {
     if url.scheme() != "http" {
         return false;
     }
-    matches!(url.host_str(), Some("127.0.0.1") | Some("localhost") | Some("[::1]"))
+    matches!(
+        url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("[::1]")
+    )
 }
 
-/// Resolve the effective OAuth `client_secret`: a non-empty caller value (e.g. a
-/// per-account confidential secret stored in the DB) wins; otherwise the empty
-/// string, i.e. a public/desktop PKCE client. Client secrets are NEVER baked
-/// into the binary: a compiled-in secret is trivially extractable via `strings`
-/// and would let a third party impersonate Maho's OAuth consent screen.
-pub fn resolve_client_secret(_provider: &str, client_secret: &str) -> String {
-    client_secret.to_string()
+/// Resolve a confidential-client secret supplied only through the build
+/// environment. It is never accepted from renderer-controlled onboarding input.
+pub fn resolve_client_secret(provider: &str, client_secret: &str) -> String {
+    let baked = match provider {
+        "gmail" => option_env!("GMAIL_CLIENT_SECRET"),
+        "outlook" => option_env!("OUTLOOK_CLIENT_SECRET"),
+        _ => None,
+    };
+    baked
+        .filter(|value| !value.is_empty())
+        .unwrap_or(client_secret)
+        .to_string()
 }
 
 /// Begin PKCE onboarding: mint verifier/challenge/state, register the pending
@@ -196,6 +268,21 @@ pub fn start_oauth(
     client_id: &str,
     redirect_uri: &str,
 ) -> Result<StartOAuthResponse> {
+    start_oauth_with_options(
+        provider,
+        client_id,
+        redirect_uri,
+        StartOAuthOptions::default(),
+    )
+}
+
+pub fn start_oauth_with_options(
+    provider: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    options: StartOAuthOptions,
+) -> Result<StartOAuthResponse> {
+    let expected_google_sub = normalize_expected_google_sub(options.expected_google_sub.clone())?;
     let config = provider_config(provider)?;
     if !is_allowed_redirect_uri(redirect_uri) {
         return Err(MailFfiError::InvalidRequest(
@@ -206,13 +293,14 @@ pub fn start_oauth(
     let client_secret = resolve_client_secret(provider, "");
     let (verifier, challenge) = generate_pkce();
     let state_token = generate_state();
-    let auth_url = build_authorization_url(
+    let auth_url = build_authorization_url_with_options(
         provider,
         &client_id,
         redirect_uri,
         &challenge,
         &state_token,
         config.scopes,
+        &options,
     )?;
 
     state::pending_pkce().insert(
@@ -223,6 +311,8 @@ pub fn start_oauth(
             client_id,
             client_secret,
             redirect_uri: redirect_uri.to_string(),
+            expected_google_sub,
+            reauthorize_account_id: options.reauthorize_account_id,
             created_at: Instant::now(),
         },
     );
@@ -241,12 +331,25 @@ struct OAuthCompletion<'a> {
 
 impl OAuthCompletion<'_> {
     fn complete(&mut self, state_token: &str, code: &str) -> Result<AccountResponse> {
+        self.complete_with_options(state_token, code, CompleteOAuthOptions::default())
+    }
+
+    fn complete_with_options(
+        &mut self,
+        state_token: &str,
+        code: &str,
+        options: CompleteOAuthOptions,
+    ) -> Result<AccountResponse> {
         if code.trim().is_empty() {
             return Err(MailFfiError::OAuth("empty authorization code".to_string()));
         }
+        let completion_expected_google_sub =
+            normalize_expected_google_sub(options.expected_google_sub)?;
         let entry = state::pending_pkce()
             .take(state_token)
             .ok_or_else(|| MailFfiError::InvalidState(state_token.to_string()))?;
+        let captured_expected_google_sub =
+            normalize_expected_google_sub(entry.expected_google_sub.clone())?;
 
         let config = provider_config(&entry.provider)?;
         let auth_type = format!("oauth2_{}", entry.provider);
@@ -265,6 +368,24 @@ impl OAuthCompletion<'_> {
             .transport
             .fetch_userinfo(config.userinfo_endpoint, &token.access_token)?;
 
+        let expected_google_sub = completion_expected_google_sub.or(captured_expected_google_sub);
+        if entry.provider == "gmail" {
+            if let Some(expected) = expected_google_sub {
+                let actual = userinfo
+                    .subject
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or(MailFfiError::GoogleIdentityMissingSubject)?;
+                if actual != expected {
+                    return Err(MailFfiError::GoogleIdentityMismatch {
+                        expected,
+                        actual: actual.to_string(),
+                    });
+                }
+            }
+        }
+
         let request = CreateAccountRequest {
             email: userinfo.email.clone(),
             display_name: userinfo.name,
@@ -281,8 +402,17 @@ impl OAuthCompletion<'_> {
             oauth2_client_secret: Some(entry.client_secret).filter(|s| !s.is_empty()),
             oauth2_access_token: Some(token.access_token),
             oauth2_refresh_token: token.refresh_token,
+            oauth2_expires_at: token.expires_at,
         };
-        let response = account::create_account(self.conn, self.credential_key, request)?;
+        let response = match entry.reauthorize_account_id {
+            Some(account_id) => account::replace_oauth_credentials(
+                self.conn,
+                self.credential_key,
+                &account_id,
+                request,
+            )?,
+            None => account::create_account(self.conn, self.credential_key, request)?,
+        };
         Ok(response)
     }
 }
@@ -296,12 +426,28 @@ pub fn complete_oauth(
     state_token: &str,
     code: &str,
 ) -> Result<AccountResponse> {
+    complete_oauth_with_options(
+        conn,
+        credential_key,
+        state_token,
+        code,
+        CompleteOAuthOptions::default(),
+    )
+}
+
+pub fn complete_oauth_with_options(
+    conn: &mut Connection,
+    credential_key: &[u8; 32],
+    state_token: &str,
+    code: &str,
+    options: CompleteOAuthOptions,
+) -> Result<AccountResponse> {
     OAuthCompletion {
         conn,
         credential_key,
         transport: &ReqwestTransport,
     }
-    .complete(state_token, code)
+    .complete_with_options(state_token, code, options)
 }
 
 #[cfg(test)]

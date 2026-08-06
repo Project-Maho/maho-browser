@@ -20,29 +20,28 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::time::Duration;
 
 use crate::error::{MailFfiError, Result};
-use crate::oauth::{complete_oauth, start_oauth, StartOAuthResponse};
+use crate::oauth::{
+    complete_oauth, start_oauth_with_options, StartOAuthOptions, StartOAuthResponse,
+};
 use crate::state;
 
-const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+const CALLBACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-const SUCCESS_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n<html><body><h2>Signed in</h2><p>Returning to Maho…</p></body></html>";
+const SUCCESS_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><head><meta charset=\"utf-8\"></head><body><h2>Signed in</h2><p>Returning to Maho\u{2026}</p><script>window.close()</script></body></html>";
 
 /// Bind an ephemeral loopback listener, mint the PKCE authorization URL bound to
 /// `http://127.0.0.1:{port}`, and spawn the background thread that catches the
 /// redirect and completes onboarding. Returns `{state, auth_url}` immediately —
 /// before the redirect arrives — for the C++ layer to open in a tab.
 pub fn sign_in_with_oauth_loopback(provider: &str) -> Result<StartOAuthResponse> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| MailFfiError::OAuth(format!("loopback bind failed: {e}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| MailFfiError::OAuth(format!("loopback local_addr failed: {e}")))?
-        .port();
-    log::info!("[mail-ffi] oauth loopback listening on 127.0.0.1:{port}");
-    let redirect_uri = format!("http://127.0.0.1:{port}");
+    sign_in_with_oauth_loopback_with_options(provider, StartOAuthOptions::default())
+}
 
-    let started = start_oauth(provider, "", &redirect_uri)?;
-
+pub fn sign_in_with_oauth_loopback_with_options(
+    provider: &str,
+    options: StartOAuthOptions,
+) -> Result<StartOAuthResponse> {
+    let (listener, started) = prepare_loopback_oauth(provider, "", options)?;
     let expected_state = started.state.clone();
     let provider_owned = provider.to_string();
     let spawned = std::thread::Builder::new()
@@ -59,6 +58,23 @@ pub fn sign_in_with_oauth_loopback(provider: &str) -> Result<StartOAuthResponse>
     Ok(started)
 }
 
+fn prepare_loopback_oauth(
+    provider: &str,
+    client_id: &str,
+    options: StartOAuthOptions,
+) -> Result<(TcpListener, StartOAuthResponse)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| MailFfiError::OAuth(format!("loopback bind failed: {e}")))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| MailFfiError::OAuth(format!("loopback local_addr failed: {e}")))?
+        .port();
+    log::info!("[mail-ffi] oauth loopback listening on 127.0.0.1:{port}");
+    let redirect_uri = format!("http://127.0.0.1:{port}");
+    let started = start_oauth_with_options(provider, client_id, &redirect_uri, options)?;
+    Ok((listener, started))
+}
+
 fn run_callback_listener(listener: TcpListener, provider: String, expected_state: String) {
     let result = accept_and_complete(&listener, &expected_state);
     state::cancellation_store().remove(&expected_state);
@@ -70,7 +86,8 @@ fn run_callback_listener(listener: TcpListener, provider: String, expected_state
 }
 
 fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<String> {
-    listener.set_nonblocking(true)
+    listener
+        .set_nonblocking(true)
         .map_err(|e| MailFfiError::OAuth(format!("set_nonblocking failed: {e}")))?;
 
     let start_time = std::time::Instant::now();
@@ -80,7 +97,9 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
             return Err(MailFfiError::OAuth("OAuth sign-in cancelled".to_string()));
         }
         if start_time.elapsed() >= CALLBACK_TIMEOUT {
-            return Err(MailFfiError::OAuth("OAuth sign-in timed out waiting for redirect".to_string()));
+            return Err(MailFfiError::OAuth(
+                "OAuth sign-in timed out waiting for redirect".to_string(),
+            ));
         }
 
         match listener.accept() {
@@ -96,7 +115,8 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
         }
     };
 
-    stream.set_nonblocking(false)
+    stream
+        .set_nonblocking(false)
         .map_err(|e| MailFfiError::OAuth(format!("failed to set stream blocking: {e}")))?;
     stream
         .set_read_timeout(Some(CALLBACK_TIMEOUT))
@@ -124,7 +144,7 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
         .pool
         .get()
         .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-    
+
     match complete_oauth(&mut conn, &ctx.credential_key, &callback_state, &code) {
         Ok(account) => {
             write_success_response(&mut stream);
@@ -152,7 +172,7 @@ fn write_success_response(stream: &mut TcpStream) {
 fn write_error_response(stream: &mut TcpStream, msg: &str, status: u16) {
     let body = error_response_body(msg);
     let response = format!(
-        "HTTP/1.1 {} Error\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {} Error\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
         status,
         body.len(),
         body
@@ -279,8 +299,14 @@ mod ulw_t9_tests {
     #[test]
     fn error_body_escapes_html() {
         let out = error_response_body("<script>alert('x')</script>&");
-        assert!(!out.contains("<script>"), "must not reflect raw <script>: {out}");
-        assert!(out.contains("&lt;script&gt;"), "must contain escaped form: {out}");
+        assert!(
+            !out.contains("<script>"),
+            "must not reflect raw <script>: {out}"
+        );
+        assert!(
+            out.contains("&lt;script&gt;"),
+            "must contain escaped form: {out}"
+        );
     }
 
     #[test]

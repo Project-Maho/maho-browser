@@ -7,11 +7,6 @@ interface NewEmailsPayload {
   message_ids: string[];
 }
 
-interface IdleNewMailPayload {
-  account_id: string;
-  exists: number;
-}
-
 interface UseAutoSyncOptions {
   onNewEmails?: (accountId: string, messageIds: string[]) => void;
   onSyncStarted?: () => void;
@@ -22,7 +17,6 @@ interface UseAutoSyncOptions {
   onReminderTriggered?: (items: Array<[string, string]>) => void;
   onSendLaterSent?: (id: string) => void;
   onSendLaterFailed?: (data: { id: string; error: string }) => void;
-  onIdleNewMail?: (accountId: string, exists: number) => void;
 }
 
 type SyncErrorPayload = SyncErrorEvent | string;
@@ -146,19 +140,6 @@ export function useAutoSync(options: UseAutoSyncOptions) {
         unlisteners.push(unlisten);
       }
 
-      {
-        const unlisten = await listen<IdleNewMailPayload>("idle:new-mail", (event) => {
-          if (active) {
-            optionsRef.current.onIdleNewMail?.(event.payload.account_id, event.payload.exists);
-            optionsRef.current.onNewEmails?.(event.payload.account_id, []);
-          }
-        });
-        if (!active) {
-          unlisten();
-          return;
-        }
-        unlisteners.push(unlisten);
-      }
     };
 
     void setup();

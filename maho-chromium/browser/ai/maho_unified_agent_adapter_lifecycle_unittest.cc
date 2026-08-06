@@ -81,6 +81,9 @@ struct FakeAgentState {
   bool session_released = false;
   MahoAgentSecureKey (*secure_storage_cb)(void*, const char*) = nullptr;
   raw_ptr<void> secure_storage_user_data = nullptr;
+  MahoAgentToolResult (*browser_tool_cb)(void*, const char*, const char*) =
+      nullptr;
+  raw_ptr<void> browser_tool_user_data = nullptr;
   bool set_preferred_provider_result = true;
   std::vector<std::optional<std::string>> preferred_providers;
   std::vector<std::string> lifecycle_calls;
@@ -121,8 +124,8 @@ MahoAgentSession* FakeCreateSession(
     void*,
     MahoAgentSecureKey (*secure_storage_cb)(void*, const char*),
     void* secure_storage_user_data,
-    MahoAgentToolResult (*)(void*, const char*, const char*),
-    void*,
+    MahoAgentToolResult (*browser_tool_cb)(void*, const char*, const char*),
+    void* browser_tool_user_data,
     const char*,
     MahoAgentReleaseCallback on_session_release,
     void* session_release_user_data) {
@@ -133,6 +136,8 @@ MahoAgentSession* FakeCreateSession(
     g_fake_agent->session_release_user_data = session_release_user_data;
     g_fake_agent->secure_storage_cb = secure_storage_cb;
     g_fake_agent->secure_storage_user_data = secure_storage_user_data;
+    g_fake_agent->browser_tool_cb = browser_tool_cb;
+    g_fake_agent->browser_tool_user_data = browser_tool_user_data;
   }
   return reinterpret_cast<MahoAgentSession*>(0x2);
 }
@@ -857,6 +862,34 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   EXPECT_EQ(state->result_error, "Agent browser tool callback is stale");
   EXPECT_TRUE(state->result_json.empty());
   EXPECT_EQ(browser_resolution_count, 0);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       SessionBrowserToolTaskUsesActiveTurnGeneration) {
+  adapter_.reset();
+  adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(
+      nullptr, nullptr, base::RepeatingCallback<bool()>(),
+      base::BindRepeating([]() -> Browser* { return nullptr; }));
+  SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
+
+  adapter_->SubmitMessage("first", maho_ai::mojom::ChatIntent::kFreeform,
+                          false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(fake_agent_->created);
+  ASSERT_NE(nullptr, fake_agent_->browser_tool_cb);
+  ASSERT_NE(nullptr, fake_agent_->browser_tool_user_data);
+
+  auto state = std::make_shared<BrowserToolCallState>();
+  base::OnceClosure queued_task = CaptureBrowserToolTask(
+      adapter_.get(), fake_agent_->browser_tool_user_data, "get_active_tab",
+      state);
+  std::move(queued_task).Run();
+
+  EXPECT_TRUE(state->done.IsSignaled());
+  EXPECT_EQ(state->result_error, "No active browser window");
+  EXPECT_TRUE(state->result_json.empty());
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,

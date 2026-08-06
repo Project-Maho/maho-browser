@@ -215,6 +215,61 @@ export function processLinksForSafety(html: string): string {
 }
 
 /**
+ * Rewrites an external http(s) resource URL to the browser's sanitizing image
+ * proxy (chrome://image?url=<original>). Trusted chrome:// WebUI renderers
+ * cannot fetch/decode network images directly, so the browser process fetches
+ * and re-encodes them. Non-http(s) URLs (data:, cid:, blob:, already-proxied)
+ * are returned unchanged.
+ */
+export function toSanitizedImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  return `chrome://image?url=${encodeURIComponent(trimmed)}`;
+}
+
+/**
+ * Routes surviving external images through the sanitizing proxy so they can
+ * actually load inside the trusted WebUI iframe. Operates on img/src,
+ * img|source/srcset, and inline style url() references.
+ */
+export function proxyRemoteImages(doc: Document): void {
+  const rewriteSrcset = (value: string): string =>
+    value
+      .split(",")
+      .map((part) => {
+        const match = part.trim().match(/^(\S+)(.*)$/);
+        if (!match) return part;
+        const proxied = toSanitizedImageUrl(match[1]);
+        return proxied ? `${proxied}${match[2]}` : part;
+      })
+      .join(", ");
+
+  for (const img of Array.from(doc.querySelectorAll("img"))) {
+    const proxied = toSanitizedImageUrl(img.getAttribute("src"));
+    if (proxied) img.setAttribute("src", proxied);
+    const srcset = img.getAttribute("srcset");
+    if (srcset) img.setAttribute("srcset", rewriteSrcset(srcset));
+  }
+  for (const source of Array.from(doc.querySelectorAll("source"))) {
+    const srcset = source.getAttribute("srcset");
+    if (srcset) source.setAttribute("srcset", rewriteSrcset(srcset));
+  }
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>("[style]"))) {
+    const style = el.getAttribute("style");
+    if (!style || !/url\(/i.test(style)) continue;
+    const rewritten = style.replace(
+      /url\(\s*(['"]?)([^)]*)\1\s*\)/gi,
+      (match, _quote, rawUrl) => {
+        const proxied = toSanitizedImageUrl(rawUrl);
+        return proxied ? `url("${proxied}")` : match;
+      },
+    );
+    if (rewritten !== style) el.setAttribute("style", rewritten);
+  }
+}
+
+/**
  * Prepares fully sandboxed HTML content for iframe rendering, wrapping styling and observers.
  */
 export function prepareIframeHtml(
@@ -239,6 +294,12 @@ export function prepareIframeHtml(
   markSuspiciousLinks(doc);
   linkifyEmailAddresses(doc);
 
+  // 2b. When remote images are allowed, route them through the sanitizing
+  // chrome://image proxy so they load inside the trusted WebUI iframe.
+  if (!options.blockImages) {
+    proxyRemoteImages(doc);
+  }
+
   // 3. Inject CSP meta tag and style block into head
   let head = doc.querySelector("head");
   if (!head) {
@@ -248,7 +309,7 @@ export function prepareIframeHtml(
 
   const cspMeta = doc.createElement("meta");
   cspMeta.setAttribute("http-equiv", "Content-Security-Policy");
-  const imgCSP = options.blockImages ? "data: blob: cid:" : "https: data: blob: cid:";
+  const imgCSP = options.blockImages ? "data: blob: cid:" : "chrome://image data: blob: cid:";
   cspMeta.setAttribute(
     "content",
     `default-src 'none'; img-src ${imgCSP}; style-src 'unsafe-inline'; script-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none';`
@@ -263,6 +324,18 @@ export function prepareIframeHtml(
   const fontSize = Math.min(Math.max(options.fontSize ?? 14, 10), 24);
   const style = doc.createElement("style");
   style.textContent = `
+    /*
+     * Render the message body as a readable light island regardless of the
+     * app theme (the behavior Gmail / Apple Mail use in dark mode). Emails are
+     * authored assuming a light background, and a forced dark background here
+     * canNOT recolor the message's own element-level text colors (emails very
+     * commonly hardcode color:#000 on spans/divs/font tags). The old
+     * html.dark body background:#18181b override therefore left dark-authored
+     * text invisible on a dark surface. color-scheme:light keeps UA defaults
+     * (form controls, canvas) light even when the OS/app is dark. Do not
+     * reintroduce a dark background for untrusted email HTML.
+     */
+    html { color-scheme: light; background: #ffffff; }
     body {
       font-family: ${fontFamily};
       font-size: ${fontSize}px;
@@ -272,16 +345,10 @@ export function prepareIframeHtml(
       background: #ffffff;
       color: #18181b;
     }
-    html.dark body {
-      background: #18181b !important;
-      color: #d4d4d8 !important;
-    }
     a { color: #2563eb; }
-    html.dark a { color: #60a5fa !important; }
     .maho-email-link { cursor: pointer; text-decoration: underline; }
     .maho-email-link:hover { opacity: 0.8; }
     img { max-width: 100%; height: auto; }
-    html.dark img { opacity: 0.9; }
     pre { overflow-x: auto; }
     ${LINK_SAFETY_CSS}
   `;

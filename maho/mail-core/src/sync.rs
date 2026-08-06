@@ -170,8 +170,15 @@ fn sync_account_blocking(ctx: &AppCtx, account_id: &str) -> Result<usize> {
     sync_folders(&conn, &resolved)?;
     let folders = sync_targets(&conn, account_id)?;
     let mut inserted = 0usize;
+    let mut new_inbox_mail = false;
     for folder in folders {
-        inserted += sync_folder(&conn, &resolved, &folder)?;
+        let folder_type = folder_type(&conn, &folder.id)?;
+        let folder_inserted = sync_folder(&conn, &resolved, &folder)?;
+        inserted += folder_inserted;
+        new_inbox_mail |= should_emit_new_mail(&folder_type, folder_inserted);
+    }
+    if new_inbox_mail {
+        crate::ffi::emit_new_mail_event(account_id);
     }
     Ok(inserted)
 }
@@ -254,19 +261,41 @@ fn sync_targets(conn: &rusqlite::Connection, account_id: &str) -> Result<Vec<Fol
     Ok(rows.filter_map(std::result::Result::ok).collect())
 }
 
+fn folder_type(conn: &rusqlite::Connection, folder_id: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT folder_type FROM folders WHERE id = ?1",
+        [folder_id],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn should_emit_new_mail(folder_type: &str, inserted: usize) -> bool {
+    folder_type == "inbox" && inserted > 0
+}
+
 fn sync_folder(
     conn: &rusqlite::Connection,
     resolved: &AccountAuth,
     folder: &FolderSyncTarget,
 ) -> Result<usize> {
     let mut client = connect_imap(resolved)?;
-    let since_uid = if folder.uid_validity == 0 {
+    let initial_since_uid = if folder.uid_validity == 0 {
         0
     } else {
         folder.last_synced_uid
     };
-    let (envelopes, server_uid_validity) =
-        client.fetch_envelopes_since_uid(&folder.path, since_uid)?;
+    let (mut envelopes, server_uid_validity) =
+        client.fetch_envelopes_since_uid(&folder.path, initial_since_uid)?;
+
+    let reset_required = folder.uid_validity != 0
+        && server_uid_validity != 0
+        && server_uid_validity != folder.uid_validity;
+    if reset_required {
+        let (reset_envelopes, _) = client.fetch_envelopes_since_uid(&folder.path, 0)?;
+        envelopes = reset_envelopes;
+    }
+
     safe_logout(client);
     insert_envelopes(
         conn,
@@ -284,27 +313,27 @@ fn insert_envelopes(
     envelopes: &[ImapEnvelope],
     server_uid_validity: u32,
 ) -> Result<usize> {
-    if folder.uid_validity != 0 && server_uid_validity != folder.uid_validity {
+    let reset_required = folder.uid_validity != 0
+        && server_uid_validity != 0
+        && server_uid_validity != folder.uid_validity;
+
+    if reset_required {
         conn.execute("DELETE FROM emails WHERE folder_id = ?1", [&folder.id])?;
-        conn.execute(
-            "UPDATE folders SET last_synced_uid = 0, uid_validity = ?1 WHERE id = ?2",
-            params![server_uid_validity as i64, folder.id],
-        )?;
     }
 
-    let existing = existing_message_ids(conn, account_id, envelopes)?;
+    let existing_uids = existing_uids(conn, &folder.id, envelopes)?;
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut inserted = 0usize;
-    let mut max_uid = folder.last_synced_uid;
+    let mut max_uid = if reset_required { 0 } else { folder.last_synced_uid };
     for env in envelopes {
         if env.uid > max_uid {
             max_uid = env.uid;
         }
-        if env.message_id.is_empty() || existing.contains(&env.message_id) {
+        if existing_uids.contains(&env.uid) {
             continue;
         }
         let email_id = Uuid::new_v4().to_string();
-        conn.execute(
+        let inserted_rows = conn.execute(
             "INSERT OR IGNORE INTO emails
              (id, account_id, folder_id, uid, message_id, in_reply_to, subject,
               from_address, from_name, to_addresses, cc_addresses, date, snippet,
@@ -315,7 +344,11 @@ fn insert_envelopes(
                 account_id,
                 folder.id,
                 env.uid as i64,
-                env.message_id,
+                if env.message_id.is_empty() {
+                    Option::<String>::None
+                } else {
+                    Some(env.message_id.clone())
+                },
                 env.in_reply_to,
                 env.subject,
                 env.from_address,
@@ -331,14 +364,18 @@ fn insert_envelopes(
                 now,
             ],
         )?;
-        inserted += 1;
+        if inserted_rows == 0 {
+            continue;
+        }
+        inserted += inserted_rows;
         for att in &env.attachments {
             conn.execute(
-                "INSERT OR IGNORE INTO attachments (id, email_id, filename, mime_type, size, content_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR IGNORE INTO attachments (id, email_id, part_id, filename, mime_type, size, content_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
-                    att.part_id,
+                    Uuid::new_v4().to_string(),
                     email_id,
+                    att.part_id,
                     att.filename,
                     att.mime_type,
                     att.size,
@@ -347,43 +384,48 @@ fn insert_envelopes(
             )?;
         }
     }
+    let effective_uid_validity = if server_uid_validity == 0 {
+        folder.uid_validity
+    } else {
+        server_uid_validity
+    };
     conn.execute(
         "UPDATE folders SET total_count = (SELECT COUNT(*) FROM emails WHERE folder_id = ?1),
              unread_count = (SELECT COUNT(*) FROM emails WHERE folder_id = ?1 AND is_read = 0),
              last_synced_uid = ?2, uid_validity = ?3 WHERE id = ?1",
-        params![folder.id, max_uid as i64, server_uid_validity as i64],
+        params![folder.id, max_uid as i64, effective_uid_validity as i64],
     )?;
     Ok(inserted)
 }
 
-fn existing_message_ids(
+fn existing_uids(
     conn: &rusqlite::Connection,
-    account_id: &str,
+    folder_id: &str,
     envelopes: &[ImapEnvelope],
-) -> Result<std::collections::HashSet<String>> {
-    let ids: Vec<&str> = envelopes
-        .iter()
-        .filter(|env| !env.message_id.is_empty())
-        .map(|env| env.message_id.as_str())
-        .collect();
-    if ids.is_empty() {
+) -> Result<std::collections::HashSet<u32>> {
+    let uids: Vec<u32> = envelopes.iter().map(|env| env.uid).collect();
+    if uids.is_empty() {
         return Ok(std::collections::HashSet::new());
     }
-    let placeholders = std::iter::repeat_n("?", ids.len())
+    let placeholders = std::iter::repeat_n("?", uids.len())
         .collect::<Vec<_>>()
         .join(",");
     let query = format!(
-        "SELECT message_id FROM emails WHERE account_id = ? AND message_id IN ({placeholders})"
+        "SELECT uid FROM emails
+         WHERE folder_id = ? AND uid IN ({placeholders})"
     );
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
-        vec![Box::new(account_id.to_string())];
-    for id in ids {
-        params_vec.push(Box::new(id.to_string()));
+        vec![Box::new(folder_id.to_string())];
+    for uid in uids {
+        params_vec.push(Box::new(uid as i64));
     }
     let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn.prepare(&query)?;
-    let rows = stmt.query_map(refs.as_slice(), |row| row.get::<_, String>(0))?;
-    Ok(rows.filter_map(std::result::Result::ok).collect())
+    let rows = stmt.query_map(refs.as_slice(), |row| row.get::<_, i64>(0))?;
+    Ok(rows
+        .filter_map(std::result::Result::ok)
+        .filter_map(|uid| u32::try_from(uid).ok())
+        .collect())
 }
 
 async fn idle_wait_once(ctx: Arc<AppCtx>, account_id: &str) -> Result<bool> {
@@ -415,10 +457,375 @@ mod tests {
     use super::*;
 
     #[test]
-    fn existing_message_ids_empty_input() {
+    fn existing_uids_empty_input() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         maho_core::db::migrations::run_migrations(&conn).unwrap();
-        let ids = existing_message_ids(&conn, "acc1", &[]).unwrap();
+        let ids = existing_uids(&conn, "inbox", &[]).unwrap();
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn existing_uids_are_scoped_to_folder() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type)
+             VALUES ('all-mail', 'acc1', 'All Mail', '[Gmail]/All Mail', 'archive'),
+                    ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, folder_id, uid, message_id, subject, date)
+             VALUES ('email1', 'acc1', 'all-mail', 10, '<same@example.com>', 'Subject', '2026-07-31T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let envelopes = vec![ImapEnvelope {
+            uid: 10,
+            message_id: "<same@example.com>".to_string(),
+            in_reply_to: None,
+            subject: "Subject".to_string(),
+            from_address: "sender@example.com".to_string(),
+            from_name: None,
+            to_addresses: vec![],
+            cc_addresses: vec![],
+            date: "2026-07-31T00:00:00Z".to_string(),
+            flags: vec![],
+            size: 1,
+            has_attachments: false,
+            attachments: vec![],
+        }];
+
+        let ids = existing_uids(&conn, "inbox", &envelopes).unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn zero_server_uid_validity_does_not_delete_cached_messages() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type, last_synced_uid, uid_validity)
+             VALUES ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox', 10, 1234)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, folder_id, uid, message_id, subject, date)
+             VALUES ('email1', 'acc1', 'inbox', 10, '<cached@example.com>', 'Cached', '2026-07-31T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let folder = FolderSyncTarget {
+            id: "inbox".to_string(),
+            path: "INBOX".to_string(),
+            last_synced_uid: 10,
+            uid_validity: 1234,
+        };
+
+        insert_envelopes(&conn, "acc1", &folder, &[], 0).unwrap();
+
+        let email_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM emails WHERE folder_id = 'inbox'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let uid_validity: i64 = conn
+            .query_row(
+                "SELECT uid_validity FROM folders WHERE id = 'inbox'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(email_count, 1);
+        assert_eq!(uid_validity, 1234);
+    }
+
+    #[test]
+    fn uidvalidity_reset_replaces_messages_and_resets_cursor_atomically() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type, last_synced_uid, uid_validity)
+             VALUES ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox', 99, 1234)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, folder_id, uid, message_id, subject, date)
+             VALUES ('stale', 'acc1', 'inbox', 99, '<stale@example.com>', 'Stale', '2026-07-31T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let folder = FolderSyncTarget {
+            id: "inbox".to_string(),
+            path: "INBOX".to_string(),
+            last_synced_uid: 99,
+            uid_validity: 1234,
+        };
+        let envelopes = vec![ImapEnvelope {
+            uid: 1,
+            message_id: "".to_string(),
+            in_reply_to: None,
+            subject: "Fresh after reset".to_string(),
+            from_address: "sender@example.com".to_string(),
+            from_name: None,
+            to_addresses: vec![],
+            cc_addresses: vec![],
+            date: "2026-08-01T00:00:00Z".to_string(),
+            flags: vec![],
+            size: 1,
+            has_attachments: false,
+            attachments: vec![],
+        }];
+
+        let inserted = insert_envelopes(&conn, "acc1", &folder, &envelopes, 5678).unwrap();
+        assert_eq!(inserted, 1);
+
+        let rows: Vec<(i64, Option<String>)> = conn
+            .prepare("SELECT uid, message_id FROM emails WHERE folder_id = 'inbox' ORDER BY uid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![(1, None)]);
+
+        let (last_synced_uid, uid_validity): (i64, i64) = conn
+            .query_row(
+                "SELECT last_synced_uid, uid_validity FROM folders WHERE id = 'inbox'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(last_synced_uid, 1);
+        assert_eq!(uid_validity, 5678);
+    }
+
+    #[test]
+    fn duplicate_message_ids_and_empty_message_ids_are_preserved_when_uids_differ() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type, last_synced_uid, uid_validity)
+             VALUES ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox', 0, 1234)",
+            [],
+        )
+        .unwrap();
+        let folder = FolderSyncTarget {
+            id: "inbox".to_string(),
+            path: "INBOX".to_string(),
+            last_synced_uid: 0,
+            uid_validity: 1234,
+        };
+        let envelopes = vec![
+            ImapEnvelope {
+                uid: 10,
+                message_id: "<dup@example.com>".to_string(),
+                in_reply_to: None,
+                subject: "First dup".to_string(),
+                from_address: "sender@example.com".to_string(),
+                from_name: None,
+                to_addresses: vec![],
+                cc_addresses: vec![],
+                date: "2026-08-01T00:00:00Z".to_string(),
+                flags: vec![],
+                size: 1,
+                has_attachments: false,
+                attachments: vec![],
+            },
+            ImapEnvelope {
+                uid: 11,
+                message_id: "<dup@example.com>".to_string(),
+                in_reply_to: None,
+                subject: "Second dup".to_string(),
+                from_address: "sender@example.com".to_string(),
+                from_name: None,
+                to_addresses: vec![],
+                cc_addresses: vec![],
+                date: "2026-08-01T00:00:01Z".to_string(),
+                flags: vec![],
+                size: 1,
+                has_attachments: false,
+                attachments: vec![],
+            },
+            ImapEnvelope {
+                uid: 12,
+                message_id: "".to_string(),
+                in_reply_to: None,
+                subject: "Empty id".to_string(),
+                from_address: "sender@example.com".to_string(),
+                from_name: None,
+                to_addresses: vec![],
+                cc_addresses: vec![],
+                date: "2026-08-01T00:00:02Z".to_string(),
+                flags: vec![],
+                size: 1,
+                has_attachments: false,
+                attachments: vec![],
+            },
+        ];
+
+        let inserted = insert_envelopes(&conn, "acc1", &folder, &envelopes, 1234).unwrap();
+        assert_eq!(inserted, 3);
+
+        let rows: Vec<(i64, Option<String>)> = conn
+            .prepare("SELECT uid, message_id FROM emails WHERE folder_id = 'inbox' ORDER BY uid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (10, Some("<dup@example.com>".to_string())),
+                (11, Some("<dup@example.com>".to_string())),
+                (12, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn attachments_store_global_id_and_part_id() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type, last_synced_uid, uid_validity)
+             VALUES ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox', 0, 1234)",
+            [],
+        )
+        .unwrap();
+        let folder = FolderSyncTarget {
+            id: "inbox".to_string(),
+            path: "INBOX".to_string(),
+            last_synced_uid: 0,
+            uid_validity: 1234,
+        };
+        let envelopes = vec![ImapEnvelope {
+            uid: 10,
+            message_id: "<with-att@example.com>".to_string(),
+            in_reply_to: None,
+            subject: "Attachment".to_string(),
+            from_address: "sender@example.com".to_string(),
+            from_name: None,
+            to_addresses: vec![],
+            cc_addresses: vec![],
+            date: "2026-08-01T00:00:00Z".to_string(),
+            flags: vec![],
+            size: 1,
+            has_attachments: true,
+            attachments: vec![maho_core::imap_client::ImapAttachmentMeta {
+                part_id: "2.1".to_string(),
+                filename: Some("file.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                size: 123,
+                content_id: None,
+            }],
+        }];
+
+        insert_envelopes(&conn, "acc1", &folder, &envelopes, 1234).unwrap();
+
+        let (id, part_id, content_id): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT id, part_id, content_id FROM attachments LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_ne!(id, "2.1");
+        assert_eq!(part_id, "2.1");
+        assert_eq!(content_id.as_deref(), Some("2.1"));
+    }
+
+    #[test]
+    fn new_inbox_insertions_emit_arrival_events() {
+        assert!(should_emit_new_mail("inbox", 1));
+        assert!(!should_emit_new_mail("inbox", 0));
+        assert!(!should_emit_new_mail("sent", 1));
+    }
+
+    #[test]
+    fn duplicate_uids_in_one_sync_count_once() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type, last_synced_uid, uid_validity)
+             VALUES ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox', 0, 1234)",
+            [],
+        )
+        .unwrap();
+        let folder = FolderSyncTarget {
+            id: "inbox".to_string(),
+            path: "INBOX".to_string(),
+            last_synced_uid: 0,
+            uid_validity: 1234,
+        };
+        let envelope = |subject: &str| ImapEnvelope {
+            uid: 10,
+            message_id: "<same@example.com>".to_string(),
+            in_reply_to: None,
+            subject: subject.to_string(),
+            from_address: "sender@example.com".to_string(),
+            from_name: None,
+            to_addresses: vec![],
+            cc_addresses: vec![],
+            date: "2026-08-01T00:00:00Z".to_string(),
+            flags: vec![],
+            size: 1,
+            has_attachments: false,
+            attachments: vec![],
+        };
+
+        assert_eq!(
+            insert_envelopes(
+                &conn,
+                "acc1",
+                &folder,
+                &[envelope("first"), envelope("second")],
+                1234,
+            )
+            .unwrap(),
+            1
+        );
     }
 }

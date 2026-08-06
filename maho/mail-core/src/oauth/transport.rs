@@ -22,9 +22,11 @@ pub(crate) struct TokenExchangeRequest<'a> {
 pub(crate) struct TokenExchange {
     pub access_token: String,
     pub refresh_token: Option<String>,
+    pub expires_at: Option<String>,
 }
 
 pub(crate) struct UserInfo {
+    pub subject: Option<String>,
     pub email: String,
     pub name: String,
 }
@@ -42,6 +44,8 @@ impl OAuthTransport for ReqwestTransport {
         struct TokenResp {
             access_token: String,
             refresh_token: Option<String>,
+            expires_in: Option<i64>,
+            expires_at: Option<String>,
         }
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -72,15 +76,27 @@ impl OAuthTransport for ReqwestTransport {
         let token: TokenResp = resp
             .json()
             .map_err(|e| MailFfiError::OAuth(format!("token parse: {e}")))?;
+        let expires_at = token.expires_at.or_else(|| {
+            token.expires_in.and_then(|secs| {
+                chrono::Duration::seconds(secs)
+                    .to_std()
+                    .ok()
+                    .and_then(|duration| chrono::Utc::now().checked_add_signed(chrono::Duration::from_std(duration).ok()?))
+                    .map(|dt| dt.to_rfc3339())
+            })
+        });
         Ok(TokenExchange {
             access_token: token.access_token,
             refresh_token: token.refresh_token,
+            expires_at,
         })
     }
 
     fn fetch_userinfo(&self, userinfo_url: &str, access_token: &str) -> Result<UserInfo> {
         #[derive(Deserialize)]
         struct UserInfoResp {
+            #[serde(rename = "sub")]
+            subject: Option<String>,
             email: String,
             name: Option<String>,
         }
@@ -103,6 +119,7 @@ impl OAuthTransport for ReqwestTransport {
             .json()
             .map_err(|e| MailFfiError::OAuth(format!("userinfo parse: {e}")))?;
         Ok(UserInfo {
+            subject: info.subject,
             email: info.email,
             name: info.name.unwrap_or_default(),
         })

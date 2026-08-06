@@ -34,16 +34,34 @@ fn best_candidate_excludes_false_positive_matrix() {
         ("year_low", "Your verification code expired back in 2000."),
         ("year_mid", "Your security notice references 2024 filings."),
         ("year_high", "Login policy for 2099 renewal was updated."),
-        ("zip_keyword", "Your security alert: shipping zip 94105 changed."),
+        (
+            "zip_keyword",
+            "Your security alert: shipping zip 94105 changed.",
+        ),
         (
             "zip_plus_four",
             "Verification receipt for billing postal 94105-1234.",
         ),
-        ("zip_state_form", "Security notice: delivered to CA 94105 today."),
-        ("phone_paren", "For your security, call +1 (415) 555-2671 now."),
-        ("phone_dashes", "Verification hotline is 415-555-2671 today."),
-        ("phone_dotted", "Security desk verification line: 415.555.2671."),
-        ("price_cents", "Your security deposit of $4521 was received."),
+        (
+            "zip_state_form",
+            "Security notice: delivered to CA 94105 today.",
+        ),
+        (
+            "phone_paren",
+            "For your security, call +1 (415) 555-2671 now.",
+        ),
+        (
+            "phone_dashes",
+            "Verification hotline is 415-555-2671 today.",
+        ),
+        (
+            "phone_dotted",
+            "Security desk verification line: 415.555.2671.",
+        ),
+        (
+            "price_cents",
+            "Your security deposit of $4521 was received.",
+        ),
         (
             "price_big",
             "Verification code total charged: $123456.00 today.",
@@ -309,5 +327,8 @@ fn domain_binding_covers_not_evaluated_and_trusted_sender_and_link_cases() {
         received_at: received_at(),
         now: received_at(),
     };
-    assert_eq!(domain_binding(&link_subdomain), DomainBinding::LinkSubdomain);
+    assert_eq!(
+        domain_binding(&link_subdomain),
+        DomainBinding::LinkSubdomain
+    );
 }

@@ -34,7 +34,7 @@ pub fn list_emails(
                 date, snippet, is_read, is_starred, is_draft, has_attachments
          FROM emails
          WHERE account_id = ?1 AND folder_id = ?2
-         ORDER BY date DESC
+         ORDER BY uid DESC
          LIMIT ?3 OFFSET ?4",
     )?;
     let emails = stmt
@@ -130,7 +130,7 @@ pub fn get_email_from_db(
         .map_err(|_| AppError::NotFound(format!("Email {email_id} not found")))?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, email_id, filename, mime_type, size, content_id
+        "SELECT id, email_id, part_id, filename, mime_type, size, content_id
           FROM attachments WHERE email_id = ?1",
     )?;
     let attachments = stmt
@@ -138,6 +138,7 @@ pub fn get_email_from_db(
             Ok(Attachment {
                 id: row.get("id")?,
                 email_id: row.get("email_id")?,
+                part_id: row.get("part_id")?,
                 filename: row.get("filename")?,
                 mime_type: row.get("mime_type")?,
                 size: row.get("size")?,
@@ -297,9 +298,9 @@ pub fn get_emails_needing_body_fetch(
     conn: &rusqlite::Connection,
     account_id: &str,
     limit: i64,
-) -> Result<Vec<(String, String, String, i64)>, AppError> {
+) -> Result<Vec<(String, String, i64)>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT e.id, e.message_id, f.path, e.uid
+        "SELECT e.id, f.path, e.uid
          FROM emails e
          JOIN folders f ON e.folder_id = f.id
          WHERE e.account_id = ?1 AND e.body_fetched_at IS NULL
@@ -312,8 +313,7 @@ pub fn get_emails_needing_body_fetch(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(2)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -368,6 +368,27 @@ mod tests {
     }
 
     #[test]
+    fn test_list_emails_orders_rfc2822_dates_by_uid() {
+        let conn = setup_test_db();
+        seed_test_data(&conn);
+        conn.execute(
+            "UPDATE emails SET uid = 100, date = 'Fri, 31 Jul 2026 09:00:00 +0900' WHERE id = 'em1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE emails SET uid = 99, date = 'Thu, 30 Jul 2026 23:00:00 +0900' WHERE id = 'em2'",
+            [],
+        )
+        .unwrap();
+
+        let emails = list_emails(&conn, "acc1", "fold1", 10, 0).unwrap();
+
+        assert_eq!(emails[0].id, "em1");
+        assert_eq!(emails[1].id, "em2");
+    }
+
+    #[test]
     fn test_get_email_from_db() {
         let conn = setup_test_db();
         seed_test_data(&conn);
@@ -377,6 +398,7 @@ mod tests {
         assert_eq!(email.from_address, "sender@example.com");
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].id, "att1");
+        assert_eq!(attachments[0].part_id, "1");
         assert!(!needs_fetch);
     }
 
@@ -553,13 +575,15 @@ mod tests {
         let needing_fetch_acc1 = get_emails_needing_body_fetch(&conn, "acc1", 10).unwrap();
         assert_eq!(needing_fetch_acc1.len(), 1);
         assert_eq!(needing_fetch_acc1[0].0, "em4");
-        assert_eq!(needing_fetch_acc1[0].1, "<msg4@example.com>");
+        assert_eq!(needing_fetch_acc1[0].1, "INBOX");
+        assert_eq!(needing_fetch_acc1[0].2, 4);
 
         // Should only return emails for acc2, not acc1
         let needing_fetch_acc2 = get_emails_needing_body_fetch(&conn, "acc2", 10).unwrap();
         assert_eq!(needing_fetch_acc2.len(), 1);
         assert_eq!(needing_fetch_acc2[0].0, "em5");
-        assert_eq!(needing_fetch_acc2[0].1, "<msg5@example.com>");
+        assert_eq!(needing_fetch_acc2[0].1, "INBOX");
+        assert_eq!(needing_fetch_acc2[0].2, 5);
     }
 
     #[test]

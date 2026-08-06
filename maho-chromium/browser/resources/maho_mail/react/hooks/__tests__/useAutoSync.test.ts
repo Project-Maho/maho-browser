@@ -47,8 +47,8 @@ describe("useAutoSync", () => {
     expect(listen).toHaveBeenCalledWith("reminder-triggered", expect.any(Function));
     expect(listen).toHaveBeenCalledWith("send-later-sent", expect.any(Function));
     expect(listen).toHaveBeenCalledWith("send-later-failed", expect.any(Function));
-    expect(listen).toHaveBeenCalledWith("idle:new-mail", expect.any(Function));
-    expect(listen).toHaveBeenCalledTimes(9);
+    expect(listen).not.toHaveBeenCalledWith("idle:new-mail", expect.any(Function));
+    expect(listen).toHaveBeenCalledTimes(8);
   });
 
   it("only registers listeners for provided callbacks", async () => {
@@ -67,8 +67,7 @@ describe("useAutoSync", () => {
     });
 
     expect(listen).toHaveBeenCalledWith("new-emails", expect.any(Function));
-    // Hook also registers snooze-triggered, reminder-triggered, send-later-sent, send-later-failed, idle:new-mail unconditionally
-    expect(listen).toHaveBeenCalledTimes(6);
+    expect(listen).toHaveBeenCalledTimes(5);
   });
 
   it("calls onNewEmails when event fires", async () => {

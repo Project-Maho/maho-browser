@@ -25,6 +25,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/mail_helper/maho_mail_service_factory.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_mail/maho_mail_oauth_session.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "base/functional/callback_helpers.h"
@@ -80,10 +81,8 @@ MahoMailPageHandler::~MahoMailPageHandler() {
   // Stop new maho-core callbacks first, then cancel the handle so any in-flight
   // thunk that already loaded its shared_ptr copy short-circuits (UAF-safe).
   if (settings_change_callback_token_ != 0) {
-    if (MahoCore* core = maho::GetCore()) {
-      maho_core_unregister_settings_change_callback(
-          core, settings_change_callback_token_);
-    }
+    maho_core_unregister_settings_change_callback(
+        maho::GetCore(), settings_change_callback_token_);
     settings_change_callback_token_ = 0;
   }
   if (settings_change_handle_) {
@@ -161,7 +160,12 @@ void MahoMailPageHandler::OAuthStartUrl(const std::string& provider,
     std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
-  service->OAuthStartUrl(provider, client_id, redirect_uri, base::BindOnce(
+  const std::string options_json =
+      provider == "gmail"
+          ? maho::auth::BuildMailOAuthStartOptionsJson(profile_->GetPrefs())
+          : "{}";
+  service->OAuthStartUrl(provider, client_id, redirect_uri, options_json,
+                         base::BindOnce(
       [](OAuthStartUrlCallback cb, bool ok, std::string result) {
         std::move(cb).Run(ok, std::move(result));
       },
@@ -169,6 +173,7 @@ void MahoMailPageHandler::OAuthStartUrl(const std::string& provider,
 }
 
 void MahoMailPageHandler::BeginOAuth(const std::string& provider,
+                                     const std::string& reauthorize_account_id,
                                      BeginOAuthCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::MahoMailService* service = GetMailService();
@@ -176,8 +181,17 @@ void MahoMailPageHandler::BeginOAuth(const std::string& provider,
     std::move(callback).Run(false, "Mail service unavailable", std::string());
     return;
   }
+  std::string options_json =
+      provider == "gmail"
+          ? maho::auth::BuildMailOAuthStartOptionsJson(profile_->GetPrefs())
+          : "{}";
+  if (!reauthorize_account_id.empty()) {
+    base::DictValue options;
+    options.Set("reauthorize_account_id", reauthorize_account_id);
+    base::JSONWriter::Write(options, &options_json);
+  }
   service->OAuthLoopbackSignIn(
-      provider,
+      provider, options_json,
       base::BindOnce(
           [](base::WeakPtr<MahoMailPageHandler> self, Profile* profile,
              BeginOAuthCallback cb, bool ok, std::string result) {
@@ -245,11 +259,47 @@ void MahoMailPageHandler::ReconnectAccount(const std::string& account_id, Reconn
     std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
-  service->ReconnectAccount(account_id, base::BindOnce(
-      [](ReconnectAccountCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
+  base::DictValue options;
+  options.Set("reauthorize_account_id", account_id);
+  std::string options_json;
+  base::JSONWriter::Write(options, &options_json);
+  service->OAuthLoopbackSignIn(
+      "gmail", options_json,
+      base::BindOnce(
+          [](base::WeakPtr<MahoMailPageHandler> self, Profile* profile,
+             ReconnectAccountCallback cb, bool ok, std::string result) {
+            if (!ok) {
+              std::move(cb).Run(false, std::move(result));
+              return;
+            }
+            maho::MahoMailOAuthSession::StartResult start =
+                maho::MahoMailOAuthSession::ParseStartResult(result);
+            if (!start.ok) {
+              std::move(cb).Run(false, std::move(start.error_json));
+              return;
+            }
+            if (!self || !self->web_contents_) {
+              std::move(cb).Run(false, "Mail surface unavailable");
+              return;
+            }
+            auto cancel_closure = base::BindOnce(
+                [](Profile* prof, std::string state) {
+                  maho::MahoMailService* mail_service =
+                      maho::MahoMailServiceFactory::GetForProfileIfExists(prof);
+                  if (mail_service) {
+                    mail_service->OAuthCancel(state, base::DoNothing());
+                  }
+                },
+                profile, start.state);
+            maho::MahoMailOAuthSession::CreateForWebContents(
+                self->web_contents_, start.state, std::move(cancel_closure));
+            std::move(cb).Run(true, "null");
+
+            content::NavigationController::LoadURLParams params(start.auth_url);
+            params.transition_type = ui::PAGE_TRANSITION_LINK;
+            self->web_contents_->GetController().LoadURLWithParams(params);
+          },
+          weak_factory_.GetWeakPtr(), profile_, std::move(callback)));
 }
 
 void MahoMailPageHandler::OnAuthRequired(const std::string& account_id,
@@ -1704,84 +1754,6 @@ void MahoMailPageHandler::TestAiConnection(const std::string& config_json, TestA
   }
   service->TestAiConnection(config_json, base::BindOnce(
       [](TestAiConnectionCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
-}
-
-void MahoMailPageHandler::ListAgentSessions(const std::string& account_id, ListAgentSessionsCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
-    return;
-  }
-  service->ListAgentSessions(account_id, base::BindOnce(
-      [](ListAgentSessionsCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
-}
-
-void MahoMailPageHandler::GetAgentMessages(const std::string& account_id, const std::string& session_id, GetAgentMessagesCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
-    return;
-  }
-  service->GetAgentMessages(account_id, session_id, base::BindOnce(
-      [](GetAgentMessagesCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
-}
-
-void MahoMailPageHandler::CreateAgentSession(const std::string& account_id, CreateAgentSessionCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
-    return;
-  }
-  service->CreateAgentSession(account_id, base::BindOnce(
-      [](CreateAgentSessionCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
-}
-
-void MahoMailPageHandler::DeleteAgentSession(const std::string& account_id, const std::string& session_id, DeleteAgentSessionCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
-    return;
-  }
-  service->DeleteAgentSession(account_id, session_id, base::BindOnce(
-      [](DeleteAgentSessionCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
-}
-
-void MahoMailPageHandler::SendAgentMessage(const std::string& account_id, const std::string& session_id, const std::string& content, SendAgentMessageCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
-    return;
-  }
-  service->SendAgentMessage(account_id, session_id, content, base::BindOnce(
-      [](SendAgentMessageCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
-}
-
-void MahoMailPageHandler::CancelAgentMessage(const std::string& account_id, const std::string& session_id, CancelAgentMessageCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
-    return;
-  }
-  service->CancelAgentMessage(account_id, session_id, base::BindOnce(
-      [](CancelAgentMessageCallback cb, bool ok, std::string result) {
         std::move(cb).Run(ok, std::move(result));
       },
       std::move(callback)));

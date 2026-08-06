@@ -7,8 +7,10 @@
 
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/grit/maho_mail_resources.h"
 #include "chrome/grit/maho_mail_resources_map.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
@@ -39,6 +41,14 @@ WEB_UI_CONTROLLER_TYPE_IMPL(MahoMailUI)
 MahoMailUI::MahoMailUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
   Profile* profile = Profile::FromWebUI(web_ui);
+  // Trusted chrome:// WebUI renderers are not allowed to fetch and decode
+  // external network images directly (such loads fail with
+  // ERR_BLOCKED_BY_CLIENT). Register the shared sanitizing image proxy so the
+  // email body can request remote images as chrome://image?url=<original>:
+  // the browser process fetches the bytes, an isolated utility process decodes
+  // and re-encodes them, and only the sanitized bitmap reaches the renderer.
+  content::URLDataSource::Add(profile,
+                              std::make_unique<SanitizedImageSource>(profile));
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, maho::kMahoMailHost);
   webui::SetupWebUIDataSource(source, kMahoMailResources,
@@ -50,9 +60,10 @@ MahoMailUI::MahoMailUI(content::WebUI* web_ui)
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
       base::StrCat({webui::kDefaultTrustedTypesPolicies, " maho-mail-app default;"}));
-  source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::ImgSrc,
-      "img-src 'self' chrome-res: data: blob:;");
+  // Remote images load through the sanitizing chrome://image proxy, never as
+  // direct network requests from this trusted renderer. SetupWebUIDataSource's
+  // default trusted img-src already allowlists chrome://image (plus 'self',
+  // data:, blob:), so it is intentionally not overridden here.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::MediaSrc,
       "media-src 'self' chrome-res: data: blob:;");

@@ -1,9 +1,9 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-use std::ffi::{c_void, CStr};
-use std::os::raw::c_char;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::ffi::{c_void, CStr};
+use std::os::raw::c_char;
 use uuid::Uuid;
 
 use crate::error::{MailFfiError, Result};
@@ -88,7 +88,10 @@ pub extern "C" fn MahoMailSearchContacts(
         let limit = if limit > 0 { limit } else { 10 };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let pattern = format!("%{}%", query);
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, email, name, frequency, last_contacted_at, is_vip, created_at, updated_at
@@ -118,7 +121,10 @@ pub extern "C" fn MahoMailToggleVip(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE contacts SET is_vip = CASE WHEN is_vip = 1 THEN 0 ELSE 1 END, updated_at = datetime('now') WHERE id = ?1",
                     params![contact_id],
@@ -141,7 +147,10 @@ pub extern "C" fn MahoMailListVipContacts(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, email, name, frequency, last_contacted_at, is_vip, created_at, updated_at
                      FROM contacts
@@ -169,7 +178,10 @@ pub extern "C" fn MahoMailPopulateContactsFromHistory(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 let mut stmt = conn.prepare(
                     "SELECT from_address, from_name, COUNT(*) as freq, MAX(date) as last_date
@@ -231,14 +243,18 @@ pub extern "C" fn MahoMailListContactGroups(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, name, member_emails_json, created_at, updated_at FROM contact_groups WHERE account_id = ?1 ORDER BY name ASC"
                 )?;
                 let rows = stmt
                     .query_map(params![account_id], |row| {
                         let emails_json: String = row.get("member_emails_json")?;
-                        let member_emails: Vec<String> = serde_json::from_str(&emails_json).unwrap_or_default();
+                        let member_emails: Vec<String> =
+                            serde_json::from_str(&emails_json).unwrap_or_default();
                         Ok(ContactGroup {
                             id: row.get("id")?,
                             account_id: row.get("account_id")?,
@@ -271,7 +287,10 @@ pub extern "C" fn MahoMailSearchContactGroups(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let pattern = format!("%{}%", query);
                 let mut stmt = conn.prepare(
                     "SELECT id, account_id, name, member_emails_json, created_at, updated_at FROM contact_groups WHERE account_id = ?1 AND name LIKE ?2 ORDER BY name ASC LIMIT 10"
@@ -279,7 +298,8 @@ pub extern "C" fn MahoMailSearchContactGroups(
                 let rows = stmt
                     .query_map(params![account_id, pattern], |row| {
                         let emails_json: String = row.get("member_emails_json")?;
-                        let member_emails: Vec<String> = serde_json::from_str(&emails_json).unwrap_or_default();
+                        let member_emails: Vec<String> =
+                            serde_json::from_str(&emails_json).unwrap_or_default();
                         Ok(ContactGroup {
                             id: row.get("id")?,
                             account_id: row.get("account_id")?,
@@ -319,7 +339,10 @@ pub extern "C" fn MahoMailCreateContactGroup(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let id = Uuid::new_v4().to_string();
                 let emails_json = serde_json::to_string(&member_emails)?;
                 conn.execute(
@@ -371,7 +394,10 @@ pub extern "C" fn MahoMailUpdateContactGroup(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let emails_json = serde_json::to_string(&member_emails)?;
                 conn.execute(
                     "UPDATE contact_groups SET name = ?1, member_emails_json = ?2, updated_at = datetime('now') WHERE id = ?3",
@@ -411,7 +437,10 @@ pub extern "C" fn MahoMailDeleteContactGroup(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "DELETE FROM contact_groups WHERE id = ?1",
                     params![group_id],
@@ -475,7 +504,10 @@ pub extern "C" fn MahoMailListSignatures(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if let Some(ref aid) = account_id_opt {
                     let mut stmt = conn.prepare(
                         "SELECT id, account_id, name, body_html, body_text, is_default, created_at, updated_at
@@ -517,7 +549,10 @@ pub extern "C" fn MahoMailCreateSignature(
             blocking_json(move || {
                 let id = Uuid::new_v4().to_string();
                 let is_default = request.is_default.unwrap_or(false);
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 if is_default {
                     conn.execute(
@@ -562,7 +597,10 @@ pub extern "C" fn MahoMailUpdateSignature(
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
                 let is_default = request.is_default.unwrap_or(false);
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 if is_default {
                     conn.execute(
@@ -599,7 +637,10 @@ pub extern "C" fn MahoMailDeleteSignature(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute("DELETE FROM signatures WHERE id = ?1", params![id])?;
                 Ok("{}".to_string())
             })
@@ -650,7 +691,10 @@ pub extern "C" fn MahoMailListTemplates(
     accept_read_call(move || {
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, name, subject, body_html, body_text, created_at, updated_at
                      FROM email_templates ORDER BY name ASC",
@@ -680,7 +724,10 @@ pub extern "C" fn MahoMailCreateTemplate(
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
                 let id = Uuid::new_v4().to_string();
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "INSERT INTO email_templates (id, name, subject, body_html, body_text) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![id, request.name, request.subject, request.body_html, request.body_text],
@@ -716,7 +763,10 @@ pub extern "C" fn MahoMailUpdateTemplate(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute(
                     "UPDATE email_templates SET name = ?1, subject = ?2, body_html = ?3, body_text = ?4, updated_at = datetime('now') WHERE id = ?5",
                     params![request.name, request.subject, request.body_html, request.body_text, id],
@@ -745,7 +795,10 @@ pub extern "C" fn MahoMailDeleteTemplate(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let conn = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 conn.execute("DELETE FROM email_templates WHERE id = ?1", params![id])?;
                 Ok("{}".to_string())
             })
@@ -799,7 +852,9 @@ mod tests {
         let payload = if json.is_null() {
             String::new()
         } else {
-            unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()
+            unsafe { CStr::from_ptr(json) }
+                .to_string_lossy()
+                .into_owned()
         };
         capture.count.fetch_add(1, Ordering::SeqCst);
         *capture.slot.lock().unwrap() = Some((ok, payload));
@@ -819,7 +874,11 @@ mod tests {
         // 1. List initially empty
         let capture = Capture::new();
         let c_acc = std::ffi::CString::new("acc1").unwrap();
-        assert!(MahoMailListSignatures(c_acc.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailListSignatures(
+            c_acc.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let signatures: Vec<Signature> = serde_json::from_str(&json).unwrap();
@@ -835,7 +894,11 @@ mod tests {
         };
         let req_json = std::ffi::CString::new(serde_json::to_string(&req).unwrap()).unwrap();
         let capture = Capture::new();
-        assert!(MahoMailCreateSignature(req_json.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailCreateSignature(
+            req_json.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let created: Signature = serde_json::from_str(&json).unwrap();
@@ -850,10 +913,16 @@ mod tests {
             body_text: "Best regards v2".to_string(),
             is_default: Some(false),
         };
-        let req_update_json = std::ffi::CString::new(serde_json::to_string(&req_update).unwrap()).unwrap();
+        let req_update_json =
+            std::ffi::CString::new(serde_json::to_string(&req_update).unwrap()).unwrap();
         let id_c = std::ffi::CString::new(created.id.clone()).unwrap();
         let capture = Capture::new();
-        assert!(MahoMailUpdateSignature(id_c.as_ptr(), req_update_json.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailUpdateSignature(
+            id_c.as_ptr(),
+            req_update_json.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let updated: Signature = serde_json::from_str(&json).unwrap();
@@ -862,7 +931,11 @@ mod tests {
 
         // 4. Delete signature
         let capture = Capture::new();
-        assert!(MahoMailDeleteSignature(id_c.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailDeleteSignature(
+            id_c.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, _) = capture.wait(5000).expect("callback fired");
         assert!(ok);
     }
@@ -873,7 +946,10 @@ mod tests {
 
         // 1. List initially empty
         let capture = Capture::new();
-        assert!(MahoMailListTemplates(Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailListTemplates(
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let templates: Vec<EmailTemplate> = serde_json::from_str(&json).unwrap();
@@ -888,7 +964,11 @@ mod tests {
         };
         let req_json = std::ffi::CString::new(serde_json::to_string(&req).unwrap()).unwrap();
         let capture = Capture::new();
-        assert!(MahoMailCreateTemplate(req_json.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailCreateTemplate(
+            req_json.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let created: EmailTemplate = serde_json::from_str(&json).unwrap();
@@ -901,10 +981,16 @@ mod tests {
             body_html: "<p>Hi v2!</p>".to_string(),
             body_text: "Hi v2!".to_string(),
         };
-        let req_update_json = std::ffi::CString::new(serde_json::to_string(&req_update).unwrap()).unwrap();
+        let req_update_json =
+            std::ffi::CString::new(serde_json::to_string(&req_update).unwrap()).unwrap();
         let id_c = std::ffi::CString::new(created.id.clone()).unwrap();
         let capture = Capture::new();
-        assert!(MahoMailUpdateTemplate(id_c.as_ptr(), req_update_json.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailUpdateTemplate(
+            id_c.as_ptr(),
+            req_update_json.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let updated: EmailTemplate = serde_json::from_str(&json).unwrap();
@@ -912,7 +998,11 @@ mod tests {
 
         // 4. Delete template
         let capture = Capture::new();
-        assert!(MahoMailDeleteTemplate(id_c.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailDeleteTemplate(
+            id_c.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, _) = capture.wait(5000).expect("callback fired");
         assert!(ok);
     }
@@ -923,12 +1013,19 @@ mod tests {
 
         // 1. Create a contact group
         let member_emails = vec!["a@example.com".to_string(), "b@example.com".to_string()];
-        let member_emails_json = std::ffi::CString::new(serde_json::to_string(&member_emails).unwrap()).unwrap();
+        let member_emails_json =
+            std::ffi::CString::new(serde_json::to_string(&member_emails).unwrap()).unwrap();
         let acc_c = std::ffi::CString::new("acc1").unwrap();
         let name_c = std::ffi::CString::new("Test Group").unwrap();
 
         let capture = Capture::new();
-        assert!(MahoMailCreateContactGroup(acc_c.as_ptr(), name_c.as_ptr(), member_emails_json.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailCreateContactGroup(
+            acc_c.as_ptr(),
+            name_c.as_ptr(),
+            member_emails_json.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let created: ContactGroup = serde_json::from_str(&json).unwrap();
@@ -938,7 +1035,12 @@ mod tests {
         // 2. Search contact groups
         let query_c = std::ffi::CString::new("Test").unwrap();
         let capture = Capture::new();
-        assert!(MahoMailSearchContactGroups(acc_c.as_ptr(), query_c.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailSearchContactGroups(
+            acc_c.as_ptr(),
+            query_c.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let groups: Vec<ContactGroup> = serde_json::from_str(&json).unwrap();
@@ -947,12 +1049,19 @@ mod tests {
 
         // 3. Update contact group
         let updated_emails = vec!["c@example.com".to_string()];
-        let updated_emails_json = std::ffi::CString::new(serde_json::to_string(&updated_emails).unwrap()).unwrap();
+        let updated_emails_json =
+            std::ffi::CString::new(serde_json::to_string(&updated_emails).unwrap()).unwrap();
         let new_name_c = std::ffi::CString::new("Updated Group").unwrap();
         let id_c = std::ffi::CString::new(created.id.clone()).unwrap();
 
         let capture = Capture::new();
-        assert!(MahoMailUpdateContactGroup(id_c.as_ptr(), new_name_c.as_ptr(), updated_emails_json.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailUpdateContactGroup(
+            id_c.as_ptr(),
+            new_name_c.as_ptr(),
+            updated_emails_json.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, json) = capture.wait(5000).expect("callback fired");
         assert!(ok);
         let updated: ContactGroup = serde_json::from_str(&json).unwrap();
@@ -961,7 +1070,11 @@ mod tests {
 
         // 4. Delete contact group
         let capture = Capture::new();
-        assert!(MahoMailDeleteContactGroup(id_c.as_ptr(), Some(capture_cb), capture.as_user_data()));
+        assert!(MahoMailDeleteContactGroup(
+            id_c.as_ptr(),
+            Some(capture_cb),
+            capture.as_user_data()
+        ));
         let (ok, _) = capture.wait(5000).expect("callback fired");
         assert!(ok);
     }

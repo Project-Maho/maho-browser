@@ -700,19 +700,8 @@ impl ImapClient {
         Ok(())
     }
 
-    pub fn fetch_body_by_message_id(&mut self, folder: &str, message_id: &str) -> BodyFetchResult {
+    pub fn fetch_body_by_uid(&mut self, folder: &str, uid: u32) -> BodyFetchResult {
         self.select_folder_if_needed(folder)?;
-
-        let search_query = format!("HEADER Message-ID \"{}\"", message_id);
-        let uids = self
-            .session()
-            .uid_search(&search_query)
-            .map_err(|e| AppError::Network(e.to_string()))?;
-
-        let uid = match uids.into_iter().next() {
-            Some(uid) => uid,
-            None => return Ok(None),
-        };
 
         let messages = self
             .session()
@@ -739,23 +728,12 @@ impl ImapClient {
         Ok(Some((body_text, body_html)))
     }
 
-    pub fn fetch_body_with_mdn(
+    pub fn fetch_body_with_mdn_by_uid(
         &mut self,
         folder: &str,
-        message_id: &str,
+        uid: u32,
     ) -> Result<Option<BodyFetchWithMdn>, AppError> {
         self.select_folder_if_needed(folder)?;
-
-        let search_query = format!("HEADER Message-ID \"{}\"", message_id);
-        let uids = self
-            .session()
-            .uid_search(&search_query)
-            .map_err(|e| AppError::Network(e.to_string()))?;
-
-        let uid = match uids.into_iter().next() {
-            Some(uid) => uid,
-            None => return Ok(None),
-        };
 
         let messages = self
             .session()

@@ -27,6 +27,8 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "components/vector_icons/vector_icons.h"
+#include "components/prefs/pref_service.h"
+#include "ui/views/controls/dot_indicator.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
@@ -245,6 +247,28 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   mail_button_->SetVisible(
       browser_ && sidebar_prefs::IsMahoMailEnabled(
                       browser_->profile()->GetPrefs()));
+  // Unread indicator dot overlaid on the Mail button, driven by the
+  // `maho.mail.unread_count` pref that MahoMailService keeps up to date.
+  mail_unread_dot_ = views::DotIndicator::Install(mail_button_);
+  mail_unread_dot_->SetColor(gfx::kGoogleRed600, SK_ColorTRANSPARENT);
+  {
+    constexpr int kDotSizeDp = 8;
+    const int side = sidebar_layout::kTopBarButtonSizeDp;
+    mail_unread_dot_->SetBoundsRect(
+        gfx::Rect(side - kDotSizeDp - 2, 2, kDotSizeDp, kDotSizeDp));
+  }
+  if (browser_) {
+    mail_pref_registrar_.Init(browser_->profile()->GetPrefs());
+    mail_pref_registrar_.Add(
+        "maho.mail.unread_count",
+        base::BindRepeating(&MahoSidebarTopBarView::UpdateMailUnreadBadge,
+                            weak_factory_.GetWeakPtr()));
+    mail_pref_registrar_.Add(
+        "maho.mail.badge_enabled",
+        base::BindRepeating(&MahoSidebarTopBarView::UpdateMailUnreadBadge,
+                            weak_factory_.GetWeakPtr()));
+  }
+  UpdateMailUnreadBadge();
   ai_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
@@ -570,6 +594,24 @@ void MahoSidebarTopBarView::ResetAppMenu(int generation) {
 void MahoSidebarTopBarView::SetPrivateAppearance() {
   if (mail_button_) {
     mail_button_->SetVisible(false);
+  }
+}
+
+void MahoSidebarTopBarView::UpdateMailUnreadBadge() {
+  if (!mail_unread_dot_ || !browser_) {
+    return;
+  }
+  const bool mail_enabled =
+      sidebar_prefs::IsMahoMailEnabled(browser_->profile()->GetPrefs());
+  const bool badge_enabled =
+      browser_->profile()->GetPrefs()->GetBoolean("maho.mail.badge_enabled");
+  const int unread =
+      browser_->profile()->GetPrefs()->GetInteger("maho.mail.unread_count");
+  if (mail_enabled && badge_enabled && mail_button_ &&
+      mail_button_->GetVisible() && unread > 0) {
+    mail_unread_dot_->Show();
+  } else {
+    mail_unread_dot_->Hide();
   }
 }
 

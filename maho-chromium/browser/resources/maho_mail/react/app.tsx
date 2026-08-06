@@ -75,7 +75,6 @@ import { ShortcutCheatsheet } from "./components/ui/ShortcutCheatsheet";
 import { useTheme } from "./hooks/useTheme";
 import { useSettings } from "./hooks/useSettings";
 import { useAppUpdate } from "./hooks/useAppUpdate";
-import { useNotifications } from "./hooks/useNotifications";
 import { useTrayBadge } from "./hooks/useTrayBadge";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import {
@@ -128,7 +127,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const { authErrors, clearAuthError } = useAuthStatus();
   const { enqueueRetry } = useReauthRetryQueue();
   const appUpdate = useAppUpdate();
-  const { notify } = useNotifications({ enabled: settings.desktopNotifications });
   const totalUnread = useMemo(() => mail.folders.reduce((sum, f) => sum + f.unread_count, 0), [mail.folders]);
   const accountIds = useMemo(() => new Set(mail.accounts.map((account) => account.id)), [mail.accounts]);
   useTrayBadge(totalUnread);
@@ -216,7 +214,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       }
       if (shouldNotify) {
         playSound();
-        notify(t("notifications.newEmail", { sender: "" }), t("sidebar.inbox"));
       }
       void mail.loadAllFolders();
     },
@@ -348,7 +345,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       setShowAddAccount(true);
       return;
     }
-    void api.reconnectAccount(accountId).catch(() => {
+    void api.startOAuth2("gmail", accountId).catch(() => {
       setShowAddAccount(true);
     });
   };

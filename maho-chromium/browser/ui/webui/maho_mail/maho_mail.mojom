@@ -16,7 +16,9 @@ interface PageHandler {
   // Begins a loopback OAuth sign-in and navigates the hosting WebContents
   // in place to the provider consent page (browser-initiated). Used by the
   // in-window mail overlay, where window.open cannot open a popup/tab.
-  BeginOAuth(string provider) => (bool ok, string error_json, string state);
+  // `reauthorize_account_id` is empty for new-account sign-in. When present,
+  // the helper replaces credentials for that Gmail account after consent.
+  BeginOAuth(string provider, string reauthorize_account_id) => (bool ok, string error_json, string state);
   OAuthComplete(string state, string code) => (bool ok, string result_json);
   ReconnectAccount(string account_id) => (bool ok, string result_json);
   CancelOAuth(string state) => (bool accepted);
@@ -124,12 +126,6 @@ interface PageHandler {
   GetAiConfig(string feature) => (bool ok, string result_json);
   DeleteAiConfig(string feature) => (bool ok, string result_json);
   TestAiConnection(string config_json) => (bool ok, string result_json);
-  ListAgentSessions(string account_id) => (bool ok, string result_json);
-  GetAgentMessages(string account_id, string session_id) => (bool ok, string result_json);
-  CreateAgentSession(string account_id) => (bool ok, string result_json);
-  DeleteAgentSession(string account_id, string session_id) => (bool ok, string result_json);
-  SendAgentMessage(string account_id, string session_id, string content) => (bool ok, string result_json);
-  CancelAgentMessage(string account_id, string session_id) => (bool ok, string result_json);
   GetAutoDraftForEmail(string account_id, string email_id) => (bool ok, string result_json);
   UpdateAutoDraftStatus(string draft_id, string status) => (bool ok, string result_json);
   TranslateText(string text, string target_lang, string source_lang) => (bool ok, string result_json);

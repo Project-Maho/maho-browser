@@ -103,10 +103,16 @@ fn addrs_to_optional_json(addr: Option<&mail_parser::Address>) -> Option<String>
     }
 }
 
-fn parse_eml_bytes(raw: &[u8], account_id: &str, folder_id: &str) -> std::result::Result<Email, maho_core::error::AppError> {
+fn parse_eml_bytes(
+    raw: &[u8],
+    account_id: &str,
+    folder_id: &str,
+) -> std::result::Result<Email, maho_core::error::AppError> {
     let parsed = mail_parser::MessageParser::default()
         .parse(raw)
-        .ok_or_else(|| maho_core::error::AppError::Validation("Failed to parse EML content".to_string()))?;
+        .ok_or_else(|| {
+            maho_core::error::AppError::Validation("Failed to parse EML content".to_string())
+        })?;
 
     let (from_addr, from_name) = extract_first_addr(parsed.from());
 
@@ -194,7 +200,10 @@ fn message_id_exists(
     .is_ok()
 }
 
-fn insert_email(db: &rusqlite::Connection, email: &Email) -> std::result::Result<(), maho_core::error::AppError> {
+fn insert_email(
+    db: &rusqlite::Connection,
+    email: &Email,
+) -> std::result::Result<(), maho_core::error::AppError> {
     db.execute(
         "INSERT INTO emails
             (id, account_id, folder_id, uid, message_id, in_reply_to, subject,
@@ -253,16 +262,21 @@ pub extern "C" fn MahoMailImportEmlContent(
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
                 use base64::Engine;
-                let raw = base64::prelude::BASE64_STANDARD
-                    .decode(&b64)
-                    .map_err(|e| MailFfiError::Internal(format!("Failed to decode base64 EML: {}", e)))?;
+                let raw = base64::prelude::BASE64_STANDARD.decode(&b64).map_err(|e| {
+                    MailFfiError::Internal(format!("Failed to decode base64 EML: {}", e))
+                })?;
                 let email = parse_eml_bytes(&raw, &account_id, &folder_id)?;
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 if message_id_exists(&db, &email.message_id, &account_id, &folder_id) {
-                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!(
-                        "Email with message_id {} already exists in this folder",
-                        email.message_id
-                    ))));
+                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                        format!(
+                            "Email with message_id {} already exists in this folder",
+                            email.message_id
+                        ),
+                    )));
                 }
                 insert_email(&db, &email)?;
                 log::info!("[IMPORT] Imported EML content as {}", email.id);
@@ -293,9 +307,9 @@ pub extern "C" fn MahoMailImportMboxContent(
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
                 use base64::Engine;
-                let raw = base64::prelude::BASE64_STANDARD
-                    .decode(&b64)
-                    .map_err(|e| MailFfiError::Internal(format!("Failed to decode base64 MBOX: {}", e)))?;
+                let raw = base64::prelude::BASE64_STANDARD.decode(&b64).map_err(|e| {
+                    MailFfiError::Internal(format!("Failed to decode base64 MBOX: {}", e))
+                })?;
                 let reader = BufReader::new(raw.as_slice());
 
                 let mut imported = 0u32;
@@ -305,15 +319,18 @@ pub extern "C" fn MahoMailImportMboxContent(
                 let mut current_message: Vec<u8> = Vec::new();
                 let mut message_index = 0u32;
 
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
                 let process_message = |msg_bytes: &[u8],
-                                           idx: u32,
-                                           db: &rusqlite::Connection,
-                                           errors: &mut Vec<String>,
-                                           imported: &mut u32,
-                                           skipped: &mut u32,
-                                           failed: &mut u32| {
+                                       idx: u32,
+                                       db: &rusqlite::Connection,
+                                       errors: &mut Vec<String>,
+                                       imported: &mut u32,
+                                       skipped: &mut u32,
+                                       failed: &mut u32| {
                     if msg_bytes.is_empty() {
                         return;
                     }
@@ -327,7 +344,8 @@ pub extern "C" fn MahoMailImportMboxContent(
                                 Ok(()) => *imported += 1,
                                 Err(e) => {
                                     *failed += 1;
-                                    let msg = format!("Message {}: DB insert failed: {}", idx + 1, e);
+                                    let msg =
+                                        format!("Message {}: DB insert failed: {}", idx + 1, e);
                                     log::warn!("[IMPORT] {}", msg);
                                     errors.push(msg);
                                 }
@@ -343,8 +361,9 @@ pub extern "C" fn MahoMailImportMboxContent(
                 };
 
                 for line_result in reader.lines() {
-                    let line = line_result
-                        .map_err(|e| MailFfiError::Internal(format!("Failed to read line: {}", e)))?;
+                    let line = line_result.map_err(|e| {
+                        MailFfiError::Internal(format!("Failed to read line: {}", e))
+                    })?;
                     if line.starts_with("From ") && !current_message.is_empty() {
                         process_message(
                             &current_message,
@@ -409,7 +428,10 @@ pub extern "C" fn MahoMailGetAppSetting(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 let value: Option<String> = db
                     .query_row(
                         "SELECT value FROM app_settings WHERE key = ?1",
@@ -439,7 +461,10 @@ pub extern "C" fn MahoMailSetAppSetting(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                let db = ctx
+                    .pool
+                    .get()
+                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                 db.execute(
                     "INSERT INTO app_settings (key, value, updated_at)
                      VALUES (?1, ?2, datetime('now'))
@@ -478,9 +503,9 @@ pub extern "C" fn MahoMailMd5Hash(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::ffi::{CStr, CString};
     use std::sync::atomic::{AtomicPtr, Ordering};
-    use super::*;
 
     struct Capture {
         slot: std::sync::Mutex<Option<(bool, String)>>,
@@ -513,7 +538,9 @@ mod tests {
         let payload = if json.is_null() {
             String::new()
         } else {
-            unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()
+            unsafe { CStr::from_ptr(json) }
+                .to_string_lossy()
+                .into_owned()
         };
         *capture.slot.lock().unwrap() = Some((ok, payload));
         capture.cv.notify_all();
@@ -524,12 +551,10 @@ mod tests {
         let capture = Capture::new();
         let input = CString::new("hello").unwrap();
         let _rt = crate::runtime::runtime().unwrap();
-        
-        let success = MahoMailMd5Hash(
-            input.as_ptr(),
-            Some(test_callback),
-            capture.as_user_data(),
-        );
+        let pool = crate::test_support::pool_with_seeded_data();
+        crate::state::set_ctx(crate::test_support::ctx_arc(pool));
+
+        let success = MahoMailMd5Hash(input.as_ptr(), Some(test_callback), capture.as_user_data());
         assert!(success);
         let (ok, hash) = capture.wait();
         assert!(ok);
@@ -563,20 +588,15 @@ mod tests {
         {
             let capture = Capture::new();
             let key = CString::new("test_setting_key").unwrap();
-            let success = MahoMailGetAppSetting(
-                key.as_ptr(),
-                Some(test_callback),
-                capture.as_user_data(),
-            );
+            let success =
+                MahoMailGetAppSetting(key.as_ptr(), Some(test_callback), capture.as_user_data());
             assert!(success);
             let (ok, val) = capture.wait();
             assert!(ok);
             assert_eq!(val, "\"test_setting_value\"");
         }
     }
-
 }
-
 
 // === [W-J] ===
 
@@ -605,20 +625,22 @@ pub extern "C" fn MahoMailExportMailTransferArtifact(
                 let db_path = &ctx.db_path;
                 let art_path = std::path::PathBuf::from(artifact_path);
                 let db_copy_path = database_copy_path.map(std::path::PathBuf::from);
-                
+
                 maho_core::transfer::export_runtime_transfer_artifact(
                     db_path,
                     &art_path,
                     &passphrase,
                     db_copy_path.as_deref(),
-                ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Internal(e.to_string())))?;
-                
+                )
+                .map_err(|e| {
+                    MailFfiError::Core(maho_core::error::AppError::Internal(e.to_string()))
+                })?;
+
                 Ok("{}".to_string())
             })
         })
     })
 }
-
 
 /// Truncate `value` to at most `max_chars` characters without splitting a
 /// multi-byte character. Guards the T11b regression: `&id[..8]` panics when the

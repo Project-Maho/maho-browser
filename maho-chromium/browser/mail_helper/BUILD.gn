@@ -49,6 +49,13 @@ source_set("maho_mail_service") {
     "//components/prefs",
     "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
   ]
+  if (is_mac) {
+    sources += [
+      "maho_mail_dock_badge_mac.h",
+      "maho_mail_dock_badge_mac.mm",
+    ]
+    frameworks = [ "AppKit.framework" ]
+  }
 }
 
 # Profile-keyed factory: creates one MahoMailService per regular profile and

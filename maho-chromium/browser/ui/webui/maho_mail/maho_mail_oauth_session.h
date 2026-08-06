@@ -14,6 +14,13 @@ namespace maho {
 class MahoMailOAuthSession : public content::WebContentsUserData<MahoMailOAuthSession> {
  public:
   struct StartResult {
+    StartResult();
+    StartResult(const StartResult&);
+    StartResult& operator=(const StartResult&);
+    StartResult(StartResult&&) noexcept;
+    StartResult& operator=(StartResult&&) noexcept;
+    ~StartResult();
+
     bool ok = false;
     std::string error_json;
     std::string state;

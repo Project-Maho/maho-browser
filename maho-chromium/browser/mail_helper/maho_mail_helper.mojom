@@ -54,13 +54,14 @@ interface MahoMailHelper {
   AddAccount(string request_json) => (bool ok, string result_json);
   TestConnection(string params_json) => (bool ok, string result_json);
   DeleteAccount(string account_id) => (bool ok, string result_json);
-  OAuthStartUrl(string provider, string client_id, string redirect_uri)
-      => (bool ok, string result_json);
+  OAuthStartUrl(string provider, string client_id, string redirect_uri,
+                string options_json) => (bool ok, string result_json);
   // Loopback OAuth sign-in: binds an ephemeral 127.0.0.1 listener and returns
   // {state, auth_url} immediately, then completes OAuth server-side on a
   // background loopback-listener thread. The loopback owns its own client_id /
-  // redirect_uri, so none are passed here.
-  OAuthLoopbackSignIn(string provider) => (bool ok, string result_json);
+  // redirect_uri; options_json carries optional identity binding.
+  OAuthLoopbackSignIn(string provider, string options_json)
+      => (bool ok, string result_json);
   OAuthComplete(string state, string code) => (bool ok, string result_json);
   ReconnectAccount(string account_id) => (bool ok, string result_json);
   ImportMigrationArchive(string archive_json) => (bool ok, string result_json);
@@ -159,12 +160,6 @@ interface MahoMailHelper {
   DeleteAiConfig(string feature) => (bool ok, string result_json);
   SetBrowserAiKeys(string keys_json) => (bool ok, string result_json);
   TestAiConnection(string config_json) => (bool ok, string result_json);
-  ListAgentSessions(string account_id) => (bool ok, string result_json);
-  GetAgentMessages(string account_id, string session_id) => (bool ok, string result_json);
-  CreateAgentSession(string account_id) => (bool ok, string result_json);
-  DeleteAgentSession(string account_id, string session_id) => (bool ok, string result_json);
-  SendAgentMessage(string account_id, string session_id, string content) => (bool ok, string result_json);
-  CancelAgentMessage(string account_id, string session_id) => (bool ok, string result_json);
   GetAutoDraftForEmail(string account_id, string email_id) => (bool ok, string result_json);
   UpdateAutoDraftStatus(string draft_id, string status) => (bool ok, string result_json);
   TranslateText(string text, string target_lang, string source_lang) => (bool ok, string result_json);

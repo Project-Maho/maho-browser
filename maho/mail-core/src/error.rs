@@ -49,6 +49,12 @@ pub enum MailFfiError {
     #[error("unknown or expired oauth state: {0}")]
     InvalidState(String),
 
+    #[error("Google userinfo did not include a subject for identity binding")]
+    GoogleIdentityMissingSubject,
+
+    #[error("Google identity mismatch: expected subject {expected}, got {actual}")]
+    GoogleIdentityMismatch { expected: String, actual: String },
+
     #[error("db pool error: {0}")]
     Pool(String),
 

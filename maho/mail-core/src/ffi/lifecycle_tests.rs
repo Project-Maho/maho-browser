@@ -54,8 +54,8 @@ fn start_all_account_sync_registers_all_accounts_once() {
     state::registry().stop_account(&id_b);
 }
 
-use std::sync::{Mutex, OnceLock};
 use maho_core::models::account::{CreateAccountRequest, Encryption};
+use std::sync::{Mutex, OnceLock};
 
 static EVENT_LOG: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
 
@@ -65,8 +65,12 @@ unsafe extern "C" fn test_event_cb(
     _arg1: *const std::os::raw::c_char,
     _arg2: *const std::os::raw::c_char,
 ) {
-    let ev = std::ffi::CStr::from_ptr(event_type).to_string_lossy().into_owned();
-    let acc = std::ffi::CStr::from_ptr(account_id).to_string_lossy().into_owned();
+    let ev = std::ffi::CStr::from_ptr(event_type)
+        .to_string_lossy()
+        .into_owned();
+    let acc = std::ffi::CStr::from_ptr(account_id)
+        .to_string_lossy()
+        .into_owned();
     let log = EVENT_LOG.get_or_init(|| Mutex::new(Vec::new()));
     log.lock().unwrap().push((ev, acc));
 }
@@ -79,12 +83,25 @@ fn accounts_changed_event_emission_and_reconnect() {
 
     let pool = crate::test_support::pool_with_seeded_data();
     let ctx = crate::test_support::ctx_arc(pool);
-    
+
     assert!(MahoMailRegisterEventCallback(test_event_cb));
-    
+
     let log = EVENT_LOG.get_or_init(|| Mutex::new(Vec::new()));
     log.lock().unwrap().clear();
-    
+
+    emit_new_mail_event("arrival-account");
+    let events = log.lock().unwrap().clone();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(ev, acc)| ev == "new-mail" && acc == "arrival-account")
+            .count(),
+        1,
+        "new mailbox arrivals emit exactly one event"
+    );
+
+    log.lock().unwrap().clear();
+
     let mut conn = ctx.pool.get().unwrap();
     let req = CreateAccountRequest {
         email: "event@example.com".to_string(),
@@ -102,27 +119,46 @@ fn accounts_changed_event_emission_and_reconnect() {
         oauth2_client_secret: None,
         oauth2_access_token: None,
         oauth2_refresh_token: None,
+        oauth2_expires_at: None,
     };
     let response = crate::account::create_account(&mut conn, &ctx.credential_key, req).unwrap();
-    
+
     let events = log.lock().unwrap().clone();
-    let match_count = events.iter().filter(|(ev, acc)| ev == "accounts-changed" && acc == &response.id).count();
-    assert_eq!(match_count, 1, "exactly one accounts-changed event emitted for create");
-    
+    let match_count = events
+        .iter()
+        .filter(|(ev, acc)| ev == "accounts-changed" && acc == &response.id)
+        .count();
+    assert_eq!(
+        match_count, 1,
+        "exactly one accounts-changed event emitted for create"
+    );
+
     log.lock().unwrap().clear();
-    
+
     let rt = crate::runtime::runtime().expect("runtime");
     crate::account::reconnect_account_with_runtime(&ctx, &response.id, Some(rt)).unwrap();
-    
+
     let events = log.lock().unwrap().clone();
-    let match_count = events.iter().filter(|(ev, acc)| ev == "accounts-changed" && acc == &response.id).count();
-    assert_eq!(match_count, 1, "exactly one accounts-changed event emitted for reconnect");
+    let match_count = events
+        .iter()
+        .filter(|(ev, acc)| ev == "accounts-changed" && acc == &response.id)
+        .count();
+    assert_eq!(
+        match_count, 1,
+        "exactly one accounts-changed event emitted for reconnect"
+    );
     assert!(state::registry().is_sync_running(&response.id));
-    
+
     log.lock().unwrap().clear();
-    
+
     crate::account::delete_account(&ctx, &response.id).unwrap();
     let events = log.lock().unwrap().clone();
-    let match_count = events.iter().filter(|(ev, acc)| ev == "accounts-changed" && acc == &response.id).count();
-    assert_eq!(match_count, 1, "exactly one accounts-changed event emitted for delete");
+    let match_count = events
+        .iter()
+        .filter(|(ev, acc)| ev == "accounts-changed" && acc == &response.id)
+        .count();
+    assert_eq!(
+        match_count, 1,
+        "exactly one accounts-changed event emitted for delete"
+    );
 }

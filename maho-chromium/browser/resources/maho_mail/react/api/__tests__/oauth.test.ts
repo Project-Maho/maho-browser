@@ -4,7 +4,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 const mojoMocks = vi.hoisted(() => ({
   handler: {
-    beginOAuth: vi.fn<(provider: string) => Promise<{readonly ok: boolean; readonly errorJson: string; readonly state: string}>>(),
+    beginOAuth: vi.fn<(provider: string, reauthorizeAccountId: string) => Promise<{readonly ok: boolean; readonly errorJson: string; readonly state: string}>>(),
   },
 }));
 
@@ -25,7 +25,23 @@ describe('startOAuth2', () => {
     });
 
     await expect(startOAuth2('gmail')).resolves.toBe('state_from_cpp');
-    expect(mojoMocks.handler.beginOAuth).toHaveBeenCalledWith('gmail');
+    expect(mojoMocks.handler.beginOAuth).toHaveBeenCalledWith('gmail', '');
+  });
+
+  it('passes an existing account ID for OAuth reauthorization', async () => {
+    mojoMocks.handler.beginOAuth.mockResolvedValueOnce({
+      ok: true,
+      errorJson: '',
+      state: 'reauthorization_state',
+    });
+
+    await expect(startOAuth2('gmail', 'existing-account')).resolves.toBe(
+      'reauthorization_state',
+    );
+    expect(mojoMocks.handler.beginOAuth).toHaveBeenCalledWith(
+      'gmail',
+      'existing-account',
+    );
   });
 
   it('preserves the legacy rejection path when BeginOAuth fails', async () => {

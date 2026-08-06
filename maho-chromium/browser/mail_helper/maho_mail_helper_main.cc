@@ -14,6 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/values.h"
 #include "base/json/json_reader.h"
@@ -150,7 +151,10 @@ constexpr char kMailHelperSandboxProfile[] = R"(
 (allow system-socket)
 
 ; IMAP/SMTP/OAuth HTTPS plus the OAuth loopback listener.
-(allow network-outbound (remote tcp))
+(allow network-outbound
+  (control-name "com.apple.netsrc")
+  (remote udp)
+  (remote tcp))
 (allow network-bind (local tcp "localhost:*"))
 (allow network-inbound (local tcp "localhost:*"))
 
@@ -240,14 +244,23 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
       : receiver_(this, std::move(receiver)),
         quit_closure_(std::move(quit_closure)) {
     g_helper_impl = this;
-    static const scoped_refptr<base::SingleThreadTaskRunner> main_runner =
-        base::SingleThreadTaskRunner::GetCurrentDefault();
+    // Self-terminate if the browser end of the Mojo pipe drops (browser crash,
+    // SIGKILL, or any exit that skips the graceful Shutdown() drain). Without
+    // this the helper's RunLoop never quits on abnormal parent exit and the
+    // process is reparented to launchd (ppid=1), leaking one helper per
+    // non-graceful browser teardown. macOS has no parent-death signal, so the
+    // pipe disconnect is the only reliable orphan-prevention hook.
+    receiver_.set_disconnect_handler(base::BindOnce(
+        &MahoMailHelperImpl::OnBrowserDisconnected, base::Unretained(this)));
+    static const base::NoDestructor<
+        scoped_refptr<base::SingleThreadTaskRunner>>
+        main_runner(base::SingleThreadTaskRunner::GetCurrentDefault());
     MahoMailRegisterEventCallback([](const char* event_type, const char* account_id, const char* provider, const char* reason) {
       std::string ev(event_type);
       std::string acc(account_id);
       std::string prov(provider);
       std::string reas(reason);
-      main_runner->PostTask(
+      (*main_runner)->PostTask(
           FROM_HERE,
           base::BindOnce(
               [](std::string ev, std::string acc, std::string prov, std::string reas) {
@@ -261,6 +274,16 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
 
   ~MahoMailHelperImpl() override {
     g_helper_impl = nullptr;
+  }
+
+  // Browser-side pipe dropped without a graceful Shutdown() call. Quit the
+  // RunLoop so the helper process exits instead of lingering as an orphan.
+  void OnBrowserDisconnected() {
+    LOG(WARNING) << "[MahoMailHelper] Browser pipe disconnected; "
+                    "self-terminating to avoid orphaned helper process.";
+    if (quit_closure_) {
+      std::move(quit_closure_).Run();
+    }
   }
 
   void OnEventReceived(const std::string& ev,
@@ -504,14 +527,20 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
   void OAuthStartUrl(const std::string& provider,
                      const std::string& client_id,
                      const std::string& redirect_uri,
+                     const std::string& options_json,
                      OAuthStartUrlCallback callback) override {
     MahoMailReadBridge::Start(
         base::BindOnce(
             [](std::string prov, std::string cid, std::string redir,
-               MahoMailReadCallback cb, void* ud) {
-              return MahoMailOAuthStartUrl(prov.c_str(), cid.c_str(), redir.c_str(), cb, ud);
+               std::string options, MahoMailReadCallback cb, void* ud) {
+              return options == "{}"
+                         ? MahoMailOAuthStartUrl(prov.c_str(), cid.c_str(),
+                                                 redir.c_str(), cb, ud)
+                         : MahoMailOAuthStartUrlWithOptions(
+                               prov.c_str(), cid.c_str(), redir.c_str(),
+                               options.c_str(), cb, ud);
             },
-            provider, client_id, redirect_uri),
+            provider, client_id, redirect_uri, options_json),
         base::BindOnce(
             [](OAuthStartUrlCallback cb, bool ok, std::string json) {
               std::move(cb).Run(ok, std::move(json));
@@ -520,13 +549,16 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
   }
 
   void OAuthLoopbackSignIn(const std::string& provider,
+                           const std::string& options_json,
                            OAuthLoopbackSignInCallback callback) override {
     MahoMailReadBridge::Start(
         base::BindOnce(
-            [](std::string prov, MahoMailReadCallback cb, void* ud) {
-              return MahoMailOAuthLoopbackSignIn(prov.c_str(), cb, ud);
+            [](std::string prov, std::string options,
+               MahoMailReadCallback cb, void* ud) {
+              return MahoMailOAuthLoopbackSignIn(
+                  prov.c_str(), options.c_str(), cb, ud);
             },
-            provider),
+            provider, options_json),
         base::BindOnce(
             [](OAuthLoopbackSignInCallback cb, bool ok, std::string json) {
               std::move(cb).Run(ok, std::move(json));
@@ -1571,66 +1603,6 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
           return MahoMailTestAiConnection(config_json.c_str(), cb, ud);
         }, config_json),
         base::BindOnce([](TestAiConnectionCallback cb, bool ok, std::string json) {
-          std::move(cb).Run(ok, std::move(json));
-        }, std::move(callback)));
-  }
-
-  void ListAgentSessions(const std::string& account_id, ListAgentSessionsCallback callback) override {
-    MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, MahoMailReadCallback cb, void* ud) {
-          return MahoMailListAgentSessions(account_id.c_str(), cb, ud);
-        }, account_id),
-        base::BindOnce([](ListAgentSessionsCallback cb, bool ok, std::string json) {
-          std::move(cb).Run(ok, std::move(json));
-        }, std::move(callback)));
-  }
-
-  void GetAgentMessages(const std::string& account_id, const std::string& session_id, GetAgentMessagesCallback callback) override {
-    MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, std::string session_id, MahoMailReadCallback cb, void* ud) {
-          return MahoMailGetAgentMessages(account_id.c_str(), session_id.c_str(), cb, ud);
-        }, account_id, session_id),
-        base::BindOnce([](GetAgentMessagesCallback cb, bool ok, std::string json) {
-          std::move(cb).Run(ok, std::move(json));
-        }, std::move(callback)));
-  }
-
-  void CreateAgentSession(const std::string& account_id, CreateAgentSessionCallback callback) override {
-    MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, MahoMailReadCallback cb, void* ud) {
-          return MahoMailCreateAgentSession(account_id.c_str(), cb, ud);
-        }, account_id),
-        base::BindOnce([](CreateAgentSessionCallback cb, bool ok, std::string json) {
-          std::move(cb).Run(ok, std::move(json));
-        }, std::move(callback)));
-  }
-
-  void DeleteAgentSession(const std::string& account_id, const std::string& session_id, DeleteAgentSessionCallback callback) override {
-    MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, std::string session_id, MahoMailReadCallback cb, void* ud) {
-          return MahoMailDeleteAgentSession(account_id.c_str(), session_id.c_str(), cb, ud);
-        }, account_id, session_id),
-        base::BindOnce([](DeleteAgentSessionCallback cb, bool ok, std::string json) {
-          std::move(cb).Run(ok, std::move(json));
-        }, std::move(callback)));
-  }
-
-  void SendAgentMessage(const std::string& account_id, const std::string& session_id, const std::string& content, SendAgentMessageCallback callback) override {
-    MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, std::string session_id, std::string content, MahoMailReadCallback cb, void* ud) {
-          return MahoMailSendAgentMessage(account_id.c_str(), session_id.c_str(), content.c_str(), cb, ud);
-        }, account_id, session_id, content),
-        base::BindOnce([](SendAgentMessageCallback cb, bool ok, std::string json) {
-          std::move(cb).Run(ok, std::move(json));
-        }, std::move(callback)));
-  }
-
-  void CancelAgentMessage(const std::string& account_id, const std::string& session_id, CancelAgentMessageCallback callback) override {
-    MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, std::string session_id, MahoMailReadCallback cb, void* ud) {
-          return MahoMailCancelAgentMessage(account_id.c_str(), session_id.c_str(), cb, ud);
-        }, account_id, session_id),
-        base::BindOnce([](CancelAgentMessageCallback cb, bool ok, std::string json) {
           std::move(cb).Run(ok, std::move(json));
         }, std::move(callback)));
   }
@@ -2971,66 +2943,6 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
           base::BindOnce([](std::string req, MahoMailReadCallback cb, void* ud) {
             return MahoMailTestAiConnection(req.c_str(), cb, ud);
           }, args_json),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
-      return;
-    }
-    if (command == "ListAgentSessions") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string acc, MahoMailReadCallback cb, void* ud) {
-            return MahoMailListAgentSessions(acc.c_str(), cb, ud);
-          }, get_str("account_id")),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
-      return;
-    }
-    if (command == "GetAgentMessages") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string acc, std::string sid, MahoMailReadCallback cb, void* ud) {
-            return MahoMailGetAgentMessages(acc.c_str(), sid.c_str(), cb, ud);
-          }, get_str("account_id"), get_str("session_id")),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
-      return;
-    }
-    if (command == "CreateAgentSession") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string acc, MahoMailReadCallback cb, void* ud) {
-            return MahoMailCreateAgentSession(acc.c_str(), cb, ud);
-          }, get_str("account_id")),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
-      return;
-    }
-    if (command == "DeleteAgentSession") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string acc, std::string sid, MahoMailReadCallback cb, void* ud) {
-            return MahoMailDeleteAgentSession(acc.c_str(), sid.c_str(), cb, ud);
-          }, get_str("account_id"), get_str("session_id")),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
-      return;
-    }
-    if (command == "SendAgentMessage") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string acc, std::string sid, std::string content, MahoMailReadCallback cb, void* ud) {
-            return MahoMailSendAgentMessage(acc.c_str(), sid.c_str(), content.c_str(), cb, ud);
-          }, get_str("account_id"), get_str("session_id"), get_str("content")),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
-      return;
-    }
-    if (command == "CancelAgentMessage") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string acc, std::string sid, MahoMailReadCallback cb, void* ud) {
-            return MahoMailCancelAgentMessage(acc.c_str(), sid.c_str(), cb, ud);
-          }, get_str("account_id"), get_str("session_id")),
           base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
             std::move(cb).Run(ok, std::move(json));
           }, std::move(callback)));

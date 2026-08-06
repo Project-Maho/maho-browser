@@ -154,16 +154,20 @@ fn resolve_oauth2_access_token(
             Ok(new_token)
         }
         Err(refresh_err) => {
-            crate::ffi::emit_reauth_event(&account.id, &account.auth_type, &refresh_err.to_string());
+            crate::ffi::emit_reauth_event(
+                &account.id,
+                &account.auth_type,
+                classify_reauth_reason(&refresh_err),
+            );
             match current {
-                Some(token) => {
+                Some(token) if !expired => {
                     log::warn!(
-                        "[mail-ffi] oauth2 refresh failed for {}, using existing token: {refresh_err}",
+                        "[mail-ffi] oauth2 refresh failed for {}, using existing unexpired token: {refresh_err}",
                         account.id
                     );
                     Ok(token)
                 }
-                None => Err(refresh_err),
+                _ => Err(refresh_err),
             }
         }
     }
@@ -175,8 +179,25 @@ fn is_expired(expires_at: &str) -> bool {
             let with_margin = dt.with_timezone(&Utc) - chrono::Duration::minutes(5);
             Utc::now() >= with_margin
         }
-        Err(_) => false,
+        Err(_) => true,
     }
+}
+
+fn classify_reauth_reason(err: &MailFfiError) -> &'static str {
+    let MailFfiError::OAuth2Refresh(message) = err else {
+        return "unknown";
+    };
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("missing refresh_token") {
+        return "refresh_token_missing";
+    }
+    if lower.contains("invalid_grant") {
+        return "invalid_grant";
+    }
+    if lower.contains("invalid_client") {
+        return "invalid_client";
+    }
+    "unknown"
 }
 
 #[derive(serde::Deserialize)]
@@ -209,6 +230,42 @@ fn build_refresh_params<'a>(
 
 /// Refresh an OAuth2 access token via the provider token endpoint and persist
 /// it. Blocking (uses `reqwest::blocking`); call from a blocking context.
+fn persist_refreshed_oauth2_credentials(
+    conn: &Connection,
+    credential_key: &[u8; 32],
+    account_id: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at: Option<&str>,
+) -> Result<()> {
+    store_encrypted_credential(
+        conn,
+        credential_key,
+        account_id,
+        "oauth2_access_token",
+        access_token,
+    )?;
+    if let Some(refresh_token) = refresh_token.filter(|value| !value.is_empty()) {
+        store_encrypted_credential(
+            conn,
+            credential_key,
+            account_id,
+            "oauth2_refresh_token",
+            refresh_token,
+        )?;
+    }
+
+    conn.execute(
+        "UPDATE accounts SET oauth2_access_token = NULL, oauth2_expires_at = ?1,
+             oauth2_refresh_token = NULL,
+             updated_at = datetime('now')
+         WHERE id = ?2",
+        rusqlite::params![expires_at, account_id],
+    )
+    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+    Ok(())
+}
+
 fn refresh_oauth2_token(
     conn: &Connection,
     credential_key: &[u8; 32],
@@ -274,21 +331,18 @@ fn refresh_oauth2_token(
         .expires_in
         .map(|secs| (Utc::now() + chrono::Duration::seconds(secs)).to_rfc3339());
 
-    conn.execute(
-        "UPDATE accounts SET oauth2_access_token = ?1, oauth2_expires_at = ?2,
-             oauth2_refresh_token = COALESCE(?3, oauth2_refresh_token),
-             updated_at = datetime('now')
-         WHERE id = ?4",
-        rusqlite::params![
-            token.access_token,
-            expires_at,
-            token.refresh_token,
-            account.id
-        ],
-    )
-    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+    let new_access_token = token.access_token;
+    let rotated_refresh_token = token.refresh_token;
+    persist_refreshed_oauth2_credentials(
+        conn,
+        credential_key,
+        &account.id,
+        &new_access_token,
+        rotated_refresh_token.as_deref(),
+        expires_at.as_deref(),
+    )?;
 
-    Ok(token.access_token)
+    Ok(new_access_token)
 }
 
 pub(crate) fn token_endpoint(auth_type: &str) -> Option<&'static str> {
@@ -340,8 +394,8 @@ pub fn create_account(
         "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, imap_port,
              imap_encryption, smtp_host, smtp_port, smtp_encryption, username, password,
              oauth2_client_id, oauth2_client_secret, oauth2_refresh_token, oauth2_access_token,
-             created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, NULL, NULL, ?13, ?14)",
+             oauth2_expires_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, NULL, NULL, ?13, ?14, ?15)",
         rusqlite::params![
             id,
             request.email,
@@ -355,6 +409,7 @@ pub fn create_account(
             request.smtp_encryption.as_str(),
             request.username,
             request.oauth2_client_id,
+            request.oauth2_expires_at,
             now,
             now,
         ],
@@ -362,9 +417,18 @@ pub fn create_account(
 
     for (credential_type, value) in [
         ("password", request.password.as_deref()),
-        ("oauth2_access_token", request.oauth2_access_token.as_deref()),
-        ("oauth2_refresh_token", request.oauth2_refresh_token.as_deref()),
-        ("oauth2_client_secret", request.oauth2_client_secret.as_deref()),
+        (
+            "oauth2_access_token",
+            request.oauth2_access_token.as_deref(),
+        ),
+        (
+            "oauth2_refresh_token",
+            request.oauth2_refresh_token.as_deref(),
+        ),
+        (
+            "oauth2_client_secret",
+            request.oauth2_client_secret.as_deref(),
+        ),
     ] {
         if let Some(secret) = value.filter(|value| !value.is_empty()) {
             store_encrypted_credential(&tx, credential_key, &id, credential_type, secret)?;
@@ -377,6 +441,107 @@ pub fn create_account(
     crate::state::spawn_account_workers_if_ready(&id);
     crate::ffi::emit_accounts_changed_event(&id);
     Ok(AccountResponse::from_account(&account))
+}
+
+pub fn oauth_reauthorization_email(
+    conn: &Connection,
+    account_id: &str,
+) -> Result<String> {
+    let account = load_account(conn, account_id)?;
+    if account.auth_type != "oauth2_gmail" {
+        return Err(MailFfiError::InvalidRequest(format!(
+            "account {account_id} is not a Gmail OAuth account"
+        )));
+    }
+    Ok(account.email)
+}
+
+pub fn replace_oauth_credentials(
+    conn: &mut Connection,
+    credential_key: &[u8; 32],
+    account_id: &str,
+    request: CreateAccountRequest,
+) -> Result<AccountResponse> {
+    let account = load_account(conn, account_id)?;
+    if account.auth_type != "oauth2_gmail"
+        || request.auth_type.as_deref() != Some("oauth2_gmail")
+    {
+        return Err(MailFfiError::InvalidRequest(format!(
+            "account {account_id} is not a Gmail OAuth account"
+        )));
+    }
+    if !account.email.trim().eq_ignore_ascii_case(request.email.trim()) {
+        return Err(MailFfiError::InvalidRequest(format!(
+            "Google account mismatch: expected {}, got {}",
+            account.email, request.email
+        )));
+    }
+    let access_token = request
+        .oauth2_access_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| MailFfiError::OAuth("missing access_token".to_string()))?;
+    let refresh_token = request
+        .oauth2_refresh_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| MailFfiError::OAuth("missing refresh_token".to_string()))?;
+
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE accounts
+         SET oauth2_client_id = ?1,
+             oauth2_client_secret = NULL,
+             oauth2_refresh_token = NULL,
+             oauth2_access_token = NULL,
+             oauth2_expires_at = ?2,
+             updated_at = datetime('now')
+         WHERE id = ?3",
+        rusqlite::params![
+            request.oauth2_client_id,
+            request.oauth2_expires_at,
+            account_id,
+        ],
+    )?;
+    store_encrypted_credential(
+        &tx,
+        credential_key,
+        account_id,
+        "oauth2_access_token",
+        access_token,
+    )?;
+    store_encrypted_credential(
+        &tx,
+        credential_key,
+        account_id,
+        "oauth2_refresh_token",
+        refresh_token,
+    )?;
+    tx.execute(
+        "DELETE FROM encrypted_credentials
+         WHERE account_id = ?1 AND credential_type = 'oauth2_client_secret'",
+        [account_id],
+    )?;
+    if let Some(client_secret) = request
+        .oauth2_client_secret
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        store_encrypted_credential(
+            &tx,
+            credential_key,
+            account_id,
+            "oauth2_client_secret",
+            client_secret,
+        )?;
+    }
+    tx.commit()?;
+
+    crate::state::registry().stop_account(account_id);
+    crate::state::spawn_account_workers_if_ready(account_id);
+    crate::ffi::emit_refresh_succeeded_event(account_id);
+    crate::ffi::emit_accounts_changed_event(account_id);
+    Ok(AccountResponse::from_account(&load_account(conn, account_id)?))
 }
 
 /// Stop any running sync/backfill workers for `account_id`, then cascade-delete
@@ -537,7 +702,33 @@ mod tests {
         let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         assert!(is_expired(&past));
         assert!(!is_expired(&future));
-        assert!(!is_expired("not-a-date"));
+        assert!(is_expired("not-a-date"));
+    }
+
+    #[test]
+    fn classify_reauth_reasons_is_stable() {
+        assert_eq!(
+            classify_reauth_reason(&MailFfiError::OAuth2Refresh("missing refresh_token".into())),
+            "refresh_token_missing"
+        );
+        assert_eq!(
+            classify_reauth_reason(&MailFfiError::OAuth2Refresh(
+                "token endpoint returned 400 Bad Request: {\"error\":\"invalid_grant\"}"
+                    .into()
+            )),
+            "invalid_grant"
+        );
+        assert_eq!(
+            classify_reauth_reason(&MailFfiError::OAuth2Refresh(
+                "token endpoint returned 401 Unauthorized: {\"error\":\"invalid_client\"}"
+                    .into()
+            )),
+            "invalid_client"
+        );
+        assert_eq!(
+            classify_reauth_reason(&MailFfiError::OAuth2Refresh("something else".into())),
+            "unknown"
+        );
     }
 
     #[test]
@@ -584,6 +775,7 @@ mod tests {
             oauth2_client_secret: None,
             oauth2_access_token: None,
             oauth2_refresh_token: None,
+            oauth2_expires_at: None,
         }
     }
 
@@ -592,7 +784,8 @@ mod tests {
         let mut conn = migrated_conn();
         let key = [21u8; 32];
 
-        let response = create_account(&mut conn, &key, password_request("new@example.com")).unwrap();
+        let response =
+            create_account(&mut conn, &key, password_request("new@example.com")).unwrap();
 
         let loaded = load_account(&conn, &response.id).unwrap();
         assert_eq!(loaded.email, "new@example.com");
@@ -621,17 +814,21 @@ mod tests {
     fn create_account_rollback_on_failure() {
         let mut conn = migrated_conn();
         let key = [21u8; 32];
-        
+
         let count_accounts = |c: &Connection| -> i64 {
-            c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap()
+            c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+                .unwrap()
         };
         let count_creds = |c: &Connection| -> i64 {
-            c.query_row("SELECT COUNT(*) FROM encrypted_credentials", [], |r| r.get(0)).unwrap()
+            c.query_row("SELECT COUNT(*) FROM encrypted_credentials", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
         };
-        
+
         let initial_accounts = count_accounts(&conn);
         let initial_creds = count_creds(&conn);
-        
+
         // Install trigger that fails insertion on encrypted_credentials
         conn.execute(
             "CREATE TRIGGER fail_cred BEFORE INSERT ON encrypted_credentials
@@ -639,32 +836,129 @@ mod tests {
                  SELECT RAISE(ABORT, 'forced credential failure');
              END;",
             [],
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let result = create_account(&mut conn, &key, password_request("fail@example.com"));
         assert!(result.is_err());
-        
-        assert_eq!(count_accounts(&conn), initial_accounts, "accounts table must be rolled back");
-        assert_eq!(count_creds(&conn), initial_creds, "creds table must be rolled back");
+
+        assert_eq!(
+            count_accounts(&conn),
+            initial_accounts,
+            "accounts table must be rolled back"
+        );
+        assert_eq!(
+            count_creds(&conn),
+            initial_creds,
+            "creds table must be rolled back"
+        );
     }
 
     #[test]
     fn create_account_secrets_are_null_from_start() {
         let mut conn = migrated_conn();
         let key = [21u8; 32];
-        let response = create_account(&mut conn, &key, password_request("null_from_start@example.com")).unwrap();
-        
+        let response = create_account(
+            &mut conn,
+            &key,
+            password_request("null_from_start@example.com"),
+        )
+        .unwrap();
+
         // Directly query DB to make sure secrets are NULL
         let (pw, client_sec, ref_tok, acc_tok): (Option<String>, Option<String>, Option<String>, Option<String>) = conn.query_row(
             "SELECT password, oauth2_client_secret, oauth2_refresh_token, oauth2_access_token FROM accounts WHERE id = ?1",
             [&response.id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         ).unwrap();
-        
+
         assert!(pw.is_none());
         assert!(client_sec.is_none());
         assert!(ref_tok.is_none());
         assert!(acc_tok.is_none());
+    }
+
+    #[test]
+    fn persist_refreshed_oauth2_credentials_encrypts_tokens_and_nulls_plaintext_columns() {
+        let mut conn = migrated_conn();
+        let key = [17u8; 32];
+        let request = CreateAccountRequest {
+            email: "oauth@example.com".to_string(),
+            display_name: "OAuth User".to_string(),
+            auth_type: Some("oauth2_gmail".to_string()),
+            imap_host: "imap.gmail.com".to_string(),
+            imap_port: 993,
+            imap_encryption: Encryption::Tls,
+            smtp_host: "smtp.gmail.com".to_string(),
+            smtp_port: 587,
+            smtp_encryption: Encryption::StartTls,
+            username: "oauth@example.com".to_string(),
+            password: None,
+            oauth2_client_id: Some("cid".to_string()),
+            oauth2_client_secret: Some("secret".to_string()),
+            oauth2_access_token: Some("initial-access".to_string()),
+            oauth2_refresh_token: Some("initial-refresh".to_string()),
+            oauth2_expires_at: Some("2026-01-01T00:00:00Z".to_string()),
+        };
+        let response = create_account(&mut conn, &key, request).unwrap();
+
+        persist_refreshed_oauth2_credentials(
+            &conn,
+            &key,
+            &response.id,
+            "refreshed-access",
+            Some("rotated-refresh"),
+            Some("2026-02-01T00:00:00Z"),
+        )
+        .unwrap();
+
+        let loaded = load_account(&conn, &response.id).unwrap();
+        assert!(loaded.oauth2_access_token.is_none());
+        assert!(loaded.oauth2_refresh_token.is_none());
+        assert_eq!(loaded.oauth2_expires_at.as_deref(), Some("2026-02-01T00:00:00Z"));
+        assert_eq!(
+            get_encrypted_credential(&conn, &key, &response.id, "oauth2_access_token")
+                .unwrap()
+                .as_deref(),
+            Some("refreshed-access")
+        );
+        assert_eq!(
+            get_encrypted_credential(&conn, &key, &response.id, "oauth2_refresh_token")
+                .unwrap()
+                .as_deref(),
+            Some("rotated-refresh")
+        );
+    }
+
+    #[test]
+    fn resolve_account_auth_does_not_return_known_expired_token_after_refresh_failure() {
+        let mut conn = migrated_conn();
+        let key = [18u8; 32];
+        let request = CreateAccountRequest {
+            email: "expired@example.com".to_string(),
+            display_name: "Expired OAuth".to_string(),
+            auth_type: Some("oauth2_gmail".to_string()),
+            imap_host: "imap.gmail.com".to_string(),
+            imap_port: 993,
+            imap_encryption: Encryption::Tls,
+            smtp_host: "smtp.gmail.com".to_string(),
+            smtp_port: 587,
+            smtp_encryption: Encryption::StartTls,
+            username: "expired@example.com".to_string(),
+            password: None,
+            oauth2_client_id: Some("cid".to_string()),
+            oauth2_client_secret: None,
+            oauth2_access_token: Some("known-expired-token".to_string()),
+            oauth2_refresh_token: None,
+            oauth2_expires_at: Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339()),
+        };
+        let response = create_account(&mut conn, &key, request).unwrap();
+
+        let result = resolve_account_auth(&conn, &key, &response.id);
+        assert!(matches!(
+            result,
+            Err(MailFfiError::OAuth2Refresh(message)) if message.contains("missing refresh_token")
+        ));
     }
 
     #[test]
@@ -697,11 +991,7 @@ mod tests {
         assert_eq!(counts("folders"), 0);
     }
 
-    fn probe_params(
-        encryption: Encryption,
-        host: &str,
-        password: Option<&str>,
-    ) -> ProbeParams {
+    fn probe_params(encryption: Encryption, host: &str, password: Option<&str>) -> ProbeParams {
         ProbeParams {
             imap_host: host.to_string(),
             imap_port: 993,
@@ -781,17 +1071,29 @@ mod tests {
         let ctx = crate::test_support::ctx_arc(pool);
 
         let mut conn = ctx.pool.get().unwrap();
-        let response =
-            create_account(&mut conn, &ctx.credential_key, password_request("auto@example.com"))
-                .unwrap();
+        let response = create_account(
+            &mut conn,
+            &ctx.credential_key,
+            password_request("auto@example.com"),
+        )
+        .unwrap();
         drop(conn);
+
+        // `create_account` opportunistically auto-starts through the
+        // process-global context. Other tests may have initialized that
+        // context, so remove that optional worker before exercising this
+        // test's explicit local-worker seam.
+        crate::state::registry().stop_account(&response.id);
 
         let (sync, backfill) = crate::state::start_account_workers(rt, &ctx, &response.id);
         assert!(sync && backfill, "first auto-start spawns both workers");
         assert!(crate::state::registry().is_sync_running(&response.id));
 
         let (sync_again, _) = crate::state::start_account_workers(rt, &ctx, &response.id);
-        assert!(!sync_again, "second auto-start does not respawn the live sync worker");
+        assert!(
+            !sync_again,
+            "second auto-start does not respawn the live sync worker"
+        );
 
         crate::state::registry().stop_account(&response.id);
     }

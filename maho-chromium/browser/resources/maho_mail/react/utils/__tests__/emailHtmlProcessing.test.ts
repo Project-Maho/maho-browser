@@ -108,7 +108,7 @@ describe("processLinksForSafety (IDN homograph protection)", () => {
       expect(getMarkedLinks(result.html).length).toBeGreaterThan(0);
     });
 
-    it("allows ordinary HTTPS images when remote images are enabled", () => {
+    it("routes HTTPS images through the sanitizing proxy when remote images are enabled", () => {
       const result = prepareIframeHtml(
         '<img src="https://images.example.com/newsletter.png" alt="Newsletter">',
         {
@@ -118,8 +118,13 @@ describe("processLinksForSafety (IDN homograph protection)", () => {
         },
       );
 
-      expect(result.html).toContain('src="https://images.example.com/newsletter.png"');
-      expect(result.html).toContain("img-src https: data: blob: cid:");
+      // Trusted WebUI renderers cannot fetch network images directly, so the
+      // surviving external image is rewritten to the chrome://image proxy.
+      expect(result.html).toContain(
+        `chrome://image?url=${encodeURIComponent("https://images.example.com/newsletter.png")}`,
+      );
+      expect(result.html).not.toContain('src="https://images.example.com/newsletter.png"');
+      expect(result.html).toContain("img-src chrome://image data: blob: cid:");
       expect(result.blockedCount).toBe(0);
     });
 

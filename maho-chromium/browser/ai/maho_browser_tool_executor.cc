@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -135,6 +136,21 @@ MahoBrowserToolExecutor::FallbackTier InferFallbackTier(
 
 }  // namespace
 
+MahoBrowserToolExecutor::BrowserActionAuthorization::
+    BrowserActionAuthorization() = default;
+MahoBrowserToolExecutor::BrowserActionAuthorization::
+    BrowserActionAuthorization(const BrowserActionAuthorization&) = default;
+MahoBrowserToolExecutor::BrowserActionAuthorization::
+    BrowserActionAuthorization(BrowserActionAuthorization&&) = default;
+MahoBrowserToolExecutor::BrowserActionAuthorization&
+MahoBrowserToolExecutor::BrowserActionAuthorization::operator=(
+    const BrowserActionAuthorization&) = default;
+MahoBrowserToolExecutor::BrowserActionAuthorization&
+MahoBrowserToolExecutor::BrowserActionAuthorization::operator=(
+    BrowserActionAuthorization&&) = default;
+MahoBrowserToolExecutor::BrowserActionAuthorization::
+    ~BrowserActionAuthorization() = default;
+
 MahoBrowserToolExecutor::MahoBrowserToolExecutor(
     Browser* browser,
     bool browser_tools_v1_enabled,
@@ -221,6 +237,10 @@ void MahoBrowserToolExecutor::Execute(const std::string& tool_name,
     ExecuteExtractStructuredPageContext(std::move(callback));
     return;
   }
+  if (base::StartsWith(tool_name, "mail_")) {
+    ExecuteMailTool(tool_name, arguments, std::move(callback));
+    return;
+  }
 
   std::move(callback).Run(
       BuildErrorResult(tool_name, "Browser tool is registered but not implemented."));
@@ -269,6 +289,83 @@ void MahoBrowserToolExecutor::ExecuteExtractStructuredPageContext(
   page_context_extractor_->GetPageContext(base::BindOnce(
       &MahoBrowserToolExecutor::OnExtractStructuredPageContext,
       weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoBrowserToolExecutor::ExecuteMailTool(
+    const std::string& tool_name,
+    const base::DictValue& arguments,
+    ToolResultCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMcpBrowserDelegate* delegate = GetBrowserActionDelegate();
+  if (!delegate) {
+    std::move(callback).Run(
+        BuildErrorResult(tool_name, "Mail broker unavailable."));
+    return;
+  }
+
+  auto completion = base::BindOnce(
+      &MahoBrowserToolExecutor::OnMailToolResult,
+      weak_factory_.GetWeakPtr(), tool_name, std::move(callback));
+  if (tool_name == "mail_list_accounts") {
+    delegate->MailListAccounts(std::move(completion));
+    return;
+  }
+
+  const std::string account_id = GetStringArgument(arguments, "account_id");
+  if (tool_name == "mail_list_folders") {
+    delegate->MailListFolders(account_id, std::move(completion));
+    return;
+  }
+  if (tool_name == "mail_list_emails") {
+    delegate->MailListEmails(
+        account_id, GetStringArgument(arguments, "folder_id"),
+        GetIntArgument(arguments, "limit", 50),
+        GetIntArgument(arguments, "offset", 0), std::move(completion));
+    return;
+  }
+  if (tool_name == "mail_get_email") {
+    delegate->MailGetEmail(GetStringArgument(arguments, "email_id"),
+                           std::move(completion));
+    return;
+  }
+  if (tool_name == "mail_search_emails") {
+    delegate->MailSearchEmails(GetStringArgument(arguments, "query_json"),
+                               std::move(completion));
+    return;
+  }
+  if (tool_name == "mail_list_thread") {
+    delegate->MailListThread(account_id,
+                             GetStringArgument(arguments, "message_id"),
+                             std::move(completion));
+    return;
+  }
+  std::move(callback).Run(
+      BuildErrorResult(tool_name, "Mail tool is not implemented."));
+}
+
+void MahoBrowserToolExecutor::OnMailToolResult(
+    const std::string& tool_name,
+    ToolResultCallback callback,
+    bool ok,
+    std::string result_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!ok) {
+    std::move(callback).Run(BuildErrorResult(
+        tool_name, result_json.empty() ? "Mail broker request failed."
+                                       : result_json));
+    return;
+  }
+  base::DictValue result;
+  result.Set("ok", true);
+  result.Set("tool", tool_name);
+  std::optional<base::Value> parsed = base::JSONReader::Read(result_json, 0);
+  if (!parsed) {
+    std::move(callback).Run(
+        BuildErrorResult(tool_name, "Mail broker returned invalid JSON."));
+    return;
+  }
+  result.Set("result", std::move(*parsed));
+  std::move(callback).Run(std::move(result));
 }
 
 void MahoBrowserToolExecutor::ExecuteBrowserAction(

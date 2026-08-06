@@ -9,6 +9,17 @@
 
 namespace maho {
 
+MahoMailOAuthSession::StartResult::StartResult() = default;
+MahoMailOAuthSession::StartResult::StartResult(const StartResult&) = default;
+MahoMailOAuthSession::StartResult&
+MahoMailOAuthSession::StartResult::operator=(const StartResult&) = default;
+MahoMailOAuthSession::StartResult::StartResult(StartResult&&) noexcept =
+    default;
+MahoMailOAuthSession::StartResult&
+MahoMailOAuthSession::StartResult::operator=(StartResult&&) noexcept =
+    default;
+MahoMailOAuthSession::StartResult::~StartResult() = default;
+
 MahoMailOAuthSession::MahoMailOAuthSession(content::WebContents* web_contents,
                                            std::string state,
                                            base::OnceClosure cancel_closure)

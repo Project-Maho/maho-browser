@@ -143,10 +143,9 @@ fn require_email_owned(
         Ok((subject, from, body, row_account_id)) if row_account_id == account_id => {
             Ok((subject, from, body.unwrap_or_default()))
         }
-        _ => Err(MailFfiError::Core(maho_core::error::AppError::NotFound(format!(
-            "Email {} not found or access denied",
-            email_id
-        )))),
+        _ => Err(MailFfiError::Core(maho_core::error::AppError::NotFound(
+            format!("Email {} not found or access denied", email_id),
+        ))),
     }
 }
 
@@ -201,10 +200,7 @@ fn set_browser_ai_keys(map: HashMap<String, String>) {
 
 fn browser_ai_key(provider: &str) -> Option<String> {
     let guard = browser_ai_keys().lock().unwrap_or_else(|p| p.into_inner());
-    guard
-        .get(provider)
-        .filter(|k| !k.is_empty())
-        .cloned()
+    guard.get(provider).filter(|k| !k.is_empty()).cloned()
 }
 
 struct ApiError {
@@ -376,7 +372,10 @@ pub(crate) fn resolve_ai_config(
     ctx: &AppCtx,
     feature: &str,
 ) -> Result<(String, String, Option<String>, Option<String>)> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
     let row = db.query_row(
         "SELECT provider, model, base_url, use_browser_key FROM ai_configs WHERE feature = ?1",
@@ -392,8 +391,7 @@ pub(crate) fn resolve_ai_config(
     );
 
     if let Ok((provider_str, model, base_url, use_browser_key)) = row {
-        let api_key =
-            resolve_effective_key(&db, ctx, feature, &provider_str, use_browser_key);
+        let api_key = resolve_effective_key(&db, ctx, feature, &provider_str, use_browser_key);
 
         if api_key.is_some() || provider_str == "ollama" {
             let migrated_base = if provider_str == "ollama" {
@@ -475,14 +473,20 @@ async fn call_provider(
                     AiProvider::Ollama,
                     "ollama",
                 ),
-                _ => return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!("Unknown provider: {}", provider)))),
+                _ => {
+                    return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                        format!("Unknown provider: {}", provider),
+                    )))
+                }
             };
 
             let key_opt = if requires_key {
-                Some(
-                    api_key
-                        .ok_or_else(|| MailFfiError::Core(maho_core::error::AppError::Validation(format!("{} API key not found", provider))))?,
-                )
+                Some(api_key.ok_or_else(|| {
+                    MailFfiError::Core(maho_core::error::AppError::Validation(format!(
+                        "{} API key not found",
+                        provider
+                    )))
+                })?)
             } else {
                 api_key.filter(|s| !s.is_empty())
             };
@@ -503,15 +507,24 @@ async fn call_provider(
                     .header("HTTP-Referer", "https://mahobrowser.com")
                     .header("X-Title", "Maho Mail");
             }
-            let resp = req.send().await.map_err(|e| MailFfiError::Internal(e.to_string()))?;
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| MailFfiError::Internal(e.to_string()))?;
             let status = resp.status();
             if !status.is_success() {
-                let text = resp.text().await.map_err(|e| MailFfiError::Internal(e.to_string()))?;
+                let text = resp
+                    .text()
+                    .await
+                    .map_err(|e| MailFfiError::Internal(e.to_string()))?;
                 return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
                     format_api_error(ai_provider, status, &text, api_key).into_combined(),
                 )));
             }
-            let text = resp.text().await.map_err(|e| MailFfiError::Internal(e.to_string()))?;
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| MailFfiError::Internal(e.to_string()))?;
             let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
                 MailFfiError::Core(maho_core::error::AppError::Validation(format!(
                     "{} returned non-JSON: {} (body: {})",
@@ -532,8 +545,11 @@ async fn call_provider(
                 })
         }
         "anthropic" => {
-            let api_key =
-                api_key.ok_or_else(|| MailFfiError::Core(maho_core::error::AppError::Validation("Anthropic API key not found".to_string())))?;
+            let api_key = api_key.ok_or_else(|| {
+                MailFfiError::Core(maho_core::error::AppError::Validation(
+                    "Anthropic API key not found".to_string(),
+                ))
+            })?;
             let base = base_url.unwrap_or("https://api.anthropic.com");
             let url = format!("{}/v1/messages", base.trim_end_matches('/'));
             let resp = client
@@ -553,13 +569,19 @@ async fn call_provider(
 
             let status = resp.status();
             if !status.is_success() {
-                let text = resp.text().await.map_err(|e| MailFfiError::Internal(e.to_string()))?;
+                let text = resp
+                    .text()
+                    .await
+                    .map_err(|e| MailFfiError::Internal(e.to_string()))?;
                 return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
                     format_api_error(AiProvider::Anthropic, status, &text, Some(api_key))
                         .into_combined(),
                 )));
             }
-            let text = resp.text().await.map_err(|e| MailFfiError::Internal(e.to_string()))?;
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| MailFfiError::Internal(e.to_string()))?;
             let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
                 MailFfiError::Core(maho_core::error::AppError::Validation(format!(
                     "Anthropic returned non-JSON: {} (body: {})",
@@ -577,7 +599,9 @@ async fn call_provider(
                     )))
                 })
         }
-        _ => Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!("Unknown AI provider: {}", provider)))),
+        _ => Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+            format!("Unknown AI provider: {}", provider),
+        ))),
     }
 }
 
@@ -831,7 +855,8 @@ fn build_anthropic_messages(
 }
 
 fn get_cancellations() -> &'static Mutex<HashMap<(String, String), Arc<AtomicBool>>> {
-    static CANCELLATIONS: std::sync::OnceLock<Mutex<HashMap<(String, String), Arc<AtomicBool>>>> = std::sync::OnceLock::new();
+    static CANCELLATIONS: std::sync::OnceLock<Mutex<HashMap<(String, String), Arc<AtomicBool>>>> =
+        std::sync::OnceLock::new();
     CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -858,18 +883,25 @@ async fn get_email_summary_impl(
     request: SummaryRequest,
 ) -> Result<SummaryResponse> {
     if request.email_ids.is_empty() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Validation("No email content to summarize".to_string())));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+            "No email content to summarize".to_string(),
+        )));
     }
     if request.email_ids.len() > MAX_EMAIL_IDS_PER_SUMMARY {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!(
-            "Too many emails requested: {} (max {})",
-            request.email_ids.len(),
-            MAX_EMAIL_IDS_PER_SUMMARY
-        ))));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+            format!(
+                "Too many emails requested: {} (max {})",
+                request.email_ids.len(),
+                MAX_EMAIL_IDS_PER_SUMMARY
+            ),
+        )));
     }
 
     let email_texts = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         let mut texts = Vec::new();
         for email_id in &request.email_ids {
             let (_subject, _from, body) = require_email_owned(&db, account_id, email_id)?;
@@ -881,7 +913,9 @@ async fn get_email_summary_impl(
     };
 
     if email_texts.is_empty() {
-        return Err(MailFfiError::Core(maho_core::error::AppError::Validation("No email content to summarize".to_string())));
+        return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+            "No email content to summarize".to_string(),
+        )));
     }
 
     let combined = cap_text(&email_texts.join("\n\n---\n\n"), MAX_SUMMARY_COMBINED_CHARS);
@@ -894,7 +928,10 @@ async fn get_email_summary_impl(
     let input_trunc = truncate(&combined, 100);
 
     let res = call_llm_internal(ctx, &prompt).await;
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let info = get_ai_provider_info(&db);
     let (prov, mdl) = info
         .as_ref()
@@ -943,7 +980,10 @@ async fn get_reply_draft_impl(
     request: ReplyDraftRequest,
 ) -> Result<ReplyDraftResponse> {
     let (email_context, subject) = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         let (subject, from, body) = require_email_owned(&db, account_id, &request.email_id)?;
         let body_capped = cap_text(&body, MAX_REPLY_BODY_CHARS);
         let email_ctx = format!("Subject: {}\nFrom: {}\n\n{}", subject, from, body_capped);
@@ -964,7 +1004,10 @@ async fn get_reply_draft_impl(
     let input_trunc = truncate(&subject, 100);
 
     let res = call_llm_internal(ctx, &prompt).await;
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let info = get_ai_provider_info(&db);
     let (prov, mdl) = info
         .as_ref()
@@ -1007,10 +1050,7 @@ async fn get_reply_draft_impl(
     }
 }
 
-async fn adjust_tone_impl(
-    ctx: &AppCtx,
-    request: ToneRequest,
-) -> Result<ToneResponse> {
+async fn adjust_tone_impl(ctx: &AppCtx, request: ToneRequest) -> Result<ToneResponse> {
     let text_capped = cap_text(&request.text, MAX_TONE_TEXT_CHARS);
     let prompt = format!(
         "Rewrite the following text in a {} tone. Only return the rewritten text, no explanations.\n\n{}",
@@ -1020,7 +1060,10 @@ async fn adjust_tone_impl(
     let input_trunc = truncate(&text_capped, 100);
 
     let res = call_llm_internal(ctx, &prompt).await;
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let info = get_ai_provider_info(&db);
     let (prov, mdl) = info
         .as_ref()
@@ -1069,7 +1112,10 @@ async fn classify_email_impl(
     request: ClassifyRequest,
 ) -> Result<ClassifyResponse> {
     let (email_context, subject) = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         let (subject, _from, body) = require_email_owned(&db, account_id, &request.email_id)?;
         let body_capped = cap_text(&body, MAX_CLASSIFY_BODY_CHARS);
         let email_ctx = format!("Subject: {}\n\n{}", subject, body_capped);
@@ -1085,7 +1131,10 @@ async fn classify_email_impl(
     let input_trunc = truncate(&subject, 100);
 
     let res = call_llm_internal(ctx, &prompt).await;
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let info = get_ai_provider_info(&db);
     let (prov, mdl) = info
         .as_ref()
@@ -1095,7 +1144,9 @@ async fn classify_email_impl(
     match res {
         Ok(response) => {
             let category = normalize_category(&response).ok_or_else(|| {
-                MailFfiError::Core(maho_core::error::AppError::Validation("Failed to classify email into a valid category".to_string()))
+                MailFfiError::Core(maho_core::error::AppError::Validation(
+                    "Failed to classify email into a valid category".to_string(),
+                ))
             })?;
             log_ai_action(
                 &db,
@@ -1158,7 +1209,10 @@ async fn natural_language_search_impl(
         .unwrap_or_else(|| "system".to_string());
 
     let res = call_llm_internal(ctx, &prompt).await;
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let info = get_ai_provider_info(&db);
     let (prov, mdl) = info
         .as_ref()
@@ -1212,7 +1266,8 @@ async fn natural_language_search_impl(
                 date_from: None,
                 date_to: None,
             };
-            let mut result = maho_core::services::search::search_emails(&db, &sq).map_err(MailFfiError::Core)?;
+            let mut result =
+                maho_core::services::search::search_emails(&db, &sq).map_err(MailFfiError::Core)?;
             result.query = original_query;
             Ok(result)
         }
@@ -1240,7 +1295,10 @@ fn get_ai_action_history_impl(
     account_id: Option<String>,
     limit: Option<u32>,
 ) -> Result<Vec<AiActionLog>> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let limit = limit.unwrap_or(50).min(200);
 
     let mut entries = Vec::new();
@@ -1249,22 +1307,24 @@ fn get_ai_action_history_impl(
         let mut stmt = db.prepare(
             "SELECT id, account_id, email_id, action_type, provider, model, input_summary, output_summary, status, error_message, tokens_used, created_at FROM ai_action_log WHERE account_id = ?1 ORDER BY created_at DESC LIMIT ?2",
         ).map_err(MailFfiError::from)?;
-        let rows = stmt.query_map(params![acct_id, limit], |row| {
-            Ok(AiActionLog {
-                id: row.get(0)?,
-                account_id: row.get(1)?,
-                email_id: row.get(2)?,
-                action_type: row.get(3)?,
-                provider: row.get(4)?,
-                model: row.get(5)?,
-                input_summary: row.get(6)?,
-                output_summary: row.get(7)?,
-                status: row.get(8)?,
-                error_message: row.get(9)?,
-                tokens_used: row.get(10)?,
-                created_at: row.get(11)?,
+        let rows = stmt
+            .query_map(params![acct_id, limit], |row| {
+                Ok(AiActionLog {
+                    id: row.get(0)?,
+                    account_id: row.get(1)?,
+                    email_id: row.get(2)?,
+                    action_type: row.get(3)?,
+                    provider: row.get(4)?,
+                    model: row.get(5)?,
+                    input_summary: row.get(6)?,
+                    output_summary: row.get(7)?,
+                    status: row.get(8)?,
+                    error_message: row.get(9)?,
+                    tokens_used: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
             })
-        }).map_err(MailFfiError::from)?;
+            .map_err(MailFfiError::from)?;
         for row in rows {
             entries.push(row?);
         }
@@ -1272,22 +1332,24 @@ fn get_ai_action_history_impl(
         let mut stmt = db.prepare(
             "SELECT id, account_id, email_id, action_type, provider, model, input_summary, output_summary, status, error_message, tokens_used, created_at FROM ai_action_log ORDER BY created_at DESC LIMIT ?1",
         ).map_err(MailFfiError::from)?;
-        let rows = stmt.query_map(params![limit], |row| {
-            Ok(AiActionLog {
-                id: row.get(0)?,
-                account_id: row.get(1)?,
-                email_id: row.get(2)?,
-                action_type: row.get(3)?,
-                provider: row.get(4)?,
-                model: row.get(5)?,
-                input_summary: row.get(6)?,
-                output_summary: row.get(7)?,
-                status: row.get(8)?,
-                error_message: row.get(9)?,
-                tokens_used: row.get(10)?,
-                created_at: row.get(11)?,
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok(AiActionLog {
+                    id: row.get(0)?,
+                    account_id: row.get(1)?,
+                    email_id: row.get(2)?,
+                    action_type: row.get(3)?,
+                    provider: row.get(4)?,
+                    model: row.get(5)?,
+                    input_summary: row.get(6)?,
+                    output_summary: row.get(7)?,
+                    status: row.get(8)?,
+                    error_message: row.get(9)?,
+                    tokens_used: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
             })
-        }).map_err(MailFfiError::from)?;
+            .map_err(MailFfiError::from)?;
         for row in rows {
             entries.push(row?);
         }
@@ -1296,11 +1358,11 @@ fn get_ai_action_history_impl(
     Ok(entries)
 }
 
-fn save_ai_config_impl(
-    ctx: &AppCtx,
-    config: AiConfig,
-) -> Result<()> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+fn save_ai_config_impl(ctx: &AppCtx, config: AiConfig) -> Result<()> {
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let feature = if config.feature.is_empty() {
         "default"
     } else {
@@ -1316,7 +1378,13 @@ fn save_ai_config_impl(
 
     if let Some(ref api_key) = config.api_key {
         let key_name = credential_key(feature, provider_str);
-        crate::credentials::store_encrypted_credential(&db, &ctx.credential_key, "ai", &key_name, api_key)?;
+        crate::credentials::store_encrypted_credential(
+            &db,
+            &ctx.credential_key,
+            "ai",
+            &key_name,
+            api_key,
+        )?;
     }
 
     let existing: Option<String> = db
@@ -1349,11 +1417,11 @@ fn save_ai_config_impl(
     Ok(())
 }
 
-fn get_ai_config_impl(
-    ctx: &AppCtx,
-    feature: Option<String>,
-) -> Result<Option<AiConfigResponse>> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+fn get_ai_config_impl(ctx: &AppCtx, feature: Option<String>) -> Result<Option<AiConfigResponse>> {
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let feat = feature.as_deref().unwrap_or("default");
 
     let result = db.query_row(
@@ -1404,11 +1472,11 @@ fn get_ai_config_impl(
     }
 }
 
-fn delete_ai_config_impl(
-    ctx: &AppCtx,
-    feature: Option<String>,
-) -> Result<()> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+fn delete_ai_config_impl(ctx: &AppCtx, feature: Option<String>) -> Result<()> {
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let feat = feature.as_deref().unwrap_or("default");
 
     for provider in &["openai", "anthropic", "ollama", "openrouter"] {
@@ -1427,9 +1495,7 @@ fn delete_ai_config_impl(
     Ok(())
 }
 
-async fn test_ai_connection_impl(
-    config: AiConfig,
-) -> Result<TestAiConnectionResult> {
+async fn test_ai_connection_impl(config: AiConfig) -> Result<TestAiConnectionResult> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -1562,12 +1628,14 @@ async fn test_ai_connection_impl(
     }
 }
 
-
 async fn list_agent_sessions_impl(
     ctx: &AppCtx,
     account_id: String,
 ) -> Result<Vec<AgentChatSession>> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let mut stmt = db.prepare(
         "SELECT id, account_id, title, created_at, updated_at FROM agent_sessions WHERE account_id = ?1 ORDER BY updated_at DESC"
     ).map_err(MailFfiError::from)?;
@@ -1594,7 +1662,10 @@ async fn get_agent_messages_impl(
     account_id: String,
     session_id: String,
 ) -> Result<Vec<AgentChatMessage>> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let exists: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE id = ?1 AND account_id = ?2)",
@@ -1630,11 +1701,11 @@ async fn get_agent_messages_impl(
     Ok(messages)
 }
 
-async fn create_agent_session_impl(
-    ctx: &AppCtx,
-    account_id: String,
-) -> Result<AgentChatSession> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+async fn create_agent_session_impl(ctx: &AppCtx, account_id: String) -> Result<AgentChatSession> {
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let session = AgentChatSession {
@@ -1658,7 +1729,10 @@ async fn delete_agent_session_impl(
     account_id: String,
     session_id: String,
 ) -> Result<()> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let exists: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE id = ?1 AND account_id = ?2)",
@@ -1684,7 +1758,10 @@ async fn send_agent_message_impl(
     content: String,
 ) -> Result<AgentChatMessage> {
     {
-        let db_exists = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db_exists = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         let exists: bool = db_exists
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE id = ?1 AND account_id = ?2)",
@@ -1717,7 +1794,10 @@ async fn send_agent_message_impl(
 
     // 1. Insert user message & update session title
     {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         db.execute(
             "INSERT INTO agent_messages (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![user_msg_id, &session_id, "user", &content, &now]
@@ -1761,7 +1841,10 @@ async fn send_agent_message_impl(
 
     // 2. Fetch entire chat history for this session
     let history: Vec<(String, String, Option<String>)> = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         let mut stmt = db.prepare(
             "SELECT role, content, tool_calls FROM agent_messages WHERE session_id = ?1 ORDER BY created_at ASC"
         ).map_err(MailFfiError::from)?;
@@ -1776,16 +1859,14 @@ async fn send_agent_message_impl(
     };
 
     // 3. Resolve AI config
-    let (provider_str, model, base_url, api_key) =
-        match resolve_ai_config(ctx, "default") {
-            Ok(t) => t,
-            Err(e) => {
-                return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!(
-                    "Error generating response: {}",
-                    e
-                ))));
-            }
-        };
+    let (provider_str, model, base_url, api_key) = match resolve_ai_config(ctx, "default") {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                format!("Error generating response: {}", e),
+            )));
+        }
+    };
 
     if cancel_token.load(Ordering::Relaxed) {
         return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
@@ -1797,7 +1878,9 @@ async fn send_agent_message_impl(
 
     if is_anthropic {
         let api_key_str = api_key.ok_or_else(|| {
-            MailFfiError::Core(maho_core::error::AppError::Validation("Anthropic API key not found".to_string()))
+            MailFfiError::Core(maho_core::error::AppError::Validation(
+                "Anthropic API key not found".to_string(),
+            ))
         })?;
 
         let system_prompt = "You are Maho Mail Assistant, a helpful AI assistant integrated into a desktop email client. You can search the user's emails and read specific emails to help answer their questions.";
@@ -1834,17 +1917,22 @@ async fn send_agent_message_impl(
                 .send()
                 .await
                 .map_err(|e| {
-                    MailFfiError::Core(maho_core::error::AppError::Validation(format!("Anthropic request failed: {}", e)))
+                    MailFfiError::Core(maho_core::error::AppError::Validation(format!(
+                        "Anthropic request failed: {}",
+                        e
+                    )))
                 })?;
 
             let status = resp.status();
             if !status.is_success() {
                 let err_text = resp.text().await.unwrap_or_default();
-                return Err(MailFfiError::Core(maho_core::error::AppError::Validation(format!(
-                    "Anthropic API error ({}): {}",
-                    status,
-                    truncate(&err_text, 300)
-                ))));
+                return Err(MailFfiError::Core(maho_core::error::AppError::Validation(
+                    format!(
+                        "Anthropic API error ({}): {}",
+                        status,
+                        truncate(&err_text, 300)
+                    ),
+                )));
             }
 
             let resp_text = resp.text().await.map_err(|e| {
@@ -1853,13 +1941,12 @@ async fn send_agent_message_impl(
                     e
                 )))
             })?;
-            let resp_body: serde_json::Value =
-                serde_json::from_str(&resp_text).map_err(|e| {
-                    MailFfiError::Core(maho_core::error::AppError::Validation(format!(
-                        "Anthropic returned invalid JSON: {}",
-                        e
-                    )))
-                })?;
+            let resp_body: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+                MailFfiError::Core(maho_core::error::AppError::Validation(format!(
+                    "Anthropic returned invalid JSON: {}",
+                    e
+                )))
+            })?;
 
             let stop_reason = resp_body["stop_reason"].as_str().unwrap_or("");
             let content_blocks = resp_body["content"].as_array();
@@ -1892,10 +1979,13 @@ async fn send_agent_message_impl(
                     }
                 }
 
-                let tool_calls_json = serde_json::to_string(&tool_use_entries)
-                    .unwrap_or_else(|_| "[]".to_string());
+                let tool_calls_json =
+                    serde_json::to_string(&tool_use_entries).unwrap_or_else(|_| "[]".to_string());
                 {
-                    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                    let db = ctx
+                        .pool
+                        .get()
+                        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     let tc_msg_id = uuid::Uuid::new_v4().to_string();
                     let tc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
                     db.execute(
@@ -1926,13 +2016,11 @@ async fn send_agent_message_impl(
                     }
 
                     let tool_result = {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                        agent_tool_dispatch(
-                            tool_name,
-                            tool_input,
-                            &db,
-                            &account_id,
-                        )
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        agent_tool_dispatch(tool_name, tool_input, &db, &account_id)
                     };
 
                     let result_str = match tool_result {
@@ -1946,7 +2034,10 @@ async fn send_agent_message_impl(
                     })
                     .to_string();
                     {
-                        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                        let db = ctx
+                            .pool
+                            .get()
+                            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                         let tr_msg_id = uuid::Uuid::new_v4().to_string();
                         let tr_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
                         db.execute(
@@ -1976,7 +2067,10 @@ async fn send_agent_message_impl(
         let assistant_msg_id = uuid::Uuid::new_v4().to_string();
         let resp_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         {
-            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            let db = ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
             db.execute(
                 "INSERT INTO agent_messages (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![assistant_msg_id, &session_id, "assistant", &reply_text, &resp_now]
@@ -2035,7 +2129,10 @@ async fn send_agent_message_impl(
         let assistant_msg_id = uuid::Uuid::new_v4().to_string();
         let resp_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         {
-            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            let db = ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
             db.execute(
                 "INSERT INTO agent_messages (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![assistant_msg_id, &session_id, "assistant", &reply, &resp_now]
@@ -2055,12 +2152,11 @@ async fn send_agent_message_impl(
     }
 }
 
-fn cancel_agent_message_impl(
-    ctx: &AppCtx,
-    account_id: String,
-    session_id: String,
-) -> Result<()> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+fn cancel_agent_message_impl(ctx: &AppCtx, account_id: String, session_id: String) -> Result<()> {
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let exists: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE id = ?1 AND account_id = ?2)",
@@ -2081,14 +2177,16 @@ fn cancel_agent_message_impl(
     Ok(())
 }
 
-
 async fn get_auto_draft_for_email_impl(
     ctx: &AppCtx,
     account_id: String,
     email_id: String,
 ) -> Result<Option<AutoDraft>> {
     let existing: Option<AutoDraft> = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         let result = db.query_row(
             "SELECT id, email_id, draft_content, status FROM auto_drafts WHERE email_id = ?1",
             [&email_id],
@@ -2117,7 +2215,10 @@ async fn get_auto_draft_for_email_impl(
     }
 
     let (subject, from, body) = {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         match require_email_owned(&db, &account_id, &email_id) {
             Ok(t) => t,
             Err(_) => return Ok(None),
@@ -2138,7 +2239,10 @@ async fn get_auto_draft_for_email_impl(
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     {
-        let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
         db.execute(
             "INSERT INTO auto_drafts (id, email_id, draft_content, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![draft_id, email_id, generated_content, "pending", now]
@@ -2153,12 +2257,11 @@ async fn get_auto_draft_for_email_impl(
     }))
 }
 
-fn update_auto_draft_status_impl(
-    ctx: &AppCtx,
-    draft_id: String,
-    status: String,
-) -> Result<()> {
-    let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+fn update_auto_draft_status_impl(ctx: &AppCtx, draft_id: String, status: String) -> Result<()> {
+    let db = ctx
+        .pool
+        .get()
+        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     db.execute(
         "UPDATE auto_drafts SET status = ?1 WHERE id = ?2",
         rusqlite::params![status, draft_id],
@@ -2354,9 +2457,7 @@ pub extern "C" fn MahoMailGetAiActionHistory(
         let limit_val = if limit <= 0 { None } else { Some(limit as u32) };
 
         accept_read(callback, user_data, move |ctx| {
-            blocking_json(move || {
-                get_ai_action_history_impl(&ctx, account_id, limit_val)
-            })
+            blocking_json(move || get_ai_action_history_impl(&ctx, account_id, limit_val))
         })
     })
 }
@@ -2426,9 +2527,7 @@ pub extern "C" fn MahoMailGetAiConfig(
         };
 
         accept_read(callback, user_data, move |ctx| {
-            blocking_json(move || {
-                get_ai_config_impl(&ctx, feature)
-            })
+            blocking_json(move || get_ai_config_impl(&ctx, feature))
         })
     })
 }
@@ -2588,7 +2687,8 @@ pub extern "C" fn MahoMailSendAgentMessage(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let response = send_agent_message_impl(&ctx, account_id, session_id, content).await?;
+                let response =
+                    send_agent_message_impl(&ctx, account_id, session_id, content).await?;
                 serde_json::to_string(&response).map_err(MailFfiError::from)
             })
         })
@@ -2707,8 +2807,14 @@ mod tests {
 
     #[test]
     fn test_normalize_category() {
-        assert_eq!(normalize_category("important"), Some("important".to_string()));
-        assert_eq!(normalize_category("Important "), Some("important".to_string()));
+        assert_eq!(
+            normalize_category("important"),
+            Some("important".to_string())
+        );
+        assert_eq!(
+            normalize_category("Important "),
+            Some("important".to_string())
+        );
         assert_eq!(normalize_category("spam"), Some("spam".to_string()));
         assert_eq!(normalize_category("other"), None);
     }
@@ -2734,10 +2840,7 @@ mod tests {
             redact_secrets("my key is sk-12345678901234567890123", None),
             "my key is [REDACTED]"
         );
-        assert_eq!(
-            redact_secrets("Bearer abcdefgh", None),
-            "Bearer [REDACTED]"
-        );
+        assert_eq!(redact_secrets("Bearer abcdefgh", None), "Bearer [REDACTED]");
     }
 
     fn browser_key_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -2837,7 +2940,6 @@ mod tests {
     }
 }
 
-
 // === [W-G] ===
 
 #[no_mangle]
@@ -2875,7 +2977,13 @@ pub extern "C" fn MahoMailTranslateSegments(
             Box::pin(async move {
                 let mut translated = Vec::new();
                 for segment in segments {
-                    let res = translate_text_impl(&ctx, segment, target_lang.clone(), source_lang.clone()).await?;
+                    let res = translate_text_impl(
+                        &ctx,
+                        segment,
+                        target_lang.clone(),
+                        source_lang.clone(),
+                    )
+                    .await?;
                     translated.push(res);
                 }
                 serde_json::to_string(&translated).map_err(MailFfiError::from)
@@ -2883,4 +2991,3 @@ pub extern "C" fn MahoMailTranslateSegments(
         })
     })
 }
-

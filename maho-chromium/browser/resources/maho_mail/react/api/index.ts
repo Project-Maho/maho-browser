@@ -54,8 +54,11 @@ export const getOAuth2AuthUrl = async (config: Types.OAuth2Config, redirectUri: 
   return parsed.auth_url || '';
 };
 
-export const startOAuth2 = async (provider: string): Promise<string> => {
-  const res = await handler.beginOAuth(provider);
+export const startOAuth2 = async (
+  provider: string,
+  reauthorizeAccountId = '',
+): Promise<string> => {
+  const res = await handler.beginOAuth(provider, reauthorizeAccountId);
   if (!res.ok) throw new Error(res.errorJson);
   return res.state;
 };
