@@ -1,5 +1,8 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
 
+#include "maho/browser/ai/maho_artifact_registry.h"
+#include "maho/browser/ui/webui/maho_subscription_checkout.h"
+
 #include <algorithm>
 #include <string>
 #include <unordered_set>
@@ -54,6 +57,7 @@
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/components/constants/webui_url_constants.h"
+#include "net/base/url_util.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/base/net_errors.h"
@@ -354,6 +358,34 @@ maho_ai::mojom::CredentialErrorCode CredentialErrorCodeFromPersistedSymbol(
   return maho_ai::mojom::CredentialErrorCode::kGeneric;
 }
 
+// Builds an ArtifactInfo from the normalized JSON payload carried in a
+// kArtifactCreated event's text field. Returns null if the payload is missing
+// required fields (paths are intentionally never present here).
+maho_ai::mojom::ArtifactInfoPtr ArtifactInfoFromJson(const std::string& json) {
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return nullptr;
+  }
+  const base::DictValue& d = parsed->GetDict();
+  const std::string* id = d.FindString("artifact_id");
+  const std::string* sid = d.FindString("session_id");
+  const std::string* name = d.FindString("display_name");
+  const std::string* mime = d.FindString("mime_type");
+  if (!id || !sid || !name || !mime) {
+    return nullptr;
+  }
+  auto info = maho_ai::mojom::ArtifactInfo::New();
+  info->artifact_id = *id;
+  info->session_id = *sid;
+  info->display_name = *name;
+  info->mime_type = *mime;
+  info->size_bytes =
+      static_cast<uint64_t>(d.FindDouble("size_bytes").value_or(0));
+  info->created_at = d.FindDouble("created_at").value_or(0);
+  return info;
+}
+
 maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
     const base::DictValue& dict,
     const std::string& owning_session_id) {
@@ -377,6 +409,10 @@ maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
   const std::string* text = dict.FindString("text");
   if (text) {
     event->text = *text;
+  }
+  if (event->kind == maho_ai::mojom::RuntimeEventKind::kArtifactCreated &&
+      text) {
+    event->artifact = ArtifactInfoFromJson(*text);
   }
   const std::string* credential_error_code =
       dict.FindString("credential_error_code");
@@ -533,6 +569,8 @@ maho_ai::mojom::RuntimeEventKind InternalToMojoEventKind(
       return maho_ai::mojom::RuntimeEventKind::kBrowserContextInjected;
     case MahoAiRuntimeEventType::kToolAvailabilityChanged:
       return maho_ai::mojom::RuntimeEventKind::kToolAvailabilityChanged;
+    case MahoAiRuntimeEventType::kArtifactCreated:
+      return maho_ai::mojom::RuntimeEventKind::kArtifactCreated;
     default:
       return maho_ai::mojom::RuntimeEventKind::kError;
   }
@@ -694,6 +732,21 @@ void MahoAIPageHandler::PrepareForViewModeHandoff() {
   active_ingress_request_id_.clear();
   active_ingress_delivery_id_ = 0;
 }
+
+MahoAIPageHandler::Correlation::Correlation() = default;
+
+MahoAIPageHandler::Correlation::Correlation(
+    std::string session_id,
+    std::optional<std::string> request_id)
+    : session_id(std::move(session_id)), request_id(std::move(request_id)) {}
+
+MahoAIPageHandler::Correlation::Correlation(const Correlation&) = default;
+MahoAIPageHandler::Correlation::Correlation(Correlation&&) = default;
+MahoAIPageHandler::Correlation&
+MahoAIPageHandler::Correlation::operator=(const Correlation&) = default;
+MahoAIPageHandler::Correlation&
+MahoAIPageHandler::Correlation::operator=(Correlation&&) = default;
+MahoAIPageHandler::Correlation::~Correlation() = default;
 
 void MahoAIPageHandler::RestoreViewModeHandoff(
     maho::MahoAiIngressCoordinator::SessionHandoff handoff) {
@@ -931,6 +984,10 @@ maho_ai::mojom::RuntimeEventPtr MahoAIPageHandler::ToMojoEvent(
   } else {
     mojo_event->text =
         maho::credential_redaction::RedactCredentialText(event.text);
+  }
+
+  if (event.type == MahoAiRuntimeEventType::kArtifactCreated) {
+    mojo_event->artifact = ArtifactInfoFromJson(event.text);
   }
 
   if (event.type == MahoAiRuntimeEventType::kToolRequest) {
@@ -2124,6 +2181,111 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
   }
 }
 
+void MahoAIPageHandler::ListArtifacts(const std::string& session_id,
+                                      ListArtifactsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<maho_ai::mojom::ArtifactInfoPtr> out;
+  maho::ai::MahoArtifactRegistry* registry =
+      browser_ ? maho::ai::MahoArtifactRegistry::GetForProfile(
+                     browser_->profile())
+               : nullptr;
+  if (registry) {
+    for (const maho::ai::MahoArtifact& a : registry->ListArtifacts(session_id)) {
+      auto info = maho_ai::mojom::ArtifactInfo::New();
+      info->artifact_id = a.artifact_id;
+      info->session_id = a.session_id;
+      info->display_name = a.display_name;
+      info->mime_type = a.mime_type;
+      info->size_bytes = a.size_bytes;
+      info->created_at = static_cast<double>(a.created_at_ms) / 1000.0;
+      out.push_back(std::move(info));
+    }
+  }
+  std::move(callback).Run(std::move(out));
+}
+
+void MahoAIPageHandler::RenameArtifact(const std::string& artifact_id,
+                                       const std::string& display_name,
+                                       RenameArtifactCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::ai::MahoArtifactRegistry* registry =
+      browser_ ? maho::ai::MahoArtifactRegistry::GetForProfile(
+                     browser_->profile())
+               : nullptr;
+  if (!registry) {
+    std::move(callback).Run(false, "registry unavailable");
+    return;
+  }
+  auto result = registry->RenameArtifact(artifact_id, display_name);
+  if (result.has_value()) {
+    std::move(callback).Run(true, std::nullopt);
+  } else {
+    std::move(callback).Run(false, result.error());
+  }
+}
+
+void MahoAIPageHandler::DeleteArtifact(const std::string& artifact_id,
+                                       DeleteArtifactCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::ai::MahoArtifactRegistry* registry =
+      browser_ ? maho::ai::MahoArtifactRegistry::GetForProfile(
+                     browser_->profile())
+               : nullptr;
+  std::move(callback).Run(registry && registry->DeleteArtifact(artifact_id));
+}
+
+void MahoAIPageHandler::GetArtifactPreviewUrl(
+    const std::string& artifact_id,
+    GetArtifactPreviewUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::ai::MahoArtifactRegistry* registry =
+      browser_ ? maho::ai::MahoArtifactRegistry::GetForProfile(
+                     browser_->profile())
+               : nullptr;
+  content::WebContents* web_contents =
+      token_ ? token_->web_contents() : nullptr;
+  if (!registry || !web_contents) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::optional<std::string> capability =
+      registry->IssueCapability(artifact_id, "preview", web_contents);
+  if (!capability) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::move(callback).Run(
+      net::AppendQueryParameter(
+          GURL(maho::kMahoArtifactPreviewUntrustedURL), "cap", *capability)
+          .spec());
+}
+
+void MahoAIPageHandler::GetArtifactExportUrl(
+    const std::string& artifact_id,
+    GetArtifactExportUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::ai::MahoArtifactRegistry* registry =
+      browser_ ? maho::ai::MahoArtifactRegistry::GetForProfile(
+                     browser_->profile())
+               : nullptr;
+  content::WebContents* web_contents =
+      token_ ? token_->web_contents() : nullptr;
+  if (!registry || !web_contents) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::optional<std::string> capability =
+      registry->IssueCapability(artifact_id, "export", web_contents);
+  if (!capability) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::move(callback).Run(
+      net::AppendQueryParameter(
+          GURL(maho::kMahoArtifactExportUntrustedURL), "cap", *capability)
+          .spec());
+}
+
 void MahoAIPageHandler::GetSessionHistory(const std::string& session_id,
     uint32_t offset,
     uint32_t limit,
@@ -3004,35 +3166,13 @@ void MahoAIPageHandler::GetBuyCreditsUrl(int32_t pack_size_usd,
     GetBuyCreditsUrlCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::string checkout_url;
-  switch (pack_size_usd) {
-    case 10:
-      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-10";
-      break;
-    case 50:
-      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-50";
-      break;
-    case 100:
-      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-100";
-      break;
-    default:
-      checkout_url = "";
-      break;
-  }
-
-  // Append custom_data.user_id (ADR 0010 §Webhook Handling) so the relay's
-  // LS webhook handler can attribute the purchase to the correct account.
-  // Reads prefs synchronously via account_prefs::kRelayUserId.
-  if (!checkout_url.empty() && prefs_) {
-    const std::string user_id =
-        prefs_->GetString(maho::account_prefs::kRelayUserId);
-    if (!user_id.empty()) {
-      checkout_url += "?checkout[custom][user_id]=";
-      checkout_url += base::EscapeQueryParamValue(user_id, /*use_plus=*/false);
-    }
-  }
-
-  std::move(callback).Run(checkout_url);
+  // Single "Maho AI Pay-as-you-go credits" pay-what-you-want product: the buyer
+  // chooses the amount in the LemonSqueezy checkout, so pack_size_usd no longer
+  // selects a fixed pack. The relay webhook credits the amount actually paid.
+  const std::string user_id =
+      prefs_ ? prefs_->GetString(maho::account_prefs::kRelayUserId)
+             : std::string();
+  std::move(callback).Run(maho::webui::BuildPaygCreditsCheckoutUrl(user_id));
 }
 
 void MahoAIPageHandler::CreateAiProfile(const std::string& name,

@@ -616,6 +616,11 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
 
             let payg_amount = match variant_map.map_variant(variant_id) {
                 Some(VariantKind::PaygCredit(amt)) => Some(amt),
+                // Pay-what-you-want: credit the amount actually paid (order
+                // total, cents -> USD) rather than a fixed pack size.
+                Some(VariantKind::PaygCreditPaid) => {
+                    Some((payload.data.attributes.total.unwrap_or(0) as f64) / 100.0)
+                }
                 _ => None,
             };
             let amount_usd = payg_amount

@@ -118,6 +118,11 @@ pub fn base64_exceeds_cap(encoded_len: usize, max_decoded_bytes: usize) -> bool 
 pub enum VariantKind {
     Subscription(&'static str),
     PaygCredit(f64),
+    /// Pay-what-you-want credit product: the granted credit equals the amount
+    /// actually paid (order total), not a fixed pack size. Backs the single
+    /// "Maho AI Pay-as-you-go credits" LemonSqueezy product (variant via
+    /// LS_VARIANT_PAYG); the buyer chooses any amount >= the product minimum.
+    PaygCreditPaid,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -127,6 +132,9 @@ pub struct VariantMap {
     pub payg_10: Option<i32>,
     pub payg_50: Option<i32>,
     pub payg_100: Option<i32>,
+    /// Single pay-what-you-want credit variant (LS_VARIANT_PAYG). Credits the
+    /// amount paid rather than a fixed pack size.
+    pub payg: Option<i32>,
 }
 
 impl VariantMap {
@@ -142,6 +150,7 @@ impl VariantMap {
             payg_10: parse("LS_VARIANT_PAYG_10"),
             payg_50: parse("LS_VARIANT_PAYG_50"),
             payg_100: parse("LS_VARIANT_PAYG_100"),
+            payg: parse("LS_VARIANT_PAYG"),
         }
     }
 
@@ -157,6 +166,8 @@ impl VariantMap {
             Some(VariantKind::PaygCredit(50.0))
         } else if v == self.payg_100 {
             Some(VariantKind::PaygCredit(100.0))
+        } else if v == self.payg {
+            Some(VariantKind::PaygCreditPaid)
         } else {
             None
         }
@@ -174,6 +185,7 @@ mod tests {
             payg_10: Some(4001),
             payg_50: Some(4002),
             payg_100: Some(4003),
+            payg: Some(5000),
         }
     }
 
@@ -185,6 +197,7 @@ mod tests {
         assert_eq!(m.map_variant(4001), Some(VariantKind::PaygCredit(10.0)));
         assert_eq!(m.map_variant(4002), Some(VariantKind::PaygCredit(50.0)));
         assert_eq!(m.map_variant(4003), Some(VariantKind::PaygCredit(100.0)));
+        assert_eq!(m.map_variant(5000), Some(VariantKind::PaygCreditPaid));
     }
 
     #[test]

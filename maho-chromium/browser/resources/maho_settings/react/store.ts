@@ -530,8 +530,17 @@ export class MahoSettingsStore {
     }
   }
 
-  async getBuyCreditsUrl(packSizeUsd: 10 | 50 | 100): Promise<string> {
-    const {checkoutUrl} = await this.pageHandler.getBuyCreditsUrl(packSizeUsd);
+  async getBuyCreditsUrl(): Promise<string> {
+    // Single pay-what-you-want credits product: the amount is chosen in the
+    // LemonSqueezy checkout, so no pack size is selected here. The mojom method
+    // still takes an int32 arg (unused); pass 0.
+    const {checkoutUrl} = await this.pageHandler.getBuyCreditsUrl(0);
+    return checkoutUrl;
+  }
+
+  async getSubscriptionCheckoutUrl(tier: 'pro' | 'max'): Promise<string> {
+    const {checkoutUrl} =
+        await this.pageHandler.getSubscriptionCheckoutUrl(tier);
     return checkoutUrl;
   }
 

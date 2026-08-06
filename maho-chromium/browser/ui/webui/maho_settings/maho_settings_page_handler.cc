@@ -79,6 +79,7 @@
 #include "maho/browser/net/maho_content_blocker_update_service_factory.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
+#include "maho/browser/ui/views/peek/maho_peek_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -321,6 +322,14 @@ constexpr SettingMapping kSettingsMap[] = {
     {"atc.open_external_links_in_maho_mini",
      maho::sidebar_prefs::kOpenExternalLinksInMahoMini,
      SettingMapping::Type::kBool},
+    {"atc.peek_enabled", maho::sidebar_prefs::kPeekEnabled,
+     SettingMapping::Type::kBool},
+    {"atc.peek_link_routing_enabled",
+     maho::sidebar_prefs::kPeekLinkRoutingEnabled,
+     SettingMapping::Type::kBool},
+    {"atc.peek_popup_routing_enabled",
+     maho::sidebar_prefs::kPeekPopupRoutingEnabled,
+     SettingMapping::Type::kBool},
     // Web-page translation target language ("Translate pages into"). Bound to
     // the standard translate recent-target pref, which TranslateManager's
     // GetTargetLanguage() consults first (kTranslateRecentTarget is enabled by
@@ -353,6 +362,11 @@ constexpr SettingScopeMapping kSettingScopes[] = {
      maho_settings::mojom::SettingScope::kProcess},
     {"atc.open_external_links_in_maho_mini",
      maho_settings::mojom::SettingScope::kProcess},
+    {"atc.peek_enabled", maho_settings::mojom::SettingScope::kProfile},
+    {"atc.peek_link_routing_enabled",
+     maho_settings::mojom::SettingScope::kProfile},
+    {"atc.peek_popup_routing_enabled",
+     maho_settings::mojom::SettingScope::kProfile},
     {"autofill.password_provider",
      maho_settings::mojom::SettingScope::kCoreGlobal},
     {"autofill.passwords_enabled",
@@ -1890,10 +1904,12 @@ void MahoSettingsPageHandler::OnSpaceProfileBridgeChanged() {
 MahoSettingsPageHandler::MahoSettingsPageHandler(
     mojo::PendingReceiver<maho_settings::mojom::PageHandler> receiver,
     mojo::PendingRemote<maho_settings::mojom::Page> page,
-    Profile* profile)
+    Profile* profile,
+    content::WebContents* host_web_contents)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
       profile_(profile),
+      host_web_contents_(host_web_contents),
       prefs_(profile->GetPrefs()),
       local_state_(g_browser_process->local_state()) {
   // R-4 security guard: a forged Mojo receiver can construct this handler even
@@ -4848,11 +4864,20 @@ void MahoSettingsPageHandler::SignInWithGoogle(
     return;
   }
 
+  Browser* peek_host_browser =
+      host_web_contents_ ? chrome::FindBrowserWithTab(host_web_contents_)
+                         : nullptr;
+  if (!maho::IsPeekEligible(peek_host_browser) ||
+      peek_host_browser->profile() != profile_ ||
+      host_web_contents_->GetBrowserContext() != profile_) {
+    peek_host_browser = nullptr;
+  }
+
   // Shares OnRelayLoginCompleted with password login: an established session
   // must refresh account status and billing prefs the same way regardless of
   // which credential produced it.
   maho::auth::StartGoogleSignIn(
-      profile_, *encryptor_,
+      profile_, peek_host_browser, *encryptor_,
       base::BindOnce(&MahoSettingsPageHandler::OnRelayLoginCompleted,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -5396,35 +5421,16 @@ void MahoSettingsPageHandler::GetBuyCreditsUrl(
     GetBuyCreditsUrlCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::string checkout_url;
-  switch (pack_size_usd) {
-    case 10:
-      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-10";
-      break;
-    case 50:
-      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-50";
-      break;
-    case 100:
-      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-100";
-      break;
-    default:
-      checkout_url = "";
-      break;
-  }
-
-  // Append custom_data.user_id (ADR 0010 §Webhook Handling) so the relay's
-  // LS webhook handler can attribute the purchase to the correct account.
-  // Reads prefs synchronously via account_prefs::kRelayUserId.
-  if (!checkout_url.empty() && profile_ && profile_->GetPrefs()) {
-    const std::string user_id =
-        profile_->GetPrefs()->GetString(maho::account_prefs::kRelayUserId);
-    if (!user_id.empty()) {
-      checkout_url += "?checkout[custom][user_id]=";
-      checkout_url += base::EscapeQueryParamValue(user_id, /*use_plus=*/false);
-    }
-  }
-
-  std::move(callback).Run(checkout_url);
+  // Single "Maho AI Pay-as-you-go credits" pay-what-you-want product: the buyer
+  // chooses the amount in the LemonSqueezy checkout, so pack_size_usd no longer
+  // selects a fixed pack. The relay webhook credits the amount actually paid.
+  // user_id is attached as checkout custom data (ADR 0010 §Webhook Handling) so
+  // the relay can attribute the purchase; empty user_id yields an empty URL.
+  const std::string user_id =
+      profile_ && profile_->GetPrefs()
+          ? profile_->GetPrefs()->GetString(maho::account_prefs::kRelayUserId)
+          : std::string();
+  std::move(callback).Run(maho::webui::BuildPaygCreditsCheckoutUrl(user_id));
 }
 
 void MahoSettingsPageHandler::GetSubscriptionCheckoutUrl(
@@ -5434,22 +5440,12 @@ void MahoSettingsPageHandler::GetSubscriptionCheckoutUrl(
 
   const std::string_view checkout_url_template =
       maho::webui::SubscriptionCheckoutUrlForTier(tier);
-  std::string checkout_url;
-  if (!maho::webui::IsSubscriptionCheckoutPlaceholder(
-          checkout_url_template)) {
-    checkout_url = std::string(checkout_url_template);
-  }
-
-  if (!checkout_url.empty() && profile_ && profile_->GetPrefs()) {
-    const std::string user_id =
-        profile_->GetPrefs()->GetString(maho::account_prefs::kRelayUserId);
-    if (!user_id.empty()) {
-      checkout_url += "?checkout[custom][user_id]=";
-      checkout_url += base::EscapeQueryParamValue(user_id, /*use_plus=*/false);
-    }
-  }
-
-  std::move(callback).Run(checkout_url);
+  const std::string user_id =
+      profile_ && profile_->GetPrefs()
+          ? profile_->GetPrefs()->GetString(maho::account_prefs::kRelayUserId)
+          : std::string();
+  std::move(callback).Run(
+      maho::webui::BuildSubscriptionCheckoutUrl(checkout_url_template, user_id));
 }
 
 void MahoSettingsPageHandler::MailListAccounts(

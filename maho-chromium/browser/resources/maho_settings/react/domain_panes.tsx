@@ -16,6 +16,8 @@ import {AiDevelopersPane} from './ai_developers.js';
 import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
 import {ProfilesEditor} from './profiles_editor.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
+import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
+import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
 import {Input} from '@ui/input';
 import {
   Select,
@@ -777,6 +779,51 @@ function MahoMiniPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                   label="Command+Option+Click override"
                   onToggle={async nextEnabled => {
                     await store.commitSettingValue('atc.maho_mini_click_override_enabled', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            title="Peek"
+            description="Preview supported links and popups without leaving your current page."
+            padded
+          >
+            <div className="divide-y divide-border -mx-6 -my-6">
+              <ManagedSettingRow
+                description="Show supported links and popups in an in-window preview."
+                title="Enable Peek"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.peek_enabled')?.value !== 'false'}
+                  label="Enable Peek"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.peek_enabled', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
+              <ManagedSettingRow
+                description="Open supported links from pinned and favorite tabs in Peek."
+                title="Open links in Peek"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.peek_link_routing_enabled')?.value !== 'false'}
+                  label="Open links in Peek"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.peek_link_routing_enabled', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
+              <ManagedSettingRow
+                description="Open supported web popups, including sign-in flows, in Peek."
+                title="Open popups in Peek"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.peek_popup_routing_enabled')?.value !== 'false'}
+                  label="Open popups in Peek"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.peek_popup_routing_enabled', nextEnabled ? 'true' : 'false');
                   }}
                 />
               </ManagedSettingRow>
@@ -1617,7 +1664,9 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   const loading = state.billingLoading;
   const invoices = state.invoices;
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
-  const [purchasingSize, setPurchasingSize] = useState<10 | 50 | 100 | null>(null);
+  const [purchasing, setPurchasing] = useState(false);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+  const [purchasingTier, setPurchasingTier] = useState<PlanTier | null>(null);
 
   useEffect(() => {
     void store.refreshAccountStatus();
@@ -1643,11 +1692,11 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [account?.signedIn, store]);
 
-  const handleBuyCredits = async (packSize: 10 | 50 | 100) => {
+  const handleBuyCredits = async () => {
     setPurchaseError(null);
-    setPurchasingSize(packSize);
+    setPurchasing(true);
     try {
-      const checkoutUrl = await store.getBuyCreditsUrl(packSize);
+      const checkoutUrl = await store.getBuyCreditsUrl();
       if (!checkoutUrl) {
         setPurchaseError('Unable to generate a checkout URL. Please try again.');
         return;
@@ -1666,7 +1715,7 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       const message = err instanceof Error ? err.message : String(err);
       setPurchaseError(`Purchase failed: ${message}`);
     } finally {
-      setPurchasingSize(null);
+      setPurchasing(false);
     }
   };
 
@@ -1736,6 +1785,48 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   const progressValue = creditLimit > 0 ? remainingPct : creditBalance > 0 ? 100 : 0;
   const statusBadgeVariant: 'success' | 'secondary' =
       billing.subscriptionStatus === 'active' ? 'success' : 'secondary';
+  const currentPlanTier: PlanTier =
+      tier === 'pro' || tier === 'max' ? tier : 'free';
+
+  const handlePlanSelect = async (selectedTier: PlanTier) => {
+    if (selectedTier === currentPlanTier) {
+      return;
+    }
+    if ((currentPlanTier === 'max' && selectedTier !== 'max') ||
+        (currentPlanTier === 'pro' && selectedTier === 'free')) {
+      await openBillingPortal();
+      return;
+    }
+    if (selectedTier === 'free') {
+      return;
+    }
+
+    setSubscriptionError(null);
+    setPurchasingTier(selectedTier);
+    try {
+      const checkoutUrl = await store.getSubscriptionCheckoutUrl(selectedTier);
+      if (!checkoutUrl) {
+        setSubscriptionError('Unable to generate a checkout URL. Please try again.');
+        return;
+      }
+      await openCheckoutOverlay({
+        checkoutUrl,
+        onSuccess: () => {
+          void store.refreshAccountStatus();
+          void store.refreshBilling();
+          void store.refreshInvoices();
+        },
+        onError: (err) => {
+          console.warn('[maho-settings] LemonSqueezy overlay failed, using fallback', err);
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSubscriptionError(`Plan checkout failed: ${message}`);
+    } finally {
+      setPurchasingTier(null);
+    }
+  };
 
   return (
     <PaneShell pane={pane}>
@@ -1780,6 +1871,26 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       </SectionCard>
 
       <SectionCard
+        title="Managed AI plans"
+        description="Choose the monthly Managed AI plan that fits your usage."
+        className="mb-6"
+        padded
+      >
+        <PlanPicker
+          currentTier={currentPlanTier}
+          busyTier={purchasingTier}
+          freeLabel="Free plan"
+          onSelect={tier => { void handlePlanSelect(tier); }}
+        />
+        {subscriptionError ? (
+          <Alert variant="destructive" className="mt-4">
+            <AlertTitle>Plan checkout failed</AlertTitle>
+            <AlertDescription>{subscriptionError}</AlertDescription>
+          </Alert>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard
         title="Credits"
         description={creditLimit > 0 ? `${remainingPct}% remaining` : 'Current available balance'}
         action={
@@ -1816,45 +1927,24 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
 
       <SectionCard
         title="Buy Credits"
-        description="Prepaid credit packs that never expire. Overflow when your subscription ceiling is reached, or standalone if you have no subscription."
+        description="Pay-as-you-go credits that never expire. Choose any amount at checkout; credits cover overflow when your subscription ceiling is reached, or work standalone with no subscription."
         className="mb-6"
         padded
       >
-        <div className="grid gap-3 sm:grid-cols-3">
-          {([10, 50, 100] as const).map((packSize) => {
-            const isFeatured = packSize === 50;
-            const isPurchasing = purchasingSize === packSize;
-            const isDisabled = purchasingSize !== null;
-            return (
-              <button
-                key={packSize}
-                type="button"
-                disabled={isDisabled}
-                onClick={() => void handleBuyCredits(packSize)}
-                className={cn(
-                  'flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
-                  isFeatured
-                    ? 'border-foreground bg-foreground text-background hover:opacity-90'
-                    : 'border-border/70 bg-background/60 hover:border-foreground',
-                )}
-              >
-                <span className="text-2xl font-semibold tracking-tight">
-                  ${packSize}
-                </span>
-                <span className="text-xs opacity-80">
-                  {packSize === 10
-                    ? 'Starter pack'
-                    : packSize === 50
-                    ? 'Best value'
-                    : 'Power-user pack'}
-                </span>
-                {isPurchasing ? (
-                  <span className="text-xs opacity-70">Opening…</span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+        <button
+          type="button"
+          disabled={purchasing}
+          onClick={() => void handleBuyCredits()}
+          className="flex w-full flex-col items-start gap-1 rounded-xl border border-foreground bg-foreground p-4 text-left text-background transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span className="text-2xl font-semibold tracking-tight">Buy credits</span>
+          <span className="text-xs opacity-80">
+            Pay what you want — enter any amount (min $10) at checkout.
+          </span>
+          {purchasing ? (
+            <span className="text-xs opacity-70">Opening…</span>
+          ) : null}
+        </button>
         {purchaseError ? (
           <div className="mt-4">
             <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
