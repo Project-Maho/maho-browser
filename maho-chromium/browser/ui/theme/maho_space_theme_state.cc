@@ -7,23 +7,28 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/browser_thread.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/native_theme/native_theme.h"
 
-base::NoDestructor<std::optional<MahoSpaceThemeState::ThemeData>>
-    MahoSpaceThemeState::active_theme_;
-base::NoDestructor<std::optional<MahoSpaceThemeState::ThemeData>>
-    MahoSpaceThemeState::preview_override_;
+base::NoDestructor<base::flat_map<std::string, MahoSpaceThemeState::ThemeData>>
+    MahoSpaceThemeState::committed_themes_;
+base::NoDestructor<base::flat_map<Browser*, MahoSpaceThemeState::ThemeData>>
+    MahoSpaceThemeState::preview_overrides_;
 
 namespace {
 
@@ -218,16 +223,16 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
     float grain_val = static_cast<float>(std::clamp(
         color_dict ? color_dict->FindDouble("grain").value_or(0.0) : 0.0,
         0.0, 1.0));
-    return MahoSpaceThemeState::ThemeData{
-        .kind = kind,
-        .primary_hsv = *primary_hsv,
-        .secondary_hsv = std::nullopt,
-        .stops = {*primary_hsv},
-        .opacity = static_cast<float>(std::clamp(
-            theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
-        .texture = grain_val,
-        .grain = grain_val,
-    };
+    MahoSpaceThemeState::ThemeData theme_data;
+    theme_data.kind = kind;
+    theme_data.primary_hsv = *primary_hsv;
+    theme_data.secondary_hsv = std::nullopt;
+    theme_data.stops = {*primary_hsv};
+    theme_data.opacity = static_cast<float>(std::clamp(
+        theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0));
+    theme_data.texture = grain_val;
+    theme_data.grain = grain_val;
+    return theme_data;
   }
 
   if (*type == "gradient" || *type == "zen") {
@@ -237,19 +242,20 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
     }
 
     if (colors->empty()) {
-      return MahoSpaceThemeState::ThemeData{
-          .kind = kind,
-          .primary_hsv = {0.0f, 0.0f, 0.5f},
-          .secondary_hsv = std::nullopt,
-          .stops = {},
-          .opacity = static_cast<float>(std::clamp(
-              theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
-          .texture = static_cast<float>(std::clamp(
-              theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0)),
-          .grain = 0.0f,
-          .color_scheme = ColorSchemeFromString(theme_dict->FindString("scheme")),
-          .achromatic = true,
-      };
+      MahoSpaceThemeState::ThemeData theme_data;
+      theme_data.kind = kind;
+      theme_data.primary_hsv = {0.0f, 0.0f, 0.5f};
+      theme_data.secondary_hsv = std::nullopt;
+      theme_data.stops = {};
+      theme_data.opacity = static_cast<float>(std::clamp(
+          theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0));
+      theme_data.texture = static_cast<float>(std::clamp(
+          theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0));
+      theme_data.grain = 0.0f;
+      theme_data.color_scheme =
+          ColorSchemeFromString(theme_dict->FindString("scheme"));
+      theme_data.achromatic = true;
+      return theme_data;
     }
 
     const base::DictValue* dominant = FindDominantStop(*colors);
@@ -265,20 +271,21 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
       secondary_hsv = stops[1];
     }
 
-    return MahoSpaceThemeState::ThemeData{
-        .kind = kind,
-        .primary_hsv = primary_hsv,
-        .secondary_hsv = secondary_hsv,
-        .stops = stops,
-        .opacity = static_cast<float>(std::clamp(
-            theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
-        .texture = static_cast<float>(std::clamp(
-            theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0)),
-        .grain = static_cast<float>(std::clamp(
-            dominant ? dominant->FindDouble("grain").value_or(0.0) : 0.0,
-            0.0, 1.0)),
-        .color_scheme = ColorSchemeFromString(theme_dict->FindString("scheme")),
-    };
+    MahoSpaceThemeState::ThemeData theme_data;
+    theme_data.kind = kind;
+    theme_data.primary_hsv = primary_hsv;
+    theme_data.secondary_hsv = secondary_hsv;
+    theme_data.stops = stops;
+    theme_data.opacity = static_cast<float>(std::clamp(
+        theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0));
+    theme_data.texture = static_cast<float>(std::clamp(
+        theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0));
+    theme_data.grain = static_cast<float>(std::clamp(
+        dominant ? dominant->FindDouble("grain").value_or(0.0) : 0.0, 0.0,
+        1.0));
+    theme_data.color_scheme =
+        ColorSchemeFromString(theme_dict->FindString("scheme"));
+    return theme_data;
   }
 
   return std::nullopt;
@@ -290,16 +297,16 @@ MahoSpaceThemeState::ThemeData MakeFallbackThemeData(
   // is translucent like an explicitly-themed space. Range [0.25, 0.9], default
   // 0.5 per resources/maho_space_create/react/types.ts.
   constexpr float kDefaultThemeOpacity = 0.5f;
-  return MahoSpaceThemeState::ThemeData{
-      .kind = MahoSpaceThemeState::ThemeKind::kSolid,
-      .primary_hsv = hsv,
-      .secondary_hsv = std::nullopt,
-      // Solid invariant: exactly one stop (the primary).
-      .stops = {hsv},
-      .opacity = kDefaultThemeOpacity,
-      .texture = 0.0f,
-      .grain = 0.0f,
-  };
+  MahoSpaceThemeState::ThemeData theme_data;
+  theme_data.kind = MahoSpaceThemeState::ThemeKind::kSolid;
+  theme_data.primary_hsv = hsv;
+  theme_data.secondary_hsv = std::nullopt;
+  // Solid invariant: exactly one stop (the primary).
+  theme_data.stops = {hsv};
+  theme_data.opacity = kDefaultThemeOpacity;
+  theme_data.texture = 0.0f;
+  theme_data.grain = 0.0f;
+  return theme_data;
 }
 
 SkColor ApplyAppearanceAdjustments(const MahoSpaceThemeState::SpaceHSV& hsv,
@@ -320,99 +327,134 @@ SkColor ApplyAppearanceAdjustments(const MahoSpaceThemeState::SpaceHSV& hsv,
   return SkHSVToColor(alpha, adjusted_hsv);
 }
 
-}  // namespace
-
-bool MahoSpaceThemeState::UpdateFromCore() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  auto previous = *active_theme_;
-  active_theme_->reset();
-
-  auto get_return_val = [&]() {
-    return *active_theme_ != previous;
-  };
-
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return get_return_val();
-  }
-
-  char* active_id_cstr = maho_core_get_active_space_id(core);
-  if (!active_id_cstr) {
-    return get_return_val();
-  }
-  std::optional<base::Value> parsed_active_id =
-      base::JSONReader::Read(active_id_cstr, base::JSON_PARSE_RFC);
-  std::string active_id = parsed_active_id && parsed_active_id->is_string()
-                              ? parsed_active_id->GetString()
-                              : std::string(active_id_cstr);
-  maho_string_free(active_id_cstr);
-
-  char* json_str = maho_core_get_space_view_models(core);
-  if (!json_str) {
-    return get_return_val();
-  }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
+std::optional<base::flat_map<std::string, MahoSpaceThemeState::ThemeData>>
+ParseCommittedThemeSnapshot(const std::string& spaces_json) {
   std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+      base::JSONReader::Read(spaces_json, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list()) {
-    return get_return_val();
+    return std::nullopt;
   }
 
+  base::flat_map<std::string, MahoSpaceThemeState::ThemeData> themes;
   for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
+    const base::DictValue* dict = item.GetIfDict();
     if (!dict) {
       continue;
     }
-
     const std::string* id = dict->FindString("id");
-    if (!id || *id != active_id) {
+    if (!id || id->empty()) {
       continue;
     }
 
-    std::optional<ThemeData> theme_data =
+    std::optional<MahoSpaceThemeState::ThemeData> theme_data =
         ExtractThemeDataFromThemeDict(dict->FindDict("theme"));
-
     if (!theme_data) {
-      std::optional<SpaceHSV> fallback_hsv =
+      std::optional<MahoSpaceThemeState::SpaceHSV> fallback_hsv =
           ExtractHSBFromColorDict(dict->FindDict("color"));
       if (fallback_hsv) {
         theme_data = MakeFallbackThemeData(*fallback_hsv);
       }
     }
-
     if (theme_data) {
-      *active_theme_ = *theme_data;
-      DVLOG(1) << "MahoSpaceThemeState updated: active_id=" << active_id
-               << " kind=" << static_cast<int>(theme_data->kind)
-               << " hue=" << theme_data->primary_hsv.hue
-               << " sat=" << theme_data->primary_hsv.saturation
-               << " val=" << theme_data->primary_hsv.value
-               << " has_secondary=" << theme_data->secondary_hsv.has_value()
-               << " opacity=" << theme_data->opacity
-               << " texture=" << theme_data->texture;
+      themes.insert_or_assign(*id, std::move(*theme_data));
     }
-    break;
+  }
+  return themes;
+}
+
+MahoSpaceThemeState::ChangedSpaceIds ReplaceCommittedThemeSnapshot(
+    const std::string& spaces_json,
+    base::flat_map<std::string, MahoSpaceThemeState::ThemeData>* current) {
+  std::optional<base::flat_map<std::string, MahoSpaceThemeState::ThemeData>>
+      parsed = ParseCommittedThemeSnapshot(spaces_json);
+  if (!parsed) {
+    return {};
   }
 
-  return get_return_val();
+  MahoSpaceThemeState::ChangedSpaceIds changed;
+  for (const auto& [space_id, old_theme] : *current) {
+    auto new_it = parsed->find(space_id);
+    if (new_it == parsed->end() || new_it->second != old_theme) {
+      changed.push_back(space_id);
+    }
+  }
+  for (const auto& entry : *parsed) {
+    if (!current->contains(entry.first)) {
+      changed.push_back(entry.first);
+    }
+  }
+  std::sort(changed.begin(), changed.end());
+  *current = std::move(*parsed);
+  return changed;
+}
+
+}  // namespace
+
+MahoSpaceThemeState::ThemeData::ThemeData() = default;
+MahoSpaceThemeState::ThemeData::ThemeData(const ThemeData&) = default;
+MahoSpaceThemeState::ThemeData& MahoSpaceThemeState::ThemeData::operator=(
+    const ThemeData&) = default;
+MahoSpaceThemeState::ThemeData::ThemeData(ThemeData&&) noexcept = default;
+MahoSpaceThemeState::ThemeData& MahoSpaceThemeState::ThemeData::operator=(
+    ThemeData&&) noexcept = default;
+MahoSpaceThemeState::ThemeData::~ThemeData() = default;
+
+MahoSpaceThemeState::ChangedSpaceIds MahoSpaceThemeState::UpdateFromCore() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return {};
+  }
+
+  char* json_str = maho_core_get_space_view_models(core);
+  if (!json_str) {
+    return {};
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+  return ReplaceCommittedThemeSnapshot(json, committed_themes_.get());
+}
+
+MahoSpaceThemeState::ChangedSpaceIds
+MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+    const std::string& spaces_json) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return ReplaceCommittedThemeSnapshot(spaces_json, committed_themes_.get());
+}
+
+std::optional<MahoSpaceThemeState::ThemeData>
+MahoSpaceThemeState::GetThemeDataForBrowser(Browser* browser) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+    return std::nullopt;
+  }
+  auto preview_it = preview_overrides_->find(browser);
+  if (preview_it != preview_overrides_->end()) {
+    return preview_it->second;
+  }
+  const std::string& space_id =
+      maho::MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId(browser);
+  auto committed_it = committed_themes_->find(space_id);
+  return committed_it == committed_themes_->end()
+             ? std::nullopt
+             : std::optional<ThemeData>(committed_it->second);
 }
 
 std::optional<MahoSpaceThemeState::ThemeData>
 MahoSpaceThemeState::GetThemeData() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (preview_override_->has_value()) {
-    return *preview_override_;
-  }
-  return *active_theme_;
+  const std::string& space_id =
+      maho::MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId();
+  auto committed_it = committed_themes_->find(space_id);
+  return committed_it == committed_themes_->end()
+             ? std::nullopt
+             : std::optional<ThemeData>(committed_it->second);
 }
 
 SkColor MahoSpaceThemeState::GetChromeTint(bool is_dark, uint8_t alpha) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  const std::optional<ThemeData>& effective =
-      preview_override_->has_value() ? *preview_override_ : *active_theme_;
+  const std::optional<ThemeData> effective = GetThemeData();
   if (!effective || effective->achromatic) {
     return SK_ColorTRANSPARENT;
   }
@@ -441,12 +483,16 @@ SkColor MahoSpaceThemeState::GetChromeTint(bool is_dark, uint8_t alpha) {
 
 void MahoSpaceThemeState::Clear() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  active_theme_->reset();
-  preview_override_->reset();
+  committed_themes_->clear();
+  preview_overrides_->clear();
 }
 
-bool MahoSpaceThemeState::SetPreviewOverride(const std::string& theme_json) {
+bool MahoSpaceThemeState::SetPreviewOverride(Browser* browser,
+                                             const std::string& theme_json) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+    return false;
+  }
   std::optional<base::Value> parsed =
       base::JSONReader::Read(theme_json, base::JSON_PARSE_RFC);
   if (!parsed) {
@@ -461,40 +507,27 @@ bool MahoSpaceThemeState::SetPreviewOverride(const std::string& theme_json) {
   if (!parsed_theme) {
     return false;
   }
-  *preview_override_ = std::move(parsed_theme);
+  preview_overrides_->insert_or_assign(browser, std::move(*parsed_theme));
   return true;
 }
 
-void MahoSpaceThemeState::ClearPreviewOverride() {
+void MahoSpaceThemeState::ClearPreviewOverride(Browser* browser) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  preview_override_->reset();
-}
-
-bool MahoSpaceThemeState::HasPreviewOverride() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return preview_override_->has_value();
-}
-
-std::optional<bool> MahoSpaceThemeState::GetForcedDarkMode() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  const std::optional<ThemeData> data = GetThemeData();
-  if (!data) {
-    return std::nullopt;
+  if (browser) {
+    preview_overrides_->erase(browser);
   }
-  switch (data->color_scheme) {
-    case ColorScheme::kLight:
-      return false;
-    case ColorScheme::kDark:
-      return true;
-    case ColorScheme::kAuto:
-      return std::nullopt;
-  }
-  return std::nullopt;
 }
 
-bool MahoSpaceThemeState::ResolveSidebarDarkMode(bool os_dark) {
+bool MahoSpaceThemeState::HasPreviewOverride(Browser* browser) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return GetForcedDarkMode().value_or(os_dark);
+  return browser && browser->profile() &&
+         !browser->profile()->IsOffTheRecord() &&
+         preview_overrides_->contains(browser);
+}
+
+size_t MahoSpaceThemeState::GetPreviewOverrideCountForTesting() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return preview_overrides_->size();
 }
 
 bool MahoSpaceThemeState::IsOsDarkMode() {

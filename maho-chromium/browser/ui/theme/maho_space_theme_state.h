@@ -3,16 +3,19 @@
 #ifndef MAHO_BROWSER_UI_THEME_MAHO_SPACE_THEME_STATE_H_
 #define MAHO_BROWSER_UI_THEME_MAHO_SPACE_THEME_STATE_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "third_party/skia/include/core/SkColor.h"
 
-// Static state holder for the active space's theme color data.
-// Updated when the active space changes; read by AddMahoColorMixers.
+class Browser;
+
+// Static state holder for parsed Space themes and browser-owned previews.
 // All methods must be called on the UI thread.
 class MahoSpaceThemeState {
  public:
@@ -44,6 +47,13 @@ class MahoSpaceThemeState {
   };
 
   struct ThemeData {
+    ThemeData();
+    ThemeData(const ThemeData&);
+    ThemeData& operator=(const ThemeData&);
+    ThemeData(ThemeData&&) noexcept;
+    ThemeData& operator=(ThemeData&&) noexcept;
+    ~ThemeData();
+
     ThemeKind kind;
     SpaceHSV primary_hsv;
     std::optional<SpaceHSV> secondary_hsv;
@@ -68,24 +78,22 @@ class MahoSpaceThemeState {
     }
   };
 
-  // Updates cached state by reading the active space's theme from Rust core FFI.
-  // Returns true if the active theme changed compared to the previous state.
-  static bool UpdateFromCore();
+  using ChangedSpaceIds = std::vector<std::string>;
+
+  // Replaces the committed cache from the all-Spaces Rust Core snapshot and
+  // returns the Space IDs whose resolved committed theme changed.
+  static ChangedSpaceIds UpdateFromCore();
+
+  static ChangedSpaceIds UpdateFromSnapshotForTesting(
+      const std::string& spaces_json);
+
+  // Resolves browser-local theme state with preview(owner) taking precedence
+  // over the committed theme for the browser's canonical active Space.
+  // Incognito/guest and null browser boundaries always return no theme.
+  static std::optional<ThemeData> GetThemeDataForBrowser(Browser* browser);
 
   // Returns cached theme data for the active space, or std::nullopt if none.
   static std::optional<ThemeData> GetThemeData();
-
-  // Returns the active space's forced dark-mode preference for the SIDEBAR
-  // only: true = force dark, false = force light, std::nullopt = follow the OS
-  // system appearance (kAuto or no active theme). Honors preview overrides.
-  // This no longer drives the whole-window ColorProviderKey; the browser chrome
-  // follows prefs::kBrowserColorScheme independently.
-  static std::optional<bool> GetForcedDarkMode();
-
-  // Resolves the sidebar's effective dark mode: the space theme scheme when set
-  // (kLight/kDark), otherwise `os_dark` (the OS system appearance, passed in by
-  // the caller so this class stays free of ui::NativeTheme dependencies).
-  static bool ResolveSidebarDarkMode(bool os_dark);
 
   // Returns true when the OS system appearance is dark. Pref-independent: reads
   // ui::NativeTheme's native-UI instance, not prefs::kBrowserColorScheme.
@@ -98,24 +106,26 @@ class MahoSpaceThemeState {
   // mixing can preserve stronger surface differentiation.
   static SkColor GetChromeTint(bool is_dark, uint8_t alpha = 15);
 
-  // Sets a preview-only override. `GetThemeData()` returns this instead of the
-  // persisted active theme while a preview is active. Does NOT write to core.
+  // Sets a preview-only override for its owning regular browser. Does NOT write
+  // to core.
   // `theme_json` must be a valid SpaceThemeData JSON string; returns false if
   // parsing fails (the existing preview is left unchanged on failure).
-  static bool SetPreviewOverride(const std::string& theme_json);
+  static bool SetPreviewOverride(Browser* browser,
+                                 const std::string& theme_json);
 
-  // Clears the preview override. `GetThemeData()` reverts to `active_theme_`.
-  static void ClearPreviewOverride();
+  static void ClearPreviewOverride(Browser* browser);
 
-  // Returns true if a preview override is currently active.
-  static bool HasPreviewOverride();
+  static bool HasPreviewOverride(Browser* browser);
+  static size_t GetPreviewOverrideCountForTesting();
 
   // Clears cached state.
   static void Clear();
 
  private:
-  static base::NoDestructor<std::optional<ThemeData>> active_theme_;
-  static base::NoDestructor<std::optional<ThemeData>> preview_override_;
+  static base::NoDestructor<base::flat_map<std::string, ThemeData>>
+      committed_themes_;
+  static base::NoDestructor<base::flat_map<Browser*, ThemeData>>
+      preview_overrides_;
 };
 
 #endif  // MAHO_BROWSER_UI_THEME_MAHO_SPACE_THEME_STATE_H_

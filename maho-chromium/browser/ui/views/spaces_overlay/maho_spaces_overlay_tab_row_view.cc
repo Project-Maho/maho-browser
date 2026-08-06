@@ -14,10 +14,8 @@
 
 #include <string>
 
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -137,34 +135,35 @@ void MahoSpacesOverlayTabRowView::OnFaviconLoaded(
   }
 }
 
+void MahoSpacesOverlayTabRowView::SetPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  UpdateColors();
+}
+
 void MahoSpacesOverlayTabRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateColors();
 }
 
 void MahoSpacesOverlayTabRowView::UpdateColors() {
-  const ui::ColorProvider* color_provider = GetColorProvider();
-  if (!color_provider) {
-    return;
-  }
-
   if (IsMouseHovered() && !callback_.is_null()) {
-    SetBackground(views::CreateRoundedRectBackground(
-        color_provider->GetColor(kMahoColorTabRowHoverBackground), 6));
+    SetBackground(
+        views::CreateRoundedRectBackground(palette_.row_hover, 6));
   } else {
     SetBackground(nullptr);
   }
   SetBorder(nullptr);
 
-  title_label_->SetEnabledColor(kMahoColorPrimaryText);
-  subtitle_label_->SetEnabledColor(kMahoColorTertiaryText);
+  title_label_->SetEnabledColor(palette_.primary_text);
+  subtitle_label_->SetEnabledColor(palette_.tertiary_text);
 
   for (views::View* chip : chip_row_->children()) {
     chip->SetBackground(nullptr);
     chip->SetBorder(nullptr);
   }
   for (views::Label* label : chip_labels_) {
-    label->SetEnabledColor(kMahoColorTertiaryText);
+    label->SetEnabledColor(palette_.tertiary_text);
   }
 }
 

@@ -6,24 +6,26 @@
 #include <string>
 #include <vector>
 
-#include "base/functional/callback.h"
 #include "base/callback_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/view.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
+#include "ui/views/view.h"
 
 class Browser;
 
 namespace views {
+class ImageView;
+class Label;
+class LabelButton;
 class ScrollView;
 class Textfield;
-class Label;
 class Widget;
-}  // namespace views
+} // namespace views
 
 namespace maho {
 
@@ -31,48 +33,48 @@ class MahoSidebarFolderHoverPopupView : public views::View,
                                         public views::TextfieldController {
   METADATA_HEADER(MahoSidebarFolderHoverPopupView, views::View)
 
- public:
-  using ActivateTabCallback = base::RepeatingCallback<void(const std::string& tab_id)>;
+public:
+  using ActivateTabCallback =
+      base::RepeatingCallback<void(const std::string &tab_id)>;
 
-  static views::Widget* Show(views::View* anchor_view,
-                             Browser* browser,
-                             const std::u16string& folder_name,
+  static views::Widget *Show(views::View *anchor_view, Browser *browser,
+                             const std::u16string &folder_name,
                              std::string folder_id,
                              std::vector<SidebarTreeNode> children,
                              ActivateTabCallback on_activate);
 
-  MahoSidebarFolderHoverPopupView(Browser* browser,
-                                  std::u16string folder_name,
+  MahoSidebarFolderHoverPopupView(Browser *browser, std::u16string folder_name,
                                   std::string folder_id,
                                   std::vector<SidebarTreeNode> children,
                                   ActivateTabCallback on_activate);
-  MahoSidebarFolderHoverPopupView(const MahoSidebarFolderHoverPopupView&) = delete;
-  MahoSidebarFolderHoverPopupView& operator=(const MahoSidebarFolderHoverPopupView&) = delete;
+  MahoSidebarFolderHoverPopupView(const MahoSidebarFolderHoverPopupView &) =
+      delete;
+  MahoSidebarFolderHoverPopupView &
+  operator=(const MahoSidebarFolderHoverPopupView &) = delete;
   ~MahoSidebarFolderHoverPopupView() override;
 
   // views::View:
   void Init();
   void OnThemeChanged() override;
-  void SetSidebarPalette(const MahoSidebarPalette& palette);
+  void SetSidebarPalette(const MahoSidebarPalette &palette);
 
   // TextfieldController:
-  void ContentsChanged(views::Textfield* sender,
-                       const std::u16string& new_contents) override;
-  bool HandleKeyEvent(views::Textfield* sender,
-                       const ui::KeyEvent& key_event) override;
+  void ContentsChanged(views::Textfield *sender,
+                       const std::u16string &new_contents) override;
+  bool HandleKeyEvent(views::Textfield *sender,
+                      const ui::KeyEvent &key_event) override;
 
-  const std::string& current_root_folder_id() const { return root_folder_id_; }
-  views::Textfield* search_field() { return search_field_; }
+  const std::string &current_root_folder_id() const { return root_folder_id_; }
+  views::Textfield *search_field() { return search_field_; }
 
- private:
+private:
   struct Level {
-    Level(std::u16string name,
-          std::string folder_id,
+    Level(std::u16string name, std::string folder_id,
           std::vector<SidebarTreeNode> children);
-    Level(const Level&);
-    Level(Level&&) noexcept;
-    Level& operator=(const Level&);
-    Level& operator=(Level&&) noexcept;
+    Level(const Level &);
+    Level(Level &&) noexcept;
+    Level &operator=(const Level &);
+    Level &operator=(Level &&) noexcept;
     ~Level();
 
     std::u16string name;
@@ -81,10 +83,10 @@ class MahoSidebarFolderHoverPopupView : public views::View,
   };
 
   void RebuildResultRows();
-  void ApplyFilter(const std::u16string& query);
+  void ApplyFilter(const std::u16string &query);
   void MoveSelection(int delta);
   void ActivateSelected();
-  void PushLevel(const SidebarTreeNode& folder_node);
+  void PushLevel(const SidebarTreeNode &folder_node);
   void PopLevel();
   void RebuildBreadcrumb();
 
@@ -99,7 +101,9 @@ class MahoSidebarFolderHoverPopupView : public views::View,
 
   raw_ptr<views::View> breadcrumb_row_ = nullptr;
   raw_ptr<views::Label> path_label_ = nullptr;
+  raw_ptr<views::ImageView> search_icon_ = nullptr;
   raw_ptr<views::Textfield> search_field_ = nullptr;
+  raw_ptr<views::View> separator_ = nullptr;
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   raw_ptr<views::View> rows_container_ = nullptr;
 
@@ -111,6 +115,6 @@ class MahoSidebarFolderHoverPopupView : public views::View,
   base::WeakPtrFactory<MahoSidebarFolderHoverPopupView> weak_factory_{this};
 };
 
-}  // namespace maho
+} // namespace maho
 
-#endif  // MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_FOLDER_HOVER_POPUP_VIEW_H_
+#endif // MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_FOLDER_HOVER_POPUP_VIEW_H_

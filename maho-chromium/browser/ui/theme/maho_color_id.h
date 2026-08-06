@@ -19,9 +19,6 @@
 #define MAHO_COLOR_IDS \
   /* Window & Surface */ \
   E_CPONLY(kMahoColorWindowBackground, kMahoColorsStart, kMahoColorsStart) \
-  E_CPONLY(kMahoColorSidebarBackground) \
-  E_CPONLY(kMahoColorSidebarGradientStop1) \
-  E_CPONLY(kMahoColorSidebarGradientStop2) \
   E_CPONLY(kMahoColorContentBackground) \
   E_CPONLY(kMahoColorContentGradientTop) \
   E_CPONLY(kMahoColorContentGradientBottom) \
@@ -44,72 +41,14 @@
   E_CPONLY(kMahoColorCanvasInnerGlow) \
   E_CPONLY(kMahoColorCanvasBadgeFill) \
   E_CPONLY(kMahoColorCanvasBadgeBorder) \
-  /* Interactive Surfaces */ \
+  /* Browser Chrome Interactive Surfaces */ \
   E_CPONLY(kMahoColorSidebarHover) \
-  E_CPONLY(kMahoColorSidebarSelected) \
-  E_CPONLY(kMahoColorSpaceStripBorder) \
-  E_CPONLY(kMahoColorSpaceControlTint) \
-  E_CPONLY(kMahoColorSpaceChipHover) \
-  E_CPONLY(kMahoColorSpaceChipSelected) \
-  E_CPONLY(kMahoColorSpaceChipIdleBorder) \
-  E_CPONLY(kMahoColorSpaceChipCountFill) \
-  E_CPONLY(kMahoColorSpaceChipCountBorder) \
   E_CPONLY(kMahoColorSearchFieldBackground) \
-  E_CPONLY(kMahoColorSearchFieldBorder) \
-  E_CPONLY(kMahoColorNewTabStripBackground) \
-  E_CPONLY(kMahoColorNewTabStripBorder) \
-  E_CPONLY(kMahoColorTabRowHoverBackground) \
   E_CPONLY(kMahoColorTabRowActiveBackground) \
-  E_CPONLY(kMahoColorTabRowActiveHoveredBackground) \
-  E_CPONLY(kMahoColorTabRowSelectedBackground) \
-  E_CPONLY(kMahoColorTabRowSelectedHoveredBackground) \
-  E_CPONLY(kMahoColorInteractiveChipIdleBackground) \
-  /* Favorites */ \
-  E_CPONLY(kMahoColorFavoritesEmptyCardBackground) \
-  E_CPONLY(kMahoColorFavoritesEmptyCardBorder) \
-  E_CPONLY(kMahoColorFavoritesEmptyCardDash) \
-  E_CPONLY(kMahoColorFavoritesEmptyBadgeBackground) \
-  E_CPONLY(kMahoColorFavoritesEmptyBadgeBorder) \
-  E_CPONLY(kMahoColorFavoritesEmptyBadgeIcon) \
-  E_CPONLY(kMahoColorFavoritesEmptyCloseGlyph) \
-  /* Library Content (shared across Archive, Downloads, Boosts panels) */ \
-  E_CPONLY(kMahoColorLibraryContentBackground) \
-  E_CPONLY(kMahoColorLibraryListRowBackground) \
-  E_CPONLY(kMahoColorLibraryRowHover) \
-  E_CPONLY(kMahoColorLibraryRowSelected) \
-  E_CPONLY(kMahoColorLibrarySectionHeaderText) \
-  E_CPONLY(kMahoColorLibraryGlyphBorder) \
-  E_CPONLY(kMahoColorLibrarySearchPillBackground) \
-  E_CPONLY(kMahoColorLibraryProgressFill) \
-  /* Archive */ \
-  E_CPONLY(kMahoColorArchivePanelBackground) \
-  E_CPONLY(kMahoColorArchiveControlBackground) \
-  E_CPONLY(kMahoColorArchiveControlBorder) \
-  E_CPONLY(kMahoColorArchiveControlActiveBackground) \
-  E_CPONLY(kMahoColorArchiveRowHover) \
-  E_CPONLY(kMahoColorArchiveRowSelected) \
-  E_CPONLY(kMahoColorArchiveSectionHeaderText) \
-  E_CPONLY(kMahoColorArchiveDivider) \
-  E_CPONLY(kMahoColorArchiveDetailPanelBackground) \
-  E_CPONLY(kMahoColorArchiveDetailPanelInnerBackground) \
-  E_CPONLY(kMahoColorArchiveDetailPanelBorder) \
-  E_CPONLY(kMahoColorArchiveDetailPanelMutedFill) \
-  E_CPONLY(kMahoColorArchiveDetailPanelAccent) \
-  /* Library Rail */ \
-  E_CPONLY(kMahoColorLibraryRailBackground) \
-  E_CPONLY(kMahoColorLibraryRailItemSelected) \
-  E_CPONLY(kMahoColorLibraryRailItemHover) \
-  E_CPONLY(kMahoColorLibraryRailItemText) \
-  E_CPONLY(kMahoColorLibraryRailItemSelectedText) \
-  E_CPONLY(kMahoColorLibraryRailDivider) \
   /* Text */ \
   E_CPONLY(kMahoColorPrimaryText) \
   E_CPONLY(kMahoColorSecondaryText) \
   E_CPONLY(kMahoColorTertiaryText) \
-  /* Sidebar Text */ \
-  E_CPONLY(kMahoColorSidebarPrimaryText) \
-  E_CPONLY(kMahoColorSidebarSecondaryText) \
-  E_CPONLY(kMahoColorSidebarTertiaryText) \
   /* Legacy Aliases */ \
   E_CPONLY(kMahoColorDivider) \
   E_CPONLY(kMahoColorFooterDivider) \

@@ -7,7 +7,6 @@
 #include "base/location.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/vector_icons/vector_icons.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
@@ -62,9 +61,6 @@ class ActionRow : public views::View {
     selection_background_ = AddChildView(std::make_unique<views::View>());
     selection_background_->SetVisible(false);
     selection_background_->SetCanProcessEventsWithinSubtree(false);
-    selection_background_->SetBackground(
-        views::CreateRoundedRectBackground(kMahoColorSidebarSelected,
-                                            kRowCornerRadius));
 
     auto* content_row = AddChildView(std::make_unique<views::View>());
     content_row->SetCanProcessEventsWithinSubtree(false);
@@ -77,14 +73,11 @@ class ActionRow : public views::View {
 
     auto* icon_tile = content_row->AddChildView(std::make_unique<views::View>());
     icon_tile->SetPreferredSize(gfx::Size(kIconTileSize, kIconTileSize));
-    icon_tile->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorInteractiveChipIdleBackground, kIconTileCornerRadius));
     icon_tile->SetLayoutManager(std::make_unique<views::FillLayout>());
+    icon_tile_ = icon_tile;
 
     icon_ = &icon;
     auto icon_image = std::make_unique<views::ImageView>();
-    icon_image->SetImage(ui::ImageModel::FromVectorIcon(
-        icon, kMahoColorSidebarPrimaryText, kIconSize));
     icon_image->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
     icon_image->SetHorizontalAlignment(views::ImageView::Alignment::kCenter);
     icon_image->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
@@ -105,14 +98,12 @@ class ActionRow : public views::View {
     auto title_label = std::make_unique<views::Label>(
         title, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3_MEDIUM);
     title_label->SetAutoColorReadabilityEnabled(false);
-    title_label->SetEnabledColor(kMahoColorSidebarPrimaryText);
     title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title_label_ = label_column->AddChildView(std::move(title_label));
 
     auto subtitle_label = std::make_unique<views::Label>(
         subtitle, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5);
     subtitle_label->SetAutoColorReadabilityEnabled(false);
-    subtitle_label->SetEnabledColor(kMahoColorSidebarSecondaryText);
     subtitle_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     subtitle_label_ = label_column->AddChildView(std::move(subtitle_label));
 
@@ -129,6 +120,10 @@ class ActionRow : public views::View {
   }
 
   void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    selection_background_->SetBackground(views::CreateRoundedRectBackground(
+        palette.row_selected, kRowCornerRadius));
+    icon_tile_->SetBackground(views::CreateRoundedRectBackground(
+        palette.row_active, kIconTileCornerRadius));
     icon_image_->SetImage(ui::ImageModel::FromVectorIcon(
         *icon_, palette.primary_text, kIconSize));
     title_label_->SetEnabledColor(palette.primary_text);
@@ -152,6 +147,7 @@ class ActionRow : public views::View {
   base::RepeatingCallback<void(int)> hover_callback_;
   base::RepeatingCallback<void(int)> click_callback_;
   raw_ptr<views::View> selection_background_ = nullptr;
+  raw_ptr<views::View> icon_tile_ = nullptr;
   raw_ptr<views::ImageView> icon_image_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;
@@ -174,11 +170,6 @@ MahoSidebarActionPopoverView::MahoSidebarActionPopoverView(
       gfx::Insets(kCardPadding), kRowSpacing));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-
-  SetBackground(views::CreateRoundedRectBackground(kMahoColorCardBackground,
-                                                    kCardCornerRadius));
-  SetBorder(views::CreateRoundedRectBorder(1, kCardCornerRadius,
-                                            kMahoColorCardBorder));
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
   SetAccessibleName(u"Sidebar actions");
@@ -273,6 +264,10 @@ bool MahoSidebarActionPopoverView::OnKeyPressed(const ui::KeyEvent& event) {
 void MahoSidebarActionPopoverView::SetSidebarPalette(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
+  SetBackground(views::CreateRoundedRectBackground(palette_.row_active,
+                                                    kCardCornerRadius));
+  SetBorder(views::CreateRoundedRectBorder(1, kCardCornerRadius,
+                                            palette_.outline));
   for (views::View* row : action_rows_) {
     static_cast<ActionRow*>(row)->SetSidebarPalette(palette_);
   }

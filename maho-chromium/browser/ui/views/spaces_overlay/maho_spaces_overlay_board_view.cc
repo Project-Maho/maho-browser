@@ -2,8 +2,8 @@
 
 #include "maho_spaces_overlay_board_view.h"
 
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho_spaces_overlay_column_view.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
@@ -53,7 +53,6 @@ MahoSpacesOverlayBoardView::MahoSpacesOverlayBoardView(
     empty_state_label_->SetSubpixelRenderingEnabled(false);
     empty_state_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     empty_state_label_->SetMultiLine(true);
-    empty_state_label_->SetEnabledColor(kMahoColorSecondaryText);
     return;
   }
 
@@ -61,9 +60,11 @@ MahoSpacesOverlayBoardView::MahoSpacesOverlayBoardView(
     const bool is_active = column.is_active ||
                            (!model_.active_space_id.empty() &&
                             column.space_id == model_.active_space_id);
-    AddChildView(std::make_unique<MahoSpacesOverlayColumnView>(
+    auto column_view = std::make_unique<MahoSpacesOverlayColumnView>(
         browser_, render_mode_, column, is_active, space_selected_callback_,
-        tab_selected_callback_));
+        tab_selected_callback_);
+    column_view->SetPalette(palette_);
+    column_views_.push_back(AddChildView(std::move(column_view)));
   }
 }
 
@@ -71,9 +72,37 @@ MahoSpacesOverlayBoardView::~MahoSpacesOverlayBoardView() = default;
 
 void MahoSpacesOverlayBoardView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  if (empty_state_label_) {
-    empty_state_label_->SetEnabledColor(kMahoColorSecondaryText);
+  if (!has_palette_) {
+    ResolvePaletteFromEnvironment();
+    return;
   }
+  ApplyPaletteColors();
+}
+
+void MahoSpacesOverlayBoardView::SetPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  has_palette_ = true;
+  ApplyPaletteColors();
+}
+
+void MahoSpacesOverlayBoardView::ApplyPaletteColors() {
+  if (empty_state_label_) {
+    empty_state_label_->SetEnabledColor(palette_.secondary_text);
+  }
+  for (MahoSpacesOverlayColumnView* column_view : column_views_) {
+    column_view->SetPalette(palette_);
+  }
+}
+
+void MahoSpacesOverlayBoardView::ResolvePaletteFromEnvironment() {
+  const ui::NativeTheme* native_theme =
+      ui::NativeTheme::GetInstanceForNativeUi();
+  palette_ = ResolveMahoSidebarPalette(
+      BuildMahoSidebarThemeEnvironmentForBrowser(
+          browser_, GetColorProvider(), native_theme));
+  has_palette_ = true;
+  ApplyPaletteColors();
 }
 
 }  // namespace maho

@@ -58,7 +58,6 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
 #include "ui/compositor/layer.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 
 namespace maho {
 
@@ -152,21 +151,11 @@ class MahoFooterIconButton : public views::MdTextButton {
   void UpdateHoverBackground() {
     const ButtonState state = GetState();
     if (state == STATE_PRESSED) {
-      if (palette_.row_active != SK_ColorTRANSPARENT) {
-        SetBackground(views::CreateRoundedRectBackground(
-            palette_.row_active, kFooterControlCornerRadius));
-      } else {
-        SetBackground(views::CreateRoundedRectBackground(
-            kMahoColorTabRowActiveBackground, kFooterControlCornerRadius));
-      }
+      SetBackground(views::CreateRoundedRectBackground(
+          palette_.row_selected, kFooterControlCornerRadius));
     } else if (state == STATE_HOVERED) {
-      if (palette_.row_hover != SK_ColorTRANSPARENT) {
-        SetBackground(views::CreateRoundedRectBackground(
-            palette_.row_hover, kFooterControlCornerRadius));
-      } else {
-        SetBackground(views::CreateRoundedRectBackground(
-            kMahoColorTabRowHoverBackground, kFooterControlCornerRadius));
-      }
+      SetBackground(views::CreateRoundedRectBackground(
+          palette_.row_hover, kFooterControlCornerRadius));
     } else {
       SetBackground(nullptr);
     }

@@ -8,6 +8,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
@@ -56,6 +57,10 @@ class MahoSidebarLibraryRailView : public views::View {
   void SetCategorySelectedCallback(CategorySelectedCallback callback);
   void SetBackCallback(base::RepeatingClosure callback);
 
+  // Applies the resolved sidebar palette to every rail control. Called once
+  // right after construction and on every subsequent palette change.
+  void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
+
   views::Button* button_for_category_for_testing(Category category);
   std::vector<Category> visible_categories_for_testing() const;
   views::ImageButton* back_button_for_testing() { return back_button_; }
@@ -81,6 +86,7 @@ class MahoSidebarLibraryRailView : public views::View {
   Category selected_category_ = Category::kArchivedTabs;
   CategorySelectedCallback category_selected_callback_;
   base::RepeatingClosure back_callback_;
+  MahoSidebarPalette palette_;
   base::WeakPtrFactory<MahoSidebarLibraryRailView> weak_factory_{this};
 };
 

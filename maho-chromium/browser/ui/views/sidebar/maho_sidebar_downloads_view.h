@@ -25,6 +25,7 @@ class Browser;
 
 namespace views {
 class Button;
+class ImageView;
 class Label;
 class ScrollView;
 class Textfield;
@@ -67,6 +68,9 @@ class MahoSidebarDownloadsView : public views::View,
   views::View* empty_state_view_for_testing() {
     return empty_state_view_.get();
   }
+  views::View* search_shell_for_testing() { return search_shell_.get(); }
+  views::ImageView* search_icon_for_testing() { return search_icon_.get(); }
+  views::Textfield* search_field_for_testing() { return search_field_.get(); }
 
   views::View* download_row_for_download_id_for_testing(
       const std::string& download_id);
@@ -82,7 +86,10 @@ class MahoSidebarDownloadsView : public views::View,
   void OnMahoDownloadsChanged() override;
 
  private:
+  void OnThemeChanged() override;
+
   void BuildUi();
+  void ApplyPalette();
   void ApplySearchFilter();
   void HandleDownloadAction(const std::string& download_id,
                             DownloadActionKind action);
@@ -101,6 +108,8 @@ class MahoSidebarDownloadsView : public views::View,
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   raw_ptr<views::View> list_container_ = nullptr;
   raw_ptr<views::View> empty_state_view_ = nullptr;
+  raw_ptr<views::View> search_shell_ = nullptr;
+  raw_ptr<views::ImageView> search_icon_ = nullptr;
   raw_ptr<views::Textfield> search_field_ = nullptr;
   base::OneShotTimer search_debounce_timer_;
 

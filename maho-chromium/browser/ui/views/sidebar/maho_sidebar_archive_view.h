@@ -97,6 +97,9 @@ class MahoSidebarArchiveView : public views::View,
   void SetSidebarPalette(const MahoSidebarPalette& palette);
 
   views::LabelButton* filter_button_for_testing() { return filter_button_; }
+  SkColor filter_button_text_color_for_testing() const {
+    return filter_button_text_color_;
+  }
   ui::SimpleMenuModel* filter_menu_model_for_testing() {
     return filter_menu_model_.get();
   }
@@ -106,6 +109,8 @@ class MahoSidebarArchiveView : public views::View,
   ArchiveFilterMode filter_mode_for_testing() const { return filter_mode_; }
   std::u16string filter_accessibility_value_for_testing() const;
   int visible_result_count_for_testing() const { return visible_result_count_; }
+  views::Textfield* search_field_for_testing() { return search_field_; }
+  views::View* search_shell_for_testing() { return search_shell_; }
   const std::vector<ArchivedTabItem>& all_archived_tabs_for_testing() const {
     return all_archived_tabs_;
   }
@@ -117,6 +122,8 @@ class MahoSidebarArchiveView : public views::View,
   // ui::SimpleMenuModel::Delegate:
   void ExecuteCommand(int command_id, int event_flags) override;
   bool IsCommandIdChecked(int command_id) const override;
+
+  void OnThemeChanged() override;
 
  private:
   void BuildUi();
@@ -144,6 +151,7 @@ class MahoSidebarArchiveView : public views::View,
   raw_ptr<views::LabelButton> filter_button_ = nullptr;
   raw_ptr<views::View> empty_state_view_ = nullptr;
   MahoSidebarPalette palette_;
+  SkColor filter_button_text_color_ = SK_ColorTRANSPARENT;
 
   ArchiveFilterMode filter_mode_ = ArchiveFilterMode::kAll;
   std::unique_ptr<ui::SimpleMenuModel> filter_menu_model_;

@@ -8,6 +8,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -32,6 +33,8 @@ class MahoSpaceContextMenu;
 
 namespace maho {
 
+class MahoSpacesOverlayTabRowView;
+
 class MahoSpacesOverlayColumnView : public views::View {
   METADATA_HEADER(MahoSpacesOverlayColumnView, views::View)
 
@@ -52,6 +55,8 @@ class MahoSpacesOverlayColumnView : public views::View {
   MahoSpacesOverlayColumnView& operator=(
       const MahoSpacesOverlayColumnView&) = delete;
   ~MahoSpacesOverlayColumnView() override;
+
+  void SetPalette(const MahoSidebarPalette& palette);
 
   void OnThemeChanged() override;
   gfx::Size GetMinimumSize() const override;
@@ -80,6 +85,7 @@ class MahoSpacesOverlayColumnView : public views::View {
   raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
   raw_ptr<views::View> tab_list_ = nullptr;
   raw_ptr<views::Label> empty_state_label_ = nullptr;
+  std::vector<raw_ptr<MahoSpacesOverlayTabRowView>> tab_row_views_;
 
   raw_ptr<views::ImageView> clear_arrow_ = nullptr;
   raw_ptr<views::Label> clear_label_ = nullptr;
@@ -87,6 +93,8 @@ class MahoSpacesOverlayColumnView : public views::View {
   raw_ptr<views::Label> tag_chip_ = nullptr;
   raw_ptr<views::ImageButton> edit_button_ = nullptr;
   raw_ptr<views::ImageButton> menu_button_ = nullptr;
+
+  MahoSidebarPalette palette_;
 
   std::unique_ptr<MahoSpaceContextMenu> active_space_context_menu_;
   std::unique_ptr<ui::SimpleMenuModel> active_context_menu_model_;

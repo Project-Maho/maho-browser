@@ -61,6 +61,57 @@ Accessibility guidelines:
 * **State Reset:** Window bounds, maximize/restore, fullscreen, removal, and destruction reset the caption controls to hidden and stop any hover monitor/timer.
 * **Platform Scope:** macOS traffic lights and Linux frame behavior are unchanged.
 
+## Normal Sidebar Space Theme Contract
+
+### Semantic foreground roles
+* **Primary:** The active Space name, tab title, and other ordinary actionable/readable sidebar labels use one primary role. A Space name and a tab title are always resolved to the identical primary role for the same sidebar palette.
+* **Secondary:** Supporting labels, metadata, placeholders, and idle support glyphs use the secondary role.
+* **Tertiary / disabled:** Disabled controls and non-essential decoration may use the tertiary role. Tertiary is prohibited for essential readable information unless that specific use also meets the primary readable-text threshold.
+* **Neutral glyph:** Ordinary functional controls (close, mute, overflow, search, navigation, and similar non-semantic glyphs) use the neutral-glyph role. Favicons, media artwork, Space swatches, status/accent colors, focus/drop indicators, errors, and successes are not neutral glyphs and keep their semantic colors.
+
+### Resolution, contrast, and material
+* **Auto:** Auto selects its light or dark sidebar family from the owning Space's dominant color. **Sun** forces the light family and **Moon** forces the dark family; all three modes pass through the same deterministic contrast guard.
+* **Contrast:** Primary and secondary readable text must be at least `4.5:1` against every deterministic composed surface. Functional neutral glyphs and essential boundaries must be at least `3:1`. The contrast evaluation samples the continuous gradient and idle, hover, active, selected, editing, and disabled row states, not only a flat base color.
+* **Translucency boundary:** Normal sidebar gradient, opacity, grain, and native vibrancy remain intact, but the guarantee is bounded to deterministic composed surfaces and representative native QA. Arbitrary-wallpaper/native-vibrancy combinations are not mathematically guaranteed to meet WCAG contrast.
+* **Forced colors:** Forced-colors/high-contrast takes precedence over every Space mode and preview: use opaque platform semantic surface/on-surface/outline/focus colors, disable custom gradient, translucency, and grain, and retain normal accessibility behavior.
+
+### Scope boundaries
+* This palette is normal-sidebar-local to its owning regular browser. It does not recolor browser chrome/content, private identity tokens, or Incognito surfaces. Incognito must not read a regular Space theme or preview override.
+* The machine-readable sidebar color ledger records every direct foreground consumer and explicitly preserves semantic artwork or platform-private cases until later consumer migration work changes them.
+
+## Library
+
+### Color and UI Tokens
+The following semantic tokens are used for the Library UI surfaces to maintain consistency with Maho's design system:
+* **kMahoColorLibraryContentBackground:** Background color for the Library contents pane.
+* **kMahoColorLibraryListRowBackground:** Default resting background for row items in the Archive and Downloads list.
+* **kMahoColorLibraryRowHover:** Hover background for rows.
+* **kMahoColorLibraryRowSelected:** Selected background for rows.
+* **kMahoColorLibrarySectionHeaderText:** Text color for section headers (e.g. date groups).
+* **kMahoColorLibraryGlyphBorder:** Border color for items and buttons.
+* **kMahoColorLibrarySearchPillBackground:** Background for search field pill.
+* **kMahoColorLibraryProgressFill:** Foreground fill color for download progress bar.
+* **kMahoColorLibraryRailBackground:** Background for the Library Category Rail.
+* **kMahoColorLibraryRailItemSelected:** Selected background color for rail category item.
+* **kMahoColorLibraryRailItemHover:** Hover background color for rail category item.
+* **kMahoColorLibraryRailItemText:** Text color for category item at rest.
+* **kMahoColorLibraryRailItemSelectedText:** Text color for selected category item.
+* **kMahoColorLibraryRailDivider:** Divider line color between category rail and contents.
+
+### Layout Contract
+To match Arc references (`arc-library-archive.jpeg` and `arc-library-download.png`) while keeping Maho semantic styling, the exact layout dimensions are locked as:
+* **Category Rail width:** 92dp
+* **Rail category item width:** 80dp
+* **Item horizontal inset:** 6dp
+* **Item vertical inset:** 8dp
+* **Content/label width (within item):** 68dp
+* **Downloads visible label:** Single-line, non-eliding.
+* **Minimum width constraints:** At the 280dp minimum sidebar width, the remaining content pane is at least 171dp wide.
+
+### Visual Deviations
+* **Downloads:** Local completed images show real thumbnails loaded asynchronously. Other file types, incomplete downloads, or failed thumbnail loads display the Lucide `file` icon.
+* **IconManager Dependency:** Native OS file icons are deferred because a direct dependency on `IconManager` from `maho_sidebar_downloads` creates a GN cyclic dependency with `//chrome/browser`.
+
 ## Maho Mini Top Bar
 
 ### Layout Contract
@@ -81,6 +132,32 @@ Accessibility guidelines:
 * The hostname and all labels painted over translucent surfaces keep subpixel rendering disabled. Focus indicators must remain visible against the dark glass, and every interaction remains keyboard-operable.
 * Completion requires a fresh 600×760dp capture comparison against `maho-mini-reference-arc.png`, `maho-mini-reference-design.png`, `maho-mini-reference-comparison.png`, and `maho-mini-reference-later.png` before visual parity is claimed.
 
+## Command Palette Action Selector
+
+* **Current AI entry and privacy:** The native palette uses the persistent two-segment `Search / Ask Maho` selector, with `PaletteAction::kAskMaho`, instead of the superseded transient `ai + Tab` `CommandOverlayMode::kAI` palette mode. `MahoPrivateCapability::kAI` remains the AI side panel/private capability privacy gate. Incognito/off-the-record contexts must block Ask Maho and all AI ingress while keeping the Search input usable.
+
+### Color and UI Tokens
+To maintain design consistency with the Command Palette, the selector view reuses existing semantic colors:
+* **Background container:** Semi-transparent or default command palette backing.
+* **Selected segment:** Semi-transparent background fill (`kMahoColorAccentBlue` or `kMahoColorAccentBlueBright`) with a thin border.
+* **Unselected segment:** Clear background with secondary text.
+* **Hover state:** Soft brightness overlay applied to both selected and unselected states on mouse hover.
+* **Focus outline:** Focus indicator mapped to `kMahoColorAccentBlue`.
+* **Disabled state (Incognito):** Ask Maho is disabled/greyed out or hidden entirely to restrict AI ingress. Implementations may disable the selector affordance as a whole if the text field remains usable and Ask Maho cannot be selected or submitted.
+
+### Compact Tab Hint
+* A small helper label "Tab to switch" is shown adjacent to the selector.
+* **Narrow width rule:** Under horizontal constraints, the tab hint is hidden first, preserving the "Search" and "Ask Maho" segment labels.
+
+### Accessibility Contract
+* The selector view acts as an `ax::mojom::Role::kRadioGroup`.
+* Individual segments act as `ax::mojom::Role::kRadioButton` with explicit accessible names and selection states (`SetIsSelected`).
+* Selection changes trigger accessibility announcements to notify screen readers of the active action mode (e.g. "Search selected" or "Ask Maho selected").
+
+### Scope Constraint
+* The selector remains a simple 2-segment switcher.
+* No additional Agent features (such as context checkboxes, tool selection, model configurations, or system prompt toggles) may be placed inside the palette interface.
+
 ## Sidebar Ellipsis Spark Action Row
 
 ### Overview
@@ -98,3 +175,39 @@ Accessibility guidelines:
 * **Palette**: Dots map to `ui::kColorSysOnSurfaceSubtle`; spark/check mark map to `kMahoColorAccentBlueBright`.
 * **State & Announcements**: Textless states with no visible label. Accessible name/role `kAlert` is announced on start and resolution.
 * **Input Blocking**: Button subtree event processing and accessibility exposure are blocked during processing. Keyboard focus is restored to the initiating button upon completion.
+
+## Sidebar Palette Wiring Conventions
+
+### Naming Rule
+* Palette subscription callbacks are named `OnSidebarPaletteChanged(const MahoSidebarPalette&)`. That is the event `MahoSidebarView::palette_changed_callbacks_` broadcasts, so the name stays honest.
+* New code must use `OnSidebarPaletteChanged`. `SetSidebarPalette(const MahoSidebarPalette&)` is legacy and remains only on views that haven't migrated yet.
+
+### Subscription Pattern
+* `MahoSidebarView` wires each direct child at construction time. Reference: `sidebar/maho_sidebar_view.cc:632-656`.
+* Step 1: one-shot apply, so the child's first paint already uses the palette.
+
+  ```cpp
+  child_view_->OnSidebarPaletteChanged(sidebar_palette());
+  ```
+* Step 2: subscribe to later palette updates.
+
+  ```cpp
+  child_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&ChildView::OnSidebarPaletteChanged,
+                          base::Unretained(child_view_)));
+  ```
+* The returned handle is kept as a `base::CallbackListSubscription` member of `MahoSidebarView`, which ties the subscription's lifetime to the parent view. See `sidebar/maho_sidebar_view.h:421-431`.
+* `views::Label::SetEnabledColor()` and `ui::ImageModel::FromVectorIcon()` both accept `SkColor` directly, so migrating a view needs no signature changes on the views side.
+
+### Migration Pitfalls
+| # | Rule | Why |
+| --- | --- | --- |
+| 1 | Always apply the palette once at construction. | ColorIds are resolved lazily by the ColorProvider, but `SkColor` setters are push-based. Miss the initial apply and the first paint goes out in default black. |
+| 2 | `OnThemeChanged()` overrides re-apply the stored `palette_`; they never re-read ColorIds. | Anti-example: the rail item's `OnThemeChanged()` calls `UpdateAppearance()`, which reads ColorIds and overwrites palette values (`sidebar/maho_sidebar_library_rail_view.cc:194-196`). |
+| 3 | Never mix a ColorId assignment with a later palette override on the same element. | Anti-example: the downloads search field gets `palette_.primary_text` at `sidebar/maho_sidebar_downloads_view.cc:916` but `kMahoColorSidebarPrimaryText` at `sidebar/maho_sidebar_downloads_view.cc:1010`. Order-dependent and breaks easily. |
+
+### Color Authority
+* Sidebar surfaces (sidebar body, library overlay, Spaces overlay) take text, glyph, and surface colors ONLY from `MahoSidebarPalette`. Direct `kMahoColor*` ColorId references on those surfaces are forbidden.
+* The global ColorProvider stays the authority for browser chrome. That split is intentional and out of scope for the palette migration.
+* Semantic accents (for example `kMahoColorAccentBlueBright`) keep semantic colors and are not migrated into the palette.
+* Static gate: `maho-chromium/build/scripts/check_sidebar_theme_color_ledger.py` enforces the color ledger and blocks regressions.

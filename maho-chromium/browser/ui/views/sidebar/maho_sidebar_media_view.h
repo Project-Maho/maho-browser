@@ -18,6 +18,8 @@
 
 namespace views {
 class Button;
+class ImageView;
+class Label;
 class ScrollView;
 class Textfield;
 }  // namespace views
@@ -46,6 +48,7 @@ class MahoSidebarMediaView : public views::View,
   MahoSidebarMediaView& operator=(const MahoSidebarMediaView&) = delete;
   ~MahoSidebarMediaView() override;
 
+  void OnThemeChanged() override;
   void ReloadMedia();
   void SetSidebarPalette(const MahoSidebarPalette& palette);
 
@@ -65,13 +68,17 @@ class MahoSidebarMediaView : public views::View,
 
  private:
   void BuildUi();
+  void UpdateAppearance();
   void ApplySearchFilter();
   void SetActiveFilter(std::optional<MediaKind> filter);
   void HandleMediaAction(const std::string& item_id, MediaActionKind action);
 
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   raw_ptr<views::View> list_container_ = nullptr;
+  raw_ptr<views::Label> header_label_ = nullptr;
   raw_ptr<views::Label> empty_state_view_ = nullptr;
+  raw_ptr<views::View> search_shell_ = nullptr;
+  raw_ptr<views::ImageView> search_icon_ = nullptr;
   raw_ptr<views::Textfield> search_field_ = nullptr;
   raw_ptr<views::View> filters_container_ = nullptr;
   base::OneShotTimer search_debounce_timer_;

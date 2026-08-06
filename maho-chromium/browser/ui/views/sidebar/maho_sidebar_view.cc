@@ -603,6 +603,10 @@ void MahoSidebarView::BuildUi() {
       weak_factory_.GetWeakPtr()));
   library_rail_view_->SetBackCallback(base::BindRepeating(
       &MahoSidebarView::HandleLibraryBack, weak_factory_.GetWeakPtr()));
+  library_rail_view_->OnSidebarPaletteChanged(sidebar_palette());
+  library_rail_palette_subscription_ = AddSidebarPaletteChangedCallback(
+      base::BindRepeating(&MahoSidebarLibraryRailView::OnSidebarPaletteChanged,
+                          base::Unretained(library_rail_view_)));
 
   library_divider_ =
       library_container_->AddChildView(std::make_unique<views::View>());

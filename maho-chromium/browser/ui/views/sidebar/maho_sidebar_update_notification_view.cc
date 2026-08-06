@@ -12,7 +12,6 @@
 #include "cc/paint/draw_looper.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_shader.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkScalar.h"
@@ -226,7 +225,6 @@ MahoSidebarUpdateNotificationView::MahoSidebarUpdateNotificationView() {
 
   heading_ = header_->AddChildView(std::make_unique<views::Label>());
   heading_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-  heading_->SetEnabledColor(kMahoColorSidebarPrimaryText);
   heading_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   heading_->SetElideBehavior(gfx::ELIDE_TAIL);
   heading_->SetSubpixelRenderingEnabled(false);
@@ -235,7 +233,6 @@ MahoSidebarUpdateNotificationView::MahoSidebarUpdateNotificationView() {
 
   divider_ = AddChildView(std::make_unique<views::View>());
   divider_->SetPreferredSize(gfx::Size(0, 1));
-  divider_->SetBackground(views::CreateSolidBackground(kMahoColorDivider));
   divider_->SetPaintToLayer();
   divider_->layer()->SetFillsBoundsOpaquely(false);
 

@@ -8,6 +8,7 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
@@ -43,6 +44,8 @@ class MahoSpacesOverlayTabRowView : public views::View {
       const MahoSpacesOverlayTabRowView&) = delete;
   ~MahoSpacesOverlayTabRowView() override;
 
+  void SetPalette(const MahoSidebarPalette& palette);
+
   void OnThemeChanged() override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   ui::Cursor GetCursor(const ui::MouseEvent& event) override;
@@ -62,6 +65,7 @@ class MahoSpacesOverlayTabRowView : public views::View {
   raw_ptr<views::Label> subtitle_label_ = nullptr;
   raw_ptr<views::View> chip_row_ = nullptr;
   std::vector<raw_ptr<views::Label>> chip_labels_;
+  MahoSidebarPalette palette_;
 
   base::CancelableTaskTracker cancelable_task_tracker_;
   base::WeakPtrFactory<MahoSpacesOverlayTabRowView> weak_ptr_factory_{this};

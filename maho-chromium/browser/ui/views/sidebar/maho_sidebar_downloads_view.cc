@@ -81,17 +81,13 @@ constexpr int kHeaderSearchCornerRadiusDp = 8;
 constexpr int kHeaderSearchHorizontalInsetDp = 12;
 constexpr int kHeaderSearchIconSpacingDp = 8;
 constexpr int kHeaderSearchIconSizeDp = 14;
-constexpr int kHeaderSummaryTopInsetDp = 8;
 constexpr int kRowCornerRadiusDp = 10;
 constexpr int kRowSpacingDp = 2;
 constexpr int kRowHorizontalSpacingDp = 8;
 constexpr int kRowVerticalPaddingDp = 6;
 constexpr int kRowHorizontalPaddingDp = 8;
 constexpr int kBadgeSizeDp = 28;
-constexpr int kBadgeCornerRadiusDp = 7;
-constexpr int kBadgeLabelMaxChars = 4;
 constexpr int kActionSpacingDp = 6;
-constexpr int kActionButtonHeightDp = 28;
 constexpr int kMetaSpacingDp = 3;
 constexpr int kProgressBarHeightDp = 3;
 constexpr int kProgressBarWidthDp = 48;
@@ -100,15 +96,11 @@ constexpr int kSectionHeaderTopInsetDp = 12;
 constexpr int kSectionHeaderBottomInsetDp = 6;
 constexpr int kSectionHeaderHorizontalInsetDp = 6;
 constexpr int kSectionSpacingDp = 0;
-constexpr int kEmptyStateIconSizeDp = 24;
-constexpr int kEmptyStateIconTileSizeDp = 40;
-constexpr int kEmptyStateIconTileCornerRadiusDp = 12;
 constexpr int kEmptyStateTextMaxWidthDp = 188;
 constexpr int kEmptyStateHorizontalPaddingDp = 24;
 constexpr int kEmptyStateItemSpacingDp =
     sidebar_layout::kArchiveEmptyStateItemSpacingDp;
 constexpr int kListBottomInsetDp = 10;
-constexpr int kListHorizontalInsetDp = 10;
 
 struct DownloadActionSpec {
   std::u16string label;
@@ -152,15 +144,6 @@ std::u16string StateLabel(const std::string& state) {
     return u"Cancelled";
   }
   return base::UTF8ToUTF16(state);
-}
-
-std::u16string ProgressText(const DownloadItem& item) {
-  if (item.total_bytes == 0) {
-    return item.received_bytes == 0 ? u"0 bytes" :
-                                      FormatByteCount(item.received_bytes);
-  }
-  return FormatByteCount(item.received_bytes) + u" of " +
-         FormatByteCount(item.total_bytes);
 }
 
 bool IsInProgressState(const std::string& state) {
@@ -284,13 +267,6 @@ std::u16string DownloadCountText(size_t count) {
          (count == 1 ? u" download" : u" downloads");
 }
 
-std::u16string HeaderSummaryText(size_t count) {
-  if (count == 0) {
-    return u"Ready for your next file";
-  }
-  return base::StrCat({DownloadCountText(count), u" in your library"});
-}
-
 std::u16string MonthDayText(base::Time timestamp) {
   static constexpr std::array<std::u16string_view, 12> kMonths = {
       u"Jan", u"Feb", u"Mar", u"Apr", u"May", u"Jun",
@@ -375,7 +351,9 @@ class DownloadSectionHeaderView : public views::View {
   METADATA_HEADER(DownloadSectionHeaderView, views::View)
 
  public:
-  DownloadSectionHeaderView(const std::u16string& title, size_t count) {
+  DownloadSectionHeaderView(const std::u16string& title,
+                            size_t count,
+                            const MahoSidebarPalette& palette) {
     GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
     GetViewAccessibility().SetName(title + u", " + DownloadCountText(count));
 
@@ -393,7 +371,7 @@ class DownloadSectionHeaderView : public views::View {
         AddChildView(std::make_unique<views::Label>(title));
     title_label->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
-    title_label->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
+    title_label->SetEnabledColor(palette.primary_text);
     title_label->SetAutoColorReadabilityEnabled(false);
     title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title_label->GetViewAccessibility().SetIsIgnored(true);
@@ -403,30 +381,11 @@ class DownloadSectionHeaderView : public views::View {
             base::UTF8ToUTF16(std::to_string(count))));
     count_label->SetSkipSubpixelRenderingOpacityCheck(true);
     count_label->SetTextStyle(views::style::STYLE_BODY_5);
-    count_label->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
+    count_label->SetEnabledColor(palette.primary_text);
     count_label->SetAutoColorReadabilityEnabled(false);
     count_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     count_label->GetViewAccessibility().SetIsIgnored(true);
-    if (GetColorProvider()) {
-      count_label->SetEnabledColor(SkColorSetA(
-          GetColorProvider()->GetColor(kMahoColorLibrarySectionHeaderText),
-          0xB8));
-    }
-
-    count_label_ = count_label;
   }
-
-  void OnThemeChanged() override {
-    views::View::OnThemeChanged();
-    if (count_label_ && GetColorProvider()) {
-      count_label_->SetEnabledColor(SkColorSetA(
-          GetColorProvider()->GetColor(kMahoColorLibrarySectionHeaderText),
-          0xB8));
-    }
-  }
-
- private:
-  raw_ptr<views::Label> count_label_ = nullptr;
 };
 
 BEGIN_METADATA(DownloadSectionHeaderView)
@@ -585,22 +544,18 @@ class DownloadsEmptyStateView : public views::View {
   METADATA_HEADER(DownloadsEmptyStateView, views::View)
 
  public:
-  DownloadsEmptyStateView() {
+  explicit DownloadsEmptyStateView(const MahoSidebarPalette& palette) {
     GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
     GetViewAccessibility().SetName(u"Downloads empty state");
 
     icon_ = AddChildView(std::make_unique<views::ImageView>());
     icon_->SetPreferredSize(gfx::Size(24, 24));
-    icon_->SetImage(ui::ImageModel::FromVectorIcon(
-        maho_lucide_icons::kArrowDownToLineIcon,
-        kMahoColorSidebarSecondaryText, 24));
     icon_->GetViewAccessibility().SetIsIgnored(true);
 
     title_label_ = AddChildView(
         std::make_unique<views::Label>(u"No downloads yet"));
     title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-    title_label_->SetEnabledColor(kMahoColorSidebarPrimaryText);
     title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     title_label_->SetAutoColorReadabilityEnabled(false);
     title_label_->GetViewAccessibility().SetIsIgnored(true);
@@ -609,11 +564,19 @@ class DownloadsEmptyStateView : public views::View {
         u"Files you download will show up here."));
     subtitle_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle_label_->SetTextStyle(views::style::STYLE_BODY_4);
-    subtitle_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
     subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     subtitle_label_->SetAutoColorReadabilityEnabled(false);
     subtitle_label_->SetMultiLine(true);
     subtitle_label_->GetViewAccessibility().SetIsIgnored(true);
+
+    SetPalette(palette);
+  }
+
+  void SetPalette(const MahoSidebarPalette& palette) {
+    icon_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kArrowDownToLineIcon, palette.secondary_text, 24));
+    title_label_->SetEnabledColor(palette.primary_text);
+    subtitle_label_->SetEnabledColor(palette.secondary_text);
   }
 
   void Layout(PassKey) override {
@@ -936,11 +899,13 @@ MahoSidebarDownloadsView::~MahoSidebarDownloadsView() {
 void MahoSidebarDownloadsView::SetSidebarPalette(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
-  if (search_field_) {
-    search_field_->SetTextColor(palette_.primary_text);
-    search_field_->set_placeholder_text_color(palette_.secondary_text);
-  }
+  ApplyPalette();
   ReloadDownloads();
+}
+
+void MahoSidebarDownloadsView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  ApplyPalette();
 }
 
 void MahoSidebarDownloadsView::OnMahoDownloadsChanged() {
@@ -1001,13 +966,10 @@ void MahoSidebarDownloadsView::BuildUi() {
   header_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  auto* search_shell = header_strip->AddChildView(std::make_unique<views::View>());
-  search_shell->SetPreferredSize(gfx::Size(0, kHeaderSearchHeightDp));
-  search_shell->SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorLibrarySearchPillBackground, kHeaderSearchCornerRadiusDp));
-  search_shell->SetBorder(views::CreateRoundedRectBorder(
-      1, kHeaderSearchCornerRadiusDp, kMahoColorLibraryGlyphBorder));
-  auto* search_layout = search_shell->SetLayoutManager(
+  search_shell_ =
+      header_strip->AddChildView(std::make_unique<views::View>());
+  search_shell_->SetPreferredSize(gfx::Size(0, kHeaderSearchHeightDp));
+  auto* search_layout = search_shell_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(0, kHeaderSearchHorizontalInsetDp),
@@ -1015,28 +977,24 @@ void MahoSidebarDownloadsView::BuildUi() {
   search_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  auto* search_icon =
-      search_shell->AddChildView(std::make_unique<views::ImageView>());
-  search_icon->GetViewAccessibility().SetIsIgnored(true);
-  search_icon->SetPreferredSize(
+  search_icon_ =
+      search_shell_->AddChildView(std::make_unique<views::ImageView>());
+  search_icon_->GetViewAccessibility().SetIsIgnored(true);
+  search_icon_->SetPreferredSize(
       gfx::Size(kHeaderSearchIconSizeDp, kHeaderSearchIconSizeDp));
-  search_icon->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSearchIcon, kMahoColorSidebarSecondaryText,
-      kHeaderSearchIconSizeDp));
 
   auto search_field = std::make_unique<views::Textfield>();
-  search_field_ = search_shell->AddChildView(std::move(search_field));
+  search_field_ = search_shell_->AddChildView(std::move(search_field));
   search_field_->SetPlaceholderText(u"Search downloads...");
   search_field_->set_controller(this);
   search_field_->SetPreferredSize(gfx::Size(0, kHeaderSearchHeightDp));
   search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   search_field_->SetBorder(nullptr);
-  search_field_->SetTextColor(kMahoColorSidebarPrimaryText);
   search_field_->SetAccessibleName(u"Search Downloads");
   search_layout->SetFlexForView(search_field_, 1);
-  search_shell->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
-  search_shell->GetViewAccessibility().SetName(u"Search downloads header");
-  header_layout->SetFlexForView(search_shell, 1);
+  search_shell_->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
+  search_shell_->GetViewAccessibility().SetName(u"Search downloads header");
+  header_layout->SetFlexForView(search_shell_, 1);
 
   auto* body_container = AddChildView(std::make_unique<views::View>());
   body_container->SetLayoutManager(std::make_unique<views::FillLayout>());
@@ -1064,10 +1022,33 @@ void MahoSidebarDownloadsView::BuildUi() {
   list_container_->GetViewAccessibility().SetName(u"Downloads results");
 
   empty_state_view_ = body_container->AddChildView(
-      std::make_unique<DownloadsEmptyStateView>());
+      std::make_unique<DownloadsEmptyStateView>(palette_));
 
+  ApplyPalette();
   empty_state_view_->SetVisible(true);
   scroll_view_->SetVisible(false);
+}
+
+void MahoSidebarDownloadsView::ApplyPalette() {
+  if (search_shell_) {
+    search_shell_->SetBackground(views::CreateRoundedRectBackground(
+        palette_.row_active, kHeaderSearchCornerRadiusDp));
+    search_shell_->SetBorder(views::CreateRoundedRectBorder(
+        1, kHeaderSearchCornerRadiusDp, palette_.outline));
+  }
+  if (search_icon_) {
+    search_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+        vector_icons::kSearchIcon, palette_.secondary_text,
+        kHeaderSearchIconSizeDp));
+  }
+  if (search_field_) {
+    search_field_->SetTextColor(palette_.primary_text);
+    search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  if (empty_state_view_) {
+    static_cast<DownloadsEmptyStateView*>(empty_state_view_.get())
+        ->SetPalette(palette_);
+  }
 }
 
 void MahoSidebarDownloadsView::ReloadDownloads() {
@@ -1121,7 +1102,7 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
     }
 
     list_container_->AddChildView(std::make_unique<DownloadSectionHeaderView>(
-        section.title, section.items.size()));
+        section.title, section.items.size(), palette_));
 
     auto* rows_container = list_container_->AddChildView(std::make_unique<views::View>());
     auto* rows_layout = rows_container->SetLayoutManager(

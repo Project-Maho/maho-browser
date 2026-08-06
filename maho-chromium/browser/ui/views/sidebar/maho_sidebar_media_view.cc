@@ -20,7 +20,6 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_constants.h"
@@ -35,7 +34,6 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "components/vector_icons/vector_icons.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 
 namespace maho {
 namespace {
@@ -219,7 +217,9 @@ class MediaSectionHeaderView : public views::View {
   METADATA_HEADER(MediaSectionHeaderView, views::View)
 
  public:
-  MediaSectionHeaderView(std::u16string title, size_t count) {
+  MediaSectionHeaderView(std::u16string title,
+                         size_t count,
+                         const MahoSidebarPalette& palette) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets(), 2));
     layout->set_cross_axis_alignment(
@@ -229,7 +229,7 @@ class MediaSectionHeaderView : public views::View {
     auto* label = AddChildView(std::make_unique<views::Label>(
         title + u" · " + count_text + (count == 1 ? u" item" : u" items")));
     label->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    label->SetEnabledColor(kMahoColorSidebarPrimaryText);
+    label->SetEnabledColor(palette.primary_text);
     label->SetAutoColorReadabilityEnabled(false);
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   }
@@ -367,20 +367,20 @@ MahoSidebarMediaView::MahoSidebarMediaView() {
 
 MahoSidebarMediaView::~MahoSidebarMediaView() = default;
 
+void MahoSidebarMediaView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  UpdateAppearance();
+}
+
 void MahoSidebarMediaView::SetSidebarPalette(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
-  if (search_field_) {
-    search_field_->SetTextColor(palette_.primary_text);
-    search_field_->set_placeholder_text_color(palette_.secondary_text);
-  }
+  UpdateAppearance();
   ReloadMedia();
 }
 
 void MahoSidebarMediaView::BuildUi() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
-  SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorLibraryContentBackground, kPanelCornerRadiusDp));
 
   auto* surface = AddChildView(std::make_unique<views::View>());
   auto* surface_layout = surface->SetLayoutManager(
@@ -397,20 +397,16 @@ void MahoSidebarMediaView::BuildUi() {
   surface->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   surface->GetViewAccessibility().SetName(u"Media panel");
 
-  auto* header = surface->AddChildView(std::make_unique<views::Label>(u"Media"));
-  header->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-  header->SetEnabledColor(kMahoColorSidebarPrimaryText);
-  header->SetAutoColorReadabilityEnabled(false);
-  header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  header_label_ =
+      surface->AddChildView(std::make_unique<views::Label>(u"Media"));
+  header_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
+  header_label_->SetAutoColorReadabilityEnabled(false);
+  header_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
   // 1. Search textfield shell
-  auto* search_shell = surface->AddChildView(std::make_unique<views::View>());
-  search_shell->SetPreferredSize(gfx::Size(0, 36));
-  search_shell->SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorLibrarySearchPillBackground, 8));
-  search_shell->SetBorder(views::CreateRoundedRectBorder(
-      1, 8, kMahoColorLibraryGlyphBorder));
-  auto* search_layout = search_shell->SetLayoutManager(
+  search_shell_ = surface->AddChildView(std::make_unique<views::View>());
+  search_shell_->SetPreferredSize(gfx::Size(0, 36));
+  auto* search_layout = search_shell_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(0, 12),
@@ -418,25 +414,22 @@ void MahoSidebarMediaView::BuildUi() {
   search_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  auto* search_icon =
-      search_shell->AddChildView(std::make_unique<views::ImageView>());
-  search_icon->GetViewAccessibility().SetIsIgnored(true);
-  search_icon->SetPreferredSize(gfx::Size(14, 14));
-  search_icon->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kSearchIcon, kMahoColorSidebarSecondaryText, 14));
+  search_icon_ =
+      search_shell_->AddChildView(std::make_unique<views::ImageView>());
+  search_icon_->GetViewAccessibility().SetIsIgnored(true);
+  search_icon_->SetPreferredSize(gfx::Size(14, 14));
 
   auto search_field = std::make_unique<views::Textfield>();
-  search_field_ = search_shell->AddChildView(std::move(search_field));
+  search_field_ = search_shell_->AddChildView(std::move(search_field));
   search_field_->SetPlaceholderText(u"Search media...");
   search_field_->set_controller(this);
   search_field_->SetPreferredSize(gfx::Size(0, 36));
   search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   search_field_->SetBorder(nullptr);
-  search_field_->SetTextColor(kMahoColorSidebarPrimaryText);
   search_field_->SetAccessibleName(u"Search Media");
   search_layout->SetFlexForView(search_field_, 1);
-  search_shell->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
-  search_shell->GetViewAccessibility().SetName(u"Search media header");
+  search_shell_->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
+  search_shell_->GetViewAccessibility().SetName(u"Search media header");
 
   // 2. Filter chips container
   filters_container_ = surface->AddChildView(std::make_unique<views::View>());
@@ -487,7 +480,6 @@ void MahoSidebarMediaView::BuildUi() {
   empty_state_view_ = surface->AddChildView(
       std::make_unique<views::Label>(u"No media items"));
   empty_state_view_->SetTextStyle(views::style::STYLE_BODY_4);
-  empty_state_view_->SetEnabledColor(kMahoColorSidebarSecondaryText);
   empty_state_view_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   empty_state_view_->SetMultiLine(true);
   empty_state_view_->SetAutoColorReadabilityEnabled(false);
@@ -495,6 +487,35 @@ void MahoSidebarMediaView::BuildUi() {
   empty_state_view_->SetVisible(true);
   scroll_view_->SetVisible(false);
   scroll_view_->GetViewAccessibility().SetValue(u"No media items");
+  UpdateAppearance();
+}
+
+void MahoSidebarMediaView::UpdateAppearance() {
+  const SkColor surface = palette_.content_surface_stops.empty()
+                              ? palette_.row_active
+                              : palette_.content_surface_stops.back();
+  SetBackground(views::CreateRoundedRectBackground(surface,
+                                                    kPanelCornerRadiusDp));
+  if (header_label_) {
+    header_label_->SetEnabledColor(palette_.primary_text);
+  }
+  if (search_shell_) {
+    search_shell_->SetBackground(
+        views::CreateRoundedRectBackground(palette_.row_active, 8));
+    search_shell_->SetBorder(
+        views::CreateRoundedRectBorder(1, 8, palette_.outline));
+  }
+  if (search_icon_) {
+    search_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+        vector_icons::kSearchIcon, palette_.secondary_text, 14));
+  }
+  if (search_field_) {
+    search_field_->SetTextColor(palette_.primary_text);
+    search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  if (empty_state_view_) {
+    empty_state_view_->SetEnabledColor(palette_.secondary_text);
+  }
 }
 
 views::View* MahoSidebarMediaView::media_row_for_item_id_for_testing(
@@ -583,7 +604,7 @@ void MahoSidebarMediaView::ReloadMedia() {
 
     section->AddChildView(std::make_unique<MediaSectionHeaderView>(
         MediaKindLabel(group.kind) + u" · " + group.date_label,
-        group.items.size()));
+        group.items.size(), palette_));
 
     auto* rows_container = section->AddChildView(std::make_unique<views::View>());
     auto* rows_layout = rows_container->SetLayoutManager(

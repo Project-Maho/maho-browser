@@ -485,14 +485,10 @@ class MahoInlineActionButton : public views::LabelButton {
     const ButtonState state = GetState();
     if (engaged_ || state == STATE_PRESSED) {
       SetBackground(views::CreateRoundedRectBackground(
-          ResolveSidebarPaletteColor(palette_, this, palette_.row_active,
-                                     kMahoColorTabRowActiveBackground),
-          corner_radius_));
+          palette_.row_active, corner_radius_));
     } else if (state == STATE_HOVERED) {
       SetBackground(views::CreateRoundedRectBackground(
-          ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
-                                     kMahoColorTabRowHoverBackground),
-          corner_radius_));
+          palette_.row_hover, corner_radius_));
     } else {
       SetBackground(nullptr);
     }
@@ -1029,6 +1025,11 @@ class SplitGroupContainerView : public views::BoxLayoutView {
     UpdateBackground();
   }
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    UpdateBackground();
+  }
+
   void OnMouseEntered(const ui::MouseEvent& event) override {
     hovered_ = true;
     UpdateBackground();
@@ -1041,13 +1042,10 @@ class SplitGroupContainerView : public views::BoxLayoutView {
 
  private:
   void UpdateBackground() {
-    ui::ColorId bg = active_ ? (hovered_ ? kMahoColorTabRowActiveHoveredBackground
-                                         : kMahoColorTabRowActiveBackground)
-                             : (hovered_ ? kMahoColorTabRowHoverBackground
-                                         : ui::ColorId{});
     if (active_ || hovered_) {
-      SetBackground(
-          views::CreateRoundedRectBackground(bg, kRowCornerRadiusDp));
+      SetBackground(views::CreateRoundedRectBackground(
+          hovered_ ? palette_.row_hover : palette_.row_active,
+          kRowCornerRadiusDp));
     } else {
       SetBackground(nullptr);
     }
@@ -1055,6 +1053,7 @@ class SplitGroupContainerView : public views::BoxLayoutView {
 
   bool active_ = false;
   bool hovered_ = false;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(SplitGroupContainerView)
@@ -1348,14 +1347,18 @@ class SidebarInlineRow : public views::LabelButton {
     UpdateAppearance();
   }
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    UpdateAppearance();
+  }
+
  private:
   void UpdateAppearance() {
     const bool hovered = GetState() == STATE_HOVERED ||
                          GetState() == STATE_PRESSED;
     if (active_) {
       SetBackground(views::CreateRoundedRectBackground(
-          hovered ? kMahoColorTabRowActiveHoveredBackground
-                  : kMahoColorTabRowActiveBackground,
+          hovered ? palette_.row_hover : palette_.row_active,
           kRowCornerRadiusDp));
       SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
       SetEnabledTextColors(ui::kColorSysOnSurface);
@@ -1364,8 +1367,7 @@ class SidebarInlineRow : public views::LabelButton {
     }
 
     SetBackground(hovered ? views::CreateRoundedRectBackground(
-                                kMahoColorTabRowHoverBackground,
-                                kRowCornerRadiusDp)
+                                palette_.row_hover, kRowCornerRadiusDp)
                           : nullptr);
     SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
     SetEnabledTextColors(subtle_ ? ui::kColorSysOnSurfaceSubtle
@@ -1376,6 +1378,7 @@ class SidebarInlineRow : public views::LabelButton {
 
   const bool active_;
   const bool subtle_;
+  MahoSidebarPalette palette_;
 };
 
 std::u16string NormalizeRenamedTitle(const std::u16string& text) {
@@ -2800,13 +2803,8 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
       parent() ? parent()->GetMirroredRect(adjusted_bounds) : adjusted_bounds;
   SetBoundsRect(unmirrored_bounds);
 
-  const ui::ColorProvider* color_provider = GetColorProvider();
-  const SkColor base_color =
-      color_provider ? color_provider->GetColor(kMahoColorSidebarBackground)
-                     : SkColorSetARGB(0xFF, 0x27, 0x23, 0x36);
-  const SkColor overlay_color =
-      color_provider ? color_provider->GetColor(kMahoColorTabRowActiveBackground)
-                     : SkColorSetARGB(0x33, 0x88, 0x88, 0x88);
+  const SkColor base_color = palette_.surface_stops.back();
+  const SkColor overlay_color = palette_.row_active;
   auto drag_image = CreateSidebarDragImageWithBackground(
       this, base_color, overlay_color, static_cast<float>(kRowCornerRadiusDp));
 
@@ -2918,8 +2916,7 @@ void SidebarTabRowView::UpdateAppearance() {
                               base::Unretained(this)),
           base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
                               base::Unretained(this)),
-          ResolveSidebarPaletteColor(palette_, this, palette_.row_active,
-                                     kMahoColorTabRowActiveBackground),
+          palette_.row_active,
           ResolveSidebarPaletteColor(palette_, this, palette_.outline,
                                      ui::kColorSysDivider),
           ResolveSidebarPaletteColor(palette_, this, palette_.focus_ring,
@@ -2936,9 +2933,7 @@ void SidebarTabRowView::UpdateAppearance() {
                     base::Unretained(this)),
                 base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
                                      base::Unretained(this)),
-                ResolveSidebarPaletteColor(
-                    palette_, this, palette_.row_active,
-                    kMahoColorTabRowActiveBackground),
+                palette_.row_active,
                 ResolveSidebarPaletteColor(palette_, this, palette_.outline,
                                            ui::kColorSysDivider),
                 ResolveSidebarPaletteColor(palette_, this, palette_.focus_ring,
@@ -2958,31 +2953,19 @@ void SidebarTabRowView::UpdateAppearance() {
           break;
         case AppearanceVisualState::kActive:
           SetBackground(views::CreateRoundedRectBackground(
-              hovered ? ResolveSidebarPaletteColor(
-                            palette_, this, palette_.row_active,
-                            kMahoColorTabRowActiveHoveredBackground)
-                      : ResolveSidebarPaletteColor(
-                            palette_, this, palette_.row_active,
-                            kMahoColorTabRowActiveBackground),
+              hovered ? palette_.row_hover : palette_.row_active,
               kRowCornerRadiusDp));
           SetBorder(nullptr);
           break;
         case AppearanceVisualState::kSelected:
           SetBackground(views::CreateRoundedRectBackground(
-              hovered ? ResolveSidebarPaletteColor(
-                            palette_, this, palette_.row_selected,
-                            kMahoColorTabRowSelectedHoveredBackground)
-                      : ResolveSidebarPaletteColor(
-                            palette_, this, palette_.row_selected,
-                            kMahoColorTabRowSelectedBackground),
+              hovered ? palette_.row_hover : palette_.row_selected,
               kRowCornerRadiusDp));
           SetBorder(nullptr);
           break;
         case AppearanceVisualState::kHovered:
           SetBackground(views::CreateRoundedRectBackground(
-              ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
-                                         kMahoColorTabRowHoverBackground),
-              kRowCornerRadiusDp));
+              palette_.row_hover, kRowCornerRadiusDp));
           SetBorder(nullptr);
           break;
         case AppearanceVisualState::kIdle:
@@ -3700,9 +3683,7 @@ void SidebarFolderRowView::UpdateAppearance() {
         break;
       case FolderVisualState::kHovered:
         SetBackground(views::CreateRoundedRectBackground(
-            ResolveSidebarPaletteColor(palette_, this, palette_.row_hover,
-                                       kMahoColorTabRowHoverBackground),
-            kRowCornerRadiusDp));
+            palette_.row_hover, kRowCornerRadiusDp));
         SetBorder(nullptr);
         break;
       case FolderVisualState::kIdle:
@@ -4251,6 +4232,12 @@ void MahoSidebarTabListView::OnSidebarPaletteChanged(
   for (const auto& entry : folder_rows_by_id_) {
     if (entry.second) {
       entry.second->SetSidebarPalette(palette_);
+    }
+  }
+  for (const auto& entry : split_id_to_container_) {
+    if (auto* split_container =
+            views::AsViewClass<SplitGroupContainerView>(entry.second.get())) {
+      split_container->SetSidebarPalette(palette_);
     }
   }
   ApplyActionRowPalette();
@@ -6076,6 +6063,7 @@ std::unique_ptr<views::View> MahoSidebarTabListView::BuildSplitGroupContainer(
     Browser* browser,
     const std::string& parent_folder_id) {
   auto split_container = std::make_unique<SplitGroupContainerView>();
+  split_container->SetSidebarPalette(palette_);
 
   const bool is_side_by_side = (group_node.split_orientation == "vertical");
   bool force_vertical = false;

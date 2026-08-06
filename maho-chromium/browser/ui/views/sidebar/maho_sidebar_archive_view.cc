@@ -138,13 +138,11 @@ constexpr int kFilterButtonHeight = 24;
 constexpr int kFilterButtonCornerRadius = 6;
 constexpr int kRowCornerRadius = 10;
 constexpr int kRowTileSize = 28;
-constexpr int kRowTileCornerRadius = 8;
 constexpr int kRowTileContentSize = 18;
 constexpr int kRowFallbackGlyphSize = 16;
 constexpr int kRowHorizontalSpacing = 8;
 constexpr int kRowVerticalPadding = 6;
 constexpr int kRowHorizontalPadding = 8;
-constexpr int kRowRestoreGlyphSize = 10;
 constexpr int kHeaderBottomSpacing = 0;
 constexpr int kSectionSpacing = 0;
 constexpr int kSectionHeaderSpacing = 0;
@@ -236,15 +234,6 @@ std::u16string TrimWhitespace16(const std::u16string& str) {
   return str.substr(start, end - start + 1);
 }
 
-MahoSidebarTilePalette ArchiveTilePalette(const ArchivedTabItem& item) {
-  std::string seed = item.url.empty() ? base::UTF16ToUTF8(item.title) : item.url;
-  if (seed.empty()) {
-    seed = item.tab_id;
-  }
-
-  return MahoSidebarTilePaletteForSeed(seed);
-}
-
 std::u16string ArchiveTileLetter(const ArchivedTabItem& item) {
   return MahoSidebarTileLetterForText(GetArchiveRowTitleText(item));
 }
@@ -334,7 +323,7 @@ class ArchiveRowView : public views::View,
         tile_label_->SetTextStyle(views::style::STYLE_BODY_5_BOLD);
         tile_label_->SetFontList(tile_label_->font_list().Derive(
             1, gfx::Font::NORMAL, gfx::Font::Weight::BOLD));
-        tile_label_->SetEnabledColor(kMahoColorSidebarPrimaryText);
+        tile_label_->SetEnabledColor(palette_.primary_text);
         tile_label_->SetAutoColorReadabilityEnabled(false);
         tile_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
         tile_label_->GetViewAccessibility().SetIsIgnored(true);
@@ -343,7 +332,7 @@ class ArchiveRowView : public views::View,
             std::make_unique<views::ImageView>());
         tile_icon_->SetImage(CreateArchivePaneIcon(
             maho_lucide_icons::kGlobeIcon,
-            kMahoColorSidebarPrimaryText, kRowFallbackGlyphSize));
+            palette_.primary_text, kRowFallbackGlyphSize));
         tile_icon_->SetPreferredSize(
             gfx::Size(kRowFallbackGlyphSize, kRowFallbackGlyphSize));
         tile_icon_->GetViewAccessibility().SetIsIgnored(true);
@@ -363,7 +352,7 @@ class ArchiveRowView : public views::View,
     title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label_->GetViewAccessibility().SetIsIgnored(true);
     title_label_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    title_label_->SetEnabledColor(kMahoColorSidebarPrimaryText);
+    title_label_->SetEnabledColor(palette_.primary_text);
     title_label_->SetAutoColorReadabilityEnabled(false);
     title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title_label_->SetMultiLine(false);
@@ -374,7 +363,7 @@ class ArchiveRowView : public views::View,
     subtitle_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle_label_->GetViewAccessibility().SetIsIgnored(true);
     subtitle_label_->SetTextStyle(views::style::STYLE_BODY_5);
-    subtitle_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
+    subtitle_label_->SetEnabledColor(palette_.secondary_text);
     subtitle_label_->SetAutoColorReadabilityEnabled(false);
     subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     subtitle_label_->SetMultiLine(false);
@@ -559,7 +548,10 @@ class ArchiveSectionHeaderView : public views::View {
   METADATA_HEADER(ArchiveSectionHeaderView, views::View)
 
   public:
-  explicit ArchiveSectionHeaderView(const std::u16string& title, int count) {
+  ArchiveSectionHeaderView(const std::u16string& title,
+                           int count,
+                           const MahoSidebarPalette& palette)
+      : palette_(palette) {
     GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
     GetViewAccessibility().SetName(title + u", " +
                                    GetArchivedTabsCountText(count));
@@ -570,17 +562,16 @@ class ArchiveSectionHeaderView : public views::View {
     layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kStart);
 
-    auto* title_label = AddChildView(
-        std::make_unique<views::Label>(title));
+    title_label_ = AddChildView(std::make_unique<views::Label>(title));
     // Labels sit over an opaque ancestor background; the nearest compositor
     // layer is the macOS composited ScrollView/Textfield layer, so skip the
     // subpixel opacity DCHECK (same as row labels).
-    title_label->SetSkipSubpixelRenderingOpacityCheck(true);
-    title_label->GetViewAccessibility().SetIsIgnored(true);
-    title_label->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
-    title_label->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
-    title_label->SetAutoColorReadabilityEnabled(false);
-    title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+    title_label_->GetViewAccessibility().SetIsIgnored(true);
+    title_label_->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
+    title_label_->SetEnabledColor(palette_.primary_text);
+    title_label_->SetAutoColorReadabilityEnabled(false);
+    title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
     count_label_ = AddChildView(
         std::make_unique<views::Label>(
@@ -588,36 +579,34 @@ class ArchiveSectionHeaderView : public views::View {
     count_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     count_label_->GetViewAccessibility().SetIsIgnored(true);
     count_label_->SetTextStyle(views::style::STYLE_BODY_5);
-    count_label_->SetEnabledColor(kMahoColorLibrarySectionHeaderText);
+    count_label_->SetEnabledColor(palette_.primary_text);
     count_label_->SetAutoColorReadabilityEnabled(false);
     count_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     count_label_->SetBorder(
         views::CreateEmptyBorder(gfx::Insets::TLBR(2, 0, 0, 0)));
 
-    if (GetColorProvider()) {
-      count_label_->SetEnabledColor(SkColorSetA(
-          GetColorProvider()->GetColor(kMahoColorLibrarySectionHeaderText),
-          0xB8));
-    }
-
-    layout->SetFlexForView(title_label, 0);
+    layout->SetFlexForView(title_label_, 0);
   }
 
   ArchiveSectionHeaderView(const ArchiveSectionHeaderView&) = delete;
   ArchiveSectionHeaderView& operator=(const ArchiveSectionHeaderView&) = delete;
   ~ArchiveSectionHeaderView() override = default;
 
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    title_label_->SetEnabledColor(palette_.primary_text);
+    count_label_->SetEnabledColor(palette_.primary_text);
+  }
+
   void OnThemeChanged() override {
     views::View::OnThemeChanged();
-    if (count_label_ && GetColorProvider()) {
-      count_label_->SetEnabledColor(SkColorSetA(
-          GetColorProvider()->GetColor(kMahoColorLibrarySectionHeaderText),
-          0xB8));
-    }
+    SetSidebarPalette(palette_);
   }
 
  private:
+  raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> count_label_ = nullptr;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(ArchiveSectionHeaderView)
@@ -653,8 +642,9 @@ class ArchiveEmptyStateView : public views::View {
     icon_view->SetPreferredSize(gfx::Size(
         sidebar_layout::kArchiveEmptyStateIconSizeDp,
         sidebar_layout::kArchiveEmptyStateIconSizeDp));
-    icon_view->SetImage(CreateArchivePaneIcon(
-        maho_lucide_icons::kArchiveIcon, kMahoColorSidebarSecondaryText,
+    icon_view_ = icon_view;
+    icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kArchiveIcon, palette_.secondary_text,
         sidebar_layout::kArchiveEmptyStateIconSizeDp));
 
     title_label_ = content->AddChildView(
@@ -662,7 +652,7 @@ class ArchiveEmptyStateView : public views::View {
     title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label_->GetViewAccessibility().SetIsIgnored(true);
     title_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-    title_label_->SetEnabledColor(kMahoColorSidebarPrimaryText);
+    title_label_->SetEnabledColor(palette_.primary_text);
     title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     title_label_->SetAutoColorReadabilityEnabled(false);
 
@@ -670,7 +660,7 @@ class ArchiveEmptyStateView : public views::View {
     subtitle_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle_label_->GetViewAccessibility().SetIsIgnored(true);
     subtitle_label_->SetTextStyle(views::style::STYLE_BODY_4);
-    subtitle_label_->SetEnabledColor(kMahoColorSidebarSecondaryText);
+    subtitle_label_->SetEnabledColor(palette_.secondary_text);
     subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     subtitle_label_->SetAutoColorReadabilityEnabled(false);
     subtitle_label_->SetMultiLine(true);
@@ -682,6 +672,20 @@ class ArchiveEmptyStateView : public views::View {
   ArchiveEmptyStateView(const ArchiveEmptyStateView&) = delete;
   ArchiveEmptyStateView& operator=(const ArchiveEmptyStateView&) = delete;
   ~ArchiveEmptyStateView() override = default;
+
+  void SetSidebarPalette(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kArchiveIcon, palette_.secondary_text,
+        sidebar_layout::kArchiveEmptyStateIconSizeDp));
+    title_label_->SetEnabledColor(palette_.primary_text);
+    subtitle_label_->SetEnabledColor(palette_.secondary_text);
+  }
+
+  void OnThemeChanged() override {
+    views::View::OnThemeChanged();
+    SetSidebarPalette(palette_);
+  }
 
   void Configure(bool has_archived_tabs, bool has_active_filters) {
     if (has_archived_tabs && has_active_filters) {
@@ -701,8 +705,10 @@ class ArchiveEmptyStateView : public views::View {
   }
 
  private:
+  raw_ptr<views::ImageView> icon_view_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(ArchiveEmptyStateView)
@@ -723,9 +729,24 @@ MahoSidebarArchiveView::~MahoSidebarArchiveView() = default;
 void MahoSidebarArchiveView::SetSidebarPalette(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
+  if (search_shell_) {
+    search_shell_->SetBackground(views::CreateRoundedRectBackground(
+        palette_.row_active, kSearchFieldCornerRadius));
+    search_shell_->SetBorder(views::CreateRoundedRectBorder(
+        1, kSearchFieldCornerRadius, palette_.outline));
+  }
+  if (search_icon_) {
+    search_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kSearchIcon, palette_.secondary_text,
+        kSearchFieldIconSize));
+  }
   if (search_field_) {
     search_field_->SetTextColor(palette_.primary_text);
     search_field_->set_placeholder_text_color(palette_.secondary_text);
+  }
+  if (empty_state_view_) {
+    static_cast<ArchiveEmptyStateView*>(empty_state_view_.get())
+        ->SetSidebarPalette(palette_);
   }
   UpdateFilterButtonAppearance();
   ApplyFilters();
@@ -774,9 +795,9 @@ void MahoSidebarArchiveView::BuildUi() {
       std::make_unique<SearchFieldShellView>(search_field.get()));
   search_shell_->SetPreferredSize(gfx::Size(0, kSearchFieldHeight));
   search_shell_->SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorLibrarySearchPillBackground, kSearchFieldCornerRadius));
+      palette_.row_active, kSearchFieldCornerRadius));
   search_shell_->SetBorder(views::CreateRoundedRectBorder(
-      1, kSearchFieldCornerRadius, kMahoColorLibraryGlyphBorder));
+      1, kSearchFieldCornerRadius, palette_.outline));
   auto* search_layout = search_shell_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
@@ -790,7 +811,7 @@ void MahoSidebarArchiveView::BuildUi() {
   search_icon_->SetPreferredSize(gfx::Size(kSearchFieldIconSize,
                                            kSearchFieldIconSize));
   search_icon_->SetImage(CreateArchivePaneIcon(
-      maho_lucide_icons::kSearchIcon, kMahoColorSidebarSecondaryText,
+      maho_lucide_icons::kSearchIcon, palette_.secondary_text,
       kSearchFieldIconSize));
 
   search_field_ = search_shell_->AddChildView(std::move(search_field));
@@ -799,7 +820,7 @@ void MahoSidebarArchiveView::BuildUi() {
   search_field_->SetPreferredSize(gfx::Size(0, kSearchFieldHeight));
   search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   search_field_->SetBorder(nullptr);
-  search_field_->SetTextColor(kMahoColorSidebarPrimaryText);
+  search_field_->SetTextColor(palette_.primary_text);
   search_field_->SetAccessibleName(u"Search Archive");
   search_layout->SetFlexForView(search_field_, 1);
 
@@ -811,7 +832,7 @@ void MahoSidebarArchiveView::BuildUi() {
   filter_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       CreateArchivePaneIcon(maho_lucide_icons::kSlidersHorizontalIcon,
-                            kMahoColorSidebarSecondaryText,
+                            palette_.secondary_text,
                             kFilterButtonIconSize));
   filter_button_->SetMinSize(
       gfx::Size(kFilterButtonHeight, kFilterButtonHeight));
@@ -857,6 +878,8 @@ void MahoSidebarArchiveView::BuildUi() {
 
   empty_state_view_ = body_container_->AddChildView(
       std::make_unique<ArchiveEmptyStateView>());
+  static_cast<ArchiveEmptyStateView*>(empty_state_view_.get())
+      ->SetSidebarPalette(palette_);
 
   empty_state_view_->SetVisible(true);
   scroll_view_->SetVisible(false);
@@ -1173,7 +1196,7 @@ void MahoSidebarArchiveView::RebuildList(
 
     list_container_->AddChildView(
         std::make_unique<ArchiveSectionHeaderView>(
-            section.title, static_cast<int>(section.tabs.size())));
+            section.title, static_cast<int>(section.tabs.size()), palette_));
 
     auto* header_spacer = list_container_->AddChildView(
         std::make_unique<views::View>());
@@ -1281,27 +1304,34 @@ void MahoSidebarArchiveView::UpdateFilterButtonAppearance() {
              : u"Filter Inactive");
   if (active) {
     filter_button_->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryRowSelected, kFilterButtonCornerRadius));
+        palette_.row_selected, kFilterButtonCornerRadius));
     filter_button_->SetBorder(views::CreateRoundedRectBorder(
-        1, kFilterButtonCornerRadius, kMahoColorLibraryGlyphBorder));
-    filter_button_->SetEnabledTextColors(kMahoColorSidebarPrimaryText);
+        1, kFilterButtonCornerRadius, palette_.outline));
+    filter_button_text_color_ = palette_.primary_text;
+    filter_button_->SetEnabledTextColors(filter_button_text_color_);
     filter_button_->SetImageModel(
         views::Button::STATE_NORMAL,
         CreateArchivePaneIcon(maho_lucide_icons::kSlidersHorizontalIcon,
-                              kMahoColorSidebarPrimaryText,
+                              palette_.primary_text,
                               kFilterButtonIconSize));
   } else {
     filter_button_->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryListRowBackground, kFilterButtonCornerRadius));
+        palette_.row_active, kFilterButtonCornerRadius));
     filter_button_->SetBorder(views::CreateRoundedRectBorder(
-        1, kFilterButtonCornerRadius, kMahoColorLibraryGlyphBorder));
-    filter_button_->SetEnabledTextColors(kMahoColorSidebarSecondaryText);
+        1, kFilterButtonCornerRadius, palette_.outline));
+    filter_button_text_color_ = palette_.secondary_text;
+    filter_button_->SetEnabledTextColors(filter_button_text_color_);
     filter_button_->SetImageModel(
         views::Button::STATE_NORMAL,
         CreateArchivePaneIcon(maho_lucide_icons::kSlidersHorizontalIcon,
-                              kMahoColorSidebarSecondaryText,
+                              palette_.secondary_text,
                               kFilterButtonIconSize));
   }
+}
+
+void MahoSidebarArchiveView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  SetSidebarPalette(palette_);
 }
 
 void MahoSidebarArchiveView::ExecuteCommand(int command_id, int event_flags) {

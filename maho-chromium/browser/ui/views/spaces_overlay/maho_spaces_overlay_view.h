@@ -8,6 +8,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -61,14 +62,7 @@ class MahoSpacesOverlayView : public views::View {
   MahoSpacesOverlayBoardView* GetBoardViewForTesting() { return board_view_; }
   views::View* GetAnimatedView() { return surface_; }
 
-  // Sources the themed background's ColorProvider from `widget` (the browser
-  // frame widget the overlay is parented to) instead of this overlay's own
-  // widget. The full-viewport, activatable, frameless overlay is realized as a
-  // top-level native widget whose ColorProviderKey lacks the browser window's
-  // per-space tint mixer, so its own provider resolves an achromatic base;
-  // using the parent frame's provider yields the exact tint the docked rail
-  // uses. `widget` outlives the overlay (it is the parent).
-  void SetThemeSourceWidget(const views::Widget* widget);
+  void SetPalette(const MahoSidebarPalette& palette);
 
   void RequestFocus() override;
   void OnThemeChanged() override;
@@ -92,7 +86,7 @@ class MahoSpacesOverlayView : public views::View {
   raw_ptr<views::ScrollView> board_scroll_view_ = nullptr;
   raw_ptr<MahoSpacesOverlayBoardView> board_view_ = nullptr;
   raw_ptr<views::View> separator_ = nullptr;
-  raw_ptr<const views::Widget> theme_source_widget_ = nullptr;
+  MahoSidebarPalette palette_;
 };
 
 }  // namespace maho

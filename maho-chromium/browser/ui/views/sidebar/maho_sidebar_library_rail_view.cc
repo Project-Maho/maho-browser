@@ -13,12 +13,10 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
@@ -83,9 +81,9 @@ void StyleIconButton(views::ImageButton* button) {
   button->SetRequestFocusOnPress(false);
 }
 
-ui::ColorId GetRailItemForegroundColor(bool selected) {
-  return selected ? kMahoColorLibraryRailItemSelectedText
-                  : kMahoColorLibraryRailItemText;
+SkColor GetRailItemForegroundColor(const MahoSidebarPalette& palette,
+                                   bool selected) {
+  return selected ? palette.primary_text : palette.secondary_text;
 }
 
 }  // namespace
@@ -179,6 +177,11 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
 
   MahoSidebarLibraryRailView::Category category() const { return category_; }
 
+  void OnSidebarPaletteChanged(const MahoSidebarPalette& palette) {
+    palette_ = palette;
+    UpdateAppearance();
+  }
+
   void SetSelected(bool selected) {
     if (selected_ == selected) {
       return;
@@ -204,17 +207,18 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
     const bool hovered = enabled &&
                          (GetState() == STATE_HOVERED ||
                           GetState() == STATE_PRESSED);
-    const ui::ColorId foreground = selected_ || hovered
-                                       ? kMahoColorLibraryRailItemSelectedText
-                                       : GetRailItemForegroundColor(selected_);
+    const SkColor foreground =
+        selected_ || hovered
+            ? palette_.primary_text
+            : GetRailItemForegroundColor(palette_, selected_);
     if (enabled && selected_) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorLibraryRailItemSelected,
+          palette_.row_selected,
           sidebar_layout::kLibraryRailItemCornerRadiusDp));
       SetBorder(nullptr);
     } else if (hovered) {
       SetBackground(views::CreateRoundedRectBackground(
-          kMahoColorLibraryRailItemHover,
+          palette_.row_hover,
           sidebar_layout::kLibraryRailItemCornerRadiusDp));
       SetBorder(nullptr);
     } else {
@@ -240,6 +244,7 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
   raw_ptr<views::ImageView> icon_view_ = nullptr;
   raw_ptr<views::Label> label_ = nullptr;
   bool selected_ = false;
+  MahoSidebarPalette palette_;
 };
 
 BEGIN_METADATA(MahoSidebarLibraryRailItemButton)
@@ -262,7 +267,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
   SetPreferredSize(gfx::Size(sidebar_layout::kLibraryRailWidthDp, 0));
-  // Transparent: the parent sidebar already paints kMahoColorSidebarBackground.
+  // Transparent: the parent sidebar already paints the background surface.
   // Painting it again here double-composites the translucent (glass-frame)
   // color, darkening the rail relative to the content pane.
   SetBackground(nullptr);
@@ -287,6 +292,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
   back_button->SetTooltipText(u"Back");
   back_button->SetAccessibleName(u"Back");
   back_button->SetPaintToLayer();
+  back_button->layer()->SetFillsBoundsOpaquely(false);
   views::InstallCircleHighlightPathGenerator(back_button.get());
   StyleIconButton(back_button.get());
   back_button_ = utility_host_->AddChildView(std::move(back_button));
@@ -404,6 +410,17 @@ void MahoSidebarLibraryRailView::SetBackCallback(
   UpdateBackButtonAppearance();
 }
 
+void MahoSidebarLibraryRailView::OnSidebarPaletteChanged(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  for (auto& button : category_buttons_) {
+    if (button) {
+      button->OnSidebarPaletteChanged(palette);
+    }
+  }
+  UpdateBackButtonAppearance();
+}
+
 void MahoSidebarLibraryRailView::OnThemeChanged() {
   views::View::OnThemeChanged();
   SetBackground(nullptr);
@@ -470,8 +487,8 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
   back_button_->SetBackground(nullptr);
   back_button_->SetBorder(nullptr);
 
-  const ui::ColorId back_color = enabled ? kMahoColorLibraryRailItemSelectedText
-                                          : kMahoColorLibraryRailItemText;
+  const SkColor back_color =
+      enabled ? palette_.primary_text : palette_.secondary_text;
   back_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(maho_lucide_icons::kArrowLeftIcon,

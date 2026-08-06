@@ -25,7 +25,6 @@
 
 #include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho_spaces_overlay_tab_row_view.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -222,10 +221,6 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
 
   SetNotifyEnterExitOnChild(true);
 
-  SetBackground(views::CreateRoundedRectBackground(kMahoColorCardBackground,
-                                                   kColumnCornerRadiusDp));
-  SetBorder(views::CreateRoundedRectBorder(1, kColumnCornerRadiusDp,
-                                           kMahoColorCardBorder));
 
   auto* header_row = AddChildView(std::make_unique<views::View>());
   auto* header_layout = header_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -366,10 +361,11 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
       }
 
       for (const SpaceBoardTabItem* tab : section.tabs) {
-        section_view->AddChildView(
-            std::make_unique<MahoSpacesOverlayTabRowView>(
-                browser_ ? browser_->profile() : nullptr, *tab,
-                column_.space_id, tab_selected_callback_));
+        auto tab_row = std::make_unique<MahoSpacesOverlayTabRowView>(
+            browser_ ? browser_->profile() : nullptr, *tab, column_.space_id,
+            tab_selected_callback_);
+        tab_row->SetPalette(palette_);
+        tab_row_views_.push_back(section_view->AddChildView(std::move(tab_row)));
       }
     }
   }
@@ -430,6 +426,15 @@ MahoSpacesOverlayColumnView::GetSectionTitlesForTesting() const {
   return titles;
 }
 
+void MahoSpacesOverlayColumnView::SetPalette(
+    const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  for (MahoSpacesOverlayTabRowView* tab_row : tab_row_views_) {
+    tab_row->SetPalette(palette_);
+  }
+  UpdateColors();
+}
+
 void MahoSpacesOverlayColumnView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateColors();
@@ -440,16 +445,11 @@ gfx::Size MahoSpacesOverlayColumnView::GetMinimumSize() const {
 }
 
 void MahoSpacesOverlayColumnView::UpdateColors() {
-  const ui::ColorProvider* color_provider = GetColorProvider();
-  if (!color_provider) {
-    return;
-  }
-
   const std::optional<SkColor> theme_color = SpaceThemeColor(column_);
-  const SkColor column_border = SkColorSetA(
-      color_provider->GetColor(kMahoColorCardBorder), 0x60);
-
-  const SkColor base_fill = color_provider->GetColor(kMahoColorContentBackground);
+  const SkColor column_border = SkColorSetA(palette_.outline, 0x60);
+  const SkColor base_fill = palette_.content_surface_stops.empty()
+                                ? palette_.row_active
+                                : palette_.content_surface_stops.back();
   if (theme_color) {
     SetBackground(std::make_unique<ColumnThemeBackground>(
         base_fill, *theme_color, is_active_));
@@ -466,11 +466,11 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
     badge_container_->SetBackground(nullptr);
   }
   badge_container_->SetBorder(nullptr);
-  title_label_->SetEnabledColor(kMahoColorPrimaryText);
-  subtitle_label_->SetEnabledColor(kMahoColorTertiaryText);
+  title_label_->SetEnabledColor(palette_.primary_text);
+  subtitle_label_->SetEnabledColor(palette_.tertiary_text);
 
   const SkColor section_label_color =
-      SkColorSetA(color_provider->GetColor(kMahoColorTertiaryText), 0xCC);
+      SkColorSetA(palette_.tertiary_text, 0xCC);
 
   if (clear_label_) {
     clear_label_->SetEnabledColor(section_label_color);
@@ -482,18 +482,18 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
   }
 
   if (empty_state_label_) {
-    empty_state_label_->SetEnabledColor(kMahoColorSecondaryText);
+    empty_state_label_->SetEnabledColor(palette_.secondary_text);
   }
 
   if (tag_chip_) {
-    const SkColor tag_bg = SkColorSetA(color_provider->GetColor(kMahoColorContentBackground), 0x80);
+    const SkColor tag_bg = SkColorSetA(base_fill, 0x80);
     tag_chip_->SetBackground(views::CreateRoundedRectBackground(tag_bg, 4));
-    tag_chip_->SetEnabledColor(kMahoColorSecondaryText);
+    tag_chip_->SetEnabledColor(palette_.secondary_text);
   }
 
   if (edit_button_) {
-    const SkColor edit_icon_color = theme_color.value_or(
-        color_provider->GetColor(kMahoColorTertiaryText));
+    const SkColor edit_icon_color =
+        theme_color.value_or(palette_.tertiary_text);
     edit_button_->SetImageModel(
         views::Button::STATE_NORMAL,
         ui::ImageModel::FromVectorIcon(maho_lucide_icons::kPencilLineIcon,
@@ -504,7 +504,7 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
     menu_button_->SetImageModel(
         views::Button::STATE_NORMAL,
         ui::ImageModel::FromVectorIcon(maho_lucide_icons::kEllipsisIcon,
-                                       color_provider->GetColor(kMahoColorTertiaryText), 16));
+                                       palette_.tertiary_text, 16));
   }
 }
 

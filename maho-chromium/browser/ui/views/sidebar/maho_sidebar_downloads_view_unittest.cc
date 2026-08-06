@@ -9,10 +9,16 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/models/image_model.h"
+#include "ui/views/background.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
+#include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/layout/box_layout.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
-#include "ui/views/layout/box_layout.h"
+#include "ui/views/widget/widget.h"
 
 namespace maho {
 
@@ -69,6 +75,74 @@ class MahoSidebarDownloadsViewTest : public views::ViewsTestBase {
     return row_count;
   }
 };
+
+TEST_F(MahoSidebarDownloadsViewTest, SearchUsesSidebarPaletteColors) {
+  // views::Textfield::GetTextColor() uses std::optional::value_or, which
+  // eagerly evaluates GetColorProvider()->GetColor(...) even when an explicit
+  // text color is set. The view must live inside a widget so the search
+  // field's color provider is non-null when GetTextColor() is queried below.
+  auto widget = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+                                 views::Widget::InitParams::TYPE_POPUP);
+  auto* view = widget->SetContentsView(
+      std::make_unique<MahoSidebarDownloadsView>(/*browser=*/nullptr));
+  MahoSidebarPalette palette;
+  palette.row_active = SkColorSetRGB(0x21, 0x32, 0x43);
+  palette.outline = SkColorSetRGB(0x54, 0x65, 0x76);
+  palette.primary_text = SkColorSetRGB(0x87, 0x98, 0xA9);
+  palette.secondary_text = SkColorSetRGB(0xBA, 0xCB, 0xDC);
+
+  view->SetSidebarPalette(palette);
+
+  ASSERT_NE(nullptr, view->search_shell_for_testing()->background());
+  EXPECT_EQ(palette.row_active,
+            view->search_shell_for_testing()
+                ->background()
+                ->color()
+                .ResolveToSkColor(/*color_provider=*/nullptr));
+  EXPECT_EQ(palette.primary_text,
+            view->search_field_for_testing()->GetTextColor());
+  const ui::ImageModel search_image =
+      view->search_icon_for_testing()->GetImageModel();
+  ASSERT_TRUE(search_image.IsVectorIcon());
+  EXPECT_EQ(palette.secondary_text,
+            search_image.GetVectorIcon().color().ResolveToSkColor(
+                /*color_provider=*/nullptr));
+}
+
+TEST_F(MahoSidebarDownloadsViewTest, ContentLabelsUseSidebarPaletteColors) {
+  auto view = std::make_unique<MahoSidebarDownloadsView>(/*browser=*/nullptr);
+  MahoSidebarPalette palette;
+  palette.primary_text = SkColorSetRGB(0x12, 0x34, 0x56);
+  palette.secondary_text = SkColorSetRGB(0x65, 0x43, 0x21);
+  view->SetSidebarPalette(palette);
+
+  std::vector<views::Label*> empty_labels;
+  for (views::View* child :
+       view->empty_state_view_for_testing()->children()) {
+    if (auto* label = views::AsViewClass<views::Label>(child)) {
+      empty_labels.push_back(label);
+    }
+  }
+  ASSERT_EQ(2u, empty_labels.size());
+  EXPECT_EQ(palette.primary_text, empty_labels[0]->GetEnabledColor());
+  EXPECT_EQ(palette.secondary_text, empty_labels[1]->GetEnabledColor());
+
+  view->SetDownloadsForTesting({MakeDownload("palette", "completed")});
+  views::Label* section_title = nullptr;
+  views::Label* section_count = nullptr;
+  for (views::View* child : view->list_container_for_testing()->children()) {
+    if (child->GetClassName() != "DownloadSectionHeaderView") {
+      continue;
+    }
+    ASSERT_EQ(2u, child->children().size());
+    section_title = views::AsViewClass<views::Label>(child->children()[0]);
+    section_count = views::AsViewClass<views::Label>(child->children()[1]);
+  }
+  ASSERT_NE(nullptr, section_title);
+  ASSERT_NE(nullptr, section_count);
+  EXPECT_EQ(palette.primary_text, section_title->GetEnabledColor());
+  EXPECT_EQ(palette.primary_text, section_count->GetEnabledColor());
+}
 
 TEST_F(MahoSidebarDownloadsViewTest, SearchMatchesFilenameSubstring) {
   auto view = std::make_unique<MahoSidebarDownloadsView>(/*browser=*/nullptr);

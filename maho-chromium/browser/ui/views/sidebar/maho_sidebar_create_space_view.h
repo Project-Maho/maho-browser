@@ -109,15 +109,24 @@ class MahoSidebarCreateSpaceView : public views::View,
   void OnSpaceCreated(bool success,
                       const std::string& new_space_id,
                       const std::string& profile_id);
+  void ApplyPalette();
 
   raw_ptr<Browser> browser_;
+  raw_ptr<views::Label> title_label_ = nullptr;
+  raw_ptr<views::Label> subtitle_label_ = nullptr;
+  raw_ptr<views::View> name_row_ = nullptr;
   raw_ptr<views::Textfield> name_field_ = nullptr;
   raw_ptr<views::MdTextButton> create_button_ = nullptr;
   raw_ptr<views::Label> error_label_ = nullptr;
   raw_ptr<views::MdTextButton> cancel_button_ = nullptr;
+  raw_ptr<views::View> profile_row_ = nullptr;
+  raw_ptr<views::Label> profile_label_ = nullptr;
   raw_ptr<views::Button> profile_button_ = nullptr;
   raw_ptr<views::Label> profile_button_label_ = nullptr;
+  raw_ptr<views::ImageView> profile_disclosure_ = nullptr;
   raw_ptr<views::Button> theme_button_ = nullptr;
+  raw_ptr<views::Label> theme_label_ = nullptr;
+  raw_ptr<views::ImageView> theme_disclosure_ = nullptr;
   raw_ptr<views::Button> name_leading_icon_button_ = nullptr;
   raw_ptr<views::View> theme_preview_tile_ = nullptr;
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;

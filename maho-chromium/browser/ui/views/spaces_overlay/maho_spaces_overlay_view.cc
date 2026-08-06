@@ -121,6 +121,7 @@ void MahoSpacesOverlayView::Init(SpaceBoardModel model,
                               base::Unretained(this)),
           base::BindRepeating(&MahoSpacesOverlayView::HandleTabSelected,
                               base::Unretained(this))));
+  board_view_->SetPalette(palette_);
 
   // Hairline separator
   separator_ = surface_->AddChildView(std::make_unique<views::View>());
@@ -149,8 +150,11 @@ void MahoSpacesOverlayView::OnThemeChanged() {
   SchedulePaint();
 }
 
-void MahoSpacesOverlayView::SetThemeSourceWidget(const views::Widget* widget) {
-  theme_source_widget_ = widget;
+void MahoSpacesOverlayView::SetPalette(const MahoSidebarPalette& palette) {
+  palette_ = palette;
+  if (board_view_) {
+    board_view_->SetPalette(palette_);
+  }
   SchedulePaint();
 }
 
@@ -160,16 +164,6 @@ void MahoSpacesOverlayView::OnPaintBackground(gfx::Canvas* canvas) {
   // Opaque stops keep the overlay a valid occluder (web contents must not bleed
   // through) — identical to the fixed-width library overlay.
   //
-  // Source the ColorProvider from the parent browser-frame widget: this
-  // top-level frameless overlay's own provider lacks the per-space tint mixer
-  // and would resolve an achromatic base (fall back to this view's provider
-  // only during teardown/reparent when the parent is not yet set).
-  const ui::ColorProvider* provider =
-      theme_source_widget_ ? theme_source_widget_->GetColorProvider()
-                           : GetColorProvider();
-  if (!provider) {
-    return;
-  }
   const SkVector radii[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
   // Anchor the gradient span to the library-overlay content width (380dp): the
   // narrow library overlay renders correctly with a full-bounds span at that
@@ -178,7 +172,7 @@ void MahoSpacesOverlayView::OnPaintBackground(gfx::Canvas* canvas) {
   // final stop beyond the span). Chosen as the sanctioned proxy for the
   // sidebar/rail width the docked gradient effectively paints across.
   PaintMahoSidebarThemedBackground(
-      canvas, GetLocalBounds(), provider, /*opaque=*/true, radii,
+      canvas, palette_, GetLocalBounds(), /*opaque=*/true, radii,
       /*gradient_span_dp=*/sidebar_layout::kLibraryOverlayContentWidthDp);
 }
 

@@ -418,6 +418,7 @@ class MahoSidebarView
   MahoSidebarPaletteHost palette_host_;
   base::RepeatingCallbackList<void(const MahoSidebarPalette&)>
       palette_changed_callbacks_;
+  base::CallbackListSubscription library_rail_palette_subscription_;
   base::CallbackListSubscription top_bar_palette_subscription_;
   base::CallbackListSubscription search_palette_subscription_;
   base::CallbackListSubscription favorites_palette_subscription_;

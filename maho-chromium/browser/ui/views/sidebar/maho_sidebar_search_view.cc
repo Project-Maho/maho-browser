@@ -25,6 +25,7 @@
 #include "components/translate/core/common/translate_errors.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/net/maho_translate_injection_handler.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
@@ -188,13 +189,8 @@ class SearchPillActionButton : public views::ImageButton {
       SetBackground(nullptr);
       return;
     }
-    if (palette_.row_active != SK_ColorTRANSPARENT) {
-      SetBackground(views::CreateRoundedRectBackground(
-          palette_.row_active, kSearchPillActionChipCornerRadiusDp));
-      return;
-    }
     SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorTabRowActiveBackground, kSearchPillActionChipCornerRadiusDp));
+        palette_.row_active, kSearchPillActionChipCornerRadiusDp));
   }
 
   MahoSidebarPalette palette_;
@@ -373,12 +369,15 @@ void MahoSidebarSearchView::OnSidebarPaletteChanged(
 
 void MahoSidebarSearchView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  if (textfield_ && GetColorProvider()) {
+  if (palette_.primary_text == SK_ColorTRANSPARENT && textfield_ &&
+      GetColorProvider()) {
     textfield_->SetTextColor(
         GetColorProvider()->GetColor(ui::kColorSysOnSurface));
     textfield_->set_placeholder_text_color(
         GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle));
+    return;
   }
+  UpdateSearchChrome();
 }
 
 void MahoSidebarSearchView::FocusVisibleControl() {
@@ -603,14 +602,7 @@ void MahoSidebarSearchView::OnIdleButtonPressed(const ui::Event& event) {
 }
 
 void MahoSidebarSearchView::OnTranslateLabelClicked() {
-  // Direct-anchor path (avoids ToolbarButtonProvider::From routing entirely).
-  // The systemic provider replacement plan (§2C) is not viable on macOS Arc
-  // because BrowserView::AddedToWidget() requires a valid provider in its body
-  // before any child view's AddedToWidget can run, and ToolbarView ctor cannot
-  // know the Maho-side anchor target. Anchor the translate bubble at the Maho
-  // sidebar label here. Other bubbles (zoom/memory-saver/etc.) continue to
-  // anchor through the upstream ToolbarView, which is unchanged.
-  if (!browser_ || !secondary_label_) {
+  if (!browser_) {
     return;
   }
   content::WebContents* contents =
@@ -618,45 +610,10 @@ void MahoSidebarSearchView::OnTranslateLabelClicked() {
   if (!contents) {
     return;
   }
-  auto* translate_client = ChromeTranslateClient::FromWebContents(contents);
-  if (!translate_client) {
-    return;
-  }
-  auto* translate_manager = translate_client->GetTranslateManager();
-  if (!translate_manager) {
-    return;
-  }
-  auto* controller = TranslateBubbleController::From(browser_);
-  if (!controller) {
-    return;
-  }
-
-  std::string source_language;
-  std::string target_language;
-  translate_client->GetTranslateLanguages(contents, &source_language,
-                                           &target_language);
-  if (source_language == target_language) {
-    source_language = language_detection::kUnknownLanguageCode;
-  }
-
-  const auto* language_state = translate_manager->GetLanguageState();
-  translate::TranslateStep step = translate::TRANSLATE_STEP_BEFORE_TRANSLATE;
-  if (language_state) {
-    if (language_state->translation_pending()) {
-      step = translate::TRANSLATE_STEP_TRANSLATING;
-    } else if (language_state->translation_error()) {
-      step = translate::TRANSLATE_STEP_TRANSLATE_ERROR;
-    } else if (language_state->IsPageTranslated()) {
-      step = translate::TRANSLATE_STEP_AFTER_TRANSLATE;
-    }
-  }
-
   contents->ClearFocusedElement();
-  controller->ShowTranslateBubble(
-      contents, views::BubbleAnchor(secondary_label_),
-      /*highlighted_element=*/std::nullopt, step, source_language,
-      target_language, translate::TranslateErrors::NONE,
-      LocationBarBubbleDelegateView::USER_GESTURE);
+  maho::TranslatePageViaOnDevice(contents);
+  model_.is_page_translated = maho::IsMahoPageTranslated(contents);
+  UpdateIdleSurface();
 }
 
 void MahoSidebarSearchView::OnIdleButtonHoverChanged(bool hover_visible) {
@@ -782,14 +739,10 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
       idle_button_ ? idle_button_->GetState() : views::Button::STATE_NORMAL;
   const bool btn_pressed = btn_state == views::Button::STATE_PRESSED;
   const bool btn_hovered = btn_state == views::Button::STATE_HOVERED;
-  ui::ColorId pill_bg;
-  if (btn_pressed) {
-    pill_bg = kMahoColorTabRowActiveBackground;
-  } else if (btn_hovered) {
-    pill_bg = kMahoColorTabRowHoverBackground;
-  } else {
-    pill_bg = kMahoColorInteractiveChipIdleBackground;
-  }
+  const SkColor pill_bg = btn_pressed
+                              ? palette_.row_active
+                              : (btn_hovered ? palette_.row_hover
+                                             : palette_.row_active);
   idle_button_->SetBackground(views::CreateRoundedRectBackground(
       pill_bg, sidebar_layout::kSearchPillCornerRadiusDp));
   idle_button_->SetBorder(views::CreatePaddedBorder(

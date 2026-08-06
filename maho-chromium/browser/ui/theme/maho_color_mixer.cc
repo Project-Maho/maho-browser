@@ -2,9 +2,8 @@
 
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 
-#include <algorithm>
-
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/ui/downloads/maho_download_theme.h"
@@ -12,13 +11,6 @@
 #include "maho/browser/ui/permissions/maho_permission_theme.h"
 #include "maho/browser/ui/reader/maho_reader_theme.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
-#include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "maho/browser/ui/theme/maho_theme_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/themes/theme_service_factory.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_mixer.h"
 #include "ui/color/color_provider.h"
@@ -31,33 +23,12 @@ constexpr SkColor kWindowBackgroundDark = SkColorSetARGB(255, 16, 15, 21);
 constexpr SkColor kWindowBackgroundLight = SkColorSetARGB(255, 240, 240, 245);
 constexpr SkColor kTitlebarGlassDark = SkColorSetARGB(209, 34, 31, 50);
 constexpr SkColor kTitlebarGlassLight = SkColorSetARGB(235, 237, 238, 247);
-constexpr SkColor kSidebarBackgroundDark = SkColorSetARGB(255, 39, 35, 54);
-constexpr SkColor kSidebarBackgroundLight = SkColorSetARGB(255, 228, 229, 238);
-
-// Minimum alpha for kMahoColorSidebarBackground when the theme opacity slider
-// is at 0.0. Low enough for a glassy Zen look (the NSVisualEffectView blur
-// shows through), but nonzero so opaque tab labels stay legible over it.
-constexpr SkAlpha kSidebarMinAlpha = 24;
 constexpr SkColor kContentBackgroundDark = SkColorSetARGB(255, 28, 27, 45);
 constexpr SkColor kContentBackgroundLight = SkColorSetARGB(255, 246, 247, 251);
 constexpr SkColor kContentGradientTopDark = SkColorSetARGB(255, 35, 33, 55);
 constexpr SkColor kContentGradientTopLight = SkColorSetARGB(255, 252, 252, 254);
 constexpr SkColor kContentGradientBottomDark = SkColorSetARGB(255, 24, 23, 39);
 constexpr SkColor kContentGradientBottomLight = SkColorSetARGB(255, 237, 239, 248);
-
-void AddSidebarSurfaceColors(ui::ColorMixer& mixer, bool sidebar_dark) {
-  // Translucent by default (no active Space theme) so the kGlassFrame vibrancy
-  // shows through. The tint mixer below raises alpha per the opacity slider
-  // when a theme is active.
-  mixer[kMahoColorSidebarBackground] = {sidebar_dark
-      ? SkColorSetA(kSidebarBackgroundDark, kSidebarMinAlpha)
-      : SkColorSetA(kSidebarBackgroundLight, kSidebarMinAlpha)};
-  // Gradient stops default to the primary sidebar color; the theme tint mixer
-  // overrides them when a multi-stop theme is active. Registered unconditionally
-  // so the ColorProvider IDs always resolve.
-  mixer[kMahoColorSidebarGradientStop1] = {kMahoColorSidebarBackground};
-  mixer[kMahoColorSidebarGradientStop2] = {kMahoColorSidebarBackground};
-}
 
 void AddChromeSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorWindowBackground] = {dark_mode
@@ -142,180 +113,17 @@ void AddCanvasColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorCanvasBadgeBorder] = {SkColorSetARGB(112, 66, 62, 93)};
 }
 
-void AddInteractiveSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
+void AddBrowserChromeInteractiveColors(ui::ColorMixer& mixer,
+                                       bool dark_mode) {
   mixer[kMahoColorSidebarHover] = {dark_mode
       ? SkColorSetARGB(15, 255, 255, 255)
       : SkColorSetARGB(15, 30, 41, 77)};
-  mixer[kMahoColorSidebarSelected] = {dark_mode
-      ? SkColorSetARGB(27, 255, 255, 255)
-      : SkColorSetARGB(28, 54, 75, 140)};
-  mixer[kMahoColorSpaceStripBorder] = {dark_mode
-      ? SkColorSetARGB(10, 255, 255, 255)
-      : SkColorSetARGB(168, 184, 190, 216)};
-  mixer[kMahoColorSpaceControlTint] = {dark_mode
-      ? SkColorSetARGB(122, 200, 201, 222)
-      : SkColorSetARGB(128, 88, 97, 129)};
-  mixer[kMahoColorSpaceChipHover] = {dark_mode
-      ? SkColorSetARGB(20, 255, 255, 255)
-      : SkColorSetARGB(20, 33, 43, 82)};
-  mixer[kMahoColorSpaceChipSelected] = {dark_mode
-      ? SkColorSetARGB(30, 255, 255, 255)
-      : SkColorSetARGB(41, 45, 62, 115)};
-  mixer[kMahoColorSpaceChipIdleBorder] = {dark_mode
-      ? SkColorSetARGB(17, 255, 255, 255)
-      : SkColorSetARGB(199, 164, 174, 210)};
-  mixer[kMahoColorSpaceChipCountFill] = {SkColorSetARGB(235, 47, 45, 71)};
-  mixer[kMahoColorSpaceChipCountBorder] = {SkColorSetARGB(173, 71, 66, 99)};
   mixer[kMahoColorSearchFieldBackground] = {dark_mode
       ? SkColorSetARGB(230, 43, 40, 62)
       : SkColorSetARGB(245, 242, 243, 249)};
-  mixer[kMahoColorSearchFieldBorder] = {dark_mode
-      ? SkColorSetARGB(77, 65, 61, 89)
-      : SkColorSetARGB(107, 180, 186, 213)};
-  mixer[kMahoColorNewTabStripBackground] = {dark_mode
-      ? SkColorSetARGB(173, 40, 37, 59)
-      : SkColorSetARGB(209, 237, 239, 248)};
-  mixer[kMahoColorNewTabStripBorder] = {dark_mode
-      ? SkColorSetARGB(66, 63, 59, 90)
-      : SkColorSetARGB(97, 176, 182, 210)};
-}
-
-void AddTabRowColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorTabRowHoverBackground] = {dark_mode
-      ? SkColorSetARGB(26, 255, 255, 255)
-      : SkColorSetARGB(20, 0, 0, 0)};
   mixer[kMahoColorTabRowActiveBackground] = {dark_mode
       ? SkColorSetARGB(51, 255, 255, 255)
       : SkColorSetARGB(38, 0, 0, 0)};
-  mixer[kMahoColorTabRowActiveHoveredBackground] = {dark_mode
-      ? SkColorSetARGB(51, 255, 255, 255)
-      : SkColorSetARGB(38, 0, 0, 0)};
-  mixer[kMahoColorTabRowSelectedBackground] = {dark_mode
-      ? SkColorSetARGB(38, 255, 255, 255)
-      : SkColorSetARGB(25, 0, 0, 0)};
-  mixer[kMahoColorTabRowSelectedHoveredBackground] = {dark_mode
-      ? SkColorSetARGB(38, 255, 255, 255)
-      : SkColorSetARGB(25, 0, 0, 0)};
-  mixer[kMahoColorInteractiveChipIdleBackground] = {dark_mode
-      ? SkColorSetARGB(16, 255, 255, 255)
-      : SkColorSetARGB(13, 0, 0, 0)};
-}
-
-void AddFavoritesColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorFavoritesEmptyCardBackground] = {dark_mode
-      ? SkColorSetARGB(245, 38, 35, 59)
-      : SkColorSetARGB(245, 246, 247, 253)};
-  mixer[kMahoColorFavoritesEmptyCardBorder] = {dark_mode
-      ? SkColorSetARGB(128, 68, 63, 98)
-      : SkColorSetARGB(138, 184, 193, 230)};
-  mixer[kMahoColorFavoritesEmptyCardDash] = {dark_mode
-      ? SkColorSetARGB(184, 124, 143, 250)
-      : SkColorSetARGB(122, 108, 135, 237)};
-  mixer[kMahoColorFavoritesEmptyBadgeBackground] = {dark_mode
-      ? SkColorSetARGB(255, 48, 45, 74)
-      : SkColorSetARGB(255, 236, 240, 252)};
-  mixer[kMahoColorFavoritesEmptyBadgeBorder] = {dark_mode
-      ? SkColorSetARGB(143, 102, 116, 228)
-      : SkColorSetARGB(133, 163, 181, 242)};
-  mixer[kMahoColorFavoritesEmptyBadgeIcon] = {dark_mode
-      ? SkColorSetARGB(255, 194, 206, 255)
-      : SkColorSetARGB(255, 79, 107, 216)};
-  mixer[kMahoColorFavoritesEmptyCloseGlyph] = {dark_mode
-      ? SkColorSetARGB(158, 196, 198, 226)
-      : SkColorSetARGB(158, 118, 129, 167)};
-}
-
-void AddArchiveColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorArchivePanelBackground] = {dark_mode
-      ? SkColorSetARGB(235, 49, 48, 52)
-      : SkColorSetARGB(214, 242, 243, 248)};
-  mixer[kMahoColorArchiveControlBackground] = {dark_mode
-      ? SkColorSetARGB(194, 62, 60, 64)
-      : SkColorSetARGB(194, 245, 246, 250)};
-  mixer[kMahoColorArchiveControlBorder] = {dark_mode
-      ? SkColorSetARGB(31, 93, 91, 98)
-      : SkColorSetARGB(10, 176, 184, 211)};
-  mixer[kMahoColorArchiveControlActiveBackground] = {dark_mode
-      ? SkColorSetARGB(194, 69, 68, 73)
-      : SkColorSetARGB(128, 233, 237, 250)};
-  mixer[kMahoColorArchiveRowHover] = {dark_mode
-      ? SkColorSetARGB(6, 255, 255, 255)
-      : SkColorSetARGB(3, 48, 61, 97)};
-  mixer[kMahoColorArchiveRowSelected] = {dark_mode
-      ? SkColorSetARGB(11, 255, 255, 255)
-      : SkColorSetARGB(8, 55, 74, 129)};
-  mixer[kMahoColorArchiveSectionHeaderText] = {dark_mode
-      ? SkColorSetARGB(219, 186, 186, 193)
-      : SkColorSetARGB(214, 90, 98, 124)};
-  mixer[kMahoColorArchiveDivider] = {dark_mode
-      ? SkColorSetARGB(5, 255, 255, 255)
-      : SkColorSetARGB(9, 163, 171, 201)};
-  mixer[kMahoColorArchiveDetailPanelBackground] = {dark_mode
-      ? SkColorSetARGB(255, 21, 20, 30)
-      : SkColorSetARGB(255, 237, 239, 248)};
-  mixer[kMahoColorArchiveDetailPanelInnerBackground] = {dark_mode
-      ? SkColorSetARGB(250, 30, 29, 43)
-      : SkColorSetARGB(250, 244, 245, 252)};
-  mixer[kMahoColorArchiveDetailPanelBorder] = {dark_mode
-      ? SkColorSetARGB(209, 55, 53, 75)
-      : SkColorSetARGB(122, 183, 190, 216)};
-  mixer[kMahoColorArchiveDetailPanelMutedFill] = {dark_mode
-      ? SkColorSetARGB(199, 43, 42, 61)
-      : SkColorSetARGB(163, 225, 230, 248)};
-  mixer[kMahoColorArchiveDetailPanelAccent] = {dark_mode
-      ? SkColorSetARGB(61, 118, 130, 243)
-      : SkColorSetARGB(46, 92, 116, 237)};
-}
-
-void AddLibraryRailColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorLibraryRailBackground] = {dark_mode
-      ? SkColorSetARGB(255, 43, 35, 48)
-      : SkColorSetARGB(255, 224, 226, 234)};
-  // Selected background: rgba(255,255,255,0.08) per mockup (.rail-item.active).
-  mixer[kMahoColorLibraryRailItemSelected] = {dark_mode
-      ? SkColorSetARGB(20, 255, 255, 255)
-      : SkColorSetARGB(214, 217, 220, 230)};
-  // Hover: slightly lifted above idle-transparent; no hover state in mockup so
-  // we use half the selected alpha (0.06) for a subtle-but-perceptible feel.
-  mixer[kMahoColorLibraryRailItemHover] = {dark_mode
-      ? SkColorSetARGB(15, 255, 255, 255)
-      : SkColorSetARGB(10, 0, 0, 0)};
-  // Idle icon/label: #8a8290 per mockup (.rail-item .label / .rail-item svg stroke).
-  mixer[kMahoColorLibraryRailItemText] = {dark_mode
-      ? SkColorSetARGB(219, 138, 130, 144)
-      : SkColorSetARGB(255, 87, 92, 112)};
-  // Selected icon/label: #e8e4ec per mockup (.rail-item.active svg / .label).
-  mixer[kMahoColorLibraryRailItemSelectedText] = {dark_mode
-      ? SkColorSetARGB(255, 232, 228, 236)
-      : SkColorSetARGB(255, 46, 51, 74)};
-  mixer[kMahoColorLibraryRailDivider] = {dark_mode
-      ? SkColorSetARGB(15, 255, 255, 255)
-      : SkColorSetARGB(51, 179, 184, 204)};
-}
-
-void AddLibraryContentColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorLibraryContentBackground] = {dark_mode
-      ? SkColorSetARGB(255, 61, 52, 68)
-      : SkColorSetARGB(255, 236, 234, 240)};
-  mixer[kMahoColorLibraryListRowBackground] = {dark_mode
-      ? SkColorSetARGB(10, 255, 255, 255)
-      : SkColorSetARGB(10, 0, 0, 0)};
-  mixer[kMahoColorLibraryRowHover] = {dark_mode
-      ? SkColorSetARGB(14, 255, 255, 255)
-      : SkColorSetARGB(12, 0, 0, 0)};
-  mixer[kMahoColorLibraryRowSelected] = {dark_mode
-      ? SkColorSetARGB(22, 255, 255, 255)
-      : SkColorSetARGB(20, 0, 0, 0)};
-  mixer[kMahoColorLibrarySectionHeaderText] = {dark_mode
-      ? SkColorSetARGB(219, 122, 114, 128)
-      : SkColorSetARGB(214, 90, 98, 124)};
-  mixer[kMahoColorLibraryGlyphBorder] = {dark_mode
-      ? SkColorSetARGB(25, 255, 255, 255)
-      : SkColorSetARGB(20, 0, 0, 0)};
-  mixer[kMahoColorLibrarySearchPillBackground] = {dark_mode
-      ? SkColorSetARGB(64, 0, 0, 0)
-      : SkColorSetARGB(40, 0, 0, 0)};
-  mixer[kMahoColorLibraryProgressFill] = {SkColorSetARGB(255, 119, 215, 161)};
 }
 
 void AddTextColors(ui::ColorMixer& mixer, bool dark_mode) {
@@ -326,18 +134,6 @@ void AddTextColors(ui::ColorMixer& mixer, bool dark_mode) {
       ? SkColorSetARGB(255, 188, 188, 202)
       : SkColorSetARGB(255, 89, 97, 128)};
   mixer[kMahoColorTertiaryText] = {dark_mode
-      ? SkColorSetARGB(255, 143, 143, 159)
-      : SkColorSetARGB(255, 128, 136, 166)};
-}
-
-void AddSidebarTextColors(ui::ColorMixer& mixer, bool sidebar_dark) {
-  mixer[kMahoColorSidebarPrimaryText] = {sidebar_dark
-      ? SkColorSetARGB(255, 243, 243, 247)
-      : SkColorSetARGB(255, 45, 51, 74)};
-  mixer[kMahoColorSidebarSecondaryText] = {sidebar_dark
-      ? SkColorSetARGB(255, 188, 188, 202)
-      : SkColorSetARGB(255, 89, 97, 128)};
-  mixer[kMahoColorSidebarTertiaryText] = {sidebar_dark
       ? SkColorSetARGB(255, 143, 143, 159)
       : SkColorSetARGB(255, 128, 136, 166)};
 }
@@ -447,82 +243,6 @@ void AddAccentAndSemanticColors(ui::ColorMixer& mixer, SkColor accent_color) {
       SkColorGetB(accent_color))};
 }
 
-SkColor AdjustThemeTint(const MahoSpaceThemeState::SpaceHSV& hsv,
-                       bool dark_mode,
-                       uint8_t alpha,
-                       float saturation_scale,
-                       float dark_value_bias,
-                       float light_saturation_scale,
-                       float light_value_scale) {
-  SkScalar saturation = std::clamp(hsv.saturation * saturation_scale, 0.0f, 1.0f);
-  SkScalar value = dark_mode
-                       ? std::clamp(hsv.value + dark_value_bias, 0.0f, 1.0f)
-                       : std::clamp(hsv.value * light_value_scale, 0.0f, 1.0f);
-  if (!dark_mode) {
-    saturation = std::clamp(saturation * light_saturation_scale, 0.0f, 0.95f);
-  }
-
-  SkScalar adjusted[3] = {hsv.hue, saturation, value};
-  return SkHSVToColor(alpha, adjusted);
-}
-
-float GetSidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
-  switch (kind) {
-    case MahoSpaceThemeState::ThemeKind::kSolid:
-      return 0.08f;
-    case MahoSpaceThemeState::ThemeKind::kGradient:
-      return 0.11f;
-    case MahoSpaceThemeState::ThemeKind::kZen:
-      return 0.09f;
-  }
-
-  return 0.08f;
-}
-
-// Builds one sidebar gradient stop color: appearance-adjusted theme tint,
-// blended over the base sidebar surface with the fixed per-kind weight, then
-// stamped with the shared sidebar alpha so vibrancy shows through uniformly.
-SkColor MakeSidebarStopColor(const MahoSpaceThemeState::SpaceHSV& hsv,
-                             MahoSpaceThemeState::ThemeKind kind,
-                             bool sidebar_dark,
-                             SkColor base_sidebar,
-                             SkAlpha sidebar_alpha) {
-  const SkColor tint = SkColorSetA(
-      AdjustThemeTint(hsv, sidebar_dark,
-                      kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
-                      1.0f, sidebar_dark ? 0.02f : 0.0f, 0.85f, 1.08f),
-      255);
-  const SkColor blended =
-      maho_theme::BlendColors(base_sidebar, tint, GetSidebarBlendForKind(kind));
-  return SkColorSetA(blended, sidebar_alpha);
-}
-
-float GetContentBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
-  switch (kind) {
-    case MahoSpaceThemeState::ThemeKind::kSolid:
-      return 0.05f;
-    case MahoSpaceThemeState::ThemeKind::kGradient:
-      return 0.08f;
-    case MahoSpaceThemeState::ThemeKind::kZen:
-      return 0.065f;
-  }
-
-  return 0.05f;
-}
-
-float GetTitlebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
-  switch (kind) {
-    case MahoSpaceThemeState::ThemeKind::kSolid:
-      return 0.15f;
-    case MahoSpaceThemeState::ThemeKind::kGradient:
-      return 0.18f;
-    case MahoSpaceThemeState::ThemeKind::kZen:
-      return 0.12f;
-  }
-
-  return 0.15f;
-}
-
 // R-12: Private/Incognito semantic colors. These are unconditional
 // constants — never conditioned on profile in the mixer layer.
 // Profile-aware Views code calls SetPrivateAppearance() to inject them.
@@ -542,11 +262,27 @@ void AddPrivateColors(ui::ColorMixer& mixer) {
   mixer[kMahoColorPrivateTopBarBackground]   = {SkColorSetRGB(0x11, 0x12, 0x14)};
 }
 
+// R-12: Identity marker attached to key.app_controller for OTR/Incognito
+// windows so AddMahoColorMixers can recognize them. It MUST be a real
+// InitializerSupplier: the color pipeline unconditionally dereferences
+// key.app_controller and invokes the pure-virtual AddColorMixers()
+// (chrome/browser/ui/color/chrome_color_mixers.cc), so a fake pointer would be
+// an illegal virtual call. This subclass makes that call a safe no-op.
+class MahoOtrSentinelSupplier
+    : public ui::ColorProviderKey::InitializerSupplier {
+ public:
+  void AddColorMixers(ui::ColorProvider* provider,
+                      const ui::ColorProviderKey& key) const override {}
+
+ protected:
+  ~MahoOtrSentinelSupplier() override = default;
+};
+
 }  // namespace
 
 ui::ColorProviderKey::InitializerSupplier* GetMahoOtrSentinel() {
-  static char g_otr_sentinel;
-  return reinterpret_cast<ui::ColorProviderKey::InitializerSupplier*>(&g_otr_sentinel);
+  static base::NoDestructor<MahoOtrSentinelSupplier> sentinel;
+  return sentinel.get();
 }
 
 void AddMahoColorMixers(ui::ColorProvider* provider,
@@ -555,51 +291,18 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
 
   const bool is_otr = (key.app_controller == GetMahoOtrSentinel());
 
-  const bool sidebar_dark =
+  const bool browser_theme_dark =
       is_otr || (key.color_mode == ui::ColorProviderKey::ColorMode::kDark);
-  // Sidebar (and the whole window) follows the active space theme scheme.
-
-  bool browser_theme_dark = false;
-  if (is_otr) {
-    browser_theme_dark = true;
-  } else {
-    Profile* maho_profile = nullptr;
-    if (g_browser_process && g_browser_process->profile_manager()) {
-      maho_profile = g_browser_process->profile_manager()->GetLastUsedProfileIfLoaded();
-    }
-    if (maho_profile &&
-        g_browser_process->profile_manager()->IsValidProfile(maho_profile)) {
-      auto* theme_service = ThemeServiceFactory::GetForProfile(maho_profile);
-      if (theme_service) {
-        const auto scheme = theme_service->GetBrowserColorScheme();
-        if (scheme == ThemeService::BrowserColorScheme::kSystem) {
-          browser_theme_dark = MahoSpaceThemeState::IsOsDarkMode();
-        } else {
-          browser_theme_dark = (scheme == ThemeService::BrowserColorScheme::kDark);
-        }
-      }
-    } else {
-      browser_theme_dark = MahoSpaceThemeState::IsOsDarkMode();
-    }
-  }
-  // Content area and browsing environment follow the Browser Theme.
 
   const SkColor kFixedAccentColor = SkColorSetRGB(99, 102, 241);
   // Fixed brand accent (indigo-500); no longer user-configurable.
 
   ui::ColorMixer& mixer = provider->AddMixer();
 
-  AddSidebarSurfaceColors(mixer, sidebar_dark);
   AddChromeSurfaceColors(mixer, browser_theme_dark);
   AddCanvasColors(mixer, browser_theme_dark);
-  AddInteractiveSurfaceColors(mixer, sidebar_dark);
-  AddTabRowColors(mixer, sidebar_dark);
-  AddFavoritesColors(mixer, sidebar_dark);
-  AddArchiveColors(mixer, sidebar_dark);
-  AddLibraryRailColors(mixer, sidebar_dark);
-  AddLibraryContentColors(mixer, sidebar_dark);
+  AddBrowserChromeInteractiveColors(mixer, browser_theme_dark);
   AddTextColors(mixer, browser_theme_dark);
-  AddSidebarTextColors(mixer, sidebar_dark);
   AddToastColors(mixer, browser_theme_dark);
   AddLegacyAliasColors(mixer, browser_theme_dark);
   AddCommandBarColors(mixer, browser_theme_dark);
@@ -612,112 +315,6 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
   MahoPermissionTheme::AddColors(mixer, browser_theme_dark);
   MahoReaderTheme::AddColors(mixer, browser_theme_dark);
 
-  // Phase 3: Space theme tinting.
-  // Skip for incognito/guest windows.
-  std::optional<MahoSpaceThemeState::ThemeData> theme_data =
-      is_otr ? std::nullopt : MahoSpaceThemeState::GetThemeData();
-  if (theme_data && !theme_data->achromatic) {
-    const SkColor base_titlebar = browser_theme_dark ? kTitlebarGlassDark
-                                                     : kTitlebarGlassLight;
-    const SkColor base_sidebar = sidebar_dark ? kSidebarBackgroundDark
-                                              : kSidebarBackgroundLight;
-    const SkColor base_content = browser_theme_dark ? kContentBackgroundDark
-                                                    : kContentBackgroundLight;
-    const SkColor base_window = browser_theme_dark ? kWindowBackgroundDark
-                                                   : kWindowBackgroundLight;
-
-    const SkColor primary_tint = SkColorSetA(AdjustThemeTint(
-        theme_data->primary_hsv, browser_theme_dark,
-        theme_data->kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
-        1.0f, browser_theme_dark ? 0.02f : 0.0f, 0.85f, 1.08f), 255);
-    const SkColor primary_tint_sidebar = SkColorSetA(AdjustThemeTint(
-        theme_data->primary_hsv, sidebar_dark,
-        theme_data->kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
-        1.0f, sidebar_dark ? 0.02f : 0.0f, 0.85f, 1.08f), 255);
-
-    const MahoSpaceThemeState::SpaceHSV& secondary_hsv =
-        theme_data->secondary_hsv.value_or(theme_data->primary_hsv);
-    const SkColor secondary_tint_sidebar = SkColorSetA(AdjustThemeTint(
-        secondary_hsv, sidebar_dark,
-        theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 15 : 18,
-        theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 0.72f : 0.9f,
-        sidebar_dark ? -0.03f : 0.0f, 0.78f,
-        theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 1.02f : 1.05f), 255);
-
-    ui::ColorMixer& tint_mixer = provider->AddMixer();
-    tint_mixer[kMahoColorTitlebarGlass] = {maho_theme::BlendColors(
-        base_titlebar, primary_tint,
-        GetTitlebarBlendForKind(theme_data->kind))};
-    // Frame background: the opaque backdrop that shows through the rounded
-    // gaps/corners around the sidebar and content. Tinted with the same
-    // primary hue (content blend weight) so those gaps match the theme instead
-    // of Chromium's default gray frame. Stays fully opaque; the kGlassFrame
-    // paint path applies its own reduced alpha over the desktop blur.
-    tint_mixer[kMahoColorWindowBackground] = {maho_theme::BlendColors(
-        base_window, primary_tint,
-        GetContentBlendForKind(theme_data->kind))};
-
-    const SkAlpha sidebar_alpha = static_cast<SkAlpha>(
-        kSidebarMinAlpha +
-        (255 - kSidebarMinAlpha) * std::clamp(theme_data->opacity, 0.0f, 1.0f));
-    // Sidebar gradient: up to three canonical theme stops, each mixed
-    // identically and sharing one alpha. Falls back to the primary hsv when the
-    // stops vector is empty (defensive; gradient/zen always populate it).
-    const MahoSpaceThemeState::SpaceHSV& sidebar_stop0 =
-        !theme_data->stops.empty() ? theme_data->stops[0]
-                                   : theme_data->primary_hsv;
-    tint_mixer[kMahoColorSidebarBackground] = {MakeSidebarStopColor(
-        sidebar_stop0, theme_data->kind, sidebar_dark, base_sidebar,
-        sidebar_alpha)};
-    if (theme_data->stops.size() >= 2) {
-      tint_mixer[kMahoColorSidebarGradientStop1] = {MakeSidebarStopColor(
-          theme_data->stops[1], theme_data->kind, sidebar_dark, base_sidebar,
-          sidebar_alpha)};
-    }
-    if (theme_data->stops.size() >= 3) {
-      tint_mixer[kMahoColorSidebarGradientStop2] = {MakeSidebarStopColor(
-          theme_data->stops[2], theme_data->kind, sidebar_dark, base_sidebar,
-          sidebar_alpha)};
-    }
-
-    tint_mixer[kMahoColorContentBackground] = {maho_theme::BlendColors(
-        base_content, primary_tint,
-        GetContentBlendForKind(theme_data->kind))};
-    tint_mixer[kColorWebContentsBackground] = {kMahoColorContentBackground};
-    // Content gradient shares the sidebar's hue family and alpha but spans a
-    // real light->dark range (top lifted toward white, bottom deepened toward
-    // black). A wide delta is required: a near-flat fill posterizes into ~160px
-    // 8-bit bands over the tall content area.
-    const float content_grad_blend = GetSidebarBlendForKind(theme_data->kind);
-    const SkColor grad_top = maho_theme::BlendColors(
-        maho_theme::BlendColors(base_sidebar, primary_tint_sidebar,
-                                content_grad_blend),
-        SK_ColorWHITE, 0.10f);
-    const SkColor grad_bottom = maho_theme::BlendColors(
-        maho_theme::BlendColors(base_sidebar, secondary_tint_sidebar,
-                                content_grad_blend),
-        SK_ColorBLACK, 0.18f);
-    tint_mixer[kMahoColorContentGradientTop] = {
-        SkColorSetA(grad_top, sidebar_alpha)};
-    tint_mixer[kMahoColorContentGradientBottom] = {
-        SkColorSetA(grad_bottom, sidebar_alpha)};
-    const SkColor base_tab_active = sidebar_dark
-        ? SkColorSetARGB(51, 255, 255, 255)
-        : SkColorSetARGB(38, 0, 0, 0);
-    const SkColor tinted_tab_active =
-        maho_theme::BlendColors(base_tab_active, primary_tint_sidebar, 0.05f);
-    tint_mixer[kMahoColorTabRowActiveBackground] = {tinted_tab_active};
-    tint_mixer[kMahoColorTabRowActiveHoveredBackground] = {tinted_tab_active};
-    const SkColor base_tab_selected = sidebar_dark
-        ? SkColorSetARGB(38, 255, 255, 255)
-        : SkColorSetARGB(25, 0, 0, 0);
-    const SkColor tinted_tab_selected =
-        maho_theme::BlendColors(base_tab_selected, primary_tint_sidebar, 0.05f);
-    tint_mixer[kMahoColorTabRowSelectedBackground] = {tinted_tab_selected};
-    tint_mixer[kMahoColorTabRowSelectedHoveredBackground] = {tinted_tab_selected};
-  }
-
   DVLOG(1) << "MahoColorMixers: registered " << (kMahoColorsEnd - kMahoColorsStart)
-           << " color IDs, browser_theme_dark=" << browser_theme_dark
-           << " sidebar_dark=" << sidebar_dark;
+           << " color IDs, browser_theme_dark=" << browser_theme_dark;
 }
