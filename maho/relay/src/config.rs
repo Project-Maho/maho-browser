@@ -10,6 +10,13 @@ pub struct RelayConfig {
     pub max_connections_per_room: u32,
     pub retention_days: u32,
     pub google_oauth_allowed_auds: Vec<String>,
+    /// Public Google OAuth client id used for the desktop loopback code
+    /// exchange. Public (not a secret).
+    pub google_oauth_client_id: Option<String>,
+    /// Google OAuth client secret for the desktop client. The desktop client
+    /// type requires it at the token endpoint even with PKCE, so the exchange
+    /// runs server-side here and the secret never ships in any client binary.
+    pub google_oauth_client_secret: Option<String>,
 }
 
 impl RelayConfig {
@@ -59,6 +66,18 @@ impl RelayConfig {
             .map(|v| crate::auth::google::parse_audiences(&v.to_string()))
             .unwrap_or_default();
 
+        let google_oauth_client_id = env
+            .var("GOOGLE_OAUTH_CLIENT_ID")
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| !v.trim().is_empty());
+
+        let google_oauth_client_secret = env
+            .secret("GOOGLE_OAUTH_CLIENT_SECRET")
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| !v.trim().is_empty());
+
         Self {
             require_auth,
             open_registration,
@@ -68,6 +87,8 @@ impl RelayConfig {
             max_connections_per_room,
             retention_days,
             google_oauth_allowed_auds,
+            google_oauth_client_id,
+            google_oauth_client_secret,
         }
     }
 }

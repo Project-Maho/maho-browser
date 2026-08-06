@@ -490,34 +490,31 @@ pub async fn delete_account(db: &D1Database, user_id: i32, email: &str) -> Resul
     Ok(())
 }
 
+const ROTATE_SESSION_TOKENS_SQL: &str =
+    "UPDATE sessions
+     SET token_hash = ?1, refresh_hash = ?2, expires_at = ?3, refresh_expires_at = ?4, last_used_at = ?5
+     WHERE refresh_hash = ?6 AND refresh_expires_at > ?5
+     RETURNING *";
+
 pub async fn rotate_session_tokens(
     db: &D1Database,
-    id: i32,
+    presented_refresh_hash: &[u8],
     token_hash: &[u8],
     refresh_hash: &[u8],
     expires_at: i64,
     refresh_expires_at: i64,
     now: i64,
-) -> Result<Session> {
-    let stmt = db.prepare(
-        "UPDATE sessions
-         SET token_hash = ?1, refresh_hash = ?2, expires_at = ?3, refresh_expires_at = ?4, last_used_at = ?5
-         WHERE id = ?6
-         RETURNING *"
-    );
+) -> Result<Option<Session>> {
+    let stmt = db.prepare(ROTATE_SESSION_TOKENS_SQL);
     let stmt = stmt.bind(&[
         js(&token_hash)?,
         js(&refresh_hash)?,
         js(&expires_at)?,
         js(&refresh_expires_at)?,
         js(&now)?,
-        js(&id)?,
+        js(&presented_refresh_hash)?,
     ])?;
-    let session = stmt
-        .first::<Session>(None)
-        .await?
-        .ok_or_else(|| AppError::Internal("Failed to rotate session".to_string()))?;
-    Ok(session)
+    Ok(stmt.first::<Session>(None).await?)
 }
 
 pub async fn touch_session_and_device(
@@ -1046,6 +1043,112 @@ pub async fn get_room_size(db: &D1Database, room_id: &str) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_rotation_consumes_the_presented_hash_once() {
+        use rusqlite::{params, Connection, OptionalExtension};
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0002_create_auth_tables.sql"))
+            .unwrap();
+        db.execute(
+            "INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES (1, 'u@example.com', 'hash', 'U', 1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO devices (id, user_id, name, device_type, room_id, created_at) VALUES (1, 1, 'd', 'desktop', 'r', 1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO sessions (id, user_id, device_id, token_hash, refresh_hash, expires_at, refresh_expires_at, created_at) VALUES (1, 1, 1, x'01', x'02', 100, 1000, 1)",
+            [],
+        )
+        .unwrap();
+
+        let rotate = |new_access: &[u8], new_refresh: &[u8]| {
+            db.query_row(
+                ROTATE_SESSION_TOKENS_SQL,
+                params![
+                    new_access,
+                    new_refresh,
+                    200_i64,
+                    2000_i64,
+                    100_i64,
+                    &[2_u8][..]
+                ],
+                |row| row.get::<_, i32>(0),
+            )
+            .optional()
+            .unwrap()
+        };
+
+        assert_eq!(rotate(&[3], &[4]), Some(1));
+        assert_eq!(
+            rotate(&[5], &[6]),
+            None,
+            "reusing the consumed refresh hash must not rotate the session twice"
+        );
+        let stored_refresh: Vec<u8> = db
+            .query_row(
+                "SELECT refresh_hash FROM sessions WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_refresh, vec![4]);
+    }
+
+    #[test]
+    fn expired_refresh_hash_is_not_rotated() {
+        use rusqlite::{params, Connection, OptionalExtension};
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0002_create_auth_tables.sql"))
+            .unwrap();
+        db.execute(
+            "INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES (1, 'u@example.com', 'hash', 'U', 1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO devices (id, user_id, name, device_type, room_id, created_at) VALUES (1, 1, 'd', 'desktop', 'r', 1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO sessions (id, user_id, device_id, token_hash, refresh_hash, expires_at, refresh_expires_at, created_at) VALUES (1, 1, 1, x'01', x'02', 100, 99, 1)",
+            [],
+        )
+        .unwrap();
+
+        let rotated = db
+            .query_row(
+                ROTATE_SESSION_TOKENS_SQL,
+                params![
+                    &[3_u8][..],
+                    &[4_u8][..],
+                    200_i64,
+                    2000_i64,
+                    100_i64,
+                    &[2_u8][..]
+                ],
+                |row| row.get::<_, i32>(0),
+            )
+            .optional()
+            .unwrap();
+
+        assert_eq!(rotated, None);
+        let stored_refresh: Vec<u8> = db
+            .query_row(
+                "SELECT refresh_hash FROM sessions WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_refresh, vec![2]);
+    }
 
     #[test]
     fn topup_first_purchase_seeds_balance_lifetime_and_timestamps() {

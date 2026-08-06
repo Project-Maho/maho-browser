@@ -38,6 +38,21 @@ pub struct GoogleOAuthRequest {
     pub device_id: Option<String>,
 }
 
+/// Desktop loopback code exchange: the client cannot hold the Google client
+/// secret, so it hands the PKCE authorization code to the relay, which
+/// exchanges it server-side and returns only the resulting `id_token`.
+#[derive(Debug, Deserialize)]
+pub struct GoogleExchangeRequest {
+    pub code: String,
+    pub code_verifier: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GoogleExchangeResponse {
+    pub id_token: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,

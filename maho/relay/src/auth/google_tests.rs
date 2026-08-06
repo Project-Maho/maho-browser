@@ -177,3 +177,76 @@ fn hash_nonce_is_stable_and_distinct() {
     assert_eq!(hash_nonce("abc"), hash_nonce("abc"));
     assert_ne!(hash_nonce("abc"), hash_nonce("abd"));
 }
+
+#[test]
+fn token_exchange_body_includes_secret_and_form_encodes() {
+    let body = build_token_exchange_body(
+        "client-123.apps.googleusercontent.com",
+        "GOCSPX-secret/value",
+        "4/0Aauth-code+value",
+        "verifier-abc.def~ghi",
+        "http://127.0.0.1:56142",
+    );
+    // Fixed field order lets us assert the whole encoded body deterministically.
+    assert_eq!(
+        body,
+        "client_id=client-123.apps.googleusercontent.com\
+         &client_secret=GOCSPX-secret%2Fvalue\
+         &code=4%2F0Aauth-code%2Bvalue\
+         &code_verifier=verifier-abc.def~ghi\
+         &grant_type=authorization_code\
+         &redirect_uri=http%3A%2F%2F127.0.0.1%3A56142"
+    );
+}
+
+#[test]
+fn token_exchange_body_carries_client_secret_field() {
+    // The whole point of the server-side exchange: the secret is present so
+    // Google's desktop-client token endpoint does not reject with
+    // "client_secret is missing".
+    let body = build_token_exchange_body("cid", "the-secret", "code", "verifier", "http://x");
+    assert!(body.contains("client_secret=the-secret"));
+    assert!(body.contains("grant_type=authorization_code"));
+}
+
+#[test]
+fn verify_rs256_accepts_valid_signature_and_rejects_tampering() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use rsa::traits::PublicKeyParts;
+    use rsa::{Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey};
+    use sha2::{Digest, Sha256};
+
+    let mut rng = rand::thread_rng();
+    let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate rsa key");
+    let public_key = RsaPublicKey::from(&private_key);
+    let jwk = Jwk {
+        kid: "test-kid".to_string(),
+        n: URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be()),
+        e: URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be()),
+    };
+
+    // A JWT signing input is `base64url(header).base64url(claims)`.
+    let signing_input = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJnb29nbGUtc3ViIn0";
+    let digest = Sha256::digest(signing_input.as_bytes());
+    let signature = private_key
+        .sign(Pkcs1v15Sign::new::<Sha256>(), &digest)
+        .expect("sign");
+
+    assert!(
+        verify_rs256(&jwk, signing_input, &signature).unwrap(),
+        "a genuine RS256 signature must verify"
+    );
+
+    let mut tampered_sig = signature.clone();
+    tampered_sig[0] ^= 0xFF;
+    assert!(
+        !verify_rs256(&jwk, signing_input, &tampered_sig).unwrap(),
+        "a tampered signature must not verify"
+    );
+
+    assert!(
+        !verify_rs256(&jwk, "different.signing.input", &signature).unwrap(),
+        "a signature over different input must not verify"
+    );
+}

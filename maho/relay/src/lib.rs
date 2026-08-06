@@ -52,6 +52,12 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(e) => e.to_response(),
             }
         })
+        .post_async("/auth/oauth/google/exchange", |req, ctx| async move {
+            match auth::routes::oauth_google_exchange(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
         .post_async("/auth/logout", |req, ctx| async move {
             match auth::routes::logout(req, ctx.env).await {
                 Ok(res) => Ok(res),
@@ -232,6 +238,14 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await
 }
 
+const OAUTH_NONCE_REPLAY_RETENTION_SECS: i64 = 30 * 86_400;
+const PRUNE_CONSUMED_OAUTH_NONCES_SQL: &str =
+    "DELETE FROM consumed_oauth_nonces WHERE consumed_at < ?1";
+
+fn oauth_nonce_cutoff(now: i64) -> i64 {
+    now - OAUTH_NONCE_REPLAY_RETENTION_SECS
+}
+
 #[event(scheduled)]
 pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     console_log!("scheduled maintenance start");
@@ -281,6 +295,13 @@ pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) 
         "consumed_bypass_tokens",
         "DELETE FROM consumed_bypass_tokens WHERE consumed_at < ?1",
         bypass_cutoff,
+    )
+    .await;
+    prune(
+        &db,
+        "consumed_oauth_nonces",
+        PRUNE_CONSUMED_OAUTH_NONCES_SQL,
+        oauth_nonce_cutoff(now),
     )
     .await;
     prune(
@@ -370,6 +391,34 @@ impl DurableObject for RoomDO {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_nonce_pruning_keeps_the_replay_window_boundary() {
+        use rusqlite::Connection;
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../migrations/0021_add_oauth_identities.sql"))
+            .unwrap();
+        let now = 40 * 86_400;
+        let cutoff = oauth_nonce_cutoff(now);
+        db.execute(
+            "INSERT INTO consumed_oauth_nonces (nonce_hash, consumed_at) VALUES (x'01', ?1), (x'02', ?2), (x'03', ?3)",
+            [cutoff - 1, cutoff, cutoff + 1],
+        )
+        .unwrap();
+
+        db.execute(PRUNE_CONSUMED_OAUTH_NONCES_SQL, [cutoff])
+            .unwrap();
+
+        let remaining: Vec<i64> = db
+            .prepare("SELECT consumed_at FROM consumed_oauth_nonces ORDER BY consumed_at")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(std::result::Result::unwrap)
+            .collect();
+        assert_eq!(remaining, vec![cutoff, cutoff + 1]);
+    }
 
     #[test]
     fn room_do_uses_the_workers_rs_shared_callback_contract() {

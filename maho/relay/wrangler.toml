@@ -65,10 +65,14 @@ MAHO_VERIFY_URL = "https://mahobrowser.com/verify"
 MAHO_ENV = "production"
 # Google Sign-In client IDs allowed as id_token `aud` (public, not secrets).
 GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
-# LemonSqueezy variant IDs (public, not secrets). PLACEHOLDERS — replace with
-# real store IDs (D4) before go-live, else paid tiers record as free.
-LS_VARIANT_PRO = "1001"
-LS_VARIANT_MAX = "2002"
+# Desktop OAuth client id for the server-side loopback code exchange (public, not a secret).
+GOOGLE_OAUTH_CLIENT_ID = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com"
+# LemonSqueezy variant IDs (public, not secrets). Real noveling.lemonsqueezy.com
+# store subscription variants: Pro ($5) = 1985817, Max ($20) = 1985825.
+# PAYG credit-pack IDs below are STILL PLACEHOLDERS — replace with real store IDs
+# before enabling credit-pack purchases, else those orders record no credit.
+LS_VARIANT_PRO = "1985817"
+LS_VARIANT_MAX = "1985825"
 LS_VARIANT_PAYG_10 = "4001"
 LS_VARIANT_PAYG_50 = "4002"
 LS_VARIANT_PAYG_100 = "4003"
@@ -129,6 +133,8 @@ MAHO_FROM_EMAIL = "Maho Staging <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://relay-staging.mahobrowser.com/verify"
 MAHO_ENV = "staging"
 GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
+# Desktop OAuth client id for the server-side loopback code exchange (public, not a secret).
+GOOGLE_OAUTH_CLIENT_ID = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com"
 LS_VARIANT_PRO = "1970139"
 LS_VARIANT_MAX = "2002"
 LS_VARIANT_PAYG_10 = "4001"

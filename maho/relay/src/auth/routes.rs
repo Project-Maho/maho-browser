@@ -402,6 +402,51 @@ pub async fn oauth_google(mut req: Request, env: Env) -> Result<Response> {
     Ok(Response::from_json(&auth_res)?)
 }
 
+/// Desktop loopback code exchange. The desktop client cannot hold the Google
+/// client secret, so it posts the PKCE authorization code here; the relay
+/// exchanges it server-side and returns only the `id_token`, which the client
+/// then submits to `/auth/oauth/google` for audience/nonce verification and
+/// session minting. Keeps the Google client secret off every client binary.
+pub async fn oauth_google_exchange(mut req: Request, env: Env) -> Result<Response> {
+    let payload = req.json::<GoogleExchangeRequest>().await?;
+    let ip = req
+        .headers()
+        .get("cf-connecting-ip")?
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    if !crate::ratelimit::check(&env, "RL_LOGIN", &ip).await? {
+        return Err(AppError::RateLimit("login rate limit exceeded".to_string()));
+    }
+
+    if payload.code.trim().is_empty()
+        || payload.code_verifier.trim().is_empty()
+        || payload.redirect_uri.trim().is_empty()
+    {
+        return Err(AppError::BadRequest(
+            "code, code_verifier and redirect_uri are required".to_string(),
+        ));
+    }
+
+    let config = RelayConfig::from_env(&env);
+    let client_id = config
+        .google_oauth_client_id
+        .ok_or_else(|| AppError::Internal("google oauth client id not configured".to_string()))?;
+    let client_secret = config.google_oauth_client_secret.ok_or_else(|| {
+        AppError::Internal("google oauth client secret not configured".to_string())
+    })?;
+
+    let id_token = google::exchange_code(
+        &client_id,
+        &client_secret,
+        &payload.code,
+        &payload.code_verifier,
+        &payload.redirect_uri,
+    )
+    .await?;
+
+    Ok(Response::from_json(&GoogleExchangeResponse { id_token })?)
+}
+
 /// Resolves the account for a first-time Google identity: link to an existing
 /// same-email account only when Google asserts the address is verified,
 /// otherwise an attacker could pre-register an unverified Google address to
@@ -489,22 +534,7 @@ pub async fn refresh(mut req: Request, env: Env) -> Result<Response> {
         ));
     }
 
-    let refresh_hash = hash_token_str(&payload.refresh_token);
-    let session = find_session_by_refresh_hash(&db, &refresh_hash)
-        .await?
-        .ok_or_else(|| AppError::Auth("invalid refresh token".to_string()))?;
-
-    if session.refresh_expires_at <= now {
-        return Err(AppError::Auth("refresh token expired".to_string()));
-    }
-
-    let user = find_user_by_id(&db, session.user_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("user missing".to_string()))?;
-    let device = find_device_by_id(&db, session.device_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("device missing".to_string()))?;
-
+    let presented_refresh_hash = hash_token_str(&payload.refresh_token);
     let access_token = generate_access_token_string()?;
     let refresh_token = generate_refresh_token_string()?;
 
@@ -513,7 +543,7 @@ pub async fn refresh(mut req: Request, env: Env) -> Result<Response> {
 
     let updated = rotate_session_tokens(
         &db,
-        session.id,
+        &presented_refresh_hash,
         &access_hash,
         &refresh_hash,
         now + ACCESS_TOKEN_TTL_SECS,
@@ -521,7 +551,25 @@ pub async fn refresh(mut req: Request, env: Env) -> Result<Response> {
         now,
     )
     .await?;
+    let updated = match updated {
+        Some(updated) => updated,
+        None => {
+            if find_session_by_refresh_hash(&db, &presented_refresh_hash)
+                .await?
+                .is_some_and(|session| session.refresh_expires_at <= now)
+            {
+                return Err(AppError::Auth("refresh token expired".to_string()));
+            }
+            return Err(AppError::Auth("invalid refresh token".to_string()));
+        }
+    };
 
+    let user = find_user_by_id(&db, updated.user_id)
+        .await?
+        .ok_or_else(|| AppError::Internal("user missing".to_string()))?;
+    let device = find_device_by_id(&db, updated.device_id)
+        .await?
+        .ok_or_else(|| AppError::Internal("device missing".to_string()))?;
     touch_device(&db, device.id, now).await?;
 
     let account = public_user_with_google_metadata(&db, user).await?;

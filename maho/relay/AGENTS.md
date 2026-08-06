@@ -56,6 +56,7 @@ Auth subject column prevents the T3-class bug (a client calling a service-only r
 | `/health` | GET | Health | none |
 | `/auth/signup`, `/auth/login`, `/auth/logout`, `/auth/refresh` | POST | Auth | none (credentials in body) |
 | `/auth/oauth/google` | POST | Auth | none (Google id_token in body) |
+| `/auth/oauth/google/exchange` | POST | Auth | none (PKCE code in body; relay does the secret-bearing token exchange) |
 | `/auth/me`, `/auth/subscription` | GET | Auth | user |
 | `/auth/devices/:id` | DELETE | Auth | user |
 | `/auth/request_verify`, `/auth/verify` | POST | Auth | user |
@@ -106,7 +107,9 @@ Auth subject column prevents the T3-class bug (a client calling a service-only r
 - `CONFIG_UPDATE_ADMIN_TOKEN` — separate token for `POST /updates/config` (kept distinct on purpose).
 - `ARGON2_PEPPER`, `LS_WEBHOOK_SECRET`, `LEMONSQUEEZY_API_KEY`, `RESEND_API_KEY` — as before.
 - `LS_VARIANT_*` (public product IDs, `[env.*.vars]`, not secrets) — must be the real store variant IDs or paid tiers record as free.
-- `GOOGLE_OAUTH_ALLOWED_AUDS` (public client IDs, `[env.*.vars]`, not secrets) — comma-separated Google OAuth client IDs accepted as id_token `aud`. Empty = `/auth/oauth/google` fails closed. Google client *secrets* are never stored here: all clients are public PKCE clients.
+- `GOOGLE_OAUTH_ALLOWED_AUDS` (public client IDs, `[env.*.vars]`, not secrets) — comma-separated Google OAuth client IDs accepted as id_token `aud`. Empty = `/auth/oauth/google` fails closed.
+- `GOOGLE_OAUTH_CLIENT_ID` (public, `[env.*.vars]`, not a secret) — the Google **Desktop** OAuth client id used for the loopback code exchange at `/auth/oauth/google/exchange`. Must match the client id the desktop app builds its auth URL with, and be present in `GOOGLE_OAUTH_ALLOWED_AUDS`.
+- `GOOGLE_OAUTH_CLIENT_SECRET` (**secret**, `wrangler secret put`) — the Desktop client's secret. Google's Desktop client type requires it at the token endpoint even with PKCE, so the exchange runs server-side here; the secret never ships in any client binary. Absent = `/auth/oauth/google/exchange` fails closed (500). NOT the classic "all clients are public PKCE" model: the desktop identity client needs this secret, held only here.
 - Removed keys (do not reintroduce without an implementation): `MAX_CONNECTIONS_PER_IP`, `MAX_ROOMS_PER_IP`, `*_RATE_LIMIT_PER_IP_PER_MINUTE` (superseded by the edge rate-limit backend).
 
 ## COMMANDS

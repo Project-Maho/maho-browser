@@ -17,13 +17,23 @@ serde_json = "1"
 
 # Preserved from legacy
 argon2 = "0.5"
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
 hmac = "0.12"
 subtle = "2.5"
 uuid = { version = "1", features = ["serde", "v4", "js"] }
 chrono = { version = "0.4", features = ["serde", "wasmbind"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc"] }
+# Pure-Rust RS256 verification of Google id_tokens. Replaces the WebCrypto
+# SubtleCrypto path, which rejected valid Google JWKs on the Workers runtime
+# (every Google login 500'd). Deterministic verify needs no RNG, so it is
+# wasm-safe; keygen is only used in native tests.
+# RUSTSEC-2023-0071 (rsa "Marvin" timing side-channel) does NOT apply here: it
+# targets RSA private-key decryption/signing, whereas this crate is used only
+# for public-key signature verification of Google-issued tokens (no private key,
+# no decryption oracle). No fixed rsa release exists; the relay is a separate
+# workspace not covered by maho's cargo-audit gate.
+rsa = { version = "0.9", default-features = false }
 
 
 # WASM support
@@ -41,6 +51,7 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
+rand = "0.8"
 wasm-bindgen-test = "0.3"
 
 [profile.release]
