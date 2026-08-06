@@ -2390,6 +2390,25 @@ TEST_F(MahoMcpSessionTypeGuardTest, OrdinaryTextFieldTypesThroughWithoutEcho) {
 }
 
 TEST_F(MahoMcpSessionTypeGuardTest,
+       CredentialFieldTypesThroughWhenAllowCredentialsSet) {
+  MahoMcpFieldMetadata secret;
+  secret.classified = true;
+  secret.is_protected = true;
+  secret.accessible_name = "password";
+  delegate_->field_metadata[202] = secret;
+  session_->ref_table()[2] = 202;
+
+  base::Value resp = CallTool(
+      "browser_type",
+      R"({"ref":2,"text":"admin1234","allow_credentials":true})", 11);
+
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result) << resp.DebugString();
+  EXPECT_EQ(delegate_->type_call_count, 1);
+  EXPECT_EQ(delegate_->last_typed_text, "admin1234");
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
        VaultCredentialToolsReturnHandlesAndFillWithoutEchoingSecret) {
   MahoMcpBrowserDelegate::VaultCredentialSummary credential;
   credential.handle = "vh_sentinel_handle";

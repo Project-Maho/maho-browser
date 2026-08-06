@@ -79,8 +79,10 @@ class MahoMcpBrowserActionHandler {
       return UnknownRefError();
     }
 
-    if (delegate && IsCredentialField(delegate->GetFieldMetadata(
-                        tab_id, it->second))) {
+    const bool allow_credentials =
+        arguments->FindBool("allow_credentials").value_or(false);
+    if (!allow_credentials && delegate &&
+        IsCredentialField(delegate->GetFieldMetadata(tab_id, it->second))) {
       return MakeError(
           -32002,
           "Credential fields (password, one-time-code, recovery) cannot be "
