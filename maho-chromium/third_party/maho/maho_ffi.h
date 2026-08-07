@@ -2655,7 +2655,8 @@ bool maho_agent_send_message(struct MahoAgentSession *session,
                              void (*on_tool_result)(void *user_data,
                                                     const char *id,
                                                     const char *name,
-                                                    const char *result),
+                                                    const char *result,
+                                                    bool success),
                              void (*on_complete)(void *user_data,
                                                  const char *full_text,
                                                  const char *tool_calls_json),
@@ -2679,7 +2680,8 @@ bool maho_agent_send_message_leased(struct MahoAgentSession *session,
                                     void (*on_tool_result)(void *user_data,
                                                            const char *id,
                                                            const char *name,
-                                                           const char *result),
+                                                           const char *result,
+                                                           bool success),
                                     void (*on_complete)(void *user_data,
                                                         const char *full_text,
                                                         const char *tool_calls_json),
@@ -2719,6 +2721,18 @@ void maho_agent_set_approval_policy(struct MahoAgentSession *session, const char
 
 /**
  * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `cb` (nullable) receives a JSON-serialized `ArtifactInfo` string
+ * for each artifact created during a turn; `user_data` is passed back verbatim.
+ * ABI-stable: callers that never install this still stream token/tool/complete
+ * events unchanged (the artifact arm is only added when a callback is set).
+ */
+void maho_agent_set_artifact_created_callback(struct MahoAgentSession *session,
+                                              void (*cb)(void *user_data, const char *artifact_json),
+                                              void *user_data);
+
+/**
+ * # Safety
  * `session` must be a valid pointer to a `MahoAgentSession`.
  * `provider` may be null to clear the explicit provider selection; otherwise it
  * must be a null-terminated UTF-8 string naming an allowlisted provider.
@@ -2731,6 +2745,33 @@ bool maho_agent_session_set_preferred_provider(struct MahoAgentSession *session,
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 char *maho_agent_list_tools(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `path` must be a null-terminated UTF-8 string, or null to clear.
+ * Sets the session's artifact storage root; the fs_write tool and artifact
+ * index resolve relative paths against it.
+ */
+void maho_agent_set_artifact_root(struct MahoAgentSession *session, const char *path);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. Returns a newly allocated JSON array of ArtifactInfo for the
+ * session (caller frees via `maho_free_string`), or null on error.
+ */
+char *maho_agent_list_artifacts(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `artifact_id` must be a null-terminated UTF-8 string. Returns a
+ * newly allocated root-relative path string (caller frees via
+ * `maho_free_string`), or null for an unknown id or error. Opaque ids cross
+ * the boundary; the resolved path is only produced here.
+ */
+char *maho_agent_artifact_path(struct MahoAgentSession *session, const char *artifact_id);
 
 /**
  * # Safety
@@ -3092,6 +3133,19 @@ char *maho_google_sign_in_start(const char *client_id,
                                                     const char *nonce,
                                                     const char *error),
                                 void *user_data);
+
+/**
+ * Cancels an in-flight Google Sign-In identified by `state` (the value from the
+ * JSON returned by `maho_google_sign_in_start`). Lets the C++ layer end a flow
+ * deterministically when the OAuth popup is closed before the redirect, or when
+ * a new sign-in supersedes a stale one, freeing the listener thread + bound
+ * loopback port instead of leaking them until the backstop timeout. Returns
+ * true when a matching pending flow was found; idempotent.
+ *
+ * # Safety
+ * `state` must be a null-terminated C string.
+ */
+bool maho_google_sign_in_cancel(const char *state);
 
 /**
  * Returns the secret-free Vault status owned by `core`.

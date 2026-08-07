@@ -19,21 +19,23 @@ pub mod runtime_isolation;
 pub mod swiftide_backend;
 pub mod tool_registry;
 pub mod vault_tools;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub mod web_fetch;
 
 pub use approval::{
     ApprovalDecisionMetadata, ApprovalDecisionReason, ApprovalDecisionSource, ApprovalPolicy,
     ToolSensitivity, ToolSensitivityDowngrade, ToolSensitivityResolution,
 };
 pub use approval_audit::{ApprovalAuditEventKind, ApprovalAuditRecord};
+pub use deep_research::{
+    run_deep_research, AgentResearchStepper, Citation, DeepResearchError, DeepResearchReport,
+    ResearchBudget, ResearchEntitlement, ResearchPolicy, ResearchStepper, StopReason,
+};
 pub use fallback_ladder::{
     FallbackDecision, FallbackDecisionReason, FallbackLadderError, FallbackLadderState,
     FallbackSafetyState, FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval,
 };
 pub use fallback_ladder_browser::browser_tool_fallback_request;
-pub use deep_research::{
-    run_deep_research, AgentResearchStepper, Citation, DeepResearchError, DeepResearchReport,
-    ResearchBudget, ResearchEntitlement, ResearchPolicy, ResearchStepper, StopReason,
-};
 pub use maho_reasoning_openai::MahoReasoningOpenAI;
 pub use permission::{
     sanitize_tool_arguments, sanitize_tool_result, PermissionCallback, PermissionDecision,
@@ -47,16 +49,49 @@ pub use maho_types::tool::ToolDescriptor as ToolDefinition;
 
 pub const DEFAULT_MANAGED_MODEL: &str = "google/gemini-3-flash-lite:free";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CredentialError {
+    #[error("provider_not_configured")]
+    ProviderNotConfigured,
+    #[error("credential_unusable")]
+    CredentialUnusable,
+    #[error("secure_store_unavailable")]
+    SecureStoreUnavailable,
+    #[error("credential_decrypt_failed")]
+    CredentialDecryptFailed,
+    #[error("managed_auth_unavailable")]
+    ManagedAuthUnavailable,
+    #[error("unsupported_provider")]
+    UnsupportedProvider,
+}
+
+impl CredentialError {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ProviderNotConfigured => "provider_not_configured",
+            Self::CredentialUnusable => "credential_unusable",
+            Self::SecureStoreUnavailable => "secure_store_unavailable",
+            Self::CredentialDecryptFailed => "credential_decrypt_failed",
+            Self::ManagedAuthUnavailable => "managed_auth_unavailable",
+            Self::UnsupportedProvider => "unsupported_provider",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
+    #[error("Session is busy: {0}")]
+    SessionBusy(String),
     #[error("Execution error: {0}")]
     ExecutionError(String),
     #[error("Cancelled")]
     Cancelled,
     #[error("Permission denied")]
     PermissionDenied,
+    #[error("{0}")]
+    Credential(#[from] CredentialError),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +107,10 @@ pub enum AgentStreamEvent {
         id: String,
         name: String,
         result: String,
+        succeeded: bool,
+    },
+    ArtifactCreated {
+        artifact: maho_types::artifact::ArtifactInfo,
     },
 }
 
@@ -142,6 +181,22 @@ pub trait AgentStorage: Send + Sync {
         content: &str,
     ) -> Result<(), AgentError>;
     async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, AgentError>;
+    /// Persist an artifact's metadata into the session artifact index.
+    /// Default is a no-op so storage backends without an artifact index
+    /// (CLI, mocks) keep compiling and streaming unchanged.
+    async fn save_artifact(
+        &self,
+        _artifact: &maho_types::artifact::ArtifactInfo,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+    /// List a session's persisted artifacts, oldest first. Default empty.
+    async fn list_artifacts(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        Ok(Vec::new())
+    }
     async fn list_mcp_servers(
         &self,
         _workspace_id: &str,
@@ -286,6 +341,40 @@ impl AgentStorage for MutexAgentStorage {
                 })
                 .collect();
             Ok(history)
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn save_artifact(
+        &self,
+        artifact: &maho_types::artifact::ArtifactInfo,
+    ) -> Result<(), AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let artifact = artifact.clone();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.insert_artifact(&artifact)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn list_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.list_artifacts(&session_id)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
         })
         .await
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?

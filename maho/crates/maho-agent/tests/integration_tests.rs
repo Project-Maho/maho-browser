@@ -1,11 +1,13 @@
 use async_trait::async_trait;
-use maho_agent::{AgentRuntime, AgentStorage, PermissionDecision, SwiftideBackend};
+use maho_agent::{AgentError, AgentRuntime, AgentStorage, PermissionDecision, SwiftideBackend};
 use maho_types::chat::{ChatContent, ChatMessage};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use swiftide_core::chat_completion::{
     errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
     ToolCall,
 };
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 struct MockAgentStorage {
@@ -80,6 +82,30 @@ impl ChatCompletion for MockLLM {
     ) -> Result<ChatCompletionResponse, LanguageModelError> {
         self.calls.lock().unwrap().push(request.clone());
         Ok(self.response.lock().unwrap().clone())
+    }
+}
+
+#[derive(Clone)]
+struct BlockingFirstCompletionLLM {
+    completion_count: Arc<AtomicUsize>,
+    first_completion_started: Arc<Notify>,
+    release_first_completion: Arc<Notify>,
+    response: Arc<ChatCompletionResponse>,
+}
+
+#[async_trait]
+impl ChatCompletion for BlockingFirstCompletionLLM {
+    async fn complete(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, LanguageModelError> {
+        let completion_index = self.completion_count.fetch_add(1, Ordering::SeqCst);
+        if completion_index == 0 {
+            self.first_completion_started.notify_one();
+            self.release_first_completion.notified().await;
+        }
+
+        Ok((*self.response).clone())
     }
 }
 
@@ -169,6 +195,108 @@ async fn test_agent_turn_integration() {
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].role.as_str(), "user");
     assert_eq!(history[1].role.as_str(), "assistant");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn same_session_overlap_returns_busy_and_cancel_targets_original_turn() {
+    const SESSION_ID: &str = "same-session-overlap";
+
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        true,
+    );
+
+    let first_completion_started = Arc::new(Notify::new());
+    let release_first_completion = Arc::new(Notify::new());
+    let first_completion_ready = first_completion_started.notified();
+    let response = ChatCompletionResponse::builder()
+        .message("completed".to_string())
+        .build()
+        .unwrap();
+    backend.set_llm_override(Box::new(BlockingFirstCompletionLLM {
+        completion_count: Arc::new(AtomicUsize::new(0)),
+        first_completion_started: Arc::clone(&first_completion_started),
+        release_first_completion: Arc::clone(&release_first_completion),
+        response: Arc::new(response),
+    }) as Box<dyn ChatCompletion>);
+
+    let first_backend = backend.clone();
+    let original_turn = tokio::spawn(async move {
+        first_backend
+            .run_turn(
+                SESSION_ID,
+                ChatMessage::user(ChatContent::text("first turn".to_string())),
+                None,
+                None,
+            )
+            .await
+    });
+
+    first_completion_ready.await;
+
+    let overlapping_turn = backend
+        .run_turn(
+            SESSION_ID,
+            ChatMessage::user(ChatContent::text("overlapping turn".to_string())),
+            None,
+            None,
+        )
+        .await;
+    let first_cancel = backend.cancel(SESSION_ID).await;
+    let post_cancel_overlap = backend
+        .run_turn(
+            SESSION_ID,
+            ChatMessage::user(ChatContent::text("post-cancel overlap".to_string())),
+            None,
+            None,
+        )
+        .await;
+    let repeated_cancel = backend.cancel(SESSION_ID).await;
+
+    let original_turn = original_turn.await.expect("first turn task joins");
+    let post_cleanup_turn = backend
+        .run_turn(
+            SESSION_ID,
+            ChatMessage::user(ChatContent::text("post-cleanup turn".to_string())),
+            None,
+            None,
+        )
+        .await;
+    let post_cleanup_cancel = backend.cancel(SESSION_ID).await;
+
+    assert!(
+        matches!(overlapping_turn, Err(AgentError::SessionBusy(ref session_id)) if session_id == SESSION_ID),
+        "a second turn must be rejected before it can overwrite the original session abort handle"
+    );
+    assert!(
+        first_cancel.is_ok(),
+        "cancelling the session must abort the original blocked turn"
+    );
+    assert!(
+        matches!(post_cancel_overlap, Err(AgentError::SessionBusy(ref session_id)) if session_id == SESSION_ID),
+        "the cancelled turn must retain its session admission fence until join cleanup completes"
+    );
+    assert!(
+        repeated_cancel.is_ok(),
+        "repeated cancellation must succeed while the original turn remains registered"
+    );
+    assert!(
+        matches!(original_turn, Err(AgentError::Cancelled)),
+        "the original blocked turn must resolve as cancelled"
+    );
+    assert!(
+        post_cleanup_turn.is_ok(),
+        "the session must admit a new turn after the original join cleanup runs"
+    );
+    assert!(
+        matches!(post_cleanup_cancel, Err(AgentError::SessionNotFound(ref session_id)) if session_id == SESSION_ID),
+        "a completed post-cleanup turn must leave no active session"
+    );
 }
 
 #[tokio::test]
@@ -1023,9 +1151,19 @@ impl ChatCompletion for FsReadCaptureLLM {
     }
 }
 
+static FSREAD_PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 async fn run_fsread_turn(policy: Option<&str>) -> String {
     let dir = std::env::temp_dir();
-    let path = dir.join(format!("maho_fsread_probe_{}.txt", std::process::id()));
+    // Unique per call: these helpers run concurrently in one test process and each
+    // removes its probe file at the end, so a shared (pid-only) path lets one test's
+    // cleanup delete another's file mid-read. A per-call sequence keeps them isolated.
+    let seq = FSREAD_PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!(
+        "maho_fsread_probe_{}_{}.txt",
+        std::process::id(),
+        seq
+    ));
     std::fs::write(&path, b"SECRET_CONTENT_XYZ").unwrap();
 
     let storage = Arc::new(MockAgentStorage {
@@ -1603,7 +1741,7 @@ async fn test_agent_event_order() {
                 assert!(args.contains("nonexistent"));
                 tool_call_seen = true;
             }
-            maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
+            maho_agent::AgentStreamEvent::ToolResult { id, name, result, .. } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "fs_read");
                 assert!(

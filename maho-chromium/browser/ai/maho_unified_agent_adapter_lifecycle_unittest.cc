@@ -86,6 +86,7 @@ struct FakeAgentState {
   raw_ptr<void> browser_tool_user_data = nullptr;
   bool set_preferred_provider_result = true;
   std::vector<std::optional<std::string>> preferred_providers;
+  std::vector<std::string> artifact_roots;
   std::vector<std::string> lifecycle_calls;
 
   std::vector<Send> sends;
@@ -158,7 +159,7 @@ bool FakeSendMessage(MahoAgentSession*,
                      void (*on_token)(void*, const char*),
                      void (*on_thinking)(void*, const char*),
                      void (*on_tool_call)(void*, const char*, const char*, const char*),
-                     void (*on_tool_result)(void*, const char*, const char*, const char*),
+                     void (*on_tool_result)(void*, const char*, const char*, const char*, bool),
                      void (*on_complete)(void*, const char*, const char*),
                       void (*on_error)(void*, const char*),
                       void* user_data,
@@ -201,9 +202,19 @@ void FakeSessionFree(MahoAgentSession*) {
   }
 }
 
+void FakeSetArtifactRoot(MahoAgentSession*, const char* path) {
+  if (g_fake_agent) {
+    g_fake_agent->artifact_roots.emplace_back(path ? path : "");
+  }
+}
+void FakeSetArtifactCreatedCallback(MahoAgentSession*,
+                                    void (*)(void*, const char*),
+                                    void*) {}
+
 const MahoAgentFfi kFakeFfi = {
     &FakeCreateSession, &FakeSetApprovalPolicy, &FakeSetPreferredProvider,
     &FakeSendMessage,   &FakeCancel,            &FakeSessionFree,
+    &FakeSetArtifactRoot, &FakeSetArtifactCreatedCallback,
 };
 
 }  // namespace
@@ -409,6 +420,57 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
   std::unique_ptr<MahoUnifiedAgentAdapter> adapter_;
   std::vector<MahoAiRuntimeEvent> events_;
 };
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ArtifactRootFailureStopsBeforeSessionAndSend) {
+  adapter_.reset();
+  adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(
+      nullptr, nullptr, base::RepeatingCallback<bool()>(),
+      base::RepeatingCallback<Browser*()>(),
+      base::BindRepeating([]() -> base::expected<base::FilePath, std::string> {
+        return base::unexpected("Artifact root could not be created");
+      }));
+  SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
+
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform,
+                          false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  EXPECT_FALSE(fake_agent_->created);
+  EXPECT_TRUE(fake_agent_->sends.empty());
+  EXPECT_TRUE(fake_agent_->artifact_roots.empty());
+  const MahoAiRuntimeEvent* error =
+      LastEventOfType(MahoAiRuntimeEventType::kError);
+  ASSERT_NE(error, nullptr);
+  EXPECT_EQ(error->text, "Artifact root could not be created");
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ArtifactRootConfiguredBeforeFirstSend) {
+  adapter_.reset();
+  const base::FilePath root(FILE_PATH_LITERAL("/tmp/maho-artifacts"));
+  adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(
+      nullptr, nullptr, base::RepeatingCallback<bool()>(),
+      base::RepeatingCallback<Browser*()>(),
+      base::BindRepeating(
+          [](base::FilePath path)
+              -> base::expected<base::FilePath, std::string> { return path; },
+          root));
+  SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
+
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform,
+                          false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_TRUE(fake_agent_->created);
+  ASSERT_EQ(fake_agent_->artifact_roots.size(), 1u);
+  EXPECT_EQ(fake_agent_->artifact_roots[0], root.AsUTF8Unsafe());
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+}
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest, FullTurnFlow) {
   adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
@@ -1086,6 +1148,60 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, WebUiApproveResolvesOnce) {
   // Duplicate / stale reply does nothing: no second resolution, no crash.
   adapter_->RespondToApproval(approval_id, /*approved=*/true);
   EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+// Under the "prompt" (ask) policy, a sensitive desktop-agent tool with an empty
+// extension id (mail_send) must route to the interactive approval broker (chat
+// card) instead of a blanket deny, so the user can approve it from chat.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       PromptPolicyRoutesDesktopMailSendToApprovalBroker) {
+  auto prefs = CreateSecurePrefs();  // kApprovalPolicy defaults to "prompt".
+  auto adapter =
+      std::make_unique<MahoUnifiedAgentAdapter>(prefs.get(), nullptr);
+  SetAgentFfiForTesting(adapter.get(), &kFakeFfi);
+  adapter->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper,
+                         callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter.get(), "mail_send", std::string());
+  // Not hard-denied: parked as a pending approval and published as a card.
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 1u);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalRequest), 1u);
+  EXPECT_FALSE(state->event.IsSignaled());
+
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+  adapter->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kAllowOnce);
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 0u);
+}
+
+// The chat approval card for a desktop-agent mail_send is fail-closed: a deny
+// reply resolves the parked request to a denial and never dispatches.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       PromptPolicyDesktopMailSendDenyIsFailClosed) {
+  auto prefs = CreateSecurePrefs();  // kApprovalPolicy defaults to "prompt".
+  auto adapter =
+      std::make_unique<MahoUnifiedAgentAdapter>(prefs.get(), nullptr);
+  SetAgentFfiForTesting(adapter.get(), &kFakeFfi);
+  adapter->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper,
+                         callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto state = DriveDecision(adapter.get(), "mail_send", std::string());
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 1u);
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+
+  adapter->RespondToApproval(approval_id, /*approved=*/false);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kDeny);
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 0u);
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,

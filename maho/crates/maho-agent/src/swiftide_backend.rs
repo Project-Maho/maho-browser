@@ -815,6 +815,7 @@ fn build_after_tool_events(
         id: tool_id,
         name: tool_name,
         result: sanitized,
+        succeeded,
     });
     (events, artifact_to_persist)
 }

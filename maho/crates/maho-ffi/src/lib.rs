@@ -10171,6 +10171,14 @@ pub struct MahoAgentSession {
     core: std::ptr::NonNull<MahoCore>,
     workspace_root: std::path::PathBuf,
     active_space_id: Option<String>,
+    // Artifact-created delivery: installed post-construction via
+    // `maho_agent_set_artifact_created_callback` (ABI-stable setter, not a
+    // create/send param). Read during turn setup to add the ArtifactCreated
+    // event arm. `user_data` stored as usize (raw pointer is not Send).
+    artifact_created_cb: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
+    >,
+    artifact_created_user_data: usize,
 }
 
 fn apply_agent_skill_system_prompt(session: &MahoAgentSession, runtime: &SwiftideBackend) {
@@ -10323,10 +10331,7 @@ impl Drop for TurnCallbackLease {
     }
 }
 
-fn invoke_with_turn_callback_lease(
-    lease: Option<Arc<TurnCallbackLease>>,
-    callback: impl FnOnce(),
-) {
+fn invoke_with_turn_callback_lease(lease: Option<Arc<TurnCallbackLease>>, callback: impl FnOnce()) {
     callback();
     drop(lease);
 }
@@ -10805,6 +10810,8 @@ unsafe fn maho_agent_create_session_impl(
                 core: core_ptr,
                 workspace_root: session_workspace_root,
                 active_space_id,
+                artifact_created_cb: None,
+                artifact_created_user_data: 0,
             });
             if let Some(callback_lease) = session.callback_lease.as_ref() {
                 callback_lease.arm();
@@ -10970,6 +10977,7 @@ unsafe fn maho_agent_send_message_impl(
             id: *const c_char,
             name: *const c_char,
             result: *const c_char,
+            success: bool,
         ),
     >,
     on_complete: Option<
@@ -11033,10 +11041,13 @@ unsafe fn maho_agent_send_message_impl(
             let on_event_cb = if on_tool_call.is_some()
                 || on_tool_result.is_some()
                 || on_thinking.is_some()
+                || session.artifact_created_cb.is_some()
             {
                 let on_tool_call_sendable = SendableCallback(on_tool_call);
                 let on_tool_result_sendable = SendableCallback(on_tool_result);
                 let on_thinking_sendable = SendableCallback(on_thinking);
+                let artifact_cb_sendable = SendableCallback(session.artifact_created_cb);
+                let artifact_udata = SendableUserData(session.artifact_created_user_data);
                 let user_data_val = SendableUserData(user_data as usize);
                 let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
                 let session_callback_lease = clone_callback_lease(&session_callback_lease);
@@ -11064,7 +11075,7 @@ unsafe fn maho_agent_send_message_impl(
                                 }
                             }
                         }
-                        maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
+                        maho_agent::AgentStreamEvent::ToolResult { id, name, result, succeeded } => {
                             if let Some(cb) = on_tool_result_sendable.0 {
                                 if let (Ok(id_c), Ok(name_c), Ok(result_c)) =
                                     (CString::new(id), CString::new(name), CString::new(result))
@@ -11075,7 +11086,20 @@ unsafe fn maho_agent_send_message_impl(
                                             id_c.as_ptr(),
                                             name_c.as_ptr(),
                                             result_c.as_ptr(),
+                                            succeeded,
                                         );
+                                    }
+                                }
+                            }
+                        }
+                        maho_agent::AgentStreamEvent::ArtifactCreated { artifact } => {
+                            if let Some(cb) = artifact_cb_sendable.0 {
+                                let audata = artifact_udata.0 as *mut std::ffi::c_void;
+                                if let Ok(json) = serde_json::to_string(&artifact) {
+                                    if let Ok(json_c) = CString::new(json) {
+                                        unsafe {
+                                            cb(audata, json_c.as_ptr());
+                                        }
                                     }
                                 }
                             }
@@ -11106,35 +11130,33 @@ unsafe fn maho_agent_send_message_impl(
                 let result = runtime
                     .run_turn(&session_id, user_chat_msg, on_token_cb, on_event_cb)
                     .await;
-                invoke_with_turn_callback_lease(turn_callback_lease, || {
-                    match result {
-                        Ok(response) => {
-                            let text = match &response.content {
-                                maho_types::chat::ChatContent::Text(t) => t.clone(),
-                                _ => String::new(),
-                            };
-                            let Some(text_c) = cstring_or_fallback(&text, "") else {
-                                return;
-                            };
-                            let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
-                                return;
-                            };
-                            if let Some(cb) = on_complete.0 {
-                                cb(
-                                    user_data_val.0 as *mut std::ffi::c_void,
-                                    text_c.as_ptr(),
-                                    empty_json.as_ptr(),
-                                );
-                            }
+                invoke_with_turn_callback_lease(turn_callback_lease, || match result {
+                    Ok(response) => {
+                        let text = match &response.content {
+                            maho_types::chat::ChatContent::Text(t) => t.clone(),
+                            _ => String::new(),
+                        };
+                        let Some(text_c) = cstring_or_fallback(&text, "") else {
+                            return;
+                        };
+                        let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
+                            return;
+                        };
+                        if let Some(cb) = on_complete.0 {
+                            cb(
+                                user_data_val.0 as *mut std::ffi::c_void,
+                                text_c.as_ptr(),
+                                empty_json.as_ptr(),
+                            );
                         }
-                        Err(e) => {
-                            let error_text = agent_error_callback_text(&e);
-                            let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
-                                return;
-                            };
-                            if let Some(cb) = on_error.0 {
-                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
-                            }
+                    }
+                    Err(e) => {
+                        let error_text = agent_error_callback_text(&e);
+                        let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
+                            return;
+                        };
+                        if let Some(cb) = on_error.0 {
+                            cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
                         }
                     }
                 });
@@ -11177,6 +11199,7 @@ pub unsafe extern "C" fn maho_agent_send_message(
             id: *const c_char,
             name: *const c_char,
             result: *const c_char,
+            success: bool,
         ),
     >,
     on_complete: Option<
@@ -11232,6 +11255,7 @@ pub unsafe extern "C" fn maho_agent_send_message_leased(
             id: *const c_char,
             name: *const c_char,
             result: *const c_char,
+            success: bool,
         ),
     >,
     on_complete: Option<
@@ -11445,6 +11469,33 @@ pub unsafe extern "C" fn maho_agent_set_approval_policy(
 }
 
 /// # Safety
+/// `session` must be a valid pointer returned by a `maho_agent_create_session*`
+/// function. `cb` (nullable) receives a JSON-serialized `ArtifactInfo` string
+/// for each artifact created during a turn; `user_data` is passed back verbatim.
+/// ABI-stable: callers that never install this still stream token/tool/complete
+/// events unchanged (the artifact arm is only added when a callback is set).
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_set_artifact_created_callback(
+    session: *mut MahoAgentSession,
+    cb: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
+    >,
+    user_data: *mut std::ffi::c_void,
+) {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return;
+            }
+            let session = &mut *session;
+            session.artifact_created_cb = cb;
+            session.artifact_created_user_data = user_data as usize;
+        },
+        ()
+    )
+}
+
+/// # Safety
 /// `session` must be a valid pointer to a `MahoAgentSession`.
 /// `provider` may be null to clear the explicit provider selection; otherwise it
 /// must be a null-terminated UTF-8 string naming an allowlisted provider.
@@ -11499,6 +11550,107 @@ pub unsafe extern "C" fn maho_agent_list_tools(session: *mut MahoAgentSession) -
                     .unwrap_or_else(|_| CString::new("[]").unwrap())
                     .into_raw(),
                 Err(_) => std::ptr::null_mut(),
+            }
+        },
+        std::ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer returned by a `maho_agent_create_session*`
+/// function. `path` must be a null-terminated UTF-8 string, or null to clear.
+/// Sets the session's artifact storage root; the fs_write tool and artifact
+/// index resolve relative paths against it.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_set_artifact_root(
+    session: *mut MahoAgentSession,
+    path: *const c_char,
+) {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return;
+            }
+            let session = &*session;
+            let root = if path.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(path).to_str() {
+                    Ok(s) => Some(std::path::PathBuf::from(s)),
+                    Err(_) => return,
+                }
+            };
+            session.runtime.set_artifact_root(root);
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer returned by a `maho_agent_create_session*`
+/// function. Returns a newly allocated JSON array of ArtifactInfo for the
+/// session (caller frees via `maho_free_string`), or null on error.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_list_artifacts(session: *mut MahoAgentSession) -> *mut c_char {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return std::ptr::null_mut();
+            }
+            let session = &*session;
+            let runtime = Arc::clone(&session.runtime);
+            let session_id = session.session_id.clone();
+            let isolation = Arc::clone(&session.isolation);
+            let res = isolation.block_on(async move { runtime.list_artifacts(&session_id).await });
+            let artifacts = match res {
+                Ok(Ok(a)) => a,
+                _ => return std::ptr::null_mut(),
+            };
+            match serde_json::to_string(&artifacts) {
+                Ok(json) => CString::new(json)
+                    .unwrap_or_else(|_| CString::new("[]").unwrap())
+                    .into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        },
+        std::ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer returned by a `maho_agent_create_session*`
+/// function. `artifact_id` must be a null-terminated UTF-8 string. Returns a
+/// newly allocated root-relative path string (caller frees via
+/// `maho_free_string`), or null for an unknown id or error. Opaque ids cross
+/// the boundary; the resolved path is only produced here.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_artifact_path(
+    session: *mut MahoAgentSession,
+    artifact_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if session.is_null() || artifact_id.is_null() {
+                return std::ptr::null_mut();
+            }
+            let session = &*session;
+            let artifact_id = match CStr::from_ptr(artifact_id).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return std::ptr::null_mut(),
+            };
+            let runtime = Arc::clone(&session.runtime);
+            let session_id = session.session_id.clone();
+            let isolation = Arc::clone(&session.isolation);
+            let res = isolation.block_on(async move {
+                runtime
+                    .artifact_storage_rel_path(&session_id, &artifact_id)
+                    .await
+            });
+            match res {
+                Ok(Ok(Some(path))) => CString::new(path)
+                    .map(|c| c.into_raw())
+                    .unwrap_or(std::ptr::null_mut()),
+                _ => std::ptr::null_mut(),
             }
         },
         std::ptr::null_mut()
@@ -13435,6 +13587,32 @@ pub unsafe extern "C" fn maho_google_sign_in_start(
     )
 }
 
+/// Cancels an in-flight Google Sign-In identified by `state` (the value from the
+/// JSON returned by `maho_google_sign_in_start`). Lets the C++ layer end a flow
+/// deterministically when the OAuth popup is closed before the redirect, or when
+/// a new sign-in supersedes a stale one, freeing the listener thread + bound
+/// loopback port instead of leaking them until the backstop timeout. Returns
+/// true when a matching pending flow was found; idempotent.
+///
+/// # Safety
+/// `state` must be a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_google_sign_in_cancel(state: *const c_char) -> bool {
+    ffi_safe!(
+        {
+            if state.is_null() {
+                return false;
+            }
+            let state_str = match CStr::from_ptr(state).to_str() {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            maho_core::google_identity::cancel_google_sign_in(state_str)
+        },
+        false
+    )
+}
+
 /// Carries the C callback across the sign-in thread boundary. The raw
 /// `user_data` pointer is not `Send`, so the unsafe impl asserts the C++ owner
 /// keeps it alive until `on_complete` fires (documented on the FFI entry point).
@@ -13961,10 +14139,7 @@ mod tests {
         lease.arm();
 
         invoke_with_turn_callback_lease(Some(lease), || {
-            events
-                .lock()
-                .unwrap()
-                .push(CallbackLeaseEvent::Complete);
+            events.lock().unwrap().push(CallbackLeaseEvent::Complete);
         });
 
         assert_eq!(

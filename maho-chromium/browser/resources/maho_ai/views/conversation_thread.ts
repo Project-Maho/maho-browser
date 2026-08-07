@@ -6,6 +6,7 @@ import {
 } from '../maho_ai.mojom-webui.js';
 import type {
   ApprovalResultInfo,
+  ArtifactInfo,
   ToolCallInfo,
   ToolResultInfo,
 } from '../maho_ai.mojom-webui.js';
@@ -44,7 +45,8 @@ export interface ConversationItem {
   };
   chips?: ConversationChip[];
   credentialError?: CredentialErrorPresentation;
-  kind?: 'activity'|'approval'|'thinking';
+  kind?: 'activity'|'approval'|'artifact'|'thinking';
+  artifact?: ArtifactInfo;
   key: string;
   markdown: boolean;
   note?: string;
@@ -141,7 +143,7 @@ export function getToolProgressLabel(toolName?: string): string {
   if (normalizedName.includes('bash') || normalizedName.includes('command')) {
     return 'Running…';
   }
-  return 'Thinking…';
+  return 'Working…';
 }
 
 function humanizeToolRequest(toolCall?: ToolCallInfo|null): string {
@@ -200,7 +202,13 @@ function humanizeToolRequest(toolCall?: ToolCallInfo|null): string {
   }
 
   const display = getToolDisplayName(toolCall.toolName);
-  return display ? `Calling ${display}` : getToolProgressLabel(toolCall.toolName).replace(/…$/, '');
+  if (display) {
+    return `Calling ${display}`;
+  }
+  // No tool name reached the renderer. Never fabricate a reasoning-flavored
+  // label ("Thinking") for a committed tool activity — that collides with the
+  // real assistant-reasoning block. Fall back to an honest, neutral label.
+  return 'Working with a tool…';
 }
 
 function countOutputLines(text?: string): number {
@@ -353,6 +361,20 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           text,
           timestamp: event.timestamp,
         });
+        break;
+      case RuntimeEventKind.kArtifactCreated:
+        splitAssistantState();
+        if (event.artifact) {
+          items.push({
+            artifact: event.artifact,
+            kind: 'artifact',
+            key,
+            markdown: false,
+            role: 'assistant',
+            text: event.artifact.displayName,
+            timestamp: event.timestamp,
+          });
+        }
         break;
       case RuntimeEventKind.kAssistantToken: {
         if (!text) {

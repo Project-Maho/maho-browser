@@ -2,6 +2,71 @@ use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jboolean, jlong, jstring};
 use jni::JNIEnv;
 use maho_core::maho_core::MahoCore;
+use std::ffi::{c_char, c_void, CStr};
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentBlockerMutationError {
+    code: String,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentBlockerMutationResult {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<ContentBlockerMutationError>,
+    state: Option<maho_types::content_blocking::ContentBlockerStateDto>,
+    compile_required: bool,
+}
+
+fn content_blocker_result(
+    core: Option<&MahoCore>,
+    success: bool,
+    error: Option<ContentBlockerMutationError>,
+    compile_required: bool,
+) -> ContentBlockerMutationResult {
+    ContentBlockerMutationResult {
+        success,
+        error,
+        state: core.map(MahoCore::get_content_blocker_state_dto),
+        compile_required,
+    }
+}
+
+fn content_blocker_error(code: &str, message: impl Into<String>) -> ContentBlockerMutationError {
+    ContentBlockerMutationError {
+        code: code.to_string(),
+        message: message.into(),
+    }
+}
+
+fn apply_filter_list_update_result(
+    core: &mut MahoCore,
+    update_json: &str,
+) -> ContentBlockerMutationResult {
+    let response = match serde_json::from_str(update_json) {
+        Ok(response) => response,
+        Err(error) => {
+            return content_blocker_result(
+                Some(core),
+                false,
+                Some(content_blocker_error("invalid_json", error.to_string())),
+                false,
+            );
+        }
+    };
+    match core.apply_filter_list_update_response(response) {
+        Ok(compile_required) => content_blocker_result(Some(core), true, None, compile_required),
+        Err(error) => content_blocker_result(
+            Some(core),
+            false,
+            Some(content_blocker_error("update_rejected", error)),
+            false,
+        ),
+    }
+}
 
 fn to_json_jstring<T: serde::Serialize>(env: &mut JNIEnv, value: &T) -> jstring {
     match serde_json::to_string(value) {
@@ -575,7 +640,12 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAddFilterList<'loc
         Some(s) => s,
         None => return,
     };
-    core.add_filter_list(id_str, name_str, url_str);
+    let event = maho_types::events::shell_event::ShellEvent::AddFilterList {
+        id: id_str,
+        name: name_str,
+        url: url_str,
+    };
+    core.handle_event(event);
 }
 
 #[no_mangle]
@@ -584,11 +654,9 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRebuildContentRule
     _class: JClass<'local>,
     ptr: jlong,
 ) {
-    let core = match unsafe { get_core(ptr) } {
-        Some(c) => c,
-        None => return,
-    };
-    core.rebuild_content_rules();
+    let _ = ptr;
+    // Legacy ABI only. Production callers must request candidate-aware worker
+    // compilation through the typed update result instead of rebuilding inline.
 }
 
 #[no_mangle]
@@ -793,7 +861,8 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeStartDownload<'loc
         }
         None => None,
     };
-    let download_id = core.start_download(&filename_str, &url_str, 0, None, mime_type.as_deref(), None);
+    let download_id =
+        core.start_download(&filename_str, &url_str, 0, None, mime_type.as_deref(), None);
     match env.new_string(&download_id) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -2027,19 +2096,32 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUpdateFilterListCo
     id: JString<'local>,
     content: JString<'local>,
 ) {
+    let _ = (&mut env, ptr, id, content);
+    // Legacy ABI only. A raw replacement cannot make candidate promotion or
+    // compile-required status observable, so it is intentionally constrained.
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyFilterListUpdateResult<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    update_json: JString<'local>,
+) -> jstring {
     let core = match unsafe { get_core(ptr) } {
-        Some(c) => c,
-        None => return,
+        Some(core) => core,
+        None => return std::ptr::null_mut(),
     };
-    let id_str = match get_rust_string(&mut env, &id) {
-        Some(s) => s,
-        None => return,
+    let update_json = match get_rust_string(&mut env, &update_json) {
+        Some(value) => value,
+        None => return std::ptr::null_mut(),
     };
-    let content_str = match get_rust_string(&mut env, &content) {
-        Some(s) => s,
-        None => return,
-    };
-    core.update_filter_list_content(&id_str, content_str);
+    to_json_jstring(
+        &mut env,
+        &apply_filter_list_update_result(core, &update_json),
+    )
 }
 
 #[no_mangle]
@@ -2775,18 +2857,158 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeImportFirefoxBookm
 // Agent JNI Bindings
 // ============================================================
 
+use async_trait::async_trait;
+use jni::objects::GlobalRef;
+use jni::JavaVM;
+use maho_agent::{
+    AgentError, AgentRuntime, AgentStorage, MutexAgentStorage, SessionRuntime, SwiftideBackend,
+    ZeroizedString,
+};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use jni::objects::GlobalRef;
-use jni::JavaVM;
-use maho_agent::{SwiftideBackend, SessionRuntime, MutexAgentStorage, ZeroizedString, AgentError, AgentRuntime};
+use swiftide_core::chat_completion::{
+    errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
+    ToolCall,
+};
+
+const MAX_AGENT_EVENT_QUEUE_DEPTH: usize = 2048;
+const MAX_ANDROID_ARTIFACT_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Default)]
+struct AgentEventQueue {
+    events: VecDeque<String>,
+    artifact_ids: HashSet<String>,
+}
+
+impl AgentEventQueue {
+    fn push(&mut self, event_type: &str, artifact_id: Option<&str>, payload: String) {
+        if let Some(artifact_id) = artifact_id {
+            if !self.artifact_ids.insert(artifact_id.to_string()) {
+                return;
+            }
+        }
+        if self.events.len() == MAX_AGENT_EVENT_QUEUE_DEPTH {
+            self.events.pop_front();
+        }
+        self.events.push_back(payload);
+        if event_type == "complete" || event_type == "error" {
+            self.artifact_ids.clear();
+        }
+    }
+
+    fn pop(&mut self) -> Option<String> {
+        self.events.pop_front()
+    }
+}
 
 pub struct MahoAgentSession {
     pub runtime: Arc<SwiftideBackend>,
+    pub storage: Arc<MutexAgentStorage>,
     pub isolation: Arc<SessionRuntime>,
     pub session_id: String,
-    pub event_queue: Arc<Mutex<Vec<String>>>,
+    event_queue: Arc<Mutex<AgentEventQueue>>,
+    completion_generation: Arc<(Mutex<u64>, std::sync::Condvar)>,
+    pub artifact_root: std::path::PathBuf,
+}
+
+#[derive(Clone, Default)]
+struct DeterministicFsWriteModel {
+    calls: Arc<AtomicU64>,
+}
+
+#[async_trait]
+impl ChatCompletion for DeterministicFsWriteModel {
+    async fn complete(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, LanguageModelError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let tool_call = ToolCall::builder()
+                .id("android-instrumentation-fs-write".to_string())
+                .name("fs_write".to_string())
+                .args(
+                    serde_json::json!({
+                        "relative_path": "instrumentation/deterministic.txt",
+                        "content": "created through packaged JNI fs_write",
+                        "mime_type": "text/plain",
+                    })
+                    .to_string(),
+                )
+                .build()
+                .map_err(|error| {
+                    LanguageModelError::permanent(std::io::Error::other(error.to_string()))
+                })?;
+            ChatCompletionResponse::builder()
+                .tool_calls(vec![tool_call])
+                .build()
+                .map_err(|error| {
+                    LanguageModelError::permanent(std::io::Error::other(error.to_string()))
+                })
+        } else {
+            ChatCompletionResponse::builder()
+                .message("deterministic completion".to_string())
+                .build()
+                .map_err(|error| {
+                    LanguageModelError::permanent(std::io::Error::other(error.to_string()))
+                })
+        }
+    }
+}
+
+static AGENT_SESSIONS: OnceLock<Mutex<HashMap<u64, Arc<MahoAgentSession>>>> = OnceLock::new();
+static NEXT_AGENT_SESSION_HANDLE: AtomicU64 = AtomicU64::new(1);
+
+fn agent_sessions() -> &'static Mutex<HashMap<u64, Arc<MahoAgentSession>>> {
+    AGENT_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_agent_session(session: MahoAgentSession) -> jlong {
+    let handle = NEXT_AGENT_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
+    match agent_sessions().lock() {
+        Ok(mut sessions) => {
+            sessions.insert(handle, Arc::new(session));
+            handle as jlong
+        }
+        Err(_) => 0,
+    }
+}
+
+fn acquire_agent_session(handle: jlong) -> Option<Arc<MahoAgentSession>> {
+    let handle = u64::try_from(handle).ok().filter(|value| *value != 0)?;
+    agent_sessions().lock().ok()?.get(&handle).cloned()
+}
+
+fn remove_agent_session(handle: jlong) -> Option<Arc<MahoAgentSession>> {
+    let handle = u64::try_from(handle).ok().filter(|value| *value != 0)?;
+    agent_sessions().lock().ok()?.remove(&handle)
+}
+
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidArtifactInfo {
+    artifact_id: String,
+    session_id: String,
+    display_name: String,
+    mime_type: String,
+    size_bytes: u64,
+    created_at: f64,
+}
+
+impl From<maho_types::artifact::ArtifactInfo> for AndroidArtifactInfo {
+    fn from(artifact: maho_types::artifact::ArtifactInfo) -> Self {
+        Self {
+            artifact_id: artifact.artifact_id,
+            session_id: artifact.session_id,
+            display_name: artifact.display_name,
+            mime_type: artifact.mime_type,
+            size_bytes: artifact.size_bytes,
+            created_at: (artifact.created_at_ms as f64) / 1000.0,
+        }
+    }
 }
 
 static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
@@ -2798,14 +3020,24 @@ fn get_jni_env() -> Option<jni::AttachGuard<'static>> {
 }
 
 fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
-    let Some(mut env_guard) = get_jni_env() else { return 1; };
+    let Some(mut env_guard) = get_jni_env() else {
+        return 1;
+    };
     let env = &mut *env_guard;
 
-    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else { return 1; };
-    let cls = unsafe { &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass) };
+    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else {
+        return 1;
+    };
+    let cls = unsafe {
+        &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass)
+    };
 
-    let Ok(tool_jstr) = env.new_string(tool_name) else { return 1; };
-    let Ok(args_jstr) = env.new_string(arguments) else { return 1; };
+    let Ok(tool_jstr) = env.new_string(tool_name) else {
+        return 1;
+    };
+    let Ok(args_jstr) = env.new_string(arguments) else {
+        return 1;
+    };
 
     let val = env.call_static_method(
         cls,
@@ -2814,7 +3046,7 @@ fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
         &[
             jni::objects::JValue::Object(tool_jstr.as_ref()).into(),
             jni::objects::JValue::Object(args_jstr.as_ref()).into(),
-        ]
+        ],
     );
 
     match val {
@@ -2824,19 +3056,27 @@ fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
 }
 
 fn call_android_secure_storage_callback(provider: &str) -> Option<String> {
-    let Some(mut env_guard) = get_jni_env() else { return None; };
+    let Some(mut env_guard) = get_jni_env() else {
+        return None;
+    };
     let env = &mut *env_guard;
 
-    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else { return None; };
-    let cls = unsafe { &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass) };
+    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else {
+        return None;
+    };
+    let cls = unsafe {
+        &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass)
+    };
 
-    let Ok(provider_jstr) = env.new_string(provider) else { return None; };
+    let Ok(provider_jstr) = env.new_string(provider) else {
+        return None;
+    };
 
     let val = env.call_static_method(
         cls,
         "getAgentSecureStorage",
         "(Ljava/lang/String;)Ljava/lang/String;",
-        &[jni::objects::JValue::Object(provider_jstr.as_ref()).into()]
+        &[jni::objects::JValue::Object(provider_jstr.as_ref()).into()],
     );
 
     match val {
@@ -2888,7 +3128,9 @@ fn parse_android_secure_storage_response(
     })
 }
 
-fn jni_permission_handler(req: maho_agent::PermissionRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = maho_agent::PermissionDecision> + Send>> {
+fn jni_permission_handler(
+    req: maho_agent::PermissionRequest,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = maho_agent::PermissionDecision> + Send>> {
     let decision = call_android_permission_callback(&req.tool_name, &req.arguments);
     let p_decision = if decision == 0 {
         maho_agent::PermissionDecision::Allow
@@ -2907,19 +3149,212 @@ fn jni_secure_storage_handler(provider: &str) -> Result<maho_agent::SecureKeyBun
 use std::sync::atomic::{AtomicU64, Ordering};
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn enqueue_event(queue: &Arc<Mutex<Vec<String>>>, event_type: &str, data: serde_json::Value) {
-    const MAX_EVENT_QUEUE_DEPTH: usize = 2048;
+fn enqueue_event(queue: &Arc<Mutex<AgentEventQueue>>, event_type: &str, data: serde_json::Value) {
     let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let artifact_id = if event_type == "artifact_created" {
+        data.get("artifact_id").and_then(serde_json::Value::as_str)
+    } else {
+        None
+    };
     let payload = serde_json::json!({
         "type": event_type,
         "seq": seq,
         "data": data
     });
     if let Ok(mut lock) = queue.lock() {
-        if lock.len() < MAX_EVENT_QUEUE_DEPTH {
-            lock.push(payload.to_string());
+        lock.push(event_type, artifact_id, payload.to_string());
+    }
+}
+
+fn enqueue_agent_stream_event(
+    queue: &Arc<Mutex<AgentEventQueue>>,
+    event: maho_agent::AgentStreamEvent,
+) {
+    match event {
+        // Tokens use the dedicated streaming callback to avoid duplicates.
+        maho_agent::AgentStreamEvent::Token(_) => {}
+        maho_agent::AgentStreamEvent::Thinking(thinking) => {
+            enqueue_event(queue, "thinking", serde_json::json!(thinking));
+        }
+        maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
+            enqueue_event(
+                queue,
+                "tool_call",
+                serde_json::json!({ "id": id, "name": name, "args": args }),
+            );
+        }
+        maho_agent::AgentStreamEvent::ToolResult { id, name, result, succeeded } => {
+            enqueue_event(
+                queue,
+                "tool_result",
+                serde_json::json!({ "id": id, "name": name, "result": result, "success": succeeded }),
+            );
+        }
+        maho_agent::AgentStreamEvent::ArtifactCreated { artifact } => {
+            enqueue_event(
+                queue,
+                "artifact_created",
+                serde_json::json!({
+                    "artifact_id": artifact.artifact_id,
+                    "session_id": artifact.session_id,
+                    "display_name": artifact.display_name,
+                    "mime_type": artifact.mime_type,
+                    "size_bytes": artifact.size_bytes,
+                    "created_at": (artifact.created_at_ms as f64) / 1000.0,
+                }),
+            );
         }
     }
+}
+
+fn prepare_artifact_root(path: &str) -> Result<std::path::PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("Artifact root must not be empty".to_string());
+    }
+    let root = std::path::PathBuf::from(path);
+    if !root.is_absolute() {
+        return Err("Artifact root must be absolute".to_string());
+    }
+    std::fs::create_dir_all(&root).map_err(|error| format!("Artifact root error: {error}"))?;
+    std::fs::canonicalize(&root).map_err(|error| format!("Artifact root error: {error}"))
+}
+
+fn validated_storage_components(storage_rel_path: &str) -> Result<Vec<&std::ffi::OsStr>, String> {
+    let relative = std::path::Path::new(storage_rel_path);
+    if storage_rel_path.is_empty() || relative.is_absolute() {
+        return Err("Artifact index contains an invalid relative path".to_string());
+    }
+    let components: Vec<&std::ffi::OsStr> = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(value) => Ok(value),
+            _ => Err("Artifact index contains an invalid relative path".to_string()),
+        })
+        .collect::<Result<_, _>>()?;
+    if components.is_empty() {
+        return Err("Artifact index contains an invalid relative path".to_string());
+    }
+    Ok(components)
+}
+
+async fn list_android_artifacts(
+    runtime: &SwiftideBackend,
+    session_id: &str,
+) -> Result<Vec<AndroidArtifactInfo>, String> {
+    runtime
+        .list_artifacts(session_id)
+        .await
+        .map(|artifacts| {
+            artifacts
+                .into_iter()
+                .map(AndroidArtifactInfo::from)
+                .collect()
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn validate_artifact_id(artifact_id: &str) -> Result<(), String> {
+    if artifact_id.is_empty()
+        || artifact_id.len() > 128
+        || artifact_id == "."
+        || artifact_id == ".."
+        || artifact_id.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || character == '/'
+                || character == '\\'
+        })
+        || std::path::Path::new(artifact_id).is_absolute()
+    {
+        return Err("Artifact id is malformed".to_string());
+    }
+    Ok(())
+}
+
+async fn read_android_artifact(
+    runtime: &SwiftideBackend,
+    session_id: &str,
+    artifact_root: &std::path::Path,
+    artifact_id: &str,
+) -> Result<Vec<u8>, String> {
+    validate_artifact_id(artifact_id)?;
+    let storage_rel_path = runtime
+        .artifact_storage_rel_path(session_id, artifact_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("Unknown artifact id: {artifact_id}"))?;
+    read_nofollow_file(artifact_root, &storage_rel_path)
+}
+
+fn read_nofollow_file(
+    artifact_root: &std::path::Path,
+    storage_rel_path: &str,
+) -> Result<Vec<u8>, String> {
+    let components = validated_storage_components(storage_rel_path)?;
+    let root = std::ffi::CString::new(artifact_root.as_os_str().as_encoded_bytes())
+        .map_err(|_| "Artifact root contains a NUL byte".to_string())?;
+    let root_fd = unsafe {
+        libc::open(
+            root.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if root_fd < 0 {
+        return Err(format!(
+            "Artifact root open error: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+    for component in &components[..components.len() - 1] {
+        let component = std::ffi::CString::new(component.as_encoded_bytes())
+            .map_err(|_| "Artifact path contains a NUL byte".to_string())?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                component.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(format!(
+                "Artifact directory open error: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        directory = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    let file_name = std::ffi::CString::new(
+        components
+            .last()
+            .ok_or_else(|| "Artifact index contains an invalid relative path".to_string())?
+            .as_encoded_bytes(),
+    )
+    .map_err(|_| "Artifact path contains a NUL byte".to_string())?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            file_name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "Artifact open error: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("Artifact metadata error: {error}"))?;
+    if !metadata.is_file() || metadata.len() > MAX_ANDROID_ARTIFACT_BYTES {
+        return Err("Artifact is not a shareable file or exceeds the size limit".to_string());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("Artifact read error: {error}"))?;
+    Ok(bytes)
 }
 
 #[no_mangle]
@@ -2928,6 +3363,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
     _class: JClass<'local>,
     core_ptr: jlong,
     session_id: JString<'local>,
+    artifact_root: JString<'local>,
 ) -> jlong {
     let core = match unsafe { get_core(core_ptr) } {
         Some(c) => c,
@@ -2935,6 +3371,12 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
     };
     let sid = match get_rust_string(&mut env, &session_id) {
         Some(s) => s,
+        None => return 0,
+    };
+    let artifact_root = match get_rust_string(&mut env, &artifact_root)
+        .and_then(|path| prepare_artifact_root(&path).ok())
+    {
+        Some(root) => root,
         None => return 0,
     };
 
@@ -2959,18 +3401,23 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         Err(_) => return 0,
     };
 
-    let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+    let agent_storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(storage))));
 
     let permission_cb = Box::new(|req| jni_permission_handler(req));
     let runtime = Arc::new(SwiftideBackend::new(
-        Arc::new(agent_storage),
+        agent_storage.clone(),
         Some(permission_cb),
         workspace_root,
         false, // allow_insecure_key_storage = false on mobile/Android JNI
     ));
 
+    runtime.set_artifact_root(Some(artifact_root.clone()));
+
     let secure_storage_cb = Box::new(jni_secure_storage_handler);
-    if runtime.set_secure_storage_callback(secure_storage_cb).is_err() {
+    if runtime
+        .set_secure_storage_callback(secure_storage_cb)
+        .is_err()
+    {
         return 0;
     }
 
@@ -2979,14 +3426,15 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         Err(_) => return 0,
     };
 
-    let session = Box::new(MahoAgentSession {
+    register_agent_session(MahoAgentSession {
         runtime,
+        storage: agent_storage,
         isolation,
         session_id: sid,
-        event_queue: Arc::new(Mutex::new(Vec::new())),
-    });
-
-    Box::into_raw(session) as jlong
+        event_queue: Arc::new(Mutex::new(AgentEventQueue::default())),
+        completion_generation: Arc::new((Mutex::new(0), std::sync::Condvar::new())),
+        artifact_root,
+    })
 }
 
 #[no_mangle]
@@ -2995,10 +3443,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentFreeSe
     _class: JClass,
     session_ptr: jlong,
 ) {
-    let ptr = session_ptr as *mut MahoAgentSession;
-    if !ptr.is_null() {
-        drop(Box::from_raw(ptr));
-    }
+    let _ = remove_agent_session(session_ptr);
 }
 
 #[no_mangle]
@@ -3008,11 +3453,10 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
     session_ptr: jlong,
     message: JString<'local>,
 ) -> jboolean {
-    let session = session_ptr as *mut MahoAgentSession;
-    if session.is_null() {
-        return 0;
-    }
-    let session = &mut *session;
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return 0,
+    };
     let msg_str = match get_rust_string(&mut env, &message) {
         Some(s) => s,
         None => return 0,
@@ -3023,39 +3467,23 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
     let q_clone = Arc::clone(&session.event_queue);
     let q_clone_token = Arc::clone(&session.event_queue);
     let q_clone_event = Arc::clone(&session.event_queue);
+    let completion_generation = Arc::clone(&session.completion_generation);
 
     let on_token = Box::new(move |token: &str| {
         enqueue_event(&q_clone_token, "token", serde_json::json!(token));
     });
 
     let on_event = Arc::new(move |event: maho_agent::AgentStreamEvent| {
-        match event {
-            // Tokens are enqueued by `on_token` above; ignore here to avoid
-            // double-enqueuing each streamed token (matches maho-ffi iOS wiring).
-            maho_agent::AgentStreamEvent::Token(_) => {}
-            maho_agent::AgentStreamEvent::Thinking(thinking) => {
-                enqueue_event(&q_clone_event, "thinking", serde_json::json!(thinking));
-            }
-            maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
-                enqueue_event(&q_clone_event, "tool_call", serde_json::json!({
-                    "id": id,
-                    "name": name,
-                    "args": args
-                }));
-            }
-            maho_agent::AgentStreamEvent::ToolResult { id, name, result } => {
-                enqueue_event(&q_clone_event, "tool_result", serde_json::json!({
-                    "id": id,
-                    "name": name,
-                    "result": result
-                }));
-            }
-        }
+        enqueue_agent_stream_event(&q_clone_event, event);
     });
 
     let fut = async move {
-        let user_chat_msg = maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
-        match runtime.run_turn(&session_id, user_chat_msg, Some(on_token), Some(on_event)).await {
+        let user_chat_msg =
+            maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
+        match runtime
+            .run_turn(&session_id, user_chat_msg, Some(on_token), Some(on_event))
+            .await
+        {
             Ok(response) => {
                 let text = match &response.content {
                     maho_types::chat::ChatContent::Text(t) => t.clone(),
@@ -3066,10 +3494,20 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
                     "tool_calls_json": "[]"
                 });
                 enqueue_event(&q_clone, "complete", payload);
+                let (generation, completed) = &*completion_generation;
+                if let Ok(mut generation) = generation.lock() {
+                    *generation += 1;
+                    completed.notify_all();
+                }
             }
             Err(e) => {
                 let err_msg = e.to_string();
                 enqueue_event(&q_clone, "error", serde_json::json!(err_msg));
+                let (generation, completed) = &*completion_generation;
+                if let Ok(mut generation) = generation.lock() {
+                    *generation += 1;
+                    completed.notify_all();
+                }
             }
         }
     };
@@ -3088,20 +3526,21 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCancel
     _class: JClass,
     session_ptr: jlong,
 ) -> jboolean {
-    let session = session_ptr as *mut MahoAgentSession;
-    if session.is_null() {
-        return 0;
-    }
-    let session = &*session;
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return 0,
+    };
     let runtime = Arc::clone(&session.runtime);
     let session_id = session.session_id.clone();
 
     let isolation = Arc::clone(&session.isolation);
-    let res = isolation.block_on(async move {
-        runtime.cancel(&session_id).await
-    });
+    let res = isolation.block_on(async move { runtime.cancel(&session_id).await });
 
-    if res.is_ok() { 1 } else { 0 }
+    if res.is_ok() {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
@@ -3110,17 +3549,14 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTo
     _class: JClass<'local>,
     session_ptr: jlong,
 ) -> jstring {
-    let session = session_ptr as *mut MahoAgentSession;
-    if session.is_null() {
-        return std::ptr::null_mut();
-    }
-    let session = &*session;
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return std::ptr::null_mut(),
+    };
     let runtime = Arc::clone(&session.runtime);
 
     let isolation = Arc::clone(&session.isolation);
-    let tools_res = isolation.block_on(async move {
-        runtime.list_tools().await
-    });
+    let tools_res = isolation.block_on(async move { runtime.list_tools().await });
 
     let tools: Vec<maho_agent::ToolDefinition> = match tools_res {
         Ok(Ok(t)) => t,
@@ -3135,26 +3571,233 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTo
 }
 
 #[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListArtifacts<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+) -> jstring {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return std::ptr::null_mut(),
+    };
+    let runtime = Arc::clone(&session.runtime);
+    let session_id = session.session_id.clone();
+    let isolation = Arc::clone(&session.isolation);
+    let artifacts = match isolation
+        .block_on(async move { list_android_artifacts(&runtime, &session_id).await })
+    {
+        Ok(Ok(artifacts)) => artifacts,
+        _ => return std::ptr::null_mut(),
+    };
+    let json = match serde_json::to_string(&artifacts) {
+        Ok(json) => json,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match env.new_string(json) {
+        Ok(value) => value.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentReadArtifact<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    artifact_id: JString<'local>,
+) -> jni::sys::jbyteArray {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return std::ptr::null_mut(),
+    };
+    let artifact_id = match get_rust_string(&mut env, &artifact_id) {
+        Some(id) if validate_artifact_id(&id).is_ok() => id,
+        _ => return std::ptr::null_mut(),
+    };
+    let runtime = Arc::clone(&session.runtime);
+    let session_id = session.session_id.clone();
+    let artifact_root = session.artifact_root.clone();
+    let isolation = Arc::clone(&session.isolation);
+    let bytes = match isolation.block_on(async move {
+        read_android_artifact(&runtime, &session_id, &artifact_root, &artifact_id).await
+    }) {
+        Ok(Ok(bytes)) => bytes,
+        _ => return std::ptr::null_mut(),
+    };
+    match env.byte_array_from_slice(&bytes) {
+        Ok(value) => value.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentInstallDeterministicFsWriteModel(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+) -> jboolean {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return 0,
+    };
+    session
+        .runtime
+        .set_llm_override(Box::new(DeterministicFsWriteModel::default()));
+    1
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentTestCompletionGeneration(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+) -> jlong {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return -1,
+    };
+    session
+        .completion_generation
+        .0
+        .lock()
+        .map(|generation| *generation as jlong)
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentTestAwaitCompletion(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+    previous_generation: jlong,
+    timeout_ms: jlong,
+) -> jboolean {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return 0,
+    };
+    let target = match u64::try_from(previous_generation) {
+        Ok(generation) => generation,
+        Err(_) => return 0,
+    };
+    let timeout = match u64::try_from(timeout_ms) {
+        Ok(timeout) => std::time::Duration::from_millis(timeout),
+        Err(_) => return 0,
+    };
+    let (generation, completed) = &*session.completion_generation;
+    let generation = match generation.lock() {
+        Ok(generation) => generation,
+        Err(_) => return 0,
+    };
+    if *generation > target {
+        return 1;
+    }
+    let result = match completed
+        .wait_timeout_while(generation, timeout, |generation| *generation <= target)
+    {
+        Ok((generation, _)) if *generation > target => 1,
+        _ => 0,
+    };
+    result
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentTestEnqueueArtifactCreatedTwice<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    artifact_id: JString<'local>,
+) -> jboolean {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return 0,
+    };
+    let artifact_id = match get_rust_string(&mut env, &artifact_id) {
+        Some(artifact_id) if validate_artifact_id(&artifact_id).is_ok() => artifact_id,
+        _ => return 0,
+    };
+    for _ in 0..2 {
+        enqueue_event(
+            &session.event_queue,
+            "artifact_created",
+            serde_json::json!({
+                "artifact_id": artifact_id.clone(),
+                "session_id": session.session_id.clone(),
+                "display_name": "duplicate.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 0,
+                "created_at": 0.0,
+            }),
+        );
+    }
+    1
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentTestSeedArtifact<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    artifact_id: JString<'local>,
+    storage_rel_path: JString<'local>,
+    display_name: JString<'local>,
+    mime_type: JString<'local>,
+) -> jboolean {
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return 0,
+    };
+    let artifact_id = match get_rust_string(&mut env, &artifact_id) {
+        Some(artifact_id) if validate_artifact_id(&artifact_id).is_ok() => artifact_id,
+        _ => return 0,
+    };
+    let storage_rel_path = match get_rust_string(&mut env, &storage_rel_path) {
+        Some(path) => path,
+        None => return 0,
+    };
+    let display_name = match get_rust_string(&mut env, &display_name) {
+        Some(display_name) => display_name,
+        None => return 0,
+    };
+    let mime_type = match get_rust_string(&mut env, &mime_type) {
+        Some(mime_type) => mime_type,
+        None => return 0,
+    };
+    let artifact = maho_types::artifact::ArtifactInfo {
+        artifact_id,
+        session_id: session.session_id.clone(),
+        display_name,
+        mime_type,
+        size_bytes: 0,
+        storage_rel_path,
+        created_at_ms: 0,
+    };
+    let storage = Arc::clone(&session.storage);
+    let isolation = Arc::clone(&session.isolation);
+    match isolation.block_on(async move { storage.save_artifact(&artifact).await }) {
+        Ok(Ok(())) => 1,
+        _ => 0,
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEvent<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
     session_ptr: jlong,
 ) -> jstring {
-    let session = session_ptr as *mut MahoAgentSession;
-    if session.is_null() {
-        return std::ptr::null_mut();
-    }
-    let session = &*session;
-
-    let event = if let Ok(mut lock) = session.event_queue.lock() {
-        if lock.is_empty() {
-            None
-        } else {
-            Some(lock.remove(0))
-        }
-    } else {
-        None
+    let session = match acquire_agent_session(session_ptr) {
+        Some(session) => session,
+        None => return std::ptr::null_mut(),
     };
+
+    let event = session
+        .event_queue
+        .lock()
+        .ok()
+        .and_then(|mut queue| queue.pop());
 
     match event {
         Some(evt) => match env.new_string(&evt) {
@@ -3220,7 +3863,12 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConve
     let space_opt = get_rust_string(&mut env, &space_id).filter(|s| !s.is_empty());
     let model_opt = get_rust_string(&mut env, &model).filter(|s| !s.is_empty());
 
-    if core.create_conversation_persisted(&id_str, title_opt.as_deref(), space_opt.as_deref(), model_opt.as_deref()) {
+    if core.create_conversation_persisted(
+        &id_str,
+        title_opt.as_deref(),
+        space_opt.as_deref(),
+        model_opt.as_deref(),
+    ) {
         1
     } else {
         0
@@ -3239,7 +3887,9 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
         None => return std::ptr::null_mut(),
     };
     let conversations = if let Some(storage) = core.storage_ref() {
-        storage.list_conversations(limit as usize).unwrap_or_default()
+        storage
+            .list_conversations(limit as usize)
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -3251,7 +3901,9 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversationMessages<'local>(
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversationMessages<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     ptr: jlong,
@@ -3266,7 +3918,9 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversa
         None => return std::ptr::null_mut(),
     };
     let messages = if let Some(storage) = core.storage_ref() {
-        storage.get_conversation_messages(&sid_str).unwrap_or_default()
+        storage
+            .get_conversation_messages(&sid_str)
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -3278,7 +3932,9 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversa
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConversationMessage<'local>(
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConversationMessage<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     ptr: jlong,
@@ -3305,7 +3961,12 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConvers
     };
     let url_opt = get_rust_string(&mut env, &url_context).filter(|s| !s.is_empty());
 
-    if core.save_conversation_message_persisted(&sid_str, &role_str, &content_str, url_opt.as_deref()) {
+    if core.save_conversation_message_persisted(
+        &sid_str,
+        &role_str,
+        &content_str,
+        url_opt.as_deref(),
+    ) {
         1
     } else {
         0
@@ -3376,9 +4037,816 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeClusterTabs<'local
     to_json_jstring(&mut env, &clusters)
 }
 
+// ============================================================
+// Chat Session JNI Bindings
+// ============================================================
+//
+// These forward directly to `maho_core::chat_session::ChatSession` (the same
+// type maho-ffi exposes to the Swift/iOS shells), so there is no duplicated
+// chat business logic here. The C-ABI event sink pushes streamed tokens,
+// completions, and errors into a per-session queue that Kotlin drains via
+// `nativeChatSessionPollEvent` — mirroring the poll-based Agent bindings above.
+
+/// Per-session event buffer drained by `nativeChatSessionPollEvent`.
+type ChatEventQueue = Mutex<Vec<String>>;
+
+/// Owns a `ChatSession` plus the queue the event sink writes into. The sink's
+/// `user_data` borrows the queue via `Arc::as_ptr`; the `Arc` stored here keeps
+/// that allocation alive for as long as the session (and its streaming task,
+/// which `ChatSession::drop` aborts) can reference it.
+pub struct MahoChatJniSession {
+    session: maho_core::chat_session::ChatSession,
+    queue: Arc<ChatEventQueue>,
+}
+
+const MAX_CHAT_EVENT_QUEUE_DEPTH: usize = 2048;
+
+fn push_chat_event(queue: &ChatEventQueue, event_type: &str, data: serde_json::Value) {
+    let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let payload = serde_json::json!({
+        "type": event_type,
+        "seq": seq,
+        "data": data,
+    });
+    if let Ok(mut lock) = queue.lock() {
+        if lock.len() < MAX_CHAT_EVENT_QUEUE_DEPTH {
+            lock.push(payload.to_string());
+        }
+    }
+}
+
+/// # Safety
+/// `user_data` must point to a live `ChatEventQueue` (kept alive by the owning
+/// `MahoChatJniSession`). `token`, when non-null, must be a valid C string.
+unsafe extern "C" fn chat_on_token(user_data: *mut c_void, token: *const c_char) {
+    if user_data.is_null() || token.is_null() {
+        return;
+    }
+    let queue = &*(user_data as *const ChatEventQueue);
+    let Ok(token_str) = CStr::from_ptr(token).to_str() else {
+        return;
+    };
+    push_chat_event(queue, "token", serde_json::json!(token_str));
+}
+
+/// # Safety
+/// `user_data` must point to a live `ChatEventQueue`. The text pointers, when
+/// non-null, must be valid C strings.
+unsafe extern "C" fn chat_on_complete(
+    user_data: *mut c_void,
+    full_text: *const c_char,
+    tool_calls_json: *const c_char,
+) {
+    if user_data.is_null() {
+        return;
+    }
+    let queue = &*(user_data as *const ChatEventQueue);
+    let full = if full_text.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(full_text).to_string_lossy().into_owned()
+    };
+    let tool_calls = if tool_calls_json.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(tool_calls_json)
+            .to_string_lossy()
+            .into_owned()
+    };
+    push_chat_event(
+        queue,
+        "complete",
+        serde_json::json!({
+            "full_text": full,
+            "tool_calls_json": tool_calls,
+        }),
+    );
+}
+
+/// # Safety
+/// `user_data` must point to a live `ChatEventQueue`. `error`, when non-null,
+/// must be a valid C string.
+unsafe extern "C" fn chat_on_error(user_data: *mut c_void, error: *const c_char) {
+    if user_data.is_null() {
+        return;
+    }
+    let queue = &*(user_data as *const ChatEventQueue);
+    let err = if error.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(error).to_string_lossy().into_owned()
+    };
+    push_chat_event(queue, "error", serde_json::json!(err));
+}
+
+/// Build a session wrapper with its event sink wired to a fresh queue.
+/// Extracted from the JNI entrypoint so it can be unit-tested without a `JNIEnv`.
+fn build_chat_session(config: maho_core::chat_session::ChatConfig) -> Box<MahoChatJniSession> {
+    let mut session = maho_core::chat_session::ChatSession::new(config);
+    let queue: Arc<ChatEventQueue> = Arc::new(Mutex::new(Vec::new()));
+    let sink = maho_core::chat_session::MahoChatEventSink {
+        on_token: Some(chat_on_token),
+        on_complete: Some(chat_on_complete),
+        on_error: Some(chat_on_error),
+        user_data: Arc::as_ptr(&queue) as *mut c_void,
+    };
+    session.set_event_sink(sink);
+    Box::new(MahoChatJniSession { session, queue })
+}
+
+/// # Safety
+/// `ptr` must be a pointer returned by `nativeChatSessionNew` and not yet freed.
+unsafe fn get_chat_session(ptr: jlong) -> Option<&'static mut MahoChatJniSession> {
+    let ptr = ptr as *mut MahoChatJniSession;
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&mut *ptr)
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSessionNew<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    api_key: JString<'local>,
+    endpoint: JString<'local>,
+    model: JString<'local>,
+    system_instruction: JString<'local>,
+) -> jlong {
+    let api_key = get_rust_string(&mut env, &api_key).unwrap_or_default();
+    let endpoint = match get_rust_string(&mut env, &endpoint) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let model = match get_rust_string(&mut env, &model) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let system_instruction = get_rust_string(&mut env, &system_instruction).unwrap_or_default();
+
+    let config = maho_core::chat_session::ChatConfig {
+        api_key,
+        endpoint,
+        model,
+        system_instruction,
+    };
+    Box::into_raw(build_chat_session(config)) as jlong
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSessionFree(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+) {
+    let ptr = session_ptr as *mut MahoChatJniSession;
+    if !ptr.is_null() {
+        // Fields drop in declaration order: `session` first (its `Drop` aborts any
+        // active streaming task), then `queue`, so no callback can outlive the queue.
+        unsafe { drop(Box::from_raw(ptr)) };
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSendUserTurn<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    message: JString<'local>,
+) -> jboolean {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let message = match get_rust_string(&mut env, &message) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    if session.session.send_user_turn(&message) {
+        jni::sys::JNI_TRUE
+    } else {
+        jni::sys::JNI_FALSE
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSendImage<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    _session_ptr: jlong,
+    _mime: JString<'local>,
+    _data: JByteArray<'local>,
+) -> jboolean {
+    // maho-core `ChatSession` (and maho-ffi) expose only text turns; there is no
+    // multimodal/image message API. Report unsupported honestly rather than fake
+    // success — the Kotlin bridge surfaces this as a failed send.
+    jni::sys::JNI_FALSE
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSendTextWithImage<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    _session_ptr: jlong,
+    _text: JString<'local>,
+    _mime: JString<'local>,
+    _data: JByteArray<'local>,
+) -> jboolean {
+    // See `nativeChatSendImage`: no multimodal path exists in core/ffi yet.
+    jni::sys::JNI_FALSE
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatCancel(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+) -> jboolean {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    session.session.cancel();
+    jni::sys::JNI_TRUE
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSessionPollEvent<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+) -> jstring {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let event = match session.queue.lock() {
+        Ok(mut lock) => {
+            if lock.is_empty() {
+                None
+            } else {
+                Some(lock.remove(0))
+            }
+        }
+        Err(_) => None,
+    };
+    match event {
+        Some(evt) => match env.new_string(&evt) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatRegisterTool<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    name: JString<'local>,
+    description: JString<'local>,
+    parameters_json: JString<'local>,
+) -> jboolean {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let name = match get_rust_string(&mut env, &name) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let description = match get_rust_string(&mut env, &description) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let parameters_json = match get_rust_string(&mut env, &parameters_json) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    if session
+        .session
+        .register_tool(&name, &description, &parameters_json)
+    {
+        jni::sys::JNI_TRUE
+    } else {
+        jni::sys::JNI_FALSE
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSendToolResult<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    tool_call_id: JString<'local>,
+    name: JString<'local>,
+    output: JString<'local>,
+    _is_success: jboolean,
+) -> jboolean {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let tool_call_id = match get_rust_string(&mut env, &tool_call_id) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let name = match get_rust_string(&mut env, &name) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let output = match get_rust_string(&mut env, &output) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    // A tool result always continues the function-calling loop (trigger=true), so
+    // the model can react to the output. `_is_success` is part of the Kotlin
+    // contract but core carries no separate success flag; the outcome belongs in
+    // `output`.
+    if session
+        .session
+        .send_tool_result(&tool_call_id, &name, &output, true)
+    {
+        jni::sys::JNI_TRUE
+    } else {
+        jni::sys::JNI_FALSE
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatAppendUserMessage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    content: JString<'local>,
+) -> jboolean {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let content = match get_rust_string(&mut env, &content) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    session.session.append_user_message(&content);
+    jni::sys::JNI_TRUE
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatAppendAssistantMessage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    content: JString<'local>,
+    tool_calls_json: JString<'local>,
+) -> jboolean {
+    let session = match unsafe { get_chat_session(session_ptr) } {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let content = match get_rust_string(&mut env, &content) {
+        Some(s) => s,
+        None => return jni::sys::JNI_FALSE,
+    };
+    let tool_calls_json = get_rust_string(&mut env, &tool_calls_json).unwrap_or_default();
+    session
+        .session
+        .append_assistant_message(&content, &tool_calls_json);
+    jni::sys::JNI_TRUE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use maho_agent::{AgentRuntime, AgentStorage};
+    use swiftide_core::chat_completion::{
+        errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
+        ToolCall,
+    };
+
+    #[derive(Clone)]
+    struct FsWriteMockLlm {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl ChatCompletion for FsWriteMockLlm {
+        async fn complete(
+            &self,
+            _request: &ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, LanguageModelError> {
+            let mut calls = self.calls.lock().expect("mock LLM call count");
+            *calls += 1;
+            if *calls == 1 {
+                let tool_call = ToolCall::builder()
+                    .id("fs-write-call".to_string())
+                    .name("fs_write".to_string())
+                    .args(
+                        serde_json::json!({
+                            "relative_path": "runtime/report.txt",
+                            "content": "created by the real fs_write tool",
+                            "mime_type": "text/plain",
+                        })
+                        .to_string(),
+                    )
+                    .build()
+                    .expect("fs_write tool call");
+                Ok(ChatCompletionResponse::builder()
+                    .tool_calls(vec![tool_call])
+                    .build()
+                    .expect("tool response"))
+            } else {
+                Ok(ChatCompletionResponse::builder()
+                    .message("done".to_string())
+                    .build()
+                    .expect("final response"))
+            }
+        }
+    }
+
+    fn temporary_artifact_root(test_name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "maho-jni-{test_name}-{}",
+            maho_types::artifact::ArtifactId::new()
+        ));
+        std::fs::create_dir_all(&root).expect("create temporary artifact root");
+        root
+    }
+
+    fn test_agent_runtime() -> (Arc<SwiftideBackend>, Arc<MutexAgentStorage>) {
+        let sqlite =
+            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("jni-artifact-test")
+                .expect("open in-memory artifact index");
+        let storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(sqlite))));
+        let runtime = Arc::new(SwiftideBackend::new(
+            storage.clone(),
+            None,
+            std::env::temp_dir(),
+            true,
+        ));
+        (runtime, storage)
+    }
+
+    #[tokio::test]
+    async fn real_fs_write_callback_flows_into_the_poll_queue() {
+        let root = temporary_artifact_root("real-fs-write");
+        let sqlite =
+            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("jni-real-fs-write")
+                .expect("open in-memory artifact index");
+        let storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(sqlite))));
+        let runtime = Arc::new(SwiftideBackend::new(
+            storage,
+            None,
+            std::env::temp_dir(),
+            true,
+        ));
+        runtime.set_artifact_root(Some(root.clone()));
+        runtime.set_llm_override(Box::new(FsWriteMockLlm {
+            calls: Arc::new(Mutex::new(0)),
+        }) as Box<dyn ChatCompletion>);
+
+        let queue = Arc::new(Mutex::new(AgentEventQueue::default()));
+        let event_queue = Arc::clone(&queue);
+        let response = runtime
+            .run_turn(
+                "runtime-session",
+                maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(
+                    "write the report".to_string(),
+                )),
+                None,
+                Some(Arc::new(move |event| {
+                    enqueue_agent_stream_event(&event_queue, event);
+                })),
+            )
+            .await
+            .expect("run fs_write turn");
+        assert_eq!(
+            response.content,
+            maho_types::chat::ChatContent::text("done".to_string())
+        );
+        assert_eq!(
+            std::fs::read(root.join("runtime/report.txt")).expect("real fs_write artifact"),
+            b"created by the real fs_write tool"
+        );
+
+        let events: Vec<serde_json::Value> = std::iter::from_fn(|| {
+            queue
+                .lock()
+                .expect("poll queue")
+                .pop()
+                .map(|event| serde_json::from_str(&event).expect("event JSON"))
+        })
+        .collect();
+        let artifact_index = events
+            .iter()
+            .position(|event| event["type"] == "artifact_created")
+            .expect("artifact_created from registered callback");
+        let result_index = events
+            .iter()
+            .position(|event| event["type"] == "tool_result")
+            .expect("tool_result event");
+        assert!(artifact_index < result_index);
+        assert!(events[artifact_index]["data"]
+            .get("storage_rel_path")
+            .is_none());
+        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+    }
+
+    #[tokio::test]
+    async fn android_artifact_driver_writes_queues_lists_and_reads_by_opaque_id() {
+        let root = temporary_artifact_root("roundtrip");
+        let relative_path = "session-1/report.txt";
+        let absolute_path = root.join(relative_path);
+        std::fs::create_dir_all(absolute_path.parent().expect("artifact parent"))
+            .expect("create artifact parent");
+        std::fs::write(&absolute_path, b"native-only contents").expect("write artifact fixture");
+
+        let (runtime, storage) = test_agent_runtime();
+        runtime.set_artifact_root(Some(root.clone()));
+        let artifact = maho_types::artifact::ArtifactInfo {
+            artifact_id: maho_types::artifact::ArtifactId::new(),
+            session_id: "session-1".to_string(),
+            display_name: "report.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 20,
+            storage_rel_path: relative_path.to_string(),
+            created_at_ms: 1_750_000_000_000,
+        };
+        storage
+            .save_artifact(&artifact)
+            .await
+            .expect("persist artifact index entry");
+
+        let queue = Arc::new(Mutex::new(AgentEventQueue::default()));
+        enqueue_agent_stream_event(
+            &queue,
+            maho_agent::AgentStreamEvent::ArtifactCreated {
+                artifact: artifact.clone(),
+            },
+        );
+        let event = queue
+            .lock()
+            .expect("event queue")
+            .pop()
+            .expect("queued ArtifactCreated event");
+        let event_json: serde_json::Value = serde_json::from_str(&event).expect("event JSON");
+        assert_eq!(event_json["type"], "artifact_created");
+        assert_eq!(event_json["data"]["artifact_id"], artifact.artifact_id);
+        assert!(event_json["data"].get("storage_rel_path").is_none());
+
+        let listed = list_android_artifacts(&runtime, "session-1")
+            .await
+            .expect("list indexed artifacts");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].artifact_id, artifact.artifact_id);
+        let listed_json = serde_json::to_value(&listed).expect("serialize Android artifact DTOs");
+        assert!(listed_json[0].get("storageRelPath").is_none());
+
+        let bytes = read_android_artifact(&runtime, "session-1", &root, &artifact.artifact_id)
+            .await
+            .expect("read indexed artifact without exposing a path");
+        assert_eq!(bytes, b"native-only contents");
+
+        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn android_artifact_read_rejects_symlink_swaps_at_open_time() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_artifact_root("nofollow");
+        let outside = root.parent().expect("temporary root parent").join(format!(
+            "maho-jni-outside-{}",
+            maho_types::artifact::ArtifactId::new()
+        ));
+        std::fs::write(&outside, b"outside").expect("write outside fixture");
+        symlink(&outside, root.join("swapped.txt")).expect("create final-component symlink");
+        symlink(
+            root.parent().expect("root parent"),
+            root.join("swapped-dir"),
+        )
+        .expect("create directory-component symlink");
+        let (runtime, storage) = test_agent_runtime();
+        let directory_symlink_path = format!(
+            "swapped-dir/{}",
+            outside.file_name().expect("outside name").to_string_lossy()
+        );
+        for (artifact_id, storage_rel_path) in [
+            ("final-symlink", "swapped.txt"),
+            ("directory-symlink", directory_symlink_path.as_str()),
+        ] {
+            storage
+                .save_artifact(&maho_types::artifact::ArtifactInfo {
+                    artifact_id: artifact_id.to_string(),
+                    session_id: "session-1".to_string(),
+                    display_name: "outside.txt".to_string(),
+                    mime_type: "text/plain".to_string(),
+                    size_bytes: 7,
+                    storage_rel_path: storage_rel_path.to_string(),
+                    created_at_ms: 1,
+                })
+                .await
+                .expect("persist symlink index fixture");
+            assert!(
+                read_android_artifact(&runtime, "session-1", &root, artifact_id)
+                    .await
+                    .is_err(),
+                "nofollow open accepted {artifact_id}"
+            );
+        }
+        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+        std::fs::remove_file(outside).expect("clean outside fixture");
+    }
+
+    #[tokio::test]
+    async fn android_artifact_read_rejects_unknown_ids_and_escaping_index_paths() {
+        let root = temporary_artifact_root("boundary");
+        let outside = root.parent().expect("temporary root parent").join(format!(
+            "maho-jni-outside-{}",
+            maho_types::artifact::ArtifactId::new()
+        ));
+        std::fs::write(&outside, b"outside").expect("write outside fixture");
+        let (runtime, storage) = test_agent_runtime();
+
+        let unknown = read_android_artifact(&runtime, "session-1", &root, "unknown")
+            .await
+            .expect_err("unknown artifact id must error");
+        assert!(unknown.contains("Unknown artifact id"));
+
+        let escaping = maho_types::artifact::ArtifactInfo {
+            artifact_id: "escaping-id".to_string(),
+            session_id: "session-1".to_string(),
+            display_name: "outside.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 7,
+            storage_rel_path: format!(
+                "../{}",
+                outside
+                    .file_name()
+                    .expect("outside file name")
+                    .to_string_lossy()
+            ),
+            created_at_ms: 1,
+        };
+        storage
+            .save_artifact(&escaping)
+            .await
+            .expect("persist malicious index fixture");
+        let error = read_android_artifact(&runtime, "session-1", &root, &escaping.artifact_id)
+            .await
+            .expect_err("escaping indexed path must error");
+        assert!(error.contains("invalid relative path"));
+
+        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+        std::fs::remove_file(outside).expect("clean outside fixture");
+    }
+
+    #[test]
+    fn artifact_ids_are_strictly_opaque() {
+        for malformed in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "/absolute",
+            "a/b",
+            "a\\b",
+            "two words",
+            "line\nbreak",
+        ] {
+            assert!(
+                validate_artifact_id(malformed).is_err(),
+                "accepted malformed id: {malformed:?}"
+            );
+        }
+        assert!(validate_artifact_id("artifact-42_AZ.az").is_ok());
+    }
+
+    #[test]
+    fn agent_event_queue_deduplicates_artifacts_drops_stale_oldest_and_resets_per_turn() {
+        let mut queue = AgentEventQueue::default();
+        for index in 0..=MAX_AGENT_EVENT_QUEUE_DEPTH {
+            queue.push("token", None, format!("token-{index}"));
+        }
+        assert_eq!(queue.events.len(), MAX_AGENT_EVENT_QUEUE_DEPTH);
+        assert_eq!(queue.pop().as_deref(), Some("token-1"));
+
+        queue.push("artifact_created", Some("artifact-1"), "first".to_string());
+        queue.push(
+            "artifact_created",
+            Some("artifact-1"),
+            "duplicate".to_string(),
+        );
+        assert!(!queue.events.iter().any(|event| event == "duplicate"));
+        queue.push("complete", None, "complete".to_string());
+        queue.push(
+            "artifact_created",
+            Some("artifact-1"),
+            "next-turn".to_string(),
+        );
+        assert!(queue.events.iter().any(|event| event == "next-turn"));
+    }
+
+    #[test]
+    fn agent_session_registry_keeps_acquired_owners_alive_after_free() {
+        let (runtime, storage) = test_agent_runtime();
+        let root = temporary_artifact_root("registry");
+        let session = MahoAgentSession {
+            runtime,
+            storage,
+            isolation: Arc::new(SessionRuntime::new().expect("session runtime")),
+            session_id: "registry-session".to_string(),
+            event_queue: Arc::new(Mutex::new(AgentEventQueue::default())),
+            completion_generation: Arc::new((Mutex::new(0), std::sync::Condvar::new())),
+            artifact_root: root.clone(),
+        };
+        let handle = register_agent_session(session);
+        let owner = acquire_agent_session(handle).expect("registered session");
+        assert!(remove_agent_session(handle).is_some());
+        assert!(acquire_agent_session(handle).is_none());
+        assert_eq!(owner.session_id, "registry-session");
+        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+    }
+
+    #[test]
+    fn artifact_root_must_be_absolute_and_is_canonicalized() {
+        assert!(prepare_artifact_root("").is_err());
+        assert!(prepare_artifact_root("relative/artifacts").is_err());
+
+        let root = temporary_artifact_root("root");
+        assert_eq!(
+            prepare_artifact_root(root.to_str().expect("UTF-8 temporary root"))
+                .expect("prepare absolute root"),
+            std::fs::canonicalize(&root).expect("canonical root")
+        );
+        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+    }
+
+    #[test]
+    fn chat_session_wrapper_records_history_and_queues_sink_events() {
+        let config = maho_core::chat_session::ChatConfig {
+            api_key: String::new(),
+            endpoint: String::new(),
+            model: "test-model".to_string(),
+            system_instruction: "be helpful".to_string(),
+        };
+        let mut wrapper = build_chat_session(config);
+
+        wrapper.session.append_user_message("first question");
+        wrapper.session.append_assistant_message("first answer", "");
+        assert!(wrapper.session.register_tool("web_search", "search", "{}"));
+
+        let user_data = Arc::as_ptr(&wrapper.queue) as *mut c_void;
+        let token = std::ffi::CString::new("hello").expect("token c-string");
+        let error = std::ffi::CString::new("boom").expect("error c-string");
+        unsafe {
+            chat_on_token(user_data, token.as_ptr());
+            chat_on_error(user_data, error.as_ptr());
+        }
+
+        let events: Vec<String> = {
+            let mut lock = wrapper.queue.lock().expect("queue lock");
+            std::mem::take(&mut *lock)
+        };
+        assert_eq!(events.len(), 2);
+        assert!(events[0].contains("\"type\":\"token\""));
+        assert!(events[0].contains("hello"));
+        assert!(events[1].contains("\"type\":\"error\""));
+        assert!(events[1].contains("boom"));
+    }
+
+    #[test]
+    fn chat_session_completion_event_carries_full_text_payload() {
+        let config = maho_core::chat_session::ChatConfig {
+            api_key: String::new(),
+            endpoint: String::new(),
+            model: "m".to_string(),
+            system_instruction: String::new(),
+        };
+        let wrapper = build_chat_session(config);
+
+        let user_data = Arc::as_ptr(&wrapper.queue) as *mut c_void;
+        let full = std::ffi::CString::new("final answer").expect("full-text c-string");
+        let tools = std::ffi::CString::new("[]").expect("tool-calls c-string");
+        unsafe {
+            chat_on_complete(user_data, full.as_ptr(), tools.as_ptr());
+        }
+
+        let event = wrapper
+            .queue
+            .lock()
+            .expect("queue lock")
+            .first()
+            .cloned()
+            .expect("one completion event");
+        let parsed: serde_json::Value = serde_json::from_str(&event).expect("valid json");
+        assert_eq!(parsed["type"], "complete");
+        assert_eq!(parsed["data"]["full_text"], "final answer");
+    }
 
     #[test]
     fn secure_storage_json_preserves_provider_overrides() {
@@ -3407,7 +4875,10 @@ mod tests {
 
     #[test]
     fn malformed_secure_storage_json_is_not_used_as_a_key() {
-        assert!(parse_android_secure_storage_response(r#"{"base_url":"https://example.test"}"#).is_err());
+        assert!(
+            parse_android_secure_storage_response(r#"{"base_url":"https://example.test"}"#)
+                .is_err()
+        );
     }
 
     #[test]

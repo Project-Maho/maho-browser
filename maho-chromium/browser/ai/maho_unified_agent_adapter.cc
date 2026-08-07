@@ -23,6 +23,7 @@
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "content/public/browser/browser_thread.h"
+#include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_executor.h"  // nogncheck
 #include "maho/browser/mcp/maho_mcp_session.h"
@@ -217,6 +218,8 @@ const MahoAgentFfi kProductionFfi = {
     &maho_agent_send_message_leased,
     &maho_agent_cancel,
     &maho_agent_session_free,
+    &maho_agent_set_artifact_root,
+    &maho_agent_set_artifact_created_callback,
 };
 }  // namespace
 
@@ -329,16 +332,23 @@ MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     base::RepeatingCallback<bool()> ai_gate,
-    base::RepeatingCallback<Browser*()> bound_browser_resolver)
+    base::RepeatingCallback<Browser*()> bound_browser_resolver,
+    base::RepeatingCallback<base::expected<base::FilePath, std::string>()>
+        artifact_root_resolver)
     : prefs_(prefs),
       url_loader_factory_(std::move(url_loader_factory)),
       ai_gate_(std::move(ai_gate)),
-      bound_browser_resolver_(std::move(bound_browser_resolver)) {
+      bound_browser_resolver_(std::move(bound_browser_resolver)),
+      artifact_root_resolver_(std::move(artifact_root_resolver)) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   agent_ffi_ = GetProductionMahoAgentFfi();
   owning_task_runner_ = base::SequencedTaskRunner::GetCurrentDefault();
   active_adapter_weak_ptr_ = weak_factory_.GetWeakPtr();
   tool_availability_handle_ =
+      std::make_unique<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>(
+          owning_task_runner_,
+          weak_factory_.GetWeakPtr());
+  artifact_created_handle_ =
       std::make_unique<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>(
           owning_task_runner_,
           weak_factory_.GetWeakPtr());
@@ -403,6 +413,9 @@ MahoUnifiedAgentAdapter::~MahoUnifiedAgentAdapter() {
   session_ffi_resources_.reset();
   if (tool_availability_handle_) {
     tool_availability_handle_->Cancel();
+  }
+  if (artifact_created_handle_) {
+    artifact_created_handle_->Cancel();
   }
 
 }
@@ -502,6 +515,34 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
   const uint64_t generation = turn->generation;
   active_turn_ = std::move(turn);
 
+  std::optional<base::FilePath> artifact_root;
+  if (artifact_root_resolver_) {
+    auto ensured_root = artifact_root_resolver_.Run();
+    if (!ensured_root.has_value()) {
+      TransitionToErrorForGeneration(generation, ensured_root.error());
+      return;
+    }
+    artifact_root = std::move(ensured_root.value());
+  } else if (bound_browser_resolver_) {
+    Browser* artifact_browser = ResolveBoundBrowser();
+    maho::ai::MahoArtifactRegistry* artifact_registry =
+        artifact_browser
+            ? maho::ai::MahoArtifactRegistry::GetForProfile(
+                  artifact_browser->profile())
+            : nullptr;
+    if (!artifact_registry) {
+      TransitionToErrorForGeneration(
+          generation, "Artifact storage is unavailable for this profile.");
+      return;
+    }
+    auto ensured_root = artifact_registry->ArtifactRootForTurn();
+    if (!ensured_root.has_value()) {
+      TransitionToErrorForGeneration(generation, ensured_root.error());
+      return;
+    }
+    artifact_root = std::move(ensured_root.value());
+  }
+
   if (!agent_session_) {
     EmitConnectionState("connecting");
 
@@ -587,7 +628,16 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
 
     session_ffi_resources_ = std::move(session_resources);
 
+    agent_ffi_->set_artifact_created_callback(
+        agent_session_, &MahoUnifiedAgentAdapter::OnAgentArtifactCreated,
+        artifact_created_handle_->user_data());
+
     EmitConnectionState("connected");
+  }
+
+  if (artifact_root) {
+    agent_ffi_->set_artifact_root(agent_session_,
+                                  artifact_root->AsUTF8Unsafe().c_str());
   }
 
   if (!ConfigurePreferredProvider(generation)) {
@@ -608,9 +658,9 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
   bool success = agent_ffi_->send_message_leased(
       agent_session_, shaped_message.c_str(),
       &MahoUnifiedAgentAdapter::OnAgentToken,
-      nullptr,  // on_thinking
-      nullptr,  // on_tool_call
-      nullptr,  // on_tool_result
+      &MahoUnifiedAgentAdapter::OnAgentThinking,
+      &MahoUnifiedAgentAdapter::OnAgentToolCall,
+      &MahoUnifiedAgentAdapter::OnAgentToolResult,
       &MahoUnifiedAgentAdapter::OnAgentComplete,
       &MahoUnifiedAgentAdapter::OnAgentError,
       resources->callback_user_data,
@@ -922,12 +972,13 @@ std::optional<PromptDecision> MahoUnifiedAgentAdapter::EvaluatePermissionSync(
   }
 
   // 0. Global approval policy override.
+  std::string global_policy;
   if (prefs_) {
-    const std::string policy = prefs_->GetString(maho::ai_prefs::kApprovalPolicy);
-    if (policy == "deny") {
+    global_policy = prefs_->GetString(maho::ai_prefs::kApprovalPolicy);
+    if (global_policy == "deny") {
       return PromptDecision::kDeny;
     }
-    if (policy == "allow") {
+    if (global_policy == "allow") {
       return PromptDecision::kAllow;
     }
   }
@@ -942,9 +993,15 @@ std::optional<PromptDecision> MahoUnifiedAgentAdapter::EvaluatePermissionSync(
     // Desktop agent calls carry an empty extension id. web_fetch/web_search are
     // read-only public web retrieval, which product policy treats as needing no
     // per-call consent; their own URL validation is the enforcing boundary.
-    // shell_exec is deliberately absent and must stay absent.
+    // shell_exec is deliberately absent (denied above) and must stay absent.
     if (tool != "fs_read" && tool != "web_fetch" && tool != "web_search") {
-      return PromptDecision::kDeny;
+      // Under the "prompt" (ask) policy, route sensitive desktop-agent tools to
+      // the interactive approval broker (chat approval card, or native dialog
+      // fallback) so the user can approve per call. Any other/unset policy
+      // keeps the safe default deny.
+      if (global_policy != "prompt") {
+        return PromptDecision::kDeny;
+      }
     }
   }
 
@@ -1331,8 +1388,9 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
   const maho::ai::BrowserActionContract* browser_action_contract =
       maho::ai::FindBrowserActionContract(tool_name_str);
   const bool browser_action_requires_approval =
-      browser_action_contract &&
-      maho::ai::RequiresApproval(*browser_action_contract);
+      (browser_action_contract &&
+       maho::ai::RequiresApproval(*browser_action_contract)) ||
+      MahoBrowserToolExecutor::IsMailWriteTool(tool_name_str);
   if (browser_action_requires_approval) {
     MahoAgentPermissionDecision permission =
         OnAgentPermission(user_data, tool_name, args_json);
@@ -1544,6 +1602,69 @@ void MahoUnifiedAgentAdapter::OnAgentError(void* user_data, const char* error) {
                       pointee->owner, pointee->generation, std::move(error_copy)));
 }
 
+// static
+void MahoUnifiedAgentAdapter::OnAgentThinking(void* user_data,
+                                              const char* thinking) {
+  if (!user_data || !thinking) return;
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string copy(thinking);
+  pointee->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoUnifiedAgentAdapter::OnThinkingOnSequence,
+                     pointee->owner, pointee->generation, std::move(copy)));
+}
+
+// static
+void MahoUnifiedAgentAdapter::OnAgentToolCall(void* user_data,
+                                              const char* id,
+                                              const char* name,
+                                              const char* args) {
+  if (!user_data || !id || !name || !args) return;
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string id_copy(id), name_copy(name), args_copy(args);
+  pointee->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoUnifiedAgentAdapter::OnToolCallOnSequence,
+                     pointee->owner, pointee->generation, std::move(id_copy),
+                     std::move(name_copy), std::move(args_copy)));
+}
+
+// static
+void MahoUnifiedAgentAdapter::OnAgentToolResult(void* user_data,
+                                                const char* id,
+                                                const char* name,
+                                                const char* result,
+                                                bool success) {
+  if (!user_data || !id || !name || !result) return;
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string id_copy(id), name_copy(name), result_copy(result);
+  pointee->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoUnifiedAgentAdapter::OnToolResultOnSequence,
+                     pointee->owner, pointee->generation, std::move(id_copy),
+                     std::move(name_copy), std::move(result_copy), success));
+}
+
+// static
+void MahoUnifiedAgentAdapter::OnAgentArtifactCreated(void* user_data,
+                                                     const char* artifact_json) {
+  if (!user_data || !artifact_json) return;
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string json_copy(artifact_json);
+  pointee->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoUnifiedAgentAdapter::OnArtifactCreatedOnSequence,
+                     pointee->owner, std::move(json_copy)));
+}
+
 bool MahoUnifiedAgentAdapter::IsActiveGeneration(uint64_t generation) const {
   return active_turn_ && !active_turn_->cancelled &&
          active_turn_->generation == generation;
@@ -1581,6 +1702,121 @@ void MahoUnifiedAgentAdapter::OnCompleteOnSequence(uint64_t generation,
   event.type = MahoAiRuntimeEventType::kTurnComplete;
   event.text = full_text;
   completed_turn->on_event.Run(std::move(event));
+}
+
+void MahoUnifiedAgentAdapter::OnThinkingOnSequence(uint64_t generation,
+                                                   std::string thinking) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!IsActiveGeneration(generation) || !IsAiAllowed()) {
+    return;
+  }
+  MahoAiRuntimeEvent event;
+  event.type = MahoAiRuntimeEventType::kAssistantThinking;
+  event.text = std::move(thinking);
+  active_turn_->on_event.Run(std::move(event));
+}
+
+void MahoUnifiedAgentAdapter::OnToolCallOnSequence(uint64_t generation,
+                                                   std::string id,
+                                                   std::string name,
+                                                   std::string args) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!IsActiveGeneration(generation) || !IsAiAllowed()) {
+    return;
+  }
+  MahoAiRuntimeEvent event;
+  event.type = MahoAiRuntimeEventType::kToolRequest;
+  // Populate event.payload with the exact keys ToMojoEvent() reads. Writing to
+  // event.text with different keys leaves tool_call empty in the UI (blank tool
+  // name renders a bogus "Thinking" activity label; blank call_id breaks
+  // request/result correlation).
+  event.payload.Set("call_id", id);
+  event.payload.Set("tool_name", name);
+  event.payload.Set("arguments_json", args);
+  active_turn_->on_event.Run(std::move(event));
+}
+
+void MahoUnifiedAgentAdapter::OnToolResultOnSequence(uint64_t generation,
+                                                     std::string id,
+                                                     std::string name,
+                                                     std::string result,
+                                                     bool success) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!IsActiveGeneration(generation) || !IsAiAllowed()) {
+    return;
+  }
+  MahoAiRuntimeEvent event;
+  event.type = MahoAiRuntimeEventType::kToolResult;
+  event.payload.Set("call_id", id);
+  event.payload.Set("success", success);
+  event.payload.Set("output", result);
+  if (!success) {
+    event.payload.Set("error", result);
+  }
+  active_turn_->on_event.Run(std::move(event));
+}
+
+void MahoUnifiedAgentAdapter::OnArtifactCreatedOnSequence(
+    std::string artifact_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!IsAiAllowed()) {
+    return;
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(artifact_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return;
+  }
+  const base::DictValue& d = parsed->GetDict();
+  const std::string* session_id = d.FindString("session_id");
+  const std::string* display_name = d.FindString("display_name");
+  const std::string* mime_type = d.FindString("mime_type");
+  const std::string* storage_rel_path = d.FindString("storage_rel_path");
+  if (!session_id || !display_name || !mime_type || !storage_rel_path) {
+    return;
+  }
+  auto read_num = [&](const char* key) -> double {
+    const base::Value* v = d.Find(key);
+    if (!v) return 0;
+    if (v->is_int()) return v->GetInt();
+    if (v->is_double()) return v->GetDouble();
+    return 0;
+  };
+  Browser* browser = ResolveBoundBrowser();
+  if (!browser) {
+    return;
+  }
+  maho::ai::MahoArtifactRegistry* registry =
+      maho::ai::MahoArtifactRegistry::GetForProfile(browser->profile());
+  if (!registry) {
+    return;
+  }
+  auto registered =
+      registry->RegisterArtifact(*session_id, *display_name, *mime_type,
+                                 static_cast<uint64_t>(read_num("size_bytes")),
+                                 *storage_rel_path,
+                                 static_cast<int64_t>(read_num("created_at_ms")));
+  if (!registered.has_value()) {
+    return;
+  }
+  if (active_turn_) {
+    // Emit a normalized ArtifactInfo payload carrying the registry's opaque id.
+    // Paths never cross the mojo boundary; created_at is seconds-since-epoch to
+    // match RuntimeEvent.timestamp.
+    base::DictValue info;
+    info.Set("artifact_id", registered.value());
+    info.Set("session_id", *session_id);
+    info.Set("display_name", *display_name);
+    info.Set("mime_type", *mime_type);
+    info.Set("size_bytes", read_num("size_bytes"));
+    info.Set("created_at", read_num("created_at_ms") / 1000.0);
+    std::string info_json;
+    base::JSONWriter::Write(info, &info_json);
+    MahoAiRuntimeEvent event;
+    event.type = MahoAiRuntimeEventType::kArtifactCreated;
+    event.text = std::move(info_json);
+    active_turn_->on_event.Run(std::move(event));
+  }
 }
 
 void MahoUnifiedAgentAdapter::OnErrorOnSequence(uint64_t generation,
