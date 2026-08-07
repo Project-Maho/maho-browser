@@ -39,8 +39,10 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "chrome/grit/generated_resources.h"  // nogncheck
 #include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"  // nogncheck
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"  // nogncheck
@@ -55,6 +57,7 @@
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/views/view_utils.h"
 #include "url/gurl.h"
@@ -68,6 +71,22 @@ constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";
 void CopyTextToClipboard(const std::string& text) {
   ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
   writer.WriteText(base::UTF8ToUTF16(text));
+}
+
+// Shows the upper-right "Link copied" toast after a copy_url / copy_url_markdown
+// command. The Maho Mini top bar's copy button already surfaces this toast via
+// MahoMiniTopBarView::OnCopyPressed(); the keyboard-shortcut / command-palette
+// copy path (ExecuteCommandAction) previously wrote the clipboard but never
+// showed the toast, so Cmd+Shift+C copied silently. This routes both copy
+// surfaces through the same overlay. Show() no-ops when the browser has no
+// live BrowserView widget (e.g. headless), so this is safe to call
+// unconditionally on the UI thread.
+void ShowLinkCopiedToast(Browser* browser) {
+  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser);
+  if (overlay) {
+    overlay->Show(l10n_util::GetStringUTF16(IDS_MAHO_TOAST_LINK_COPIED),
+                  std::u16string(), base::Seconds(2));
+  }
 }
 
 bool IsApprovedMahoAliasUrl(const GURL& url) {
@@ -496,6 +515,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
             browser->tab_strip_model()->GetActiveWebContents()) {
       ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
       writer.WriteText(base::UTF8ToUTF16(web_contents->GetVisibleURL().spec()));
+      ShowLinkCopiedToast(browser);
     }
   } else if (action_id == "copy_url_markdown") {
     if (auto* web_contents =
@@ -505,6 +525,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       std::string markdown = "[" + title + "](" + url + ")";
       ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
       writer.WriteText(base::UTF8ToUTF16(markdown));
+      ShowLinkCopiedToast(browser);
     }
   } else if (action_id == "command_bar") {
     LOG(WARNING) << kShortcutTracePrefix << " execute action=command_bar";

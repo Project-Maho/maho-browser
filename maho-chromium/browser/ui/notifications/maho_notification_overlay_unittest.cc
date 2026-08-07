@@ -11,8 +11,10 @@
 #include "maho/browser/ui/notifications/maho_toast_view.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/models/image_model.h"
 #include "ui/color/color_provider.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
@@ -193,6 +195,15 @@ TEST_F(MahoToastViewTest, ThemeChangeUpdatesColors) {
             cp->GetColor(kMahoColorToastForeground));
   EXPECT_EQ(toast_->body_label_for_testing()->GetEnabledColor(),
             cp->GetColor(kMahoColorToastBodyForeground));
+}
+
+TEST_F(MahoToastViewTest, ShowsLeadingIcon) {
+  toast_->SetTitleText(u"Link copied");
+
+  toast_->OnThemeChanged();
+
+  ASSERT_NE(toast_->icon_view_for_testing(), nullptr);
+  EXPECT_FALSE(toast_->icon_view_for_testing()->GetImageModel().IsEmpty());
 }
 
 }  // namespace maho

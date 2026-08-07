@@ -26,6 +26,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
@@ -1700,6 +1701,51 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       }),
       base::Milliseconds(2500));
   run_loop.Run();
+}
+
+// Regression: the Cmd+Shift+C / command-palette copy path
+// (ExecuteCommandAction "copy_url") must surface the upper-right "Link copied"
+// toast, the same MahoNotificationOverlay the Maho Mini copy button shows.
+// Before the fix this path wrote the clipboard but never called
+// MahoNotificationOverlay::Show, so the link was copied silently with no toast.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       CopyUrlShortcutShowsLinkCopiedToast) {
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(content::WaitForLoadStop(contents));
+
+  ExecuteCommandAction(browser(), "copy_url");
+  base::RunLoop().RunUntilIdle();
+
+  MahoNotificationOverlay* overlay =
+      MahoNotificationOverlay::FromBrowser(browser());
+  ASSERT_NE(overlay, nullptr)
+      << "copy_url must create the notification overlay that hosts the toast";
+  EXPECT_TRUE(overlay->IsVisible())
+      << "copy_url must show the 'Link copied' toast, not copy silently";
+}
+
+// copy_url_markdown shares the same copy surface and must also show the toast.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       CopyUrlMarkdownShortcutShowsLinkCopiedToast) {
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(content::WaitForLoadStop(contents));
+
+  ExecuteCommandAction(browser(), "copy_url_markdown");
+  base::RunLoop().RunUntilIdle();
+
+  MahoNotificationOverlay* overlay =
+      MahoNotificationOverlay::FromBrowser(browser());
+  ASSERT_NE(overlay, nullptr);
+  EXPECT_TRUE(overlay->IsVisible())
+      << "copy_url_markdown must also show the 'Link copied' toast";
 }
 
 }  // namespace

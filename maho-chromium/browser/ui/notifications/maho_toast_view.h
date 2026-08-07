@@ -9,9 +9,12 @@
 #include "ui/views/view.h"
 
 namespace views {
+class ImageView;
 class Label;
-}
+}  // namespace views
 
+// Compact rounded pill toast with a leading glyph chip, title, and optional
+// body line; painted translucent so window vibrancy shows through.
 class MahoToastView : public views::View {
   METADATA_HEADER(MahoToastView, views::View)
  public:
@@ -24,6 +27,7 @@ class MahoToastView : public views::View {
 
   views::Label* title_label_for_testing() const { return title_label_; }
   views::Label* body_label_for_testing() const { return body_label_; }
+  views::ImageView* icon_view_for_testing() const { return icon_chip_; }
 
   // views::View:
   void OnPaintBackground(gfx::Canvas* canvas) override;
@@ -33,6 +37,7 @@ class MahoToastView : public views::View {
   bool OnMousePressed(const ui::MouseEvent& event) override;
 
  private:
+  raw_ptr<views::ImageView> icon_chip_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> body_label_ = nullptr;
   base::RepeatingClosure on_clicked_;
