@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer } from 'preact/hooks';
 import { useBridge } from '../../hooks/use-bridge';
-import { useHashRoute } from '../../router';
+import { useHashRoute } from '../../hooks/use-hash-route';
 import type { SpaceAIConfig } from '../../bridge';
 
 interface SpaceAIConfigScreenProps {

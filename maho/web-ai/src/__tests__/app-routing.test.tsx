@@ -43,4 +43,12 @@ describe('App Router - Mobile Chat Launch Routing', () => {
     expect(screen.getByText('Coming Soon')).not.toBeNull();
     expect(screen.getByText('privacy')).not.toBeNull();
   });
+
+  it('routes #pinch-summary to ComingSoonScreen (not the Unknown screen ErrorScreen)', () => {
+    window.location.hash = '#pinch-summary';
+    render(<App />);
+    expect(screen.queryByText(/Unknown screen/)).toBeNull();
+    expect(screen.getByText('Coming Soon')).not.toBeNull();
+    expect(screen.getByText('pinch-summary')).not.toBeNull();
+  });
 });

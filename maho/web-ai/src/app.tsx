@@ -51,6 +51,7 @@ export function App() {
     case 'space-ai-config':
     case 'offline-model':
     case 'privacy':
+    case 'pinch-summary':
     case 'visual-search-results':
       return (
         <ComingSoonScreen screenName={route.name} onBack={handleBack} />

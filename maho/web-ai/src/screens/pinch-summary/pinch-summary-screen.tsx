@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer } from 'preact/hooks';
 import type { CostEstimate, PinchSummaryEvent } from '../../bridge';
 import { subscribeStream } from '../../bridge/streaming';
 import { useBridge } from '../../hooks/use-bridge';
-import { useHashRoute } from '../../router';
+import { useHashRoute } from '../../hooks/use-hash-route';
 
 type Stage = 'extractive' | 'cost_confirm' | 'llm_pending' | 'llm_streaming' | 'llm_success';
 
