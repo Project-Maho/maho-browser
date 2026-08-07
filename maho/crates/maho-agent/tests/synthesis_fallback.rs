@@ -134,3 +134,72 @@ async fn synthesis_fires_on_unfinished_intent_narration() {
         "intent narration must not surface as the final answer; got: {ans:?}"
     );
 }
+
+
+// The in-browser AI panel (FFI leased bridge) and deep research reach the
+// no-tools loop `run_turn_internal_simple` via `run_turn_simple`. This proves
+// that path shares the same `finalize_turn_answer` synthesis as `run_turn`, so
+// a future synthesis change cannot silently regress the panel/deep-research
+// surface.
+#[derive(Clone)]
+struct SimpleScriptedLlm {
+    calls: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl ChatCompletion for SimpleScriptedLlm {
+    async fn complete(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, LanguageModelError> {
+        let n = {
+            let mut c = lock(&self.calls);
+            *c += 1;
+            *c
+        };
+        let mut r = ChatCompletionResponse::builder()
+            .build()
+            .expect("response builds");
+        if n == 1 {
+            r.append_message_delta(Some(
+                "I will navigate to example.com to continue the task",
+            ));
+        } else {
+            r.append_message_delta(Some(SYNTH));
+        }
+        Ok(r)
+    }
+}
+
+#[tokio::test]
+async fn synthesis_fires_on_simple_no_tools_panel_path() {
+    let harness = backend_with_profile_tools(&[]);
+    let _bridge = install_bridge(&harness.backend);
+    harness.backend.set_llm_override(Box::new(SimpleScriptedLlm {
+        calls: Arc::new(Mutex::new(0)),
+    }) as Box<dyn ChatCompletion>);
+
+    let msg = harness
+        .backend
+        .run_turn_simple(
+            "session-simple-synthesis",
+            ChatMessage::user(ChatContent::text("do the task".to_string())),
+            None,
+            None,
+        )
+        .await
+        .expect("turn completes");
+    let ans = match msg.content {
+        ChatContent::Text(t) => t,
+        other => panic!("expected text answer, got {other:?}"),
+    };
+    assert_eq!(
+        ans, SYNTH,
+        "the no-tools panel/deep-research path (run_turn_simple) must synthesize via the shared \
+         finalize_turn_answer, not surface unfinished intent; got: {ans:?}"
+    );
+    assert!(
+        !ans.starts_with("I will"),
+        "intent narration must not surface on the simple path; got: {ans:?}"
+    );
+}

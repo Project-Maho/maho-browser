@@ -2055,6 +2055,67 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
     }
 }
 
+fn mail_write_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
+    let attachments = serde_json::json!({
+        "type": "array",
+        "description": "Optional attachments. Size limits are enforced by the mail provider; oversized attachments are rejected on send.",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "filename": {"type": "string", "description": "Attachment file name."},
+                "mime_type": {"type": "string", "description": "Attachment MIME type, e.g. image/png."},
+                "data_base64": {"type": "string", "description": "Attachment bytes, base64-encoded."}
+            },
+            "required": ["filename", "mime_type", "data_base64"]
+        }
+    });
+    let mut compose_props = serde_json::json!({
+        "account_id": {"type": "string", "description": "Sending Mail account id."},
+        "to": {"type": "array", "items": {"type": "string"}, "description": "Primary recipients."},
+        "subject": {"type": "string", "description": "Email subject."},
+        "cc": {"type": "array", "items": {"type": "string"}, "description": "CC recipients."},
+        "bcc": {"type": "array", "items": {"type": "string"}, "description": "BCC recipients."},
+        "body_text": {"type": "string", "description": "Plain-text body."},
+        "body_html": {"type": "string", "description": "HTML body."},
+        "in_reply_to": {"type": "string", "description": "RFC message id this replies to."},
+        "references": {"type": "string", "description": "RFC references header value."},
+        "attachments": attachments
+    });
+    match tool_name {
+        "mail_send" | "mail_save_draft" => {
+            let description: &'static str = if tool_name == "mail_send" {
+                "Send an email through Maho Mail. Requires explicit user approval; sending honors the agent approval policy. Args: account_id (string), to (string array), subject (string), plus optional cc, bcc, body_text, body_html, in_reply_to, references, attachments."
+            } else {
+                "Save a new email draft in Maho Mail. Requires explicit user approval. Args: account_id (string), to (string array), subject (string), plus optional cc, bcc, body_text, body_html, in_reply_to, references, attachments."
+            };
+            Some(BrowserActionToolMetadata {
+                description,
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": compose_props,
+                    "required": ["account_id", "to", "subject"]
+                }),
+            })
+        }
+        "mail_update_draft" => {
+            compose_props["draft_id"] =
+                serde_json::json!({"type": "string", "description": "Draft id to update."});
+            Some(BrowserActionToolMetadata {
+                description: "Update an existing Maho Mail draft by id. Requires explicit user approval. Args: draft_id (string), account_id (string), to (string array), subject (string), plus optional cc, bcc, body_text, body_html, in_reply_to, references, attachments.",
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": compose_props,
+                    "required": ["draft_id", "account_id", "to", "subject"]
+                }),
+            })
+        }
+        _ => None,
+    }
+}
+
 fn tool_sensitivity_from_browser_contract(_sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
     // Browser tools are Not gated by the outer permission policy.
     // The capability sandbox (exact-origin registry + tab ownership + lease)
@@ -2518,6 +2579,30 @@ fn browser_tool_shims(
 
         },
 
+        BrowserToolShim {
+            name: "mail_send",
+            description: mail_write_tool_metadata("mail_send").expect("mail metadata exists").description,
+            parameters_schema: mail_write_tool_metadata("mail_send").expect("mail metadata exists").parameters_schema,
+            sensitivity: ToolSensitivity::ReadOnly,
+            bridge: Arc::clone(&bridge),
+            context: context.clone(),
+        },
+        BrowserToolShim {
+            name: "mail_save_draft",
+            description: mail_write_tool_metadata("mail_save_draft").expect("mail metadata exists").description,
+            parameters_schema: mail_write_tool_metadata("mail_save_draft").expect("mail metadata exists").parameters_schema,
+            sensitivity: ToolSensitivity::ReadOnly,
+            bridge: Arc::clone(&bridge),
+            context: context.clone(),
+        },
+        BrowserToolShim {
+            name: "mail_update_draft",
+            description: mail_write_tool_metadata("mail_update_draft").expect("mail metadata exists").description,
+            parameters_schema: mail_write_tool_metadata("mail_update_draft").expect("mail metadata exists").parameters_schema,
+            sensitivity: ToolSensitivity::ReadOnly,
+            bridge: Arc::clone(&bridge),
+            context: context.clone(),
+        },
     ];
 
     if action_state.is_enabled() {
@@ -3009,6 +3094,104 @@ impl SwiftideBackend {
             session_id: session_id.to_string(),
             approval_policy: Arc::clone(&self.approval_policy),
         }) as Box<dyn Tool>
+    }
+
+    /// Resolve the user-facing final answer for a completed agent turn.
+    ///
+    /// Shared by the tool-enabled loop (`run_turn_internal`, used by the CLI and
+    /// the in-browser AI panel via the FFI leased bridge) and the no-tools loop
+    /// (`run_turn_internal_simple`, used by deep research). Centralizing it here
+    /// guarantees the synthesis / anti-raw-tool-output behavior cannot silently
+    /// diverge between surfaces: pick the stop/assistant answer, synthesize when
+    /// the loop ended on unfinished intent, and synthesize (with a non-error
+    /// tool-output fallback) when no assistant text was produced at all.
+    async fn finalize_turn_answer(
+        &self,
+        session_id: &str,
+        llm: &dyn ChatCompletion,
+        result_history: &[SwiftideChatMessage],
+    ) -> Result<MahoChatMessage, AgentError> {
+        let stop_answer = result_history
+            .iter()
+            .rev()
+            .find_map(|msg| {
+                if let SwiftideChatMessage::ToolOutput(_, out) = msg {
+                    match out {
+                        ToolOutput::Stop(Some(v)) | ToolOutput::AgentFailed(Some(v)) => {
+                            Some(match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.trim().is_empty());
+        let last_assistant_text = stop_answer.or_else(|| {
+            result_history.iter().rev().find_map(|msg| {
+                if let SwiftideChatMessage::Assistant(text, _) = msg {
+                    text.clone().filter(|t| !t.trim().is_empty())
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some(text) = last_assistant_text {
+            let final_text = if looks_like_unfinished_intent(&text) {
+                synthesize_final_answer(llm, result_history)
+                    .await
+                    .unwrap_or(text)
+            } else {
+                text
+            };
+            self.storage
+                .save_message(session_id, "assistant", &final_text)
+                .await?;
+            Ok(MahoChatMessage::assistant(ChatContent::text(final_text)))
+        } else {
+            let history_summary: Vec<&str> = result_history
+                .iter()
+                .map(|m| match m {
+                    SwiftideChatMessage::System(_) => "system",
+                    SwiftideChatMessage::User(_) => "user",
+                    SwiftideChatMessage::Assistant(_, _) => "assistant",
+                    SwiftideChatMessage::ToolOutput(_, _) => "tool_output",
+                    SwiftideChatMessage::Summary(_) => "summary",
+                })
+                .collect();
+            tracing::error!(
+                target = "maho_agent::run_turn",
+                "Swiftide agent run completed but no assistant message was found in context. History sequence: {:?}",
+                history_summary
+            );
+            let synthesized = synthesize_final_answer(llm, result_history).await;
+            let fallback = synthesized.unwrap_or_else(|| {
+                result_history
+                    .iter()
+                    .rev()
+                    .find_map(|msg| {
+                        if let SwiftideChatMessage::ToolOutput(_, ToolOutput::Text(s)) = msg {
+                            let t = s.trim();
+                            if t.is_empty() || t.starts_with("{\"error\"") {
+                                None
+                            } else {
+                                Some(s.clone())
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default()
+            });
+            self.storage
+                .save_message(session_id, "assistant", &fallback)
+                .await?;
+            Ok(MahoChatMessage::assistant(ChatContent::text(fallback)))
+        }
     }
 
     async fn run_turn_internal(
@@ -3820,126 +4003,8 @@ impl SwiftideBackend {
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        let stop_answer = result_history
-            .iter()
-            .rev()
-            .find_map(|msg| {
-                if let SwiftideChatMessage::ToolOutput(_, out) = msg {
-                    match out {
-                        ToolOutput::Stop(Some(v)) | ToolOutput::AgentFailed(Some(v)) => {
-                            Some(match v {
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            })
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-            .filter(|s| !s.trim().is_empty());
-        let last_assistant_text = stop_answer.or_else(|| {
-            result_history.iter().rev().find_map(|msg| {
-                if let SwiftideChatMessage::Assistant(text, _) = msg {
-                    text.clone().filter(|t| !t.trim().is_empty())
-                } else {
-                    None
-                }
-            })
-        });
-
-        if let Some(res_text) = last_assistant_text {
-            let final_text = if looks_like_unfinished_intent(&res_text) {
-                synthesize_final_answer(llm.as_ref(), &result_history)
-                    .await
-                    .unwrap_or(res_text)
-            } else {
-                res_text
-            };
-            self.storage
-                .save_message(session_id, "assistant", &final_text)
-                .await?;
-            Ok(MahoChatMessage::assistant(ChatContent::text(final_text)))
-        } else {
-            let _last_role = result_history
-                .last()
-                .map(|m| match m {
-                    SwiftideChatMessage::System(_) => "System",
-
-                    SwiftideChatMessage::User(_) => "User",
-
-                    SwiftideChatMessage::Assistant(_, _) => "Assistant",
-
-                    SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
-
-                    SwiftideChatMessage::Summary(_) => "Summary",
-                })
-                .unwrap_or("<empty>");
-
-            if cfg!(debug_assertions) {
-                let history_summary: Vec<&str> = result_history
-                    .iter()
-                    .map(|m| match m {
-                        SwiftideChatMessage::System(_) => "System",
-
-                        SwiftideChatMessage::User(_) => "User",
-
-                        SwiftideChatMessage::Assistant(_, _) => "Assistant",
-
-                        SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
-
-                        SwiftideChatMessage::Summary(_) => "Summary",
-                    })
-                    .collect();
-
-                let _ = std::fs::OpenOptions::new()
-
-                    .create(true)
-
-                    .append(true)
-
-                    .open("/tmp/maho-agent-live.log")
-
-                    .and_then(|mut f| {
-
-                        use std::io::Write;
-
-                        writeln!(f,
-
-                            "[swiftide_backend] No assistant text found. History roles: {history_summary:?}. Session={session_id}."
-
-                        )
-
-                    });
-            }
-
-            {
-                let synthesized = synthesize_final_answer(llm.as_ref(), &result_history).await;
-                let fallback = synthesized.unwrap_or_else(|| {
-                    result_history
-                        .iter()
-                        .rev()
-                        .find_map(|msg| {
-                            if let SwiftideChatMessage::ToolOutput(_, ToolOutput::Text(s)) = msg {
-                                let t = s.trim();
-                                if t.is_empty() || t.starts_with("{\"error\"") {
-                                    None
-                                } else {
-                                    Some(s.clone())
-                                }
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default()
-                });
-                self.storage
-                    .save_message(session_id, "assistant", &fallback)
-                    .await?;
-                Ok(MahoChatMessage::assistant(ChatContent::text(fallback)))
-            }
-        }
+        self.finalize_turn_answer(session_id, llm.as_ref(), &result_history)
+            .await
     }
 
     pub async fn discover_tools(&self) -> Vec<ToolDefinition> {
@@ -4524,97 +4589,8 @@ impl SwiftideBackend {
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        let stop_answer = result_history
-            .iter()
-            .rev()
-            .find_map(|msg| {
-                if let SwiftideChatMessage::ToolOutput(_, out) = msg {
-                    match out {
-                        ToolOutput::Stop(Some(v)) | ToolOutput::AgentFailed(Some(v)) => {
-                            Some(match v {
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            })
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-            .filter(|s| !s.trim().is_empty());
-        let last_assistant_text = stop_answer.or_else(|| {
-            result_history.iter().rev().find_map(|msg| {
-                if let SwiftideChatMessage::Assistant(text, _) = msg {
-                    text.clone().filter(|t| !t.trim().is_empty())
-                } else {
-                    None
-                }
-            })
-        });
-
-        if let Some(text) = last_assistant_text {
-            let final_text = if looks_like_unfinished_intent(&text) {
-                synthesize_final_answer(llm.as_ref(), &result_history)
-                    .await
-                    .unwrap_or(text)
-            } else {
-                text
-            };
-            self.storage
-                .save_message(session_id, "assistant", &final_text)
-                .await?;
-            Ok(MahoChatMessage::assistant(ChatContent::text(final_text)))
-        } else {
-            let history_summary: Vec<_> = result_history
-                .iter()
-                .map(|m| match m {
-                    SwiftideChatMessage::System(_) => "system",
-
-                    SwiftideChatMessage::User(_) => "user",
-
-                    SwiftideChatMessage::Assistant(_, _) => "assistant",
-
-                    _ => "unknown",
-                })
-                .collect();
-
-            tracing::error!(
-
-                target = "maho_agent::run_turn",
-
-                "Swiftide agent run completed but no assistant message was found in context. History sequence: {:?}",
-
-                history_summary
-
-            );
-
-            {
-                let synthesized = synthesize_final_answer(llm.as_ref(), &result_history).await;
-                let fallback = synthesized.unwrap_or_else(|| {
-                    result_history
-                        .iter()
-                        .rev()
-                        .find_map(|msg| {
-                            if let SwiftideChatMessage::ToolOutput(_, ToolOutput::Text(s)) = msg {
-                                let t = s.trim();
-                                if t.is_empty() || t.starts_with("{\"error\"") {
-                                    None
-                                } else {
-                                    Some(s.clone())
-                                }
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default()
-                });
-                self.storage
-                    .save_message(session_id, "assistant", &fallback)
-                    .await?;
-                Ok(MahoChatMessage::assistant(ChatContent::text(fallback)))
-            }
-        }
+        self.finalize_turn_answer(session_id, llm.as_ref(), &result_history)
+            .await
     }
 }
 
