@@ -21,6 +21,7 @@
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -29,11 +30,13 @@
 #include "components/split_tabs/split_tab_visual_data.h"
 #include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/translate_manager.h"
+#include "components/translate/core/browser/translate_prefs.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/net/maho_boost_injection_handler.h"
+#include "maho/browser/net/maho_translate_injection_handler.h"
 #include "maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -882,19 +885,19 @@ MahoSidebarSearchModel MahoSidebarStateAdapter::BuildSearchModel(
             ? MahoSidebarAddressDisplayMode::kSearchPlaceholder
             : MahoSidebarAddressDisplayMode::kAddressCard;
 
-    if (auto* translate_client =
-            ChromeTranslateClient::FromWebContents(contents)) {
-      if (auto* translate_manager =
-              translate_client->GetTranslateManager()) {
-        const auto* language_state = translate_manager->GetLanguageState();
-        model.translation_available =
-            language_state &&
-            language_state->translate_enabled() &&
-            !language_state->IsPageTranslated();
-        model.is_page_translated =
-            language_state && language_state->IsPageTranslated();
-      }
-    }
+    // Offer on-device translate only when Chromium's language detector flags the
+    // page as foreign relative to the target (translate_enabled), matching Arc;
+    // keep it visible while translated so the label can offer "Show original".
+    model.is_page_translated = maho::IsMahoPageTranslated(contents);
+    const std::string site_host(url.host());
+    Profile* profile =
+        Profile::FromBrowserContext(contents->GetBrowserContext());
+    const bool is_never_translate_site =
+        profile && !site_host.empty() &&
+        translate::TranslatePrefs(profile->GetPrefs())
+            .IsSiteOnNeverPromptList(site_host);
+    model.translation_available = maho::CanOnDeviceTranslate(contents) &&
+                                  !is_never_translate_site;
   } else {
     // WebContents not yet initialized (startup-state race), but the tab strip
     // already has an active entry — the utility icon should still be available.

@@ -2382,6 +2382,23 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.h",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.h",\n'
+            ),
+            description=(
+                "Compile MahoTranslatePopoverView into the chrome/browser/ui:ui "
+                "target beside the sidebar search view"
+            ),
+            guard='"//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc"',
+        ),
+        Replacement(
+            old=(
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h",\n'
                 '      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n'
                 '      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.h",\n'

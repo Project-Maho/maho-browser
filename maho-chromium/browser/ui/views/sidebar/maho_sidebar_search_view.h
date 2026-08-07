@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
@@ -41,6 +42,13 @@ namespace maho {
 class MahoLocationBarUtilityBubbleCoordinator;
 class MahoLocationBarUtilityIconView;
 
+struct MahoTranslateOptionsForTesting {
+  std::vector<std::u16string> labels;
+  int first_language_command_id = 0;
+  int never_translate_command_id = 0;
+  int language_settings_command_id = 0;
+};
+
 class MahoSidebarSearchView : public views::View,
                               public views::ContextMenuController,
                               public views::TextfieldController,
@@ -70,6 +78,10 @@ class MahoSidebarSearchView : public views::View,
 
   views::Label* translate_label_view() { return secondary_label_; }
   views::View* idle_button_view() { return idle_button_; }
+  views::Widget* translate_popover_widget_for_testing() {
+    return translate_popover_widget_.get();
+  }
+  MahoTranslateOptionsForTesting PrepareTranslateOptionsForTesting();
 
   // views::View:
   void OnThemeChanged() override;
@@ -103,6 +115,17 @@ class MahoSidebarSearchView : public views::View,
   void OnIdleButtonPressed(const ui::Event& event);
   void OnTranslateLabelClicked();
   void OnIdleButtonHoverChanged(bool hover_visible);
+  void SetTranslateLabelHovered(bool hovered);
+  std::u16string ResolveTranslateTargetDisplayName() const;
+  void OnTranslatePopoverTranslate();
+  void OnTranslatePopoverOptions(views::View* anchor,
+                                 base::RepeatingClosure close_popover);
+  void BuildTranslateOptionsMenuModels();
+  void OnTranslateOptionsMenuClosed();
+  void OnTranslateLanguageSelected(const std::string& language_code);
+  void OnNeverTranslateThisSite();
+  void OnOpenTranslateLanguageSettings();
+  void CloseTranslatePopover();
   void OnCopyUrlPressed(const ui::Event& event);
   void ToggleUtilityPanel();
   views::Widget* ShowUtilityPanel();
@@ -124,6 +147,12 @@ class MahoSidebarSearchView : public views::View,
   raw_ptr<views::Textfield> textfield_ = nullptr;
   std::unique_ptr<MahoLocationBarUtilityBubbleCoordinator> utility_bubble_coordinator_;
   base::CallbackListSubscription utility_panel_close_subscription_;
+  std::unique_ptr<ui::SimpleMenuModel> translate_options_menu_model_;
+  std::unique_ptr<ui::SimpleMenuModel> translate_languages_menu_model_;
+  std::unique_ptr<views::MenuRunner> translate_options_menu_runner_;
+  std::vector<std::string> translate_option_language_codes_;
+  base::RepeatingClosure close_translate_popover_;
+  base::WeakPtr<views::Widget> translate_popover_widget_;
   MahoSidebarSearchModel model_;
   MahoSidebarPalette palette_;
   bool is_editing_ = false;

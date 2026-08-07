@@ -153,6 +153,8 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_view.cc",
     "maho_sidebar_view.h",
     "maho_traffic_light_geometry.h",
+    "maho_translate_popover_view.cc",
+    "maho_translate_popover_view.h",
   ]
 
   if (is_mac) {

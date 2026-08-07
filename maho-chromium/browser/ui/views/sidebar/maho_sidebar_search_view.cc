@@ -2,7 +2,10 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 
+#include <algorithm>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -21,11 +24,19 @@
 #include "components/language_detection/core/constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/translate/core/browser/language_state.h"
+#include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/common/translate_errors.h"
+#include "components/translate/core/browser/translate_prefs.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/net/maho_translate_injection_handler.h"
+#include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/views/sidebar/maho_translate_popover_view.h"
+#include "chrome/browser/browser_process.h"
+#include "components/prefs/pref_service.h"
+#include "components/translate/core/browser/translate_pref_names.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
@@ -48,6 +59,8 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/events/event.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/animation/ink_drop.h"
@@ -62,6 +75,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace maho {
@@ -112,6 +126,21 @@ constexpr int kSearchPillInnerVerticalInsetDp = 4;
 // Negative top-margin on the secondary label to pull its baseline closer
 // to the primary label, achieving tighter optical alignment.
 constexpr int kSearchPillSecondaryBaselineOffsetDp = -1;
+
+constexpr int kTranslateOptionsChooseLanguageCommand = 41000;
+constexpr int kTranslateOptionsNeverTranslateSiteCommand = 41001;
+constexpr int kTranslateOptionsLanguageSettingsCommand = 41002;
+constexpr int kTranslateOptionsLanguageCommandFirst = 41100;
+
+std::string GetTranslateSiteHost(content::WebContents* contents) {
+  if (!contents) {
+    return std::string();
+  }
+  const GURL& url = contents->GetVisibleURL().is_empty()
+                        ? contents->GetLastCommittedURL()
+                        : contents->GetVisibleURL();
+  return std::string(url.host());
+}
 
 class SidebarSearchIdleButton : public views::LabelButton {
  public:
@@ -274,6 +303,8 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   secondary_label_ = text_stack_raw->AddChildView(std::make_unique<views::Label>());
   secondary_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   secondary_label_->SetAutoColorReadabilityEnabled(false);
+  // Subtle grey keeps the translate affordance quiet (per user preference,
+  // not an accent tint); the hover underline is the actionable cue.
   secondary_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
   secondary_label_->SetTextStyle(views::style::STYLE_BODY_4);
   secondary_label_->SetMultiLine(false);
@@ -451,7 +482,28 @@ void MahoSidebarSearchView::ShowContextMenuForViewImpl(
                         views::MenuAnchorPosition::kTopLeft, source_type);
 }
 
-void MahoSidebarSearchView::ExecuteCommand(int command_id, int event_flags) {}
+void MahoSidebarSearchView::ExecuteCommand(int command_id, int event_flags) {
+  if (command_id >= kTranslateOptionsLanguageCommandFirst) {
+    const size_t language_index = static_cast<size_t>(
+        command_id - kTranslateOptionsLanguageCommandFirst);
+    if (language_index < translate_option_language_codes_.size()) {
+      OnTranslateLanguageSelected(
+          translate_option_language_codes_[language_index]);
+    }
+    return;
+  }
+
+  switch (command_id) {
+    case kTranslateOptionsNeverTranslateSiteCommand:
+      OnNeverTranslateThisSite();
+      return;
+    case kTranslateOptionsLanguageSettingsCommand:
+      OnOpenTranslateLanguageSettings();
+      return;
+    default:
+      return;
+  }
+}
 
 bool MahoSidebarSearchView::IsCommandIdEnabled(int command_id) const {
   return true;
@@ -593,7 +645,8 @@ void MahoSidebarSearchView::OnIdleButtonPressed(const ui::Event& event) {
     return;
   }
 
-  if (ShouldRouteEventToTranslate(event)) {
+  const bool route = ShouldRouteEventToTranslate(event);
+  if (route) {
     OnTranslateLabelClicked();
     return;
   }
@@ -610,13 +663,201 @@ void MahoSidebarSearchView::OnTranslateLabelClicked() {
   if (!contents) {
     return;
   }
+  // Already translated: a click restores the original directly (no popover).
+  if (maho::IsMahoPageTranslated(contents)) {
+    OnTranslatePopoverTranslate();
+    return;
+  }
+  views::Widget* popover_widget = MahoTranslatePopoverView::Show(
+      secondary_label_, ResolveTranslateTargetDisplayName(),
+      base::BindRepeating(&MahoSidebarSearchView::OnTranslatePopoverTranslate,
+                          weak_factory_.GetWeakPtr()),
+      base::BindRepeating(&MahoSidebarSearchView::OnTranslatePopoverOptions,
+                          weak_factory_.GetWeakPtr()));
+  translate_popover_widget_ =
+      popover_widget ? popover_widget->GetWeakPtr() : nullptr;
+}
+
+std::u16string MahoSidebarSearchView::ResolveTranslateTargetDisplayName()
+    const {
+  std::string code = "en";
+  if (browser_ && browser_->profile()) {
+    const std::string pref = browser_->profile()->GetPrefs()->GetString(
+        translate::prefs::kPrefTranslateRecentTarget);
+    if (!pref.empty()) {
+      code = pref;
+    }
+  }
+  return l10n_util::GetDisplayNameForLocale(
+      code, g_browser_process->GetApplicationLocale(), /*is_for_ui=*/true);
+}
+
+void MahoSidebarSearchView::OnTranslatePopoverTranslate() {
+  if (!browser_) {
+    return;
+  }
+  content::WebContents* contents =
+      browser_->tab_strip_model()->GetActiveWebContents();
+  if (!contents) {
+    return;
+  }
   contents->ClearFocusedElement();
   maho::TranslatePageViaOnDevice(contents);
   model_.is_page_translated = maho::IsMahoPageTranslated(contents);
   UpdateIdleSurface();
 }
 
+void MahoSidebarSearchView::OnTranslatePopoverOptions(
+    views::View* anchor,
+    base::RepeatingClosure close_popover) {
+  if (!anchor || !anchor->GetWidget() || !browser_ ||
+      !browser_->profile()) {
+    return;
+  }
+
+  translate_options_menu_runner_.reset();
+  translate_options_menu_model_.reset();
+  translate_languages_menu_model_.reset();
+  translate_option_language_codes_.clear();
+  close_translate_popover_ = std::move(close_popover);
+
+  BuildTranslateOptionsMenuModels();
+
+  translate_options_menu_runner_ = std::make_unique<views::MenuRunner>(
+      translate_options_menu_model_.get(), views::MenuRunner::CONTEXT_MENU,
+      base::BindRepeating(
+          &MahoSidebarSearchView::OnTranslateOptionsMenuClosed,
+          weak_factory_.GetWeakPtr()));
+  translate_options_menu_runner_->RunMenuAt(
+      anchor->GetWidget(), nullptr, anchor->GetAnchorBoundsInScreen(),
+      views::MenuAnchorPosition::kTopRight,
+      ui::mojom::MenuSourceType::kMouse);
+}
+
+MahoTranslateOptionsForTesting
+MahoSidebarSearchView::PrepareTranslateOptionsForTesting() {
+  translate_options_menu_runner_.reset();
+  translate_options_menu_model_.reset();
+  translate_languages_menu_model_.reset();
+  translate_option_language_codes_.clear();
+  BuildTranslateOptionsMenuModels();
+
+  MahoTranslateOptionsForTesting result;
+  const size_t item_count = translate_options_menu_model_->GetItemCount();
+  for (size_t index = 0; index < item_count; ++index) {
+    result.labels.push_back(translate_options_menu_model_->GetLabelAt(index));
+  }
+  if (!translate_option_language_codes_.empty()) {
+    result.first_language_command_id =
+        translate_languages_menu_model_->GetCommandIdAt(0);
+  }
+  result.never_translate_command_id =
+      translate_options_menu_model_->GetCommandIdAt(1);
+  result.language_settings_command_id =
+      translate_options_menu_model_->GetCommandIdAt(2);
+  return result;
+}
+
+void MahoSidebarSearchView::BuildTranslateOptionsMenuModels() {
+  DCHECK(browser_);
+  DCHECK(browser_->profile());
+
+  translate_languages_menu_model_ =
+      std::make_unique<ui::SimpleMenuModel>(this);
+  std::vector<std::string> supported_languages;
+  translate::TranslateDownloadManager::GetSupportedLanguages(
+      true, &supported_languages);
+  for (const std::string& language_code : supported_languages) {
+    const std::u16string display_name = l10n_util::GetDisplayNameForLocale(
+        language_code, g_browser_process->GetApplicationLocale(),
+        true);
+    if (display_name.empty()) {
+      continue;
+    }
+    const int command_id = kTranslateOptionsLanguageCommandFirst +
+                           static_cast<int>(translate_option_language_codes_.size());
+    translate_languages_menu_model_->AddItem(command_id, display_name);
+    translate_option_language_codes_.push_back(language_code);
+  }
+
+  translate_options_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+  translate_options_menu_model_->AddSubMenu(
+      kTranslateOptionsChooseLanguageCommand, u"Choose Another Language",
+      translate_languages_menu_model_.get());
+  translate_options_menu_model_->AddItem(
+      kTranslateOptionsNeverTranslateSiteCommand,
+      u"Never Translate This Site");
+  translate_options_menu_model_->AddItem(
+      kTranslateOptionsLanguageSettingsCommand, u"Language Settings");
+}
+
+void MahoSidebarSearchView::OnTranslateOptionsMenuClosed() {
+  translate_options_menu_runner_.reset();
+  translate_options_menu_model_.reset();
+  translate_languages_menu_model_.reset();
+  translate_option_language_codes_.clear();
+}
+
+void MahoSidebarSearchView::OnTranslateLanguageSelected(
+    const std::string& language_code) {
+  if (!browser_ || !browser_->profile() || language_code.empty()) {
+    return;
+  }
+  translate::TranslatePrefs(browser_->profile()->GetPrefs())
+      .SetRecentTargetLanguage(language_code);
+  CloseTranslatePopover();
+  OnTranslatePopoverTranslate();
+}
+
+void MahoSidebarSearchView::OnNeverTranslateThisSite() {
+  if (!browser_ || !browser_->profile()) {
+    return;
+  }
+  content::WebContents* contents =
+      browser_->tab_strip_model()->GetActiveWebContents();
+  const std::string site_host = GetTranslateSiteHost(contents);
+  if (site_host.empty()) {
+    return;
+  }
+  translate::TranslatePrefs(browser_->profile()->GetPrefs())
+      .AddSiteToNeverPromptList(site_host);
+  CloseTranslatePopover();
+  model_.translation_available = false;
+  UpdateIdleSurface();
+  UpdateSearchChrome();
+}
+
+void MahoSidebarSearchView::OnOpenTranslateLanguageSettings() {
+  if (!browser_) {
+    return;
+  }
+  CloseTranslatePopover();
+  OpenMahoSettingsPane(browser_, "general");
+}
+
+void MahoSidebarSearchView::CloseTranslatePopover() {
+  if (close_translate_popover_) {
+    close_translate_popover_.Run();
+    close_translate_popover_.Reset();
+  }
+}
+
+void MahoSidebarSearchView::SetTranslateLabelHovered(bool hovered) {
+  if (!secondary_label_) {
+    return;
+  }
+  const int current = secondary_label_->font_list().GetFontStyle();
+  const int desired = hovered ? (current | gfx::Font::UNDERLINE)
+                              : (current & ~gfx::Font::UNDERLINE);
+  if (current != desired) {
+    secondary_label_->SetFontList(
+        secondary_label_->font_list().DeriveWithStyle(desired));
+  }
+}
+
 void MahoSidebarSearchView::OnIdleButtonHoverChanged(bool hover_visible) {
+  SetTranslateLabelHovered(hover_visible && secondary_label_ &&
+                           secondary_label_->GetVisible());
   if (!utility_icon_) {
     return;
   }
@@ -751,8 +992,19 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
                         kSearchCardLeadingInsetDp,
                         kSearchPillInnerVerticalInsetDp,
                         kSearchCardTrailingInsetDp)));
-  idle_button_->SetPreferredSize(
-      gfx::Size(1, sidebar_layout::kSearchPillHeightDp));
+  // The idle pill grows to two lines when a secondary label (translate
+  // status) is shown; sizing off the text-independent font line heights keeps
+  // the height correct regardless of update ordering and button state.
+  int pill_height = sidebar_layout::kSearchPillHeightDp;
+  if (!is_editing_ && !BuildSecondaryText().empty()) {
+    const int two_line_content =
+        2 * kSearchPillInnerVerticalInsetDp +
+        primary_label_->font_list().GetHeight() +
+        kSearchPillPrimarySecondarySpacingDp +
+        secondary_label_->font_list().GetHeight();
+    pill_height = std::max(pill_height, two_line_content);
+  }
+  idle_button_->SetPreferredSize(gfx::Size(1, pill_height));
   if (utility_icon_slot_) {
     utility_icon_slot_->SetBackground(nullptr);
     utility_icon_slot_->SetBorder(nullptr);

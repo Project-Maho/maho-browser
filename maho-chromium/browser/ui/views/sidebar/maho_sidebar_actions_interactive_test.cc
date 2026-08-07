@@ -18,6 +18,8 @@
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/split_tabs/split_tab_id.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/translate/core/browser/translate_pref_names.h"
+#include "components/translate/core/browser/translate_prefs.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -27,25 +29,38 @@
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
+#include "maho/browser/net/maho_translate_injection_handler.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/font.h"
+#include "ui/events/event.h"
+#include "ui/events/types/event_type.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/view_utils.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/run_loop.h"
+#include "base/threading/thread_restrictions.h"
+#include "ui/snapshot/snapshot.h"
 
 namespace maho {
 namespace {
@@ -72,6 +87,25 @@ views::View* FindViewWithAccessibleName(views::View* root,
   return nullptr;
 }
 
+views::MdTextButton* FindTextButtonWithText(views::View* root,
+                                            const std::u16string& text) {
+  if (!root) {
+    return nullptr;
+  }
+
+  if (auto* button = views::AsViewClass<views::MdTextButton>(root);
+      button && button->GetText() == text) {
+    return button;
+  }
+
+  for (views::View* child : root->children()) {
+    if (views::MdTextButton* found = FindTextButtonWithText(child, text)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
 void ClickScreenPoint(const gfx::Point& point) {
   ASSERT_TRUE(ui_controls::SendMouseMove(point.x(), point.y()));
   base::RunLoop click_loop;
@@ -90,9 +124,51 @@ void SendKeyPressToWindow(gfx::NativeWindow window, ui::KeyboardCode key_code) {
   base::RunLoop().RunUntilIdle();
 }
 
+// Grabs an in-process PNG snapshot of the real browser window and writes it to
+// the QA evidence dir. Used only to capture screenshot evidence of the live
+// popover/translated states, which the external desktop QA provider cannot
+// drive; the assertions around each call are the actual pass/fail gate.
+void CaptureWidgetPng(views::Widget* widget, const std::string& file_name) {
+  ASSERT_TRUE(widget);
+  const gfx::Rect window_screen = widget->GetWindowBoundsInScreen();
+  gfx::Rect source_rect(window_screen.size());
+  if (views::View* contents = widget->GetContentsView()) {
+    gfx::Rect content_screen = contents->GetBoundsInScreen();
+    content_screen.Offset(-window_screen.x(), -window_screen.y());
+    if (!content_screen.IsEmpty()) {
+      source_rect = content_screen;
+    }
+  }
+  base::RunLoop run_loop;
+  ui::GrabWindowSnapshotAsPNG(
+      widget->GetNativeWindow(), source_rect,
+      base::BindOnce(
+          [](base::OnceClosure quit, const std::string& name,
+             scoped_refptr<base::RefCountedMemory> data) {
+            if (data && data->size()) {
+              base::ScopedAllowBlockingForTesting allow_blocking;
+              const base::FilePath dir(FILE_PATH_LITERAL(
+                  "/Users/indo/code/project/maho-workspace/.omo/evidence/"
+                  "arc-translate-ui"));
+              base::WriteFile(dir.AppendASCII(name),
+                              base::span<const uint8_t>(data->data(),
+                                                        data->size()));
+            }
+            std::move(quit).Run();
+          },
+          run_loop.QuitClosure(), file_name));
+  run_loop.Run();
+}
+
 class MahoSidebarActionsInteractiveTest
     : public MahoSidebarInteractiveTestBase {
  protected:
+  void SetUpOnMainThread() override {
+    MahoSidebarInteractiveTestBase::SetUpOnMainThread();
+    embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
+    ASSERT_TRUE(embedded_test_server()->Start());
+  }
+
   views::Widget* OpenFooterActionPopover() {
     MahoSidebarFooterView* footer = GetFooterView();
     CHECK(footer);
@@ -112,6 +188,7 @@ class MahoSidebarActionsInteractiveTest
     }));
     return footer->action_popover_widget_for_testing();
   }
+
 };
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
@@ -480,6 +557,275 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   EXPECT_FALSE(search->is_editing_for_testing())
       << "ESC should exit search editing mode";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TranslationLabelClickShowsAnchoredConfirmationPopover) {
+  SeedProfile(2);
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = "https://translate-test.example/";
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  model.translation_available = true;
+  model.is_page_translated = false;
+  search->Update(model);
+  ASSERT_TRUE(search->GetWidget());
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  views::Label* translate_label = search->translate_label_view();
+  ASSERT_TRUE(translate_label);
+  ASSERT_TRUE(translate_label->GetVisible());
+  ASSERT_FALSE(translate_label->GetBoundsInScreen().IsEmpty());
+
+  ClickScreenPoint(translate_label->GetBoundsInScreen().CenterPoint());
+
+  ASSERT_TRUE(base::test::RunUntil([search] {
+    views::Widget* widget = search->translate_popover_widget_for_testing();
+    return widget && widget->IsVisible();
+  })) << "Clicking the translation label must open its confirmation popover";
+
+  views::Widget* popover = search->translate_popover_widget_for_testing();
+  ASSERT_TRUE(popover);
+  auto* bubble_delegate =
+      static_cast<views::BubbleDialogDelegate*>(popover->widget_delegate());
+  ASSERT_TRUE(bubble_delegate);
+  EXPECT_EQ(translate_label, bubble_delegate->GetAnchorView());
+  EXPECT_EQ(translate_label->GetBoundsInScreen(),
+            bubble_delegate->GetAnchorRect());
+
+  EXPECT_TRUE(FindViewWithAccessibleName(popover->GetContentsView(),
+                                         u"Options"));
+  EXPECT_TRUE(FindViewWithAccessibleName(popover->GetContentsView(),
+                                         u"Translate"));
+
+  CaptureWidgetPng(popover, "GREEN-c2-confirm-popover.png");
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TranslationLabelAccentAndHoverUnderlineCapture) {
+  SeedProfile(2);
+
+  // Use a real on-device-translatable page so the sidebar state adapter keeps
+  // the translate affordance visible across the snapshot run loop (a synthetic
+  // model URL gets overwritten by the adapter mid-capture and hides the label).
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(content::WaitForLoadStop(contents));
+  ASSERT_TRUE(maho::CanOnDeviceTranslate(contents));
+
+  ResolveViews();
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = page_url.spec();
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  model.translation_available = true;
+  model.is_page_translated = false;
+  search->Update(model);
+  ASSERT_TRUE(search->GetWidget());
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  views::Label* translate_label = search->translate_label_view();
+  ASSERT_TRUE(translate_label);
+  ASSERT_TRUE(translate_label->GetVisible());
+  ASSERT_FALSE(translate_label->GetBoundsInScreen().IsEmpty());
+
+  // Baseline: accent tint, no underline at rest.
+  ASSERT_EQ(0, translate_label->font_list().GetFontStyle() &
+                   gfx::Font::UNDERLINE);
+  CaptureWidgetPng(search->GetWidget(), "GREEN-c1-label-accent-no-hover.png");
+
+  // The interactive harness cannot deliver a synthetic OS mouse-enter to this
+  // nested idle button, so invoke its real OnMouseEntered override directly.
+  // That runs the production hover path (hover_callback_ ->
+  // OnIdleButtonHoverChanged -> SetTranslateLabelHovered), underlining the
+  // still-visible label; then assert and capture the true rendered underline.
+  ASSERT_TRUE(translate_label->GetVisible());
+  views::LabelButton* idle_button = search->idle_button_for_testing();
+  ASSERT_TRUE(idle_button);
+  ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
+                             gfx::Point(), base::TimeTicks::Now(), 0, 0);
+  idle_button->OnMouseEntered(enter_event);
+  ASSERT_NE(0, translate_label->font_list().GetFontStyle() &
+                   gfx::Font::UNDERLINE)
+      << "Hovering the idle button must underline the translation label";
+  CaptureWidgetPng(search->GetWidget(),
+                   "GREEN-c1-label-hover-underline.png");
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TranslationPopoverTranslateMarksActiveHttpPageTranslated) {
+  SeedProfile(2);
+
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(content::WaitForLoadStop(contents));
+  ASSERT_TRUE(maho::CanOnDeviceTranslate(contents));
+  ASSERT_FALSE(maho::IsMahoPageTranslated(contents));
+
+  ResolveViews();
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = page_url.spec();
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  model.translation_available = true;
+  model.is_page_translated = false;
+  search->Update(model);
+  ASSERT_TRUE(search->GetWidget());
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  views::Label* translate_label = search->translate_label_view();
+  ASSERT_TRUE(translate_label);
+  ASSERT_TRUE(translate_label->GetVisible());
+  ClickScreenPoint(translate_label->GetBoundsInScreen().CenterPoint());
+
+  ASSERT_TRUE(base::test::RunUntil([search] {
+    views::Widget* widget = search->translate_popover_widget_for_testing();
+    return widget && widget->IsVisible();
+  }));
+  views::Widget* popover = search->translate_popover_widget_for_testing();
+  ASSERT_TRUE(popover);
+  views::MdTextButton* translate_button =
+      FindTextButtonWithText(popover->GetContentsView(), u"Translate");
+  ASSERT_TRUE(translate_button);
+  ClickScreenPoint(translate_button->GetBoundsInScreen().CenterPoint());
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [contents] { return maho::IsMahoPageTranslated(contents); }));
+  EXPECT_TRUE(base::test::RunUntil([search] {
+    return search->translate_popover_widget_for_testing() == nullptr;
+  }));
+  ASSERT_TRUE(search->translate_label_view());
+  EXPECT_EQ(u"Translated", search->translate_label_view()->GetText());
+
+  CaptureWidgetPng(
+      BrowserView::GetBrowserViewForBrowser(browser())->GetWidget(),
+      "GREEN-c4-translated-page.png");
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TranslationOptionsChooseLanguagePersistsAndTranslates) {
+  SeedProfile(2);
+
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(maho::CanOnDeviceTranslate(contents));
+  browser()->profile()->GetPrefs()->SetString(
+      translate::prefs::kPrefTranslateRecentTarget, "zz");
+
+  ResolveViews();
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = page_url.spec();
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  model.translation_available = true;
+  model.is_page_translated = false;
+  search->Update(model);
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  const MahoTranslateOptionsForTesting options =
+      search->PrepareTranslateOptionsForTesting();
+  ASSERT_FALSE(options.labels.empty());
+  const std::vector<std::u16string> expected_labels = {
+      u"Choose Another Language", u"Never Translate This Site",
+      u"Language Settings"};
+  EXPECT_EQ(expected_labels, options.labels);
+  ASSERT_NE(0, options.first_language_command_id);
+  const std::string selected_language =
+      browser()->profile()->GetPrefs()->GetString(
+          translate::prefs::kPrefTranslateRecentTarget);
+  search->ExecuteCommand(options.first_language_command_id, 0);
+
+  EXPECT_NE(selected_language, browser()->profile()->GetPrefs()->GetString(
+                                   translate::prefs::kPrefTranslateRecentTarget));
+  EXPECT_TRUE(base::test::RunUntil(
+      [contents] { return maho::IsMahoPageTranslated(contents); }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TranslationOptionsNeverTranslateSuppressesLabel) {
+  SeedProfile(2);
+
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+
+  ResolveViews();
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = page_url.spec();
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  model.translation_available = true;
+  model.is_page_translated = false;
+  search->Update(model);
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  const MahoTranslateOptionsForTesting options =
+      search->PrepareTranslateOptionsForTesting();
+  ASSERT_NE(0, options.never_translate_command_id);
+  search->ExecuteCommand(options.never_translate_command_id, 0);
+
+  const std::string host(page_url.host());
+  EXPECT_TRUE(base::test::RunUntil([profile = browser()->profile(), &host] {
+    return translate::TranslatePrefs(profile->GetPrefs())
+        .IsSiteOnNeverPromptList(host);
+  }));
+  ASSERT_TRUE(search->translate_label_view());
+  EXPECT_FALSE(search->translate_label_view()->GetVisible());
+
+  search->Update(GetViewState().search);
+  EXPECT_FALSE(search->translate_label_view()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TranslationOptionsLanguageSettingsOpensGeneralPane) {
+  SeedProfile(2);
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = "https://translate-settings.example/";
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  model.translation_available = true;
+  model.is_page_translated = false;
+  search->Update(model);
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  const MahoTranslateOptionsForTesting options =
+      search->PrepareTranslateOptionsForTesting();
+  ASSERT_NE(0, options.language_settings_command_id);
+  search->ExecuteCommand(options.language_settings_command_id, 0);
+
+  EXPECT_TRUE(base::test::RunUntil([this] {
+    content::WebContents* contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+    return contents && contents->GetVisibleURL().query() == "pane=general";
+  }));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,

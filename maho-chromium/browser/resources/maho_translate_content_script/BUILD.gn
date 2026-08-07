@@ -1,0 +1,15 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//ui/webui/resources/tools/build_webui.gni")
+
+assert(!is_android)
+
+build_webui("build") {
+  grd_prefix = "maho_translate_content_script"
+
+  ts_files = [ "content_script.ts" ]
+
+  ts_deps = []
+
+  webui_context_type = "untrusted"
+}
