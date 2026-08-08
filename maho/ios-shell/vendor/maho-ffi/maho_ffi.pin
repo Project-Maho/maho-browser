@@ -1,0 +1,8 @@
+# Auto-written by scripts/pin-ffi.sh — do not edit by hand.
+source_commit=a31362645baea9cee06094027553dad8e2d4f48b
+header_sha256=e6e8345946d060fcdba29002db671651df36e8d64d373859181e974ca393e82f
+cbindgen_config=cbindgen.toml
+rust_targets=aarch64-apple-ios,aarch64-apple-ios-sim
+ios_deployment_target=17.0
+pinned_at=2026-08-08T00:55:19Z
+allow_dirty=1

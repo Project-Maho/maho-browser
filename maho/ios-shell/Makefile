@@ -3,11 +3,15 @@
 
 RUST_TARGET_IOS    := aarch64-apple-ios
 RUST_TARGET_SIM    := aarch64-apple-ios-sim
+# Must match project.yml deploymentTarget. Without it the Rust build links against
+# the old default (iOS 10.0) while the SDK is new, causing sqlcipher's sqlite3.c to
+# reference ___chkstk_darwin with no runtime support -> undefined-symbol link failure.
+IOS_DEPLOYMENT_TARGET := 17.0
 RUST_LIB_NAME      := libmaho_ffi.a
 RUST_LIB_DIR       := ../target
 HEADER_DIR         := include
 FFI_CRATE          := maho-ffi
-CBINDGEN_CONFIG    := ../mobile-build/cbindgen.toml
+CBINDGEN_CONFIG    := cbindgen.toml
 IOS_LIB_DIR        := build/ios
 SIM_LIB_DIR        := build/sim
 UNIVERSAL_LIB_DIR  := build/universal
@@ -17,10 +21,10 @@ UNIVERSAL_LIB_DIR  := build/universal
 all: generate-header universal-lib
 
 build-rust-ios:
-	cargo build --target $(RUST_TARGET_IOS) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
+	IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) cargo build --target $(RUST_TARGET_IOS) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
 
 build-rust-sim:
-	cargo build --target $(RUST_TARGET_SIM) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
+	IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) cargo build --target $(RUST_TARGET_SIM) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
 
 generate-header:
 	cbindgen --config $(CBINDGEN_CONFIG) --crate $(FFI_CRATE) --output $(HEADER_DIR)/maho_ffi.h ..
@@ -34,7 +38,7 @@ universal-lib: build-rust-ios build-rust-sim
 	@echo "Legacy universal fallback: $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME) (sim slice, for tools that only look here)"
 
 
-build-app: generate-header
+build-app:
 	xcodebuild build \
 		-project Maho.xcodeproj \
 		-scheme Maho \

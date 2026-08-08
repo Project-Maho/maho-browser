@@ -1,5 +1,49 @@
 import Foundation
 import os.log
+import Security
+
+// MARK: - SQLCipher Keychain Helper
+
+struct SqlCipherKeychain {
+    static let service = "dev.maho.browser.storage"
+    static let account = "sqlcipher-key"
+
+    static func getData() -> Data? {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return data
+    }
+
+    static func set(key: String) -> Bool {
+        guard let data = key.data(using: .utf8) else { return false }
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account
+        ]
+        let attributes: [CFString: Any] = [
+            kSecValueData: data,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecItemNotFound {
+            var createQuery = query
+            createQuery[kSecValueData] = data
+            createQuery[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let createStatus = SecItemAdd(createQuery as CFDictionary, nil)
+            return createStatus == errSecSuccess
+        }
+        return updateStatus == errSecSuccess
+    }
+}
 
 // MahoCore FFI pointer: *mut MahoCore in Rust, opaque to Swift.
 // Swift sees this as OpaquePointer since cbindgen emits `typedef struct MahoCore MahoCore;`
@@ -12,6 +56,77 @@ final class MahoBridge: @unchecked Sendable {
     private let log = Logger(subsystem: "dev.maho.browser", category: "Bridge")
 
     private init() {}
+
+    func provisionSqlcipherKey(storagePath: String) {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: storagePath) {
+            try? fileManager.createDirectory(atPath: storagePath, withIntermediateDirectories: true)
+        }
+
+        var url = URL(fileURLWithPath: storagePath)
+        do {
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try url.setResourceValues(resourceValues)
+        } catch {
+            log.error("Failed to exclude storage directory from backup: \(error)")
+        }
+
+        let dbPath = URL(fileURLWithPath: storagePath).appendingPathComponent("maho.db").path
+        var dbExists = fileManager.fileExists(atPath: dbPath)
+
+        var keyHex: String? = nil
+        if let keyData = SqlCipherKeychain.getData() {
+            keyHex = String(data: keyData, encoding: .utf8)
+        }
+
+        let isTesting = NSClassFromString("XCTestCase") != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
+        if dbExists {
+            if (keyHex == nil || keyHex!.isEmpty) && isTesting {
+                let dbUrl = URL(fileURLWithPath: dbPath)
+                let parentDir = dbUrl.deletingLastPathComponent()
+                if let enumerator = fileManager.enumerator(at: parentDir, includingPropertiesForKeys: nil) {
+                    for case let fileUrl as URL in enumerator {
+                        if fileUrl.lastPathComponent.hasPrefix("maho.db") {
+                            try? fileManager.removeItem(at: fileUrl)
+                        }
+                    }
+                }
+                dbExists = false
+            }
+        }
+
+        if dbExists {
+            guard let key = keyHex, !key.isEmpty else {
+                fatalError("Critical: maho.db exists but SQLCipher key is missing or failed to read from Keychain. Aborting to prevent data corruption.")
+            }
+        } else {
+            if keyHex == nil || keyHex!.isEmpty {
+                var bytes = [UInt8](repeating: 0, count: 32)
+                let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+                guard status == errSecSuccess else {
+                    fatalError("Failed to generate random bytes for SQLCipher key")
+                }
+                let newKeyHex = bytes.map { String(format: "%02x", $0) }.joined()
+                guard SqlCipherKeychain.set(key: newKeyHex) else {
+                    fatalError("Failed to store generated SQLCipher key in Keychain")
+                }
+                keyHex = newKeyHex
+            }
+        }
+
+        guard let key = keyHex else {
+            fatalError("SQLCipher key is unavailable")
+        }
+
+        let success = key.withCString { cStr in
+            maho_storage_set_sqlcipher_key(cStr)
+        }
+        if !success {
+            fatalError("Failed to set SQLCipher key in storage driver")
+        }
+    }
 
     var isInitialized: Bool {
         lock.lock()

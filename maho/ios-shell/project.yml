@@ -13,10 +13,10 @@ options:
 settings:
   base:
     SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Maho-Bridging-Header.h"
-    HEADER_SEARCH_PATHS: ["$(SRCROOT)/include"]
-    LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/build/universal"]
-    "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(SRCROOT)/build/ios"
-    "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(SRCROOT)/build/sim"
+    HEADER_SEARCH_PATHS: ["$(SRCROOT)/vendor/maho-ffi/include"]
+    LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/vendor/maho-ffi/lib/sim"]
+    "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(SRCROOT)/vendor/maho-ffi/lib/ios"
+    "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(SRCROOT)/vendor/maho-ffi/lib/sim"
     OTHER_LDFLAGS: ["-lmaho_ffi", "-framework", "WebKit", "-framework", "Security", "-framework", "SystemConfiguration", "-framework", "Speech", "-framework", "AVFoundation"]
     SWIFT_VERSION: "5.9"
     GENERATE_INFOPLIST_FILE: false
@@ -32,6 +32,10 @@ targets:
   Maho:
     type: application
     platform: iOS
+    preBuildScripts:
+      - script: '"$SRCROOT/scripts/check-ffi-pin.sh"'
+        name: Check vendored FFI pin
+        basedOnDependencyAnalysis: false
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
@@ -61,6 +65,12 @@ targets:
           - UIInterfaceOrientationPortrait
         NSSpeechRecognitionUsageDescription: "Maho uses speech recognition to let you search by voice."
         NSMicrophoneUsageDescription: "Maho uses the microphone for voice search."
+        MahoGoogleClientID: "650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
+        MahoGoogleRedirectScheme: "com.googleusercontent.apps.650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq"
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLSchemes:
+              - "com.googleusercontent.apps.650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.maho.browser

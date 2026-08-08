@@ -17,6 +17,7 @@
 		09E062A4B36A8512AEF11961 /* MahoBridge+Notes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31CB92672B38BE4F8C80EE76 /* MahoBridge+Notes.swift */; };
 		0C703FD489CCA920765F5176 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AD61199BCF5A35615C3213 /* BrowserView.swift */; };
 		0CC0BF62D11DF6791236E701 /* AiSearchSystemPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C3F354363004F2774F720F /* AiSearchSystemPrompt.swift */; };
+		0F16D25DAEE26D5496DA3E1D /* GoogleRelaySignInFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30D21A35900BEF3B44F9A93D /* GoogleRelaySignInFlowTests.swift */; };
 		10B1D3A96E56A970FABB98AE /* AiProviderResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C052916195F3FEBD6FDB4FB6 /* AiProviderResolver.swift */; };
 		161EDC90361D487418E13CCC /* BridgeTabsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 038ED9EEA08AFAE19F7314E0 /* BridgeTabsTests.swift */; };
 		1760D2F03212CCF62E707078 /* BrowserState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E89A4B5E1894A89C3AF8459 /* BrowserState.swift */; };
@@ -31,6 +32,7 @@
 		276BE87CD6B8DD33AE826D96 /* TabGridToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3C5675E1CE153EA4710143 /* TabGridToolbar.swift */; };
 		28A01C4737658E123C316C05 /* Patchable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115CD7DD504A026FB3000E13 /* Patchable.swift */; };
 		29945FF391A233A6BD9BE8B7 /* MainBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B43101A63E11A25E35577F1 /* MainBrowserView.swift */; };
+		2ACE1ABB67F74DC018BD3283 /* RelayCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = E900F7E97838F6A0623F06FF /* RelayCoding.swift */; };
 		2D9A41B58CF394C0C0B16CF3 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = E0F014B2760877B3C5A39B65 /* Readability.js */; };
 		2DC388FABC72E24DFC0A5ECA /* PrivacyDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AFA0D73F59C325847CCB9FF /* PrivacyDashboardView.swift */; };
 		2FC38E34915D7AF107BF35B9 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */; };
@@ -57,6 +59,7 @@
 		4A098E95E31A0FB7EEC93D47 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07A09139B37646512D2C7CE7 /* HistoryView.swift */; };
 		4B60E7E023C818BD4780979E /* BrowserLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C3B4A398E66153A1E1F82E /* BrowserLaunchTests.swift */; };
 		4FF775809BC1EE35D365E9FA /* MahoBridge+Downloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F4659CF74EA06C54303E51 /* MahoBridge+Downloads.swift */; };
+		5403A927A7F1A8A9E1DE9742 /* RelayAuthResponseDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */; };
 		570DFA9BE61FE0BC8CE515D5 /* HandoffManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527B31F355C5EDFE459C310F /* HandoffManager.swift */; };
 		620729BEDF8D1984BA87B903 /* ReaderSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCD836DC0F18F95C8A80545 /* ReaderSettingsSheet.swift */; };
 		62B1753BD376BF0138169E00 /* ReadingListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B5B558DF634AA1616E1F8F /* ReadingListView.swift */; };
@@ -129,6 +132,7 @@
 		C4958A90E6A2D3F56B39004A /* CommonTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A92D7FF0CF36B1882407AA3D /* CommonTypes.swift */; };
 		C506205309979F86B0B038BE /* MahoBridge+Find.swift in Sources */ = {isa = PBXBuildFile; fileRef = D346134A5CB0CF82E6876FDB /* MahoBridge+Find.swift */; };
 		C573786BD999F49442410D4B /* MahoBridge+Bookmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6991D853C91553504BFD80B3 /* MahoBridge+Bookmarks.swift */; };
+		C8E12900F28BE84710D241CE /* GoogleSignInCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EBC5417819195E77362721C /* GoogleSignInCoordinator.swift */; };
 		C8EC3303D7B02E3FD9372FB2 /* UpdateBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1023C87BF6692E8BCC73749 /* UpdateBannerView.swift */; };
 		CABA657241C0527391AEEC70 /* SyncTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1AFF85313E8530CEF4B167 /* SyncTransport.swift */; };
 		CAE20B83E434845868DE250E /* ShortcutsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CB44EDF24FCA46AE1A22B9 /* ShortcutsManager.swift */; };
@@ -227,6 +231,7 @@
 		2B43101A63E11A25E35577F1 /* MainBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainBrowserView.swift; sourceTree = "<group>"; };
 		2CCD836DC0F18F95C8A80545 /* ReaderSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettingsSheet.swift; sourceTree = "<group>"; };
 		2DC00613B2B0890742D94D04 /* TabCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabCardView.swift; sourceTree = "<group>"; };
+		30D21A35900BEF3B44F9A93D /* GoogleRelaySignInFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleRelaySignInFlowTests.swift; sourceTree = "<group>"; };
 		311B058C5C2DB34538E1EA05 /* ConversationListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListView.swift; sourceTree = "<group>"; };
 		31CB92672B38BE4F8C80EE76 /* MahoBridge+Notes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Notes.swift"; sourceTree = "<group>"; };
 		329FF59E8F3D9FC8B074DE78 /* JSON.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSON.swift; sourceTree = "<group>"; };
@@ -286,7 +291,9 @@
 		86DD890D1F6F4294BE751E6C /* MahoShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = MahoShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		87C3F354363004F2774F720F /* AiSearchSystemPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AiSearchSystemPrompt.swift; sourceTree = "<group>"; };
 		88E1B5F41596A22C05A5FD6E /* WebViewBridgeAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewBridgeAgentTests.swift; sourceTree = "<group>"; };
+		8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAuthResponseDecodingTests.swift; sourceTree = "<group>"; };
 		8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackView.swift; sourceTree = "<group>"; };
+		8EBC5417819195E77362721C /* GoogleSignInCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInCoordinator.swift; sourceTree = "<group>"; };
 		95C5AB7D5319FBC2F2FD2884 /* Identifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identifiers.swift; sourceTree = "<group>"; };
 		97B4F0A8EB3B1E90022992DA /* MahoBridge+Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Agent.swift"; sourceTree = "<group>"; };
 		98291AB30F5FE8057ECAE731 /* BridgeSpacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeSpacesTests.swift; sourceTree = "<group>"; };
@@ -349,6 +356,7 @@
 		E3FBBEA431C08CA30AE8D2DD /* ConversationE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationE2ETests.swift; sourceTree = "<group>"; };
 		E5ED1E4E5BA9FF169BD7820A /* MahoBridge+Folders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Folders.swift"; sourceTree = "<group>"; };
 		E8564FA45C2DB03E7E53FFE1 /* FolderListSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderListSheet.swift; sourceTree = "<group>"; };
+		E900F7E97838F6A0623F06FF /* RelayCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayCoding.swift; sourceTree = "<group>"; };
 		EE0AE24A80DEF1E5C4B0C6F4 /* SyncTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTransportTests.swift; sourceTree = "<group>"; };
 		EF499B8200DD091D1B1CE73B /* MahoBridge+Events.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Events.swift"; sourceTree = "<group>"; };
 		F10658E84EF7C6D2FE039076 /* ExtractedArticle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtractedArticle.swift; sourceTree = "<group>"; };
@@ -367,7 +375,7 @@
 		FF1AFF85313E8530CEF4B167 /* SyncTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTransport.swift; sourceTree = "<group>"; };
 		FF8FF3CC8F3101B33A809CC4 /* LanguageSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageSettingsView.swift; sourceTree = "<group>"; };
 		FFEC8CF3BAC18D361D46B8F2 /* ContentBlockerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentBlockerView.swift; sourceTree = "<group>"; };
-		"TEMP_A0EEE6EB-16CA-445B-843D-92F6BF222C1E" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_A55CF193-8A2E-4B40-A58C-6BAFC2910098" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -479,7 +487,9 @@
 				038ED9EEA08AFAE19F7314E0 /* BridgeTabsTests.swift */,
 				1C1E3F6C2EC8976937E1B962 /* ChatSessionRegistryTests.swift */,
 				0443026F8911FC0AFB5E77C9 /* CodableRoundTripTests.swift */,
+				30D21A35900BEF3B44F9A93D /* GoogleRelaySignInFlowTests.swift */,
 				CED2F1688CBBF3AE94FC19A1 /* KindDiscriminatorTests.swift */,
+				8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */,
 				9F2E9DA8EE3B2140B64919E0 /* StreamSessionTests.swift */,
 				EE0AE24A80DEF1E5C4B0C6F4 /* SyncTransportTests.swift */,
 				88E1B5F41596A22C05A5FD6E /* WebViewBridgeAgentTests.swift */,
@@ -503,6 +513,7 @@
 				3B87CC665ED374B1317D85F4 /* E2ETestHooks.swift */,
 				6906148790D620F1D5F89076 /* FeatureFlags.swift */,
 				DF3A465733C9D71731DA93BA /* FFIString.swift */,
+				8EBC5417819195E77362721C /* GoogleSignInCoordinator.swift */,
 				527B31F355C5EDFE459C310F /* HandoffManager.swift */,
 				329FF59E8F3D9FC8B074DE78 /* JSON.swift */,
 				9FD563F16DF5C7A1ADBAE606 /* MahoIcon.swift */,
@@ -512,6 +523,7 @@
 				532CD6A8B6141D532AF2E8C6 /* PrivateBrowsingDataStorePool.swift */,
 				9F55268EE7090E2243829AF9 /* RelayAPIClient.swift */,
 				4C7A2261236851EAD350F123 /* RelayAuthStore.swift */,
+				E900F7E97838F6A0623F06FF /* RelayCoding.swift */,
 				6F853304DCE9B7611A3827FD /* ScreenshotHelper.swift */,
 				BA4A9101728B44AE8C23F2DD /* SpotlightManager.swift */,
 				9C909DD5327BBDA4D521C8B6 /* VoiceSearchManager.swift */,
@@ -786,10 +798,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_56A01167-04E0-4B6A-BF86-E6D17C4906E5" /* ios-shell */ = {
+		"TEMP_69FF4346-21DE-43FA-A61C-C1585490A6FE" /* ios-shell */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_A0EEE6EB-16CA-445B-843D-92F6BF222C1E" /* Signing.xcconfig */,
+				"TEMP_A55CF193-8A2E-4B40-A58C-6BAFC2910098" /* Signing.xcconfig */,
 			);
 			path = "ios-shell";
 			sourceTree = "<group>";
@@ -819,6 +831,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8F594CD64F46782A28952871 /* Build configuration list for PBXNativeTarget "Maho" */;
 			buildPhases = (
+				F1C9721C979A4C6BB4B5284E /* Check vendored FFI pin */,
 				96A7F4FCB047986B562B27F1 /* Sources */,
 				574D0393AE837139CDA6897F /* Resources */,
 				050318F26D770AF8BC2CD23C /* Frameworks */,
@@ -946,6 +959,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		F1C9721C979A4C6BB4B5284E /* Check vendored FFI pin */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check vendored FFI pin";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/scripts/check-ffi-pin.sh\"";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		7C4D2D22F12C440E1571DAFD /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -956,7 +991,9 @@
 				161EDC90361D487418E13CCC /* BridgeTabsTests.swift in Sources */,
 				86D24E9F63AAF6E83D86279D /* ChatSessionRegistryTests.swift in Sources */,
 				3CCC131BC23CF5F6F1F2DF20 /* CodableRoundTripTests.swift in Sources */,
+				0F16D25DAEE26D5496DA3E1D /* GoogleRelaySignInFlowTests.swift in Sources */,
 				B0DA093000D9E1EE8B67A775 /* KindDiscriminatorTests.swift in Sources */,
+				5403A927A7F1A8A9E1DE9742 /* RelayAuthResponseDecodingTests.swift in Sources */,
 				F9036250E339083B9D8ACD12 /* StreamSessionTests.swift in Sources */,
 				AA22FDB0A4DDE63BDAC635F1 /* SyncTransportTests.swift in Sources */,
 				7ACB237D957BEEC8FCDAE330 /* WebViewBridgeAgentTests.swift in Sources */,
@@ -1015,6 +1052,7 @@
 				A62C593022F81FB41E1AB3CC /* FolderCardView.swift in Sources */,
 				0716CB8E3197A22A7F91B09B /* FolderListSheet.swift in Sources */,
 				D35DDF9425DE8855E04C3FEB /* GeneralSettingsView.swift in Sources */,
+				C8E12900F28BE84710D241CE /* GoogleSignInCoordinator.swift in Sources */,
 				570DFA9BE61FE0BC8CE515D5 /* HandoffManager.swift in Sources */,
 				4A098E95E31A0FB7EEC93D47 /* HistoryView.swift in Sources */,
 				F37494CB1913F04E404FDC45 /* HomeSearchView.swift in Sources */,
@@ -1071,6 +1109,7 @@
 				02B2F3699C7F50D0C90C2BB4 /* RefreshControlView.swift in Sources */,
 				19E4D95436151E2BB1F607A4 /* RelayAPIClient.swift in Sources */,
 				E9CFE8E0C23AE076036186A2 /* RelayAuthStore.swift in Sources */,
+				2ACE1ABB67F74DC018BD3283 /* RelayCoding.swift in Sources */,
 				77E4E779B5B9D523323F37DA /* SceneCoordinator.swift in Sources */,
 				7BCAF2CB965F355021A6F3B1 /* ScreenshotHelper.swift in Sources */,
 				786F2ABE52D080B781912CB1 /* SearchSheet.swift in Sources */,
@@ -1181,7 +1220,7 @@
 		};
 		32EAC85B0E13154E2341C404 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_A0EEE6EB-16CA-445B-843D-92F6BF222C1E" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_A55CF193-8A2E-4B40-A58C-6BAFC2910098" /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -1198,7 +1237,7 @@
 		};
 		609C0B55047A5B33E839A127 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_A0EEE6EB-16CA-445B-843D-92F6BF222C1E" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_A55CF193-8A2E-4B40-A58C-6BAFC2910098" /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -1286,14 +1325,14 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/include",
+					"$(SRCROOT)/vendor/maho-ffi/include",
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LIBRARY_SEARCH_PATHS = (
-					"$(SRCROOT)/build/universal",
+					"$(SRCROOT)/vendor/maho-ffi/lib/sim",
 				);
-				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/build/ios";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/build/sim";
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/vendor/maho-ffi/lib/ios";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/vendor/maho-ffi/lib/sim";
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1386,14 +1425,14 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/include",
+					"$(SRCROOT)/vendor/maho-ffi/include",
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LIBRARY_SEARCH_PATHS = (
-					"$(SRCROOT)/build/universal",
+					"$(SRCROOT)/vendor/maho-ffi/lib/sim",
 				);
-				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/build/ios";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/build/sim";
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/vendor/maho-ffi/lib/ios";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/vendor/maho-ffi/lib/sim";
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				OTHER_LDFLAGS = (

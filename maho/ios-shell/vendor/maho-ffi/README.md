@@ -12,8 +12,12 @@ vendor/maho-ffi/
   README.md               # this file
 ```
 
-> `include/` + `lib/` + `maho_ffi.pin` are produced by `scripts/pin-ffi.sh`.
-> They do not exist until you run it once from a consistent core state.
+> `include/maho_ffi.h` + `maho_ffi.pin` are produced by `scripts/pin-ffi.sh` and
+> **are committed**. The `lib/` static libs are also produced by `pin-ffi.sh` but are
+> **gitignored** (build artifacts, ~90 MB each) — mirroring
+> `maho-chromium/third_party/maho/prebuilt/`, which is gitignored too. A fresh
+> checkout runs `pin-ffi.sh` once to materialize `lib/`.
+> None of these exist until you run it once from a consistent core state.
 
 ## Why this exists
 
@@ -72,4 +76,6 @@ dependency on `generate-header` so normal builds never regenerate the header.
 > These edits are intentionally **not** applied yet: `Makefile`/`cbindgen.toml`
 > are currently being edited by an in-flight FFI migration in the shared tree.
 > Apply them once that migration lands in a consistent, compiling state, then run
-> `pin-ffi.sh` and commit `vendor/maho-ffi/` + the matching Swift bridge together.
+> `pin-ffi.sh` and commit the vendored header + `maho_ffi.pin` + the matching Swift
+bridge together (the `lib/` static libs are gitignored and regenerated locally, so
+they are never part of the commit).
