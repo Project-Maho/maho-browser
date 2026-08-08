@@ -84,10 +84,10 @@ const fonts = [
 
 function titleSizeFor(title) {
   const length = title.length;
-  if (length <= 6) return 140;
-  if (length <= 12) return 108;
-  if (length <= 24) return 92;
-  return 74;
+  if (length <= 6) return 168;
+  if (length <= 12) return 132;
+  if (length <= 24) return 112;
+  return 90;
 }
 
 async function renderOne(config) {
@@ -109,10 +109,9 @@ async function renderOne(config) {
     `<img src="${logoDataUri}" style="width: 60px; height: 60px; border-radius: 15px;" />`,
     `<span style="font-family: 'Geist'; font-weight: 500; font-size: 37px; letter-spacing: -0.01em; color: #fafafa;">Maho</span>`,
     `</div>`,
-    // title + subtitle
+    // title only — kept short and large so it stays legible at feed/mobile preview sizes
     `<div style="display: flex; flex-direction: column;">`,
-    `<h1 style="margin: 0; max-width: 940px; font-family: 'Instrument Serif'; font-size: ${titleSize}px; line-height: 1.0; letter-spacing: -0.025em; color: #fafafa;">${config.title}</h1>`,
-    `<p style="margin: 30px 0 0 0; max-width: 830px; font-size: 31px; line-height: 1.42; color: #93939c;">${config.subtitle}</p>`,
+    `<h1 style="margin: 0; max-width: 1000px; font-family: 'Instrument Serif'; font-size: ${titleSize}px; line-height: 1.0; letter-spacing: -0.025em; color: #fafafa;">${config.title}</h1>`,
     `</div>`,
     // footer: url + product category
     `<div style="display: flex; align-items: center; justify-content: space-between;">`,
