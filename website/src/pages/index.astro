@@ -77,6 +77,24 @@ const ld = {
     <ImportSection config={browserContent.importSection} />
     <ChangelogSection config={browserContent.changelog} />
     <PricingSection config={browserContent.pricing} />
+    <section class="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
+      <div class="container-marketing">
+        <a
+          href="/mail"
+          class="group flex flex-col gap-4 rounded-squircle-lg border border-border/80 bg-card/60 p-6 transition-colors hover:border-foreground/30 sm:flex-row sm:items-center sm:justify-between sm:p-8"
+        >
+          <div class="space-y-2">
+            <p class="landing-eyebrow text-muted-foreground">Also in Maho</p>
+            <h2 class="landing-section-title inline-flex flex-wrap items-center gap-3">
+              Maho Mail
+              <span class="rounded-full border border-border px-2 py-0.5 text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground">Beta</span>
+            </h2>
+            <p class="landing-body max-w-xl text-muted-foreground">A built-in, local-first email client with a CLI and MCP server. Opt-in from Settings.</p>
+          </div>
+          <span class="shrink-0 text-sm font-medium text-foreground/80 transition-colors group-hover:text-foreground">Learn about Mail →</span>
+        </a>
+      </div>
+    </section>
     <FinalCtaSection config={browserContent.finalCta} />
     <Footer />
   </main>

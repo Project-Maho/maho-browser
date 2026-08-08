@@ -5,7 +5,6 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
-import SocialProofSection from '../components/landing/SocialProofSection.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
 import { getSiteUrl } from '../lib/site';
@@ -18,7 +17,7 @@ const ld = {
   name: 'Maho Mail',
   applicationCategory: 'Communication',
   operatingSystem: 'macOS',
-  description: 'Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents. Free forever.',
+  description: 'A built-in email client for Maho: desktop app, CLI, and MCP server. Opt-in Beta, enabled in Settings.',
   url: absoluteUrl('/mail'),
   offers: {
     '@type': 'Offer',
@@ -28,12 +27,11 @@ const ld = {
 };
 ---
 
-<BaseLayout title="Maho Mail — One client. Three interfaces." description="Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents.">
+<BaseLayout title="Maho Mail (Beta) — One inbox, three interfaces." description="A built-in, local-first email client for Maho with a CLI and MCP server. Opt-in Beta — enable it in Settings.">
   <JSONLD data={ld} />
   <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="mail" />
     <LandingPage product="mail" />
-    <SocialProofSection />
     <Footer />
   </main>
 </BaseLayout>

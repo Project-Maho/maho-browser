@@ -70,12 +70,15 @@ type MailProductContent = {
     headline: string;
     items: FeatureItem[];
   };
-  pricing?: PricingConfig & { tiers: PricingTier[] };
+  enable: {
+    eyebrow: string;
+    headline: string;
+    items: FeatureItem[];
+  };
   finalCta: FinalCtaConfig;
 };
 
 const browserDownloadUrl = "/download";
-const mailDownloadUrl = "/download?product=mail";
 const discordUrl = "https://discord.gg/Ty4J6pMdqg";
 
 const content = {
@@ -267,60 +270,41 @@ const content = {
   mail: {
     hero: {
       headline: "Email for humans\nand machines.",
-      subheadline: "A desktop email client with a CLI and MCP server. AI-powered, privacy-first, free forever.",
-      primaryCta: { label: "Download for macOS", href: mailDownloadUrl },
+      subheadline:
+        "A built-in email client for Maho — desktop GUI, a CLI, and an MCP server over one local database. Opt-in Beta.",
+      primaryCta: { label: "Download Maho", href: browserDownloadUrl },
+      microCta: "Already on Maho? Turn it on in Settings → Features → Enable Maho Mail (Beta).",
     },
     why: {
-      eyebrow: "Why Maho Mail",
+      eyebrow: "Maho Mail (Beta)",
       headline: "Email clients made you choose.",
-      body: "GUI or terminal. Pretty or programmable. Manual or automated. Every email client picks a side. Maho Mail gives you all three — a desktop app, a CLI, and an MCP server — sharing one local database.",
+      body: "GUI or terminal. Pretty or programmable. Manual or automated. Every email client picks a side. Maho Mail gives you all three — a desktop app, a CLI, and an MCP server — sharing one local database, built into the browser.",
     },
     features: {
       eyebrow: "Features",
-      headline: "Everything you need.",
+      headline: "One inbox, three interfaces.",
       items: [
         { title: "Desktop App", body: "A clean GUI for daily email. Keyboard shortcuts, dark mode, smart inbox. Read, compose, and organize — fast." },
         { title: "CLI", body: "maho search, maho get, maho list. JSON output, Unix pipes. Script your inbox like any other tool in your stack." },
         { title: "MCP Server", body: "AI agents read, search, and draft email through stdio. Connect Claude, Cursor, or any MCP-compatible tool to your inbox." },
-        { title: "AI Built In", body: "Summarize threads, draft replies, classify mail, translate messages. Bring your own API key — OpenAI, Anthropic, Ollama, or any OpenRouter model." },
-        { title: "Local & Private", body: "Everything lives on your machine. No cloud sync, no telemetry, no data leaving your device. SQLCipher encrypted at rest." },
-        { title: "Free Forever", body: "Free, forever. No paywalls, no feature gates. Optional AI subscription via OpenRouter for those who want managed inference." },
+        { title: "AI Built In", body: "Summarize threads, draft replies, classify, translate. Bring your own key — OpenAI, Anthropic, Ollama, or any OpenRouter model." },
+        { title: "Local-First Storage", body: "Your mail syncs directly from your provider over IMAP into a local SQLCipher-encrypted database — no Maho servers in between, no telemetry." },
+        { title: "Built In, No Extra Cost", body: "Maho Mail ships inside the browser. Optional managed AI via OpenRouter if you'd rather not bring your own key." },
       ],
     },
-    pricing: {
-      eyebrow: "Pricing",
-      headline: "Free. Forever.",
-      body: "Maho Mail is free, forever. Every feature, no limits. For AI features, bring your own API key — or use our managed AI through OpenRouter for a single monthly price.",
-      tiers: [
-        {
-          name: "Free",
-          price: "$0",
-          description: "Everything included. Bring your own API key for AI features.",
-          features: [
-            "Desktop app, CLI, and MCP server",
-            "Unlimited accounts",
-            "All features unlocked",
-            "BYOK for AI with OpenAI, Anthropic, or Ollama",
-          ],
-        },
-        {
-          name: "AI Pro",
-          price: "$5",
-          suffix: "/mo",
-          description: "Managed AI via OpenRouter. No API key needed.",
-          features: [
-            "Everything in Free",
-            "Pre-configured AI models",
-            "No API key setup required",
-            "Supports Maho development",
-          ],
-        },
+    enable: {
+      eyebrow: "How to enable",
+      headline: "Turn on Maho Mail (Beta) in Settings.",
+      items: [
+        { title: "1 · Open Settings → Features", body: "Maho Mail is off by default. Open Maho Settings and find the Features section." },
+        { title: "2 · Enable Maho Mail (Beta)", body: "Flip the 'Enable Maho Mail (Beta)' toggle. Mail, its settings panes, and the sidebar entry appear right away — no restart." },
+        { title: "3 · Open Mail from the sidebar", body: "Click the Mail icon in the sidebar to add an account and start. Turn it back off in Settings anytime." },
       ],
     },
     finalCta: {
-      headline: "Make email programmable.",
-      subheadline: "Download Maho Mail. Free forever, private, programmable.",
-      primaryCta: { label: "Download for macOS", href: mailDownloadUrl },
+      headline: "Built into Maho.",
+      subheadline: "Get Maho, then enable Mail (Beta) in Settings — a local-first client with a CLI and MCP server.",
+      primaryCta: { label: "Download Maho", href: browserDownloadUrl },
     },
   },
 } satisfies {
@@ -353,7 +337,12 @@ export function LandingPage({ product = "browser", heroImage }: LandingPageProps
           items={page.features.items}
           textOnly
         />
-        {page.pricing && <PricingSection config={page.pricing} />}
+        <FeaturesSection
+          eyebrow={page.enable.eyebrow}
+          headline={page.enable.headline}
+          items={page.enable.items}
+          textOnly
+        />
         <FinalCtaSection config={page.finalCta} />
       </>
     );

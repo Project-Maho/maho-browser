@@ -67,8 +67,8 @@ export function HeroSection({ config }: HeroSectionProps) {
             )}
           </div>
 
-          <ScrollReveal variant="fade" className="w-full">
-            {config.heroImage ? (
+          {config.heroImage && (
+            <ScrollReveal variant="fade" className="w-full">
               <div className="relative mx-auto w-full max-w-6xl">
                 <div className="absolute inset-x-[10%] top-6 h-32 rounded-full bg-foreground/6 blur-3xl" aria-hidden="true" />
                 <div
@@ -91,10 +91,8 @@ export function HeroSection({ config }: HeroSectionProps) {
                   </div>
                 </div>
               </div>
-            ) : (
-              <div className="relative aspect-[16/9] w-full max-w-6xl overflow-hidden rounded-squircle-xl border border-border/60 bg-[radial-gradient(circle_at_top_right,rgba(250,250,250,0.12),transparent_50%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))]" />
-            )}
-          </ScrollReveal>
+            </ScrollReveal>
+          )}
         </div>
       </div>
     </section>
