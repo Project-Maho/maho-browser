@@ -86,7 +86,8 @@ function titleSizeFor(title) {
   const length = title.length;
   if (length <= 6) return 140;
   if (length <= 12) return 108;
-  return 92;
+  if (length <= 24) return 92;
+  return 74;
 }
 
 async function renderOne(config) {

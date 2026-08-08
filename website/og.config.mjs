@@ -2,8 +2,8 @@
 export const ogConfigs = [
   {
     slug: 'home',
-    title: 'Maho',
-    subtitle: 'A private browser and email client. Built for people who value privacy without friction.',
+    title: 'The browser tools you liked. Still shipping.',
+    subtitle: 'Keep Spaces and Profiles separate, route URLs by rule, and use AI only when you ask.',
     accent: 'browser',
   },
   {
