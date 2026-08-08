@@ -1,7 +1,10 @@
 package dev.maho.browser
 
-import dev.maho.browser.support.MahoJson
-import org.json.JSONObject
+import android.content.Intent
+import dev.maho.browser.bridge.BridgeAgent
+import dev.maho.browser.bridge.BridgeAi
+import dev.maho.browser.bridge.BridgeChat
+import dev.maho.browser.bridge.BridgeConversations
 
 object MahoBridge {
 
@@ -10,10 +13,12 @@ object MahoBridge {
     }
 
     @Volatile
-    private var corePtr: Long = 0
+    internal var corePtr: Long = 0
 
     @Volatile
     var appContext: android.content.Context? = null
+
+    internal var artifactShareLauncher: ((android.content.Context, Intent) -> Boolean)? = null
 
     val isInitialized: Boolean get() = corePtr != 0L
 
@@ -867,297 +872,110 @@ object MahoBridge {
         return nativeImportFirefoxBookmarks(ptr, profilePath)
     }
 
-    private const val BYOK_PREFS = "maho_byok_keys"
-    private const val DB_KEYS_PREFS = "maho_db_keys"
-    private const val SQLCIPHER_KEY_ENTRY = "sqlcipher_key"
-    private const val AI_SETTINGS_PREFS = "maho_ai_settings"
-    private const val AI_PROVIDER_KEY = "provider"
-    private const val AI_BASE_URL_KEY = "base_url"
-    private const val AI_API_KEY = "api_key"
-    private const val AI_MODEL_KEY = "model"
-
-    private object SecureStorageHelper {
-        private const val KEY_PROVIDER = "AndroidKeyStore"
-        private const val KEY_ALIAS = "MahoBYOKSecureKey"
-        private const val TRANSFORMATION = "AES/GCM/NoPadding"
-        private const val TAG_LENGTH_BITS = 128
-
-        private fun getSecretKey(): javax.crypto.SecretKey {
-            val keyStore = java.security.KeyStore.getInstance(KEY_PROVIDER)
-            keyStore.load(null)
-            val key = keyStore.getKey(KEY_ALIAS, null) as? javax.crypto.SecretKey
-            if (key != null) {
-                return key
-            }
-
-            val keyGenerator = javax.crypto.KeyGenerator.getInstance(
-                android.security.keystore.KeyProperties.KEY_ALGORITHM_AES,
-                KEY_PROVIDER
-            )
-            val keySpec = android.security.keystore.KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
-                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT
-            )
-                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-            keyGenerator.init(keySpec)
-            return keyGenerator.generateKey()
-        }
-
-        fun encrypt(plaintext: String): String {
-            val cipher = javax.crypto.Cipher.getInstance(TRANSFORMATION)
-            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, getSecretKey())
-            val iv = cipher.iv
-            val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
-            
-            val combined = ByteArray(1 + iv.size + ciphertext.size)
-            combined[0] = iv.size.toByte()
-            System.arraycopy(iv, 0, combined, 1, iv.size)
-            System.arraycopy(ciphertext, 0, combined, 1 + iv.size, ciphertext.size)
-            
-            return android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
-        }
-
-        fun decrypt(encryptedBase64: String): String? {
-            return try {
-                val combined = android.util.Base64.decode(encryptedBase64, android.util.Base64.NO_WRAP)
-                if (combined.isEmpty()) return null
-                val ivSize = combined[0].toInt()
-                if (ivSize <= 0 || ivSize > combined.size - 1) return null
-                val iv = ByteArray(ivSize)
-                System.arraycopy(combined, 1, iv, 0, ivSize)
-                
-                val ciphertext = ByteArray(combined.size - 1 - ivSize)
-                System.arraycopy(combined, 1 + ivSize, ciphertext, 0, ciphertext.size)
-                
-                val cipher = javax.crypto.Cipher.getInstance(TRANSFORMATION)
-                val spec = javax.crypto.spec.GCMParameterSpec(TAG_LENGTH_BITS, iv)
-                cipher.init(javax.crypto.Cipher.DECRYPT_MODE, getSecretKey(), spec)
-                val plaintextBytes = cipher.doFinal(ciphertext)
-                String(plaintextBytes, Charsets.UTF_8)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
-        }
-    }
-
-    // --- BYOK Storage ---
-    fun byokGetProviders(): String? = "[\"openai\", \"anthropic\"]"
-    
-    fun byokGetKey(provider: String): String? {
-        val context = appContext ?: return null
-        val prefs = context.getSharedPreferences(BYOK_PREFS, android.content.Context.MODE_PRIVATE)
-        val encrypted = prefs.getString(provider, null) ?: return null
-        return SecureStorageHelper.decrypt(encrypted)
-    }
-
-    fun byokSetKey(provider: String, key: String): Boolean {
-        val context = appContext ?: return false
-        val prefs = context.getSharedPreferences(BYOK_PREFS, android.content.Context.MODE_PRIVATE)
-        val encrypted = SecureStorageHelper.encrypt(key)
-        return prefs.edit().putString(provider, encrypted).commit()
-    }
-
-    fun byokDeleteKey(provider: String): Boolean {
-        val context = appContext ?: return false
-        val prefs = context.getSharedPreferences(BYOK_PREFS, android.content.Context.MODE_PRIVATE)
-        return prefs.edit().remove(provider).commit()
-    }
-
-    fun byokValidateKey(provider: String, key: String): Boolean {
-        return true
-    }
-
-    fun getAiSettings(): String {
-        val context = appContext
-        val prefs = context?.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
-        return JSONObject()
-            .put("provider", prefs?.getString(AI_PROVIDER_KEY, "").orEmpty())
-            .put("baseUrl", prefs?.getString(AI_BASE_URL_KEY, "").orEmpty())
-            .put("model", prefs?.getString(AI_MODEL_KEY, "").orEmpty())
-            .put("hasApiKey", getCustomAiApiKey()?.isNotEmpty() == true)
-            .put("hasByokOpenai", byokGetKey("openai")?.isNotEmpty() == true)
-            .put("hasByokAnthropic", byokGetKey("anthropic")?.isNotEmpty() == true)
-            .toString()
-    }
-
-    fun setAiProvider(provider: String): Boolean = putAiSetting(AI_PROVIDER_KEY, provider)
-
-    fun setAiBaseUrl(url: String): Boolean = putAiSetting(AI_BASE_URL_KEY, url)
-
-    fun setAiApiKey(key: String): Boolean {
-        val context = appContext ?: return false
-        val prefs = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        if (key.isEmpty()) {
-            editor.remove(AI_API_KEY)
-        } else {
-            editor.putString(AI_API_KEY, SecureStorageHelper.encrypt(key))
-        }
-        return editor.commit()
-    }
-
-    fun setAiModel(model: String): Boolean = putAiSetting(AI_MODEL_KEY, model)
-
-    private fun putAiSetting(name: String, value: String): Boolean {
-        val context = appContext ?: return false
-        return context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
-            .edit()
-            .putString(name, value)
-            .commit()
-    }
-
-    private fun getCustomAiApiKey(): String? {
-        val context = appContext ?: return null
-        val encrypted = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
-            .getString(AI_API_KEY, null) ?: return null
-        return SecureStorageHelper.decrypt(encrypted)
-    }
-
-    // --- SQLCipher key provisioning ---
-
-    private fun getOrCreateSqlcipherKeyHex(): String? {
-        val context = appContext ?: return null
-        val prefs = context.getSharedPreferences(DB_KEYS_PREFS, android.content.Context.MODE_PRIVATE)
-        val stored = prefs.getString(SQLCIPHER_KEY_ENTRY, null)
-        if (stored != null) {
-            val dec = SecureStorageHelper.decrypt(stored)
-            if (dec != null) {
-                return dec
-            }
-            // Blob exists but Keystore lost the wrapping key — refuse to rotate over a
-            // possibly-encrypted DB; caller must surface the error to the user.
-            android.util.Log.e("MahoBridge", "SQLCipher key blob present but decryption failed; refusing to regenerate to avoid bricking an encrypted DB")
-            return null
-        }
-        // No prior blob — generate a fresh 32-byte (256-bit) key.
-        val bytes = ByteArray(32)
-        java.security.SecureRandom().nextBytes(bytes)
-        val hex = bytes.joinToString("") { "%02x".format(it) }
-        val enc = SecureStorageHelper.encrypt(hex)
-        prefs.edit().putString(SQLCIPHER_KEY_ENTRY, enc).commit()
-        return hex
-    }
+    // --- AI settings ---
+    fun byokGetProviders(): String? = BridgeAi.byokGetProviders()
+    fun byokGetKey(provider: String): String? = BridgeAi.byokGetKey(provider)
+    fun byokSetKey(provider: String, key: String): Boolean = BridgeAi.byokSetKey(provider, key)
+    fun byokDeleteKey(provider: String): Boolean = BridgeAi.byokDeleteKey(provider)
+    fun byokValidateKey(provider: String, key: String): Boolean = BridgeAi.byokValidateKey(provider, key)
+    fun getAiSettings(): String = BridgeAi.getAiSettings()
+    fun setAiProvider(provider: String): Boolean = BridgeAi.setAiProvider(provider)
+    fun setAiBaseUrl(url: String): Boolean = BridgeAi.setAiBaseUrl(url)
+    fun setAiApiKey(key: String): Boolean = BridgeAi.setAiApiKey(key)
+    fun setAiModel(model: String): Boolean = BridgeAi.setAiModel(model)
 
     fun provisionSqlcipherKey(): Boolean {
-        val hex = getOrCreateSqlcipherKeyHex() ?: return false
+        val hex = BridgeAi.getOrCreateSqlcipherKeyHex() ?: return false
         return nativeSetSqlcipherKey(hex)
     }
 
     // --- JVM callback bridges for JNI ---
     @JvmStatic
     fun requestAgentPermission(toolName: String, arguments: String): Int {
-        if (toolName == "shell_exec") {
-            return 1 // Deny
-        }
+        if (toolName == "shell_exec") return 1
         if (toolName == "fs_read" || toolName == "web_search" || toolName == "view_file" || toolName == "list_dir") {
-            return 0 // Allow
+            return 0
         }
-        return 1 // Deny
+        return 1
     }
 
     @JvmStatic
-    fun getAgentSecureStorage(provider: String): String? {
-        val context = appContext ?: return null
-        val prefs = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
-        val storedProvider = prefs.getString(AI_PROVIDER_KEY, "").orEmpty()
-        val customKey = getCustomAiApiKey()
-        if (!customKey.isNullOrEmpty() && (storedProvider == provider || storedProvider == "$provider-compatible")) {
-            return JSONObject()
-                .put("key", customKey)
-                .put("base_url", prefs.getString(AI_BASE_URL_KEY, "").orEmpty().takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-                .put("model", prefs.getString(AI_MODEL_KEY, "").orEmpty().takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-                .toString()
-        }
+    fun getAgentSecureStorage(provider: String): String? = BridgeAi.getAgentSecureStorage(provider)
 
-        val byokKey = when (provider) {
-            "openai" -> byokGetKey("openai")
-            "anthropic" -> byokGetKey("anthropic")
-            else -> null
-        }?.takeIf { it.isNotEmpty() } ?: return null
+    // --- Agent sessions ---
+    fun agentCreateSession(sessionId: String): Long = BridgeAgent.agentCreateSession(sessionId)
+    fun agentFreeSession(sessionPtr: Long) = BridgeAgent.agentFreeSession(sessionPtr)
+    fun agentSendMessage(sessionPtr: Long, message: String): Boolean = BridgeAgent.agentSendMessage(sessionPtr, message)
+    fun agentCancel(sessionPtr: Long): Boolean = BridgeAgent.agentCancel(sessionPtr)
+    fun agentListTools(sessionPtr: Long): String? = BridgeAgent.agentListTools(sessionPtr)
+    fun agentPollEvent(sessionPtr: Long): String? = BridgeAgent.agentPollEvent(sessionPtr)
+    fun agentListArtifacts(sessionHandle: Long): String? = BridgeAgent.agentListArtifacts(sessionHandle)
+    fun agentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray? =
+        BridgeAgent.agentReadArtifact(sessionHandle, artifactId)
+    internal fun agentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean =
+        BridgeAgent.agentInstallDeterministicFsWriteModel(sessionHandle)
+    internal fun agentTestCompletionGeneration(sessionHandle: Long): Long =
+        BridgeAgent.agentTestCompletionGeneration(sessionHandle)
+    internal fun agentTestAwaitCompletion(sessionHandle: Long, generation: Long, timeoutMs: Long): Boolean =
+        BridgeAgent.agentTestAwaitCompletion(sessionHandle, generation, timeoutMs)
+    internal fun agentTestEnqueueArtifactCreatedTwice(sessionHandle: Long, artifactId: String): Boolean =
+        BridgeAgent.agentTestEnqueueArtifactCreatedTwice(sessionHandle, artifactId)
+    internal fun agentTestSeedArtifact(
+        sessionHandle: Long,
+        artifactId: String,
+        storageRelPath: String,
+        displayName: String,
+        mimeType: String,
+    ): Boolean = BridgeAgent.agentTestSeedArtifact(
+        sessionHandle,
+        artifactId,
+        storageRelPath,
+        displayName,
+        mimeType,
+    )
+    fun artifactShare(sessionHandle: Long, artifactId: String): Boolean =
+        BridgeAgent.artifactShare(sessionHandle, artifactId)
 
-        return JSONObject()
-            .put("key", byokKey)
-            .put("base_url", JSONObject.NULL)
-            .put("model", JSONObject.NULL)
-            .toString()
-    }
+    // --- Conversations ---
+    fun createConversation(id: String, title: String?, spaceId: String?, model: String?): Boolean =
+        BridgeConversations.createConversation(id, title, spaceId, model)
+    fun listConversations(limit: Long = 100L): List<ConversationSession> =
+        BridgeConversations.listConversations(limit)
+    fun getConversationMessages(sessionId: String): List<ConversationTurn> =
+        BridgeConversations.getConversationMessages(sessionId)
+    fun saveConversationMessage(
+        sessionId: String,
+        role: String,
+        content: String,
+        urlContext: String? = null,
+    ): Boolean = BridgeConversations.saveConversationMessage(sessionId, role, content, urlContext)
+    fun deleteConversation(id: String): Boolean = BridgeConversations.deleteConversation(id)
+    fun renameConversation(id: String, title: String): Boolean = BridgeConversations.renameConversation(id, title)
 
-    // --- Agent Session Methods ---
-    fun agentCreateSession(sessionId: String): Long {
-        val ptr = corePtr
-        if (ptr == 0L) return 0L
-        return nativeAgentCreateSession(ptr, sessionId)
-    }
-
-    fun agentFreeSession(sessionPtr: Long) {
-        if (sessionPtr != 0L) nativeAgentFreeSession(sessionPtr)
-    }
-
-    fun agentSendMessage(sessionPtr: Long, message: String): Boolean {
-        if (sessionPtr == 0L) return false
-        return nativeAgentSendMessage(sessionPtr, message)
-    }
-
-    fun agentCancel(sessionPtr: Long): Boolean {
-        if (sessionPtr == 0L) return false
-        return nativeAgentCancel(sessionPtr)
-    }
-
-    fun agentListTools(sessionPtr: Long): String? {
-        if (sessionPtr == 0L) return null
-        return nativeAgentListTools(sessionPtr)
-    }
-
-    fun agentPollEvent(sessionPtr: Long): String? {
-        if (sessionPtr == 0L) return null
-        return nativeAgentPollEvent(sessionPtr)
-    }
-
-    // --- Conversation ---
-    fun createConversation(id: String, title: String?, spaceId: String?, model: String?): Boolean {
-        return nativeCreateConversation(corePtr, id, title ?: "", spaceId ?: "", model ?: "")
-    }
-    fun listConversations(limit: Long = 100L): List<ConversationSession> {
-        val jsonStr = nativeListConversations(corePtr, limit) ?: return emptyList()
-        return try {
-            MahoJson.instance.decodeFromString<List<ConversationSession>>(jsonStr)
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-    fun getConversationMessages(sessionId: String): List<ConversationTurn> {
-        val jsonStr = nativeGetConversationMessages(corePtr, sessionId) ?: return emptyList()
-        return try {
-            MahoJson.instance.decodeFromString<List<ConversationTurn>>(jsonStr)
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-    fun saveConversationMessage(sessionId: String, role: String, content: String, urlContext: String? = null): Boolean {
-        return nativeSaveConversationMessage(corePtr, sessionId, role, content, urlContext ?: "")
-    }
-    fun deleteConversation(id: String): Boolean {
-        return nativeDeleteConversation(corePtr, id)
-    }
-    fun renameConversation(id: String, title: String): Boolean {
-        return nativeRenameConversation(corePtr, id, title)
-    }
-
-    // --- Chat Stubs ---
-    fun chatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long = 0L
-    fun chatSessionFree(sessionPtr: Long) {}
-    fun chatSendUserTurn(sessionPtr: Long, message: String): Boolean = true
-    fun chatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean = true
-    fun chatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean = true
-    fun chatCancel(sessionPtr: Long): Boolean = true
-    fun chatSessionPollEvent(sessionPtr: Long): String? = null
-    fun chatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean = true
-    fun chatSendToolResult(sessionPtr: Long, toolCallId: String, name: String, output: String, isSuccess: Boolean): Boolean = true
-    fun chatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean = true
+    // --- Chat ---
+    fun chatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long =
+        BridgeChat.chatSessionNew(apiKey, endpoint, model, systemInstruction)
+    fun chatSessionFree(sessionPtr: Long) = BridgeChat.chatSessionFree(sessionPtr)
+    fun chatSendUserTurn(sessionPtr: Long, message: String): Boolean = BridgeChat.chatSendUserTurn(sessionPtr, message)
+    fun chatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean =
+        BridgeChat.chatSendTextWithImage(sessionPtr, text, mime, data)
+    fun chatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean =
+        BridgeChat.chatSendImage(sessionPtr, mime, data)
+    fun chatCancel(sessionPtr: Long): Boolean = BridgeChat.chatCancel(sessionPtr)
+    fun chatSessionPollEvent(sessionPtr: Long): String? = BridgeChat.chatSessionPollEvent(sessionPtr)
+    fun chatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean =
+        BridgeChat.chatRegisterTool(sessionPtr, name, description, parametersJson)
+    fun chatSendToolResult(
+        sessionPtr: Long,
+        toolCallId: String,
+        name: String,
+        output: String,
+        isSuccess: Boolean,
+    ): Boolean = BridgeChat.chatSendToolResult(sessionPtr, toolCallId, name, output, isSuccess)
+    fun chatAppendUserMessage(sessionPtr: Long, content: String): Boolean =
+        BridgeChat.chatAppendUserMessage(sessionPtr, content)
+    fun chatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean =
+        BridgeChat.chatAppendAssistantMessage(sessionPtr, content, toolCallsJson)
 
     // --- Space AI Config ---
     fun getSpaceAIConfig(spaceId: String): SpaceAIConfig? = null
@@ -1182,8 +1000,6 @@ object MahoBridge {
     // ============================================================
     // Native extern declarations
     // ============================================================
-
-    // --- Core Lifecycle ---
     private external fun nativeCreate(): Long
     private external fun nativeCreateWithStorage(storagePath: String): Long
     private external fun nativeDestroy(ptr: Long)
@@ -1192,15 +1008,11 @@ object MahoBridge {
     private external fun nativeClusterTabs(ptr: Long, threshold: Double): String?
     private external fun nativeSaveState(ptr: Long): Boolean
     private external fun nativeLoadState(ptr: Long): Boolean
-
-    // --- View Models ---
     private external fun nativeGetTabViewModels(ptr: Long): String?
     private external fun nativeGetSpaceViewModels(ptr: Long): String?
     private external fun nativeGetFolderViewModels(ptr: Long, spaceIdJson: String): String?
     private external fun nativeGetDownloadViewModels(ptr: Long): String?
     private external fun nativeGetNoteViewModels(ptr: Long): String?
-
-    // --- Settings ---
     private external fun nativeGetSettings(ptr: Long): String?
     private external fun nativeUpdateSettings(ptr: Long, settingsJson: String)
     private external fun nativeGetSiteSearchEntries(ptr: Long): String?
@@ -1210,8 +1022,6 @@ object MahoBridge {
     private external fun nativeSetWindowTransparency(ptr: Long, enabled: Boolean)
     private external fun nativeSetAppIcon(ptr: Long, path: String)
     private external fun nativeSetCrashSaveInterval(ptr: Long, seconds: Long)
-
-    // --- Tabs ---
     private external fun nativeGetPinnedTabs(ptr: Long, spaceIdJson: String): String?
     private external fun nativeGetTodayTabs(ptr: Long, spaceIdJson: String): String?
     private external fun nativeGetArchivedTabs(ptr: Long, spaceIdJson: String): String?
@@ -1221,16 +1031,12 @@ object MahoBridge {
     private external fun nativeSetTabParent(ptr: Long, tabIdJson: String, newParentIdJson: String)
     private external fun nativeResetPinnedTab(ptr: Long, tabId: String): String?
     private external fun nativeCheckPinnedNavigation(ptr: Long, tabId: String, url: String): String?
-
-    // --- Tab Previews ---
     private external fun nativeSchedulePreviewCapture(ptr: Long, tabIdJson: String): Boolean
     private external fun nativeTakePendingPreviewCaptures(ptr: Long): String?
     private external fun nativeHasTabPreview(ptr: Long, tabIdJson: String): Boolean
     private external fun nativeUpdateTabPreview(ptr: Long, tabIdJson: String, data: ByteArray)
     private external fun nativeGetTabPreview(ptr: Long, tabIdJson: String): String?
     private external fun nativeFreePreviewData()
-
-    // --- Spaces ---
     private external fun nativeGetActiveSpaceId(ptr: Long): String?
     private external fun nativeCreateSpace(ptr: Long, name: String, colorJson: String, profileId: String): String?
     private external fun nativeDeleteSpace(ptr: Long, spaceIdJson: String)
@@ -1238,8 +1044,6 @@ object MahoBridge {
     private external fun nativeRecolorSpace(ptr: Long, spaceIdJson: String, colorJson: String)
     private external fun nativeReorderSpace(ptr: Long, spaceIdJson: String, from: Long, to: Long)
     private external fun nativeActivateSpace(ptr: Long, spaceIdJson: String)
-
-    // --- Bookmarks ---
     private external fun nativeGetBookmarks(ptr: Long): String?
     private external fun nativeAddBookmark(ptr: Long, url: String, title: String, folderId: String)
     private external fun nativeRemoveBookmark(ptr: Long, bookmarkId: String)
@@ -1247,19 +1051,13 @@ object MahoBridge {
     private external fun nativeSearchBookmarks(ptr: Long, query: String): String?
     private external fun nativeCreateBookmarkFolder(ptr: Long, name: String, parentId: String): String?
     private external fun nativeDeleteBookmarkFolder(ptr: Long, folderId: String): String?
-
-    // --- History ---
     private external fun nativeSearchHistory(ptr: Long, query: String, limit: Long): String?
     private external fun nativeSearchHistoryPaginated(ptr: Long, query: String, limit: Long, offset: Long): String?
     private external fun nativeGetHistoryGroupedByDate(ptr: Long): String?
     private external fun nativeAddHistoryEntry(ptr: Long, url: String, title: String)
     private external fun nativeDeleteHistoryEntry(ptr: Long, entryId: String)
     private external fun nativeClearHistory(ptr: Long)
-
-    // --- Search Engines ---
     private external fun nativeGetSearchEngines(ptr: Long): String?
-
-    // --- Content Blocker ---
     private external fun nativeCompileContentRules(ptr: Long): String?
     private external fun nativeGetContentRules(ptr: Long): String?
     private external fun nativeGetFilterLists(ptr: Long): String?
@@ -1267,49 +1065,33 @@ object MahoBridge {
     private external fun nativeUpdateFilterListContent(ptr: Long, id: String, content: String)
     private external fun nativeRebuildContentRules(ptr: Long)
     private external fun nativeGetContentRuleCount(ptr: Long): Long
-
-    // --- Air Traffic Control ---
     private external fun nativeGetAtcRules(ptr: Long): String?
     private external fun nativeAddAtcRule(ptr: Long, ruleJson: String): String?
     private external fun nativeRemoveAtcRule(ptr: Long, ruleId: String): String?
     private external fun nativeToggleAtcRule(ptr: Long, ruleId: String, enabled: Boolean)
-
-    // --- Reader Mode ---
     private external fun nativeToggleReaderMode(ptr: Long, tabIdJson: String): Boolean
     private external fun nativeIsReaderMode(ptr: Long, tabIdJson: String): Boolean
     private external fun nativeGetReaderSettings(ptr: Long): String?
-
-    // --- Find in Page ---
     private external fun nativeStartFind(ptr: Long, tabIdJson: String, query: String): String?
     private external fun nativeFindNext(ptr: Long): String?
     private external fun nativeFindPrevious(ptr: Long): String?
     private external fun nativeDismissFind(ptr: Long)
-
-    // --- Downloads ---
     private external fun nativeStartDownload(ptr: Long, url: String, filename: String, contentType: String): String?
     private external fun nativeUpdateDownloadProgress(ptr: Long, downloadId: String, bytesReceived: Long, totalBytes: Long)
     private external fun nativePauseDownload(ptr: Long, downloadId: String)
     private external fun nativeResumeDownload(ptr: Long, downloadId: String)
     private external fun nativeCancelDownload(ptr: Long, downloadId: String)
     private external fun nativeRemoveDownload(ptr: Long, downloadId: String)
-
-    // --- Zoom ---
     private external fun nativeGetZoom(ptr: Long, site: String): Double
     private external fun nativeSetZoom(ptr: Long, site: String, zoom: Double)
-
-    // --- Notifications ---
     private external fun nativeGetNotifications(ptr: Long): String?
     private external fun nativeDismissNotification(ptr: Long, notificationId: String)
     private external fun nativeDismissAllNotifications(ptr: Long)
     private external fun nativeSetNotificationFilter(ptr: Long, origin: String, allowed: Boolean)
     private external fun nativeGetUnreadCount(ptr: Long): Long
-
-    // --- Toolbar ---
     private external fun nativeGetToolbarItems(ptr: Long): String?
     private external fun nativeSetToolbarItems(ptr: Long, itemsJson: String): String?
     private external fun nativeGetDefaultToolbarItems(ptr: Long): String?
-
-    // --- Sync ---
     private external fun nativeStartSync(ptr: Long, serverUrl: String, syncKey: String)
     private external fun nativeStopSync(ptr: Long)
     private external fun nativeGetSyncStatus(ptr: Long): String?
@@ -1320,26 +1102,18 @@ object MahoBridge {
     private external fun nativeRemoveSyncDevice(ptr: Long, deviceId: String)
     private external fun nativeApplyRemoteEntities(ptr: Long, entitiesJson: String): String?
     private external fun nativeDrainOutgoing(ptr: Long): String?
-
-    // --- Content Blocking ---
     private external fun nativeQueryFilterDecision(ptr: Long, url: String, sourceUrl: String, requestType: String): Boolean
-
-    // --- Profiles ---
     private external fun nativeGetActiveProfileId(ptr: Long): String?
     private external fun nativeListProfiles(ptr: Long): String?
     private external fun nativeCreateProfile(ptr: Long, name: String): String?
     private external fun nativeDeleteProfile(ptr: Long, profileId: String): Boolean
     private external fun nativeGetProfileDataStoreId(ptr: Long, profileId: String): String?
     private external fun nativeSwitchProfile(ptr: Long, profileId: String): Boolean
-
-    // --- Command Bar ---
     private external fun nativeRecordUsage(ptr: Long, itemKey: String)
     private external fun nativeGetTopUsed(ptr: Long, limit: Long): String?
     private external fun nativeGetSearchableItems(ptr: Long): String?
     private external fun nativeGetRecentSearches(ptr: Long): String?
     private external fun nativeSaveSearch(ptr: Long, query: String)
-
-    // --- Notes ---
     private external fun nativeLinkNoteToTab(ptr: Long, noteId: String, tabId: String)
     private external fun nativeLinkNoteToUrl(ptr: Long, noteId: String, url: String)
     private external fun nativeUnlinkNoteFromTab(ptr: Long, noteId: String)
@@ -1347,45 +1121,55 @@ object MahoBridge {
     private external fun nativeExportNotes(ptr: Long, format: String): String?
     private external fun nativeExportSingleNote(ptr: Long, noteId: String, format: String): String?
     private external fun nativeSearchNotesFts(ptr: Long, query: String): String?
-
-    // --- Reading List ---
     private external fun nativeToggleReadingListRead(ptr: Long, itemId: String): Long
     private external fun nativeGetReadingList(ptr: Long): String?
-
-    // --- Autofill ---
     private external fun nativeSaveFormData(ptr: Long, tabId: String, formJson: String)
-
-    // --- Shortcuts ---
     private external fun nativeGetShortcuts(ptr: Long): String?
     private external fun nativeSetShortcut(ptr: Long, action: String, keyComboJson: String): String?
     private external fun nativeResetShortcut(ptr: Long, action: String)
     private external fun nativeResetAllShortcuts(ptr: Long)
     private external fun nativeResolveShortcut(ptr: Long, keyComboJson: String): String?
-
-    // --- Backups ---
     private external fun nativeCreateBackup(ptr: Long, configJson: String): String?
     private external fun nativeRestoreBackup(ptr: Long, backupB64: String, password: String): String?
     private external fun nativeGetBackupHistory(ptr: Long): String?
-
-    // --- Import/Export ---
     private external fun nativeDetectBrowserProfiles(): String?
     private external fun nativeImportChromeBookmarks(ptr: Long, profilePath: String): String?
     private external fun nativeImportFirefoxBookmarks(ptr: Long, profilePath: String): String?
-
-    // --- Agent JNI ---
-    private external fun nativeAgentCreateSession(corePtr: Long, sessionId: String): Long
-    private external fun nativeAgentFreeSession(sessionPtr: Long)
-    private external fun nativeAgentSendMessage(sessionPtr: Long, message: String): Boolean
-    private external fun nativeAgentCancel(sessionPtr: Long): Boolean
-    private external fun nativeAgentListTools(sessionPtr: Long): String?
-    private external fun nativeAgentPollEvent(sessionPtr: Long): String?
+    internal external fun nativeAgentCreateSession(corePtr: Long, sessionId: String, artifactRoot: String): Long
+    internal external fun nativeAgentFreeSession(sessionPtr: Long)
+    internal external fun nativeAgentSendMessage(sessionPtr: Long, message: String): Boolean
+    internal external fun nativeAgentCancel(sessionPtr: Long): Boolean
+    internal external fun nativeAgentListTools(sessionPtr: Long): String?
+    internal external fun nativeAgentListArtifacts(sessionHandle: Long): String?
+    internal external fun nativeAgentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray?
+    internal external fun nativeAgentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean
+    internal external fun nativeAgentTestCompletionGeneration(sessionHandle: Long): Long
+    internal external fun nativeAgentTestAwaitCompletion(sessionHandle: Long, generation: Long, timeoutMs: Long): Boolean
+    internal external fun nativeAgentTestEnqueueArtifactCreatedTwice(sessionHandle: Long, artifactId: String): Boolean
+    internal external fun nativeAgentTestSeedArtifact(
+        sessionHandle: Long,
+        artifactId: String,
+        storageRelPath: String,
+        displayName: String,
+        mimeType: String,
+    ): Boolean
+    internal external fun nativeAgentPollEvent(sessionPtr: Long): String?
     private external fun nativeSetSqlcipherKey(keyHex: String): Boolean
-
-    // --- Conversation ---
-    private external fun nativeCreateConversation(ptr: Long, id: String, title: String, spaceId: String, model: String): Boolean
-    private external fun nativeListConversations(ptr: Long, limit: Long): String?
-    private external fun nativeGetConversationMessages(ptr: Long, sessionId: String): String?
-    private external fun nativeSaveConversationMessage(ptr: Long, sessionId: String, role: String, content: String, urlContext: String): Boolean
-    private external fun nativeDeleteConversation(ptr: Long, id: String): Boolean
-    private external fun nativeRenameConversation(ptr: Long, id: String, title: String): Boolean
+    internal external fun nativeCreateConversation(ptr: Long, id: String, title: String, spaceId: String, model: String): Boolean
+    internal external fun nativeListConversations(ptr: Long, limit: Long): String?
+    internal external fun nativeGetConversationMessages(ptr: Long, sessionId: String): String?
+    internal external fun nativeSaveConversationMessage(ptr: Long, sessionId: String, role: String, content: String, urlContext: String): Boolean
+    internal external fun nativeDeleteConversation(ptr: Long, id: String): Boolean
+    internal external fun nativeRenameConversation(ptr: Long, id: String, title: String): Boolean
+    internal external fun nativeChatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long
+    internal external fun nativeChatSessionFree(sessionPtr: Long)
+    internal external fun nativeChatSendUserTurn(sessionPtr: Long, message: String): Boolean
+    internal external fun nativeChatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean
+    internal external fun nativeChatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean
+    internal external fun nativeChatCancel(sessionPtr: Long): Boolean
+    internal external fun nativeChatSessionPollEvent(sessionPtr: Long): String?
+    internal external fun nativeChatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean
+    internal external fun nativeChatSendToolResult(sessionPtr: Long, toolCallId: String, name: String, output: String, isSuccess: Boolean): Boolean
+    internal external fun nativeChatAppendUserMessage(sessionPtr: Long, content: String): Boolean
+    internal external fun nativeChatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean
 }
