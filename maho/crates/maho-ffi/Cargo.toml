@@ -22,6 +22,7 @@ zeroize = "1.8"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
 
 [[bench]]
 name = "ffi_bench"

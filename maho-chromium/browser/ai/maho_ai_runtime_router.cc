@@ -44,7 +44,7 @@ bool MahoAiRuntimeRouter::IsAvailable() const {
 }
 
 void MahoAiRuntimeRouter::RebuildAdapterIfStale() {
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     active_adapter_.reset();
     return;
   }

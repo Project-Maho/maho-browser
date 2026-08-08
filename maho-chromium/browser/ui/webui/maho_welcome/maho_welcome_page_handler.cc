@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_page_handler.h"
 
+#include "maho/browser/ui/webui/maho_subscription_checkout.h"
 #include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 
 #include <cstdlib>
@@ -29,6 +30,7 @@
 #include "chrome/browser/sessions/session_restore.h"  // nogncheck
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
 #include "chrome/browser/ui/browser_tabstrip.h"  // nogncheck
@@ -58,12 +60,14 @@
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/webui/maho_mail/maho_mail_oauth_session.h"
 #include "maho/browser/ui/views/importer/maho_migration_dialog_view.h"
+#include "maho/browser/ui/views/peek/maho_peek_controller.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_google_sign_in.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -934,6 +938,43 @@ void MahoWelcomePageHandler::LoginFromWelcome(
           profile_->GetPrefs()));
 }
 
+void MahoWelcomePageHandler::SignInWithGoogleFromWelcome(
+    SignInWithGoogleFromWelcomeCallback callback) {
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+
+  BrowserWindowInterface* last_active =
+      chrome::FindLastActiveWithProfile(profile_);
+  Browser* peek_host_browser =
+      last_active ? last_active->GetBrowserForMigrationOnly() : nullptr;
+  if (!maho::IsPeekEligible(peek_host_browser) ||
+      peek_host_browser->profile() != profile_ ||
+      peek_host_browser->profile() != web_contents_->GetBrowserContext()) {
+    peek_host_browser = nullptr;
+  }
+
+  maho::auth::StartGoogleSignIn(
+      profile_, peek_host_browser, *encryptor_,
+      base::BindOnce(
+          [](SignInWithGoogleFromWelcomeCallback cb,
+             base::WeakPtr<MahoWelcomePageHandler> handler, PrefService* prefs,
+             bool ok, const std::string& error_message) {
+            if (ok) {
+              if (prefs->GetString(maho::ai_prefs::kProvider).empty()) {
+                prefs->SetString(maho::ai_prefs::kProvider, "maho-managed");
+              }
+              if (handler) {
+                handler->LaunchMailHelperIfReady();
+              }
+            }
+            std::move(cb).Run(ok, error_message);
+          },
+          std::move(callback), weak_factory_.GetWeakPtr(),
+          profile_->GetPrefs()));
+}
+
 void MahoWelcomePageHandler::GetRelayAccountStatusFromWelcome(
     GetRelayAccountStatusFromWelcomeCallback callback) {
   PrefService* prefs = profile_->GetPrefs();
@@ -1021,7 +1062,7 @@ void MahoWelcomePageHandler::StartSync(
     return;
   }
   char* result = maho_core_join_sync(
-      core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
+      core, maho::auth::GetSyncRelayUrl().c_str(), recovery_phrase.c_str());
   if (!result) {
     std::move(callback).Run(true, "");
     return;
@@ -1073,8 +1114,12 @@ void MahoWelcomePageHandler::MailBeginOAuth(const std::string& provider,
     std::move(callback).Run(false, "Mail service unavailable", std::string());
     return;
   }
+  const std::string options_json =
+      provider == "gmail"
+          ? maho::auth::BuildMailOAuthStartOptionsJson(profile_->GetPrefs())
+          : "{}";
   service->OAuthLoopbackSignIn(
-      provider,
+      provider, options_json,
       base::BindOnce(
           [](base::WeakPtr<MahoWelcomePageHandler> self,
              MailBeginOAuthCallback cb, bool ok, std::string result) {
@@ -1175,6 +1220,19 @@ void MahoWelcomePageHandler::SetTranslationProvider(
   }
   profile_->GetPrefs()->SetString(maho::ai_prefs::kTranslationProvider, provider);
   std::move(callback).Run(true);
+}
+
+void MahoWelcomePageHandler::GetSubscriptionCheckoutUrl(
+    const std::string& tier,
+    GetSubscriptionCheckoutUrlCallback callback) {
+  const std::string_view checkout_url_template =
+      maho::webui::SubscriptionCheckoutUrlForTier(tier);
+  const std::string user_id =
+      profile_ && profile_->GetPrefs()
+          ? profile_->GetPrefs()->GetString(maho::account_prefs::kRelayUserId)
+          : std::string();
+  std::move(callback).Run(
+      maho::webui::BuildSubscriptionCheckoutUrl(checkout_url_template, user_id));
 }
 
 void MahoWelcomePageHandler::MailOAuthCancel(

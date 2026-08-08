@@ -8,8 +8,8 @@ Arc 브라우저 대비 Maho 단축키 parity 현황.
 
 | 단축키 | Arc 기능 | 구현 방식 |
 |---|---|---|
-| ⌘⌥O | Little Arc → Open in Different Space | Space 선택 NSMenu 팝업 (LittleArcWindowController) |
-| ⌘⇧O | Organize Little Arc Tabs | ATC 설정 안내 알럿 (기능 가이드 stub) |
+| ⌘⌥O | Maho Mini → Open in Different Space | Space 선택 NSMenu 팝업 (MahoMiniWindowController) |
+| ⌘⇧O | Organize Maho Mini Tabs | ATC 설정 안내 알럿 (기능 가이드 stub) |
 | ⌘⌥G | Ask ChatGPT (Arc Max) | Coming Soon 알럿 (AI 인프라 미구현) |
 | ⌃⌘J | Join Active Meeting | Coming Soon 알럿 (캘린더 연동 미구현) |
 
@@ -25,7 +25,7 @@ Arc 브라우저 대비 Maho 단축키 parity 현황.
 
 ## 현재 상태
 
-- Little Arc: `LittleArcWindowController` — ⌘⌥N(열기), ⌘O(현재 Space에 열기), ⌘⌥O(다른 Space 선택) 모두 구현 완료
+- Maho Mini: `MahoMiniWindowController` — ⌘⌥N(열기), ⌘O(현재 Space에 열기), ⌘⌥O(다른 Space 선택) 모두 구현 완료
 - Extensions: 설정 UI(`ExtensionsSettingsView`) 존재, ⌘E로 직접 열기 구현 완료
 - AI: scaffold 플래그만 존재 — 아래 Maho AI 섹션 참조
 - Calendar: notification 설정만 존재, 미팅 연동 없음

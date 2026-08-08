@@ -19,6 +19,7 @@ namespace maho {
 
 namespace {
 
+#if BUILDFLAG(IS_APPLE)
 constexpr char kSourceProviderKey[] = "maho.ai.provider";
 constexpr char kSourceLocalServerEndpointKey[] =
     "maho.ai.localServer.endpoint";
@@ -27,7 +28,6 @@ constexpr char kSourceApiKeyKey[] = "maho.ai.api_key";
 constexpr char kSourceCustomEndpointKey[] = "maho.ai.custom.endpoint";
 constexpr char kSourceCustomModelKey[] = "maho.ai.custom.model";
 
-#if BUILDFLAG(IS_APPLE)
 std::string ReadMacOSDefault(const char* key) {
   auto key_ref = base::SysUTF8ToCFStringRef(key);
   CFPropertyListRef value_ref = CFPreferencesCopyAppValue(
@@ -49,11 +49,11 @@ void DeleteMacOSDefault(const char* key) {
   auto key_ref = base::SysUTF8ToCFStringRef(key);
   CFPreferencesSetAppValue(key_ref.get(), nullptr, CFSTR("com.maho.browser"));
 }
-#endif
 
 bool IsLegacyLocalServerProvider(const std::string& provider) {
   return provider == "Local Server" || provider == "Custom";
 }
+#endif
 
 }  // namespace
 

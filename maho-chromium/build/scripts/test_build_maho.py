@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import plistlib
 import subprocess
 import sys
 import types
@@ -61,6 +62,7 @@ find_codesign_identity = _bm.find_codesign_identity
 codesign_app = _bm.codesign_app
 launch_app = _bm.launch_app
 normalize_autoninja_args = _bm.normalize_autoninja_args
+ensure_args_gn = _bm.ensure_args_gn
 
 
 class TestFindCodesignIdentity(unittest.TestCase):
@@ -149,7 +151,81 @@ class TestCodesignApp(unittest.TestCase):
             mock_run.return_value = MagicMock(returncode=0)
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
         self.assertTrue(result)
-        self.assertEqual(mock_run.call_count, 6)
+        self.assertEqual(mock_run.call_count, 12)
+
+    def test_signs_chromium_framework_before_outer_app(self):
+        framework_path = (
+            '/fake/Maho.app/Contents/Frameworks/Maho Framework.framework'
+        )
+        helper_path = (
+            f'{framework_path}/Versions/Current/Helpers/Maho Helper.app'
+        )
+
+        with patch(
+            'os.path.isdir',
+            side_effect=lambda path: path in {
+                '/fake/Maho.app',
+                framework_path,
+                helper_path,
+            },
+        ), \
+             patch('os.path.isfile', return_value=False), \
+             patch('subprocess.run') as mock_run:
+            result = codesign_app('DEADBEEF', '/fake/Maho.app')
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [call.args[0][-1] for call in mock_run.call_args_list],
+            [helper_path, framework_path, '/fake/Maho.app'],
+        )
+        helper_call = mock_run.call_args_list[0].args[0]
+        self.assertTrue(
+            helper_call[helper_call.index('--entitlements') + 1].endswith(
+                'branding/mac/helper-entitlements.plist'
+            )
+        )
+
+    def test_uses_separate_app_and_helper_entitlements(self):
+        with patch(
+            'os.path.isdir',
+            side_effect=lambda path: path == '/fake/Maho.app',
+        ), \
+             patch('os.path.isfile', return_value=True), \
+             patch('subprocess.run') as mock_run:
+            result = codesign_app('DEADBEEF', '/fake/Maho.app')
+
+        self.assertTrue(result)
+        helper_call, app_call = [call.args[0] for call in mock_run.call_args_list]
+        self.assertTrue(
+            helper_call[helper_call.index('--entitlements') + 1].endswith(
+                'branding/mac/helper-entitlements.plist'
+            )
+        )
+        self.assertTrue(
+            app_call[app_call.index('--entitlements') + 1].endswith(
+                'branding/mac/entitlements.plist'
+            )
+        )
+
+    def test_embeds_explicit_macos_provisioning_profile(self):
+        with patch.dict(
+            os.environ,
+            {'MAHO_MAC_PROVISIONING_PROFILE': '/profiles/maho.provisionprofile'},
+        ), \
+             patch(
+                 'os.path.isdir',
+                 side_effect=lambda path: path == '/fake/Maho.app',
+             ), \
+             patch('os.path.isfile', return_value=True), \
+             patch('shutil.copy2') as mock_copy, \
+             patch('subprocess.run'):
+            result = codesign_app('DEADBEEF', '/fake/Maho.app')
+
+        self.assertTrue(result)
+        mock_copy.assert_called_once_with(
+            '/profiles/maho.provisionprofile',
+            '/fake/Maho.app/Contents/embedded.provisionprofile',
+        )
 
     def test_returns_false_when_bundle_missing(self):
         with patch('os.path.isdir', return_value=False):
@@ -178,6 +254,55 @@ class TestCodesignApp(unittest.TestCase):
         with patch('os.path.isdir', return_value=True), \
              patch('subprocess.run', return_value=MagicMock(returncode=0)):
             self.assertTrue(codesign_app('MYIDENTITY', '/fake/Maho.app'))
+
+
+class TestMacPasskeySigningContract(unittest.TestCase):
+
+    def test_branding_and_entitlements_enable_local_passkeys(self):
+        maho_chromium_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', '..')
+        )
+        branding_path = os.path.join(maho_chromium_dir, 'branding', 'BRANDING')
+        app_entitlements_path = os.path.join(
+            maho_chromium_dir, 'branding', 'mac', 'entitlements.plist'
+        )
+        helper_entitlements_path = os.path.join(
+            maho_chromium_dir, 'branding', 'mac', 'helper-entitlements.plist'
+        )
+
+        with open(branding_path, encoding='utf-8') as branding_file:
+            branding = dict(
+                line.rstrip('\n').split('=', 1)
+                for line in branding_file
+                if '=' in line
+            )
+        with open(app_entitlements_path, 'rb') as entitlements_file:
+            app_entitlements = plistlib.load(entitlements_file)
+        with open(helper_entitlements_path, 'rb') as entitlements_file:
+            helper_entitlements = plistlib.load(entitlements_file)
+
+        team_id = branding['MAC_TEAM_ID']
+        bundle_id = branding['MAC_BUNDLE_ID']
+        self.assertTrue(team_id)
+        self.assertEqual(
+            app_entitlements['com.apple.application-identifier'],
+            f'{team_id}.{bundle_id}',
+        )
+        self.assertEqual(
+            app_entitlements['com.apple.developer.team-identifier'],
+            team_id,
+        )
+        self.assertEqual(
+            app_entitlements['keychain-access-groups'],
+            [
+                f'{team_id}.{bundle_id}.webauthn',
+                f'{team_id}.{bundle_id}.webauthn-uvk',
+            ],
+        )
+        self.assertNotIn(
+            'com.apple.application-identifier', helper_entitlements
+        )
+        self.assertNotIn('keychain-access-groups', helper_entitlements)
 
 
 class TestLaunchApp(unittest.TestCase):
@@ -222,6 +347,41 @@ class TestNormalizeAutoninja(unittest.TestCase):
 
     def test_none_passthrough(self):
         self.assertIsNone(normalize_autoninja_args(None))
+
+
+class TestArgsTemplateSelection(unittest.TestCase):
+
+    def test_debug_uses_debug_template(self):
+        with patch.object(_bm, '_BUILD_CONFIG_DIR', '/configs'), \
+             patch('os.path.isfile', side_effect=lambda path: path == '/configs/args_win_debug.gn'), \
+             patch('os.makedirs') as mock_makedirs, \
+             patch('shutil.copy2') as mock_copy:
+            ensure_args_gn('/chromium', 'out/Debug', 'win', True, debug=True)
+
+        mock_makedirs.assert_called_once_with('/chromium/out/Debug', exist_ok=True)
+        mock_copy.assert_called_once_with(
+            '/configs/args_win_debug.gn',
+            '/chromium/out/Debug/args.gn',
+        )
+
+    def test_windows_debug_template_disables_siso(self):
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'config',
+            'args_win_debug.gn',
+        )
+        with open(config_path, encoding='utf-8') as config_file:
+            self.assertIn('use_siso = false', config_file.read())
+
+
+class TestChromiumSourceRoot(unittest.TestCase):
+
+    def test_resolves_junctions_before_building(self):
+        with patch('os.path.realpath', return_value='/physical/chromium/src') as mock_realpath:
+            root = _bm.chromium_src_root('/workspace')
+
+        self.assertEqual(root, '/physical/chromium/src')
+        mock_realpath.assert_called_once_with('/workspace/chromium/src')
 
 
 class TestMainFlags(unittest.TestCase):

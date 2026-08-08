@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetBridgeStateForTest } from '../rpc';
+import { useBridge } from '../../hooks/use-bridge';
+import { renderHook } from '@testing-library/preact';
 
 type WindowWithBridge = Window & {
   __mahoBridgeResponse: (responseJson: string) => void;
@@ -79,6 +81,54 @@ describe('RPC via Android transport', () => {
 
     respondTo(sent.id, undefined);
     await promise;
+  });
+
+  it('maps artifact list and share to exact path-free RPC methods and params', async () => {
+    const { result } = renderHook(() => useBridge());
+
+    const listPromise = result.current.agentListArtifacts('handle-opaque');
+    const listRequest = JSON.parse(rpcSpy.mock.calls[0]![0]) as {
+      id: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(listRequest.method).toBe('agentListArtifacts');
+    expect(listRequest.params).toEqual({ handle: 'handle-opaque' });
+    respondTo(listRequest.id, []);
+    await expect(listPromise).resolves.toEqual([]);
+
+    const sharePromise = result.current.artifactShare('handle-opaque', 'artifact-42');
+    const shareRequest = JSON.parse(rpcSpy.mock.calls[1]![0]) as {
+      id: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(shareRequest.method).toBe('artifactShare');
+    expect(shareRequest.params).toEqual({ handle: 'handle-opaque', artifactId: 'artifact-42' });
+    expect(shareRequest.params).not.toHaveProperty('path');
+    respondTo(shareRequest.id, true);
+    await expect(sharePromise).resolves.toBe(true);
+  });
+
+  it('propagates native artifactShare rejection through the typed bridge', async () => {
+    const { result } = renderHook(() => useBridge());
+
+    const promise = result.current.artifactShare('handle-opaque', 'artifact-42');
+    const request = JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string; method: string };
+    expect(request.method).toBe('artifactShare');
+    respondError(request.id, {
+      kind: 'native_error',
+      method: 'artifactShare',
+      reason: 'share sheet unavailable',
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      bridgeError: {
+        kind: 'native_error',
+        method: 'artifactShare',
+        reason: 'share sheet unavailable',
+      },
+    });
   });
 
   it('resolves multiple in-flight calls correctly (out-of-order)', async () => {

@@ -1,12 +1,13 @@
 use serde::Deserialize;
 
+/// Self balance read uses `/auth/subscription` (user bearer token), NOT the
+/// service-token-gated `/billing/credit_balance` route which is Worker-only.
 #[derive(Deserialize)]
 pub struct CreditBalanceResponse {
-    #[allow(dead_code)]
-    pub user_id: i32,
+    #[serde(rename = "credit_balance_usd")]
     pub balance_usd: f64,
-    pub last_purchase_at: Option<i64>,
-    pub last_consumption_at: Option<i64>,
+    #[serde(default)]
+    pub lifetime_purchased_usd: f64,
 }
 
 pub async fn fetch_balance(
@@ -17,7 +18,7 @@ pub async fn fetch_balance(
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let resp = client
-        .get(format!("{relay_url}/billing/credit_balance"))
+        .get(format!("{relay_url}/auth/subscription"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()
         .await?;

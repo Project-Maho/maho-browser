@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -303,6 +304,46 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
     return;
   }
 
+  if (IsMailWriteTool(tool_name)) {
+    std::string error;
+    if (!ApproveMailWrite(tool_name, &error)) {
+      std::move(callback).Run(BuildErrorResult(tool_name, error));
+      return;
+    }
+    std::string draft_id;
+    if (tool_name == "mail_update_draft") {
+      draft_id = GetStringArgument(arguments, "draft_id");
+      if (draft_id.empty()) {
+        std::move(callback).Run(
+            BuildErrorResult(tool_name, "draft_id is required."));
+        return;
+      }
+    }
+    std::optional<std::string> request_json =
+        BuildComposeRequestJson(arguments, &error);
+    if (!request_json) {
+      std::move(callback).Run(BuildErrorResult(tool_name, error));
+      return;
+    }
+    auto write_completion = base::BindOnce(
+        &MahoBrowserToolExecutor::OnMailToolResult,
+        weak_factory_.GetWeakPtr(), tool_name, std::move(callback));
+    if (tool_name == "mail_send") {
+      delegate->MailSendEmail(*request_json, /*already_authorized=*/true,
+                              std::move(write_completion));
+      return;
+    }
+    if (tool_name == "mail_save_draft") {
+      delegate->MailSaveDraft(*request_json, /*already_authorized=*/true,
+                              std::move(write_completion));
+      return;
+    }
+    delegate->MailUpdateDraft(draft_id, *request_json,
+                              /*already_authorized=*/true,
+                              std::move(write_completion));
+    return;
+  }
+
   auto completion = base::BindOnce(
       &MahoBrowserToolExecutor::OnMailToolResult,
       weak_factory_.GetWeakPtr(), tool_name, std::move(callback));
@@ -341,6 +382,128 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
   }
   std::move(callback).Run(
       BuildErrorResult(tool_name, "Mail tool is not implemented."));
+}
+
+// static
+bool MahoBrowserToolExecutor::IsMailWriteTool(std::string_view tool_name) {
+  return tool_name == "mail_send" || tool_name == "mail_save_draft" ||
+         tool_name == "mail_update_draft";
+}
+
+bool MahoBrowserToolExecutor::ApproveMailWrite(const std::string& tool_name,
+                                               std::string* error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!action_approval_callback_) {
+    *error =
+        "Mail write requires approval authorization, which is unavailable.";
+    return false;
+  }
+  BrowserActionAuthorization metadata;
+  metadata.tool_name = tool_name;
+  metadata.kind = "mail";
+  metadata.sensitivity = "high";
+  metadata.requires_approval = true;
+  BrowserActionApprovalDecision decision =
+      action_approval_callback_.Run(metadata);
+  if (!decision.approved) {
+    *error = decision.error.empty() ? "Mail write approval was denied."
+                                    : decision.error;
+    return false;
+  }
+  return true;
+}
+
+// static
+std::optional<std::string> MahoBrowserToolExecutor::BuildComposeRequestJson(
+    const base::DictValue& arguments,
+    std::string* error) {
+  const std::string account_id = GetStringArgument(arguments, "account_id");
+  if (account_id.empty()) {
+    *error = "account_id is required.";
+    return std::nullopt;
+  }
+
+  base::ListValue to_list;
+  if (const base::ListValue* to = arguments.FindList("to")) {
+    for (const base::Value& value : *to) {
+      if (value.is_string()) {
+        to_list.Append(value.GetString());
+      }
+    }
+  }
+  if (to_list.empty()) {
+    *error = "to must contain at least one recipient.";
+    return std::nullopt;
+  }
+
+  base::DictValue request;
+  request.Set("account_id", account_id);
+  request.Set("subject", GetStringArgument(arguments, "subject"));
+  request.Set("to", std::move(to_list));
+
+  auto copy_recipients = [&](const char* key) {
+    const base::ListValue* list = arguments.FindList(key);
+    if (!list) {
+      return;
+    }
+    base::ListValue out;
+    for (const base::Value& value : *list) {
+      if (value.is_string()) {
+        out.Append(value.GetString());
+      }
+    }
+    if (!out.empty()) {
+      request.Set(key, std::move(out));
+    }
+  };
+  copy_recipients("cc");
+  copy_recipients("bcc");
+
+  auto set_optional_string = [&](const char* key) {
+    const std::string value = GetStringArgument(arguments, key);
+    if (!value.empty()) {
+      request.Set(key, value);
+    }
+  };
+  set_optional_string("body_text");
+  set_optional_string("body_html");
+  set_optional_string("in_reply_to");
+  set_optional_string("references");
+
+  if (const base::ListValue* attachments = arguments.FindList("attachments")) {
+    base::ListValue out;
+    for (const base::Value& item : *attachments) {
+      const base::DictValue* dict = item.GetIfDict();
+      if (!dict) {
+        *error = "Each attachment must be an object.";
+        return std::nullopt;
+      }
+      const std::string* filename = dict->FindString("filename");
+      const std::string* mime_type = dict->FindString("mime_type");
+      const std::string* data_base64 = dict->FindString("data_base64");
+      if (!filename || !mime_type || !data_base64) {
+        *error =
+            "Each attachment requires filename, mime_type, and data_base64.";
+        return std::nullopt;
+      }
+      base::DictValue attachment;
+      attachment.Set("filename", *filename);
+      attachment.Set("mime_type", *mime_type);
+      // maho-core ComposeAttachment carries the (base64) bytes in `data`.
+      attachment.Set("data", *data_base64);
+      out.Append(std::move(attachment));
+    }
+    if (!out.empty()) {
+      request.Set("attachments", std::move(out));
+    }
+  }
+
+  std::string json;
+  if (!base::JSONWriter::Write(request, &json)) {
+    *error = "Failed to serialize the mail request.";
+    return std::nullopt;
+  }
+  return json;
 }
 
 void MahoBrowserToolExecutor::OnMailToolResult(

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::decrypt::chromium_keychain::{ChromiumKey, DecryptError, decrypt_v10};
+use crate::decrypt::chromium_keychain::{decrypt_v10, ChromiumKey, DecryptError};
 use crate::{ImportError, ImportResult, PasswordEntry};
 
 /// Parses Chromium passwords from a profile directory.
@@ -33,8 +33,8 @@ pub fn parse_chromium_passwords(
     }
 
     // Copy to temp file to avoid locking against a running browser.
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| ImportError::Io(format!("creating temp dir: {e}")))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|e| ImportError::Io(format!("creating temp dir: {e}")))?;
     let temp_db_path = temp_dir.path().join("Login Data");
     std::fs::copy(&login_data_path, &temp_db_path)
         .map_err(|e| ImportError::Io(format!("copying Login Data: {e}")))?;
@@ -142,9 +142,8 @@ mod tests {
     /// Known test vector from C++ unit test.
     const TEST_KEY_BYTES: [u8; 16] = [0x42; 16];
     const TEST_CIPHERTEXT: &[u8] = &[
-        b'v', b'1', b'0',
-        0x9c, 0x31, 0x37, 0xcc, 0x50, 0xf8, 0xd5, 0x93,
-        0x0e, 0xe3, 0x7a, 0x1e, 0x63, 0x0c, 0xce, 0x75,
+        b'v', b'1', b'0', 0x9c, 0x31, 0x37, 0xcc, 0x50, 0xf8, 0xd5, 0x93, 0x0e, 0xe3, 0x7a, 0x1e,
+        0x63, 0x0c, 0xce, 0x75,
     ];
 
     fn test_key() -> ChromiumKey {
@@ -196,12 +195,7 @@ mod tests {
                     "alice",
                     TEST_CIPHERTEXT,
                 ),
-                (
-                    "https://bad.com",
-                    "https://bad.com/login",
-                    "bob",
-                    bad_blob,
-                ),
+                ("https://bad.com", "https://bad.com/login", "bob", bad_blob),
             ],
         );
 

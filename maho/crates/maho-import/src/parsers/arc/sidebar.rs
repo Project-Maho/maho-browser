@@ -561,7 +561,10 @@ mod tests {
         let outer = ws.folders.iter().find(|f| f.name == "Outer").unwrap();
         let inner = ws.folders.iter().find(|f| f.name == "Inner").unwrap();
         assert!(outer.parent_id.is_empty(), "outer should be root-level");
-        assert_eq!(inner.parent_id, outer.id, "inner parent_id should be outer's id");
+        assert_eq!(
+            inner.parent_id, outer.id,
+            "inner parent_id should be outer's id"
+        );
     }
 
     #[test]
@@ -590,7 +593,10 @@ mod tests {
         let tmp = write_fixture("maho-import-test-arc-itemcontainer", fixture);
         let res = parse_arc_sidebar(&tmp).unwrap();
         let ws = &res.workspaces[0];
-        assert!(ws.folders.is_empty(), "itemContainer must not become a folder");
+        assert!(
+            ws.folders.is_empty(),
+            "itemContainer must not become a folder"
+        );
     }
 
     #[test]

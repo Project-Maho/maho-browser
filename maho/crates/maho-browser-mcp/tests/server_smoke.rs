@@ -37,9 +37,17 @@ async fn end_to_end_binary_via_fake_browser() {
             }
             let req: Value = serde_json::from_str(&line).unwrap();
             let id = req["id"].as_i64().unwrap();
-            let method = req["method"].as_str().unwrap_or("");
+            let wire_method = req["method"].as_str().unwrap_or("");
+            // Wave 9: the MCP server forwards browser tool calls wrapped in a
+            // `tools/call` envelope (params.name = tool). Unwrap so this fake
+            // browser matches on the effective tool/method name.
+            let method = if wire_method == "tools/call" {
+                req["params"]["name"].as_str().unwrap_or("").to_string()
+            } else {
+                wire_method.to_string()
+            };
 
-            let resp = match method {
+            let resp = match method.as_str() {
                 "initialize" => json!({
                     "jsonrpc": "2.0",
                     "id": id,

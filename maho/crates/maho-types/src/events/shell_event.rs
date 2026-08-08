@@ -4,11 +4,11 @@ use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::boost::BoostUpdate;
 use crate::chat::{ChatRequestContext, ChatRequestMode, PageContext};
 use crate::common::{ImageData, MemoryPressureLevel, Size, Url};
+use crate::content_blocking::ContentBlockingMode;
 use crate::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId, WindowId};
 use crate::settings::SettingsUpdate;
 use crate::space::{SpaceColor, SpaceConfigUpdate};
 use crate::tab::TabRole;
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -325,7 +325,6 @@ pub enum ShellEvent {
         is_pinned: bool,
     },
 
-
     // Root ordering (unified mixed-item contract)
     ReorderRootItem {
         space_id: SpaceId,
@@ -414,7 +413,10 @@ pub enum ShellEvent {
         css: String,
     },
 
-    // Content Blocker (5)
+    // Content Blocker
+    SetContentBlockingMode {
+        mode: ContentBlockingMode,
+    },
     ToggleContentBlocker {
         enabled: bool,
     },
@@ -432,6 +434,15 @@ pub enum ShellEvent {
     ToggleFilterList {
         id: String,
         enabled: bool,
+    },
+    AddSiteException {
+        exception: String,
+    },
+    RemoveSiteException {
+        exception: String,
+    },
+    TriggerFilterUpdate {
+        list_id: Option<String>,
     },
 
     // Notes (3)
@@ -846,7 +857,9 @@ impl ShellEvent {
     pub fn is_permission_event(&self) -> bool {
         matches!(
             self,
-            Self::GrantPermission { .. } | Self::RevokePermission { .. } | Self::QueryPermission { .. }
+            Self::GrantPermission { .. }
+                | Self::RevokePermission { .. }
+                | Self::QueryPermission { .. }
         )
     }
 

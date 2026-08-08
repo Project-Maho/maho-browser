@@ -64,6 +64,9 @@ pub struct ChatCompletionResponseDelta {
     pub message_chunk: Option<String>,
 
     #[builder(default)]
+    pub reasoning_chunk: Option<String>,
+
+    #[builder(default)]
     pub tool_calls_chunk: Option<HashMap<usize, ToolCallAccum>>,
 }
 
@@ -100,6 +103,7 @@ impl ChatCompletionResponse {
         } else {
             self.delta = Some(ChatCompletionResponseDelta {
                 message_chunk: Some(message_delta.to_string()),
+                reasoning_chunk: None,
                 tool_calls_chunk: None,
             });
         }
@@ -112,6 +116,24 @@ impl ChatCompletionResponse {
             .unwrap_or_else(|| {
                 self.message = Some(message_delta.to_string());
             });
+        self
+    }
+
+    /// Adds a streaming chunk to the reasoning content
+    pub fn append_reasoning_delta(&mut self, reasoning_delta: Option<&str>) -> &mut Self {
+        let Some(reasoning_delta) = reasoning_delta else {
+            return self;
+        };
+
+        if let Some(delta) = &mut self.delta {
+            delta.reasoning_chunk = Some(reasoning_delta.to_string());
+        } else {
+            self.delta = Some(ChatCompletionResponseDelta {
+                message_chunk: None,
+                reasoning_chunk: Some(reasoning_delta.to_string()),
+                tool_calls_chunk: None,
+            });
+        }
         self
     }
 
@@ -150,6 +172,7 @@ impl ChatCompletionResponse {
         } else {
             self.delta = Some(ChatCompletionResponseDelta {
                 message_chunk: None,
+                reasoning_chunk: None,
                 tool_calls_chunk: Some(HashMap::from([(
                     index,
                     ToolCallAccum {

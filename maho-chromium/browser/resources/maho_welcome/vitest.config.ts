@@ -31,12 +31,42 @@ export default defineConfig({
         replacement: path.join(featureDir, '../maho_common/react/store_utils.ts'),
       },
       {
+        find: /^@lib\/utils$/,
+        replacement: path.join(featureDir, 'standalone/vitest-plan-picker-stubs.ts'),
+      },
+      {
+        find: /^@ui\/button$/,
+        replacement: path.join(featureDir, 'standalone/vitest-plan-picker-stubs.ts'),
+      },
+      {
+        find: /^@ui\/badge$/,
+        replacement: path.join(featureDir, 'standalone/vitest-plan-picker-stubs.ts'),
+      },
+      {
         find: '@ui',
         replacement: path.join(featureDir, '../maho_common/react/ui'),
       },
       {
         find: '@lib',
         replacement: path.join(featureDir, '../maho_common/react/lib'),
+      },
+      {
+        find: 'react/jsx-runtime',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/react/jsx-runtime.js'),
+      },
+      {
+        find: 'react',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/react/index.js'),
+      },
+      {
+        find: 'lucide-react',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/lucide-react/dist/esm/lucide-react.js'),
       },
     ],
   },

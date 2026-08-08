@@ -35,7 +35,22 @@
 #include <vector>
 
 #ifdef _MSC_VER
-#include <codecvt>
+// std::wstring_convert / <codecvt> was removed in C++23, which Chromium builds
+// with, so UTF-8 -> UTF-16 goes through the Win32 API instead. libc++ also has
+// no wide-string ifstream ctor, so the wide path is wrapped in a
+// std::filesystem::path.
+#include <filesystem>
+#include <windows.h>
+
+static std::filesystem::path whisper_utf8_to_path(const char * utf8) {
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+    if (needed <= 0) {
+        return std::filesystem::path();
+    }
+    std::wstring wide(needed - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide.data(), needed);
+    return std::filesystem::path(wide);
+}
 #endif
 
 #if defined(WHISPER_BIG_ENDIAN)
@@ -3625,9 +3640,7 @@ struct whisper_context * whisper_init_from_file_with_params_no_state(const char 
     WHISPER_LOG_INFO("%s: loading model from '%s'\n", __func__, path_model);
 #ifdef _MSC_VER
     // Convert UTF-8 path to wide string (UTF-16) for Windows, resolving character encoding issues.
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-    std::wstring path_model_wide = converter.from_bytes(path_model);
-    auto fin = std::ifstream(path_model_wide, std::ios::binary);
+    auto fin = std::ifstream(whisper_utf8_to_path(path_model), std::ios::binary);
 #else
     auto fin = std::ifstream(path_model, std::ios::binary);
 #endif
@@ -4733,9 +4746,7 @@ struct whisper_vad_context * whisper_vad_init_from_file_with_params(
         struct whisper_vad_context_params params) {
     WHISPER_LOG_INFO("%s: loading VAD model from '%s'\n", __func__, path_model);
 #ifdef _MSC_VER
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-    std::wstring path_model_wide = converter.from_bytes(path_model);
-    auto fin = std::ifstream(path_model_wide, std::ios::binary);
+    auto fin = std::ifstream(whisper_utf8_to_path(path_model), std::ios::binary);
 #else
     auto fin = std::ifstream(path_model, std::ios::binary);
 #endif

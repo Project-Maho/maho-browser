@@ -94,7 +94,7 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            server_url: "wss://sync.mahobrowser.com".to_string(),
+            server_url: "wss://relay.mahobrowser.com".to_string(),
             sync_key: None,
             device_id: uuid::Uuid::new_v4().to_string(),
             device_name: hostname(),
@@ -129,6 +129,7 @@ pub enum SyncEntityType {
     AutofillPayment,
     Settings,
     SharedCollection,
+    VaultItem,
 }
 
 impl SyncEntityType {
@@ -153,6 +154,7 @@ impl SyncEntityType {
             SyncEntityType::AutofillPayment => "autofillpayment",
             SyncEntityType::Settings => "settings",
             SyncEntityType::SharedCollection => "sharedcollection",
+            SyncEntityType::VaultItem => "vaultitem",
         }
     }
 }
@@ -282,5 +284,18 @@ pub fn build_fields_hlc(payload_json: &str, version: u64, device_id: u32) -> Opt
         serde_json::to_string(&fields).ok()
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SyncConfig;
+
+    #[test]
+    fn sync_config_default_server_url() {
+        assert_eq!(
+            SyncConfig::default().server_url,
+            "wss://relay.mahobrowser.com",
+        );
     }
 }

@@ -13,6 +13,7 @@
 #include "base/task/thread_pool.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/fileicon_source.h"  // nogncheck
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -23,6 +24,7 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "chrome/grit/maho_ai_resources.h"
 #include "chrome/grit/maho_ai_resources_map.h"
 #include "content/public/browser/browser_context.h"
@@ -62,12 +64,6 @@ MahoAIUI::MahoAIUI(content::WebUI* web_ui)
   PrefService* prefs = Profile::FromWebUI(web_ui)->GetPrefs();
   source->AddBoolean("isMahoAiThinMode",
                      prefs->GetBoolean(maho::ai_prefs::kUiThinModeEnabled));
-  const std::string pending_initial_query =
-      prefs->GetString(maho::ai_prefs::kPendingInitialQuery);
-  source->AddString("pendingAiQuery", pending_initial_query);
-  if (!pending_initial_query.empty()) {
-    prefs->SetString(maho::ai_prefs::kPendingInitialQuery, std::string());
-  }
   webui::SetupWebUIDataSource(source, kMahoAiResources,
                               IDR_MAHO_AI_MAHO_AI_HTML);
   source->OverrideContentSecurityPolicy(
@@ -81,10 +77,20 @@ MahoAIUI::MahoAIUI(content::WebUI* web_ui)
       "script-src chrome://resources 'self' https://app.lemonsqueezy.com;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FrameSrc,
-      "frame-src https://maho.lemonsqueezy.com https://lemonsqueezy.com;");
+      "frame-src https://maho.lemonsqueezy.com https://lemonsqueezy.com "
+      "chrome-untrusted://maho-ai-artifact-preview;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ConnectSrc,
       "connect-src 'self' https://api.lemonsqueezy.com;");
+  // Render real OS (Finder) file-type icons for artifacts. FileIconSource
+  // resolves the icon from the extension alone, so the artifact card passes
+  // only the display name (no real filesystem path is exposed).
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ImgSrc,
+      "img-src chrome://resources chrome://theme chrome://fileicon 'self' "
+      "data: blob:;");
+  content::URLDataSource::Add(Profile::FromWebUI(web_ui),
+                              std::make_unique<FileIconSource>());
 }
 
 MahoAIUI::~MahoAIUI() = default;
@@ -194,7 +200,7 @@ void MahoAIUI::CreatePageHandler(
 
   page_handler_ = std::make_unique<MahoAIPageHandler>(
       std::move(receiver), std::move(page), std::move(token), browser,
-      profile->GetPrefs(), std::move(url_loader_factory));
+      host, profile->GetPrefs(), std::move(url_loader_factory));
 
   if (embedder()) {
     embedder()->ShowUI();

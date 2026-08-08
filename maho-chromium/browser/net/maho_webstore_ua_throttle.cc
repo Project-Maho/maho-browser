@@ -29,7 +29,8 @@ bool MahoWebStoreUAThrottle::NeedsChromeLikeUA(const GURL& url) {
     return true;
   }
   if (host == "clients2.google.com" &&
-      path.find("/service/update2/crx") != std::string::npos) {
+      base::StartsWith(path, "/service/update2/crx",
+                       base::CompareCase::INSENSITIVE_ASCII)) {
     return true;
   }
   if (host == "update.googleapis.com") {
@@ -40,11 +41,18 @@ bool MahoWebStoreUAThrottle::NeedsChromeLikeUA(const GURL& url) {
 
 // static
 std::string MahoWebStoreUAThrottle::StripMahoToken(const std::string& ua) {
-  const std::string kToken = " Maho/1.0";
+  // Strip " Maho/<version>" for any version so a version bump in
+  // user_agent_utils.cc does not silently break webstore extension installs.
+  static constexpr char kPrefix[] = " Maho/";
   std::string result = ua;
-  std::string::size_type pos = result.find(kToken);
+  std::string::size_type pos = result.find(kPrefix);
   if (pos != std::string::npos) {
-    result.erase(pos, kToken.size());
+    std::string::size_type end = pos + (sizeof(kPrefix) - 1);
+    while (end < result.size() &&
+           (base::IsAsciiDigit(result[end]) || result[end] == '.')) {
+      ++end;
+    }
+    result.erase(pos, end - pos);
   }
   return result;
 }

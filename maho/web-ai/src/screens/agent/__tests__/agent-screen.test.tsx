@@ -4,7 +4,7 @@ import { App } from '../../../app';
 import type { MahoBridge } from '../../../bridge/types';
 import { AgentScreen } from '../agent-screen';
 
-type EventType = 'token' | 'thinking' | 'tool_call' | 'tool_result' | 'complete' | 'error';
+type EventType = 'token' | 'thinking' | 'tool_call' | 'tool_result' | 'artifact_created' | 'complete' | 'error';
 
 function makeMockBridge() {
   let eventQueue: string[] = [];
@@ -13,6 +13,7 @@ function makeMockBridge() {
   const agentCancel = vi.fn<MahoBridge['agentCancel']>().mockResolvedValue(true);
   const agentFreeSession = vi.fn<MahoBridge['agentFreeSession']>().mockResolvedValue(undefined);
   const agentPollEvent = vi.fn<MahoBridge['agentPollEvent']>().mockImplementation(async () => eventQueue.shift() ?? null);
+  const artifactShare = vi.fn<MahoBridge['artifactShare']>().mockResolvedValue(true);
 
   const bridge: MahoBridge = {
     byokGetProviders: vi.fn<MahoBridge['byokGetProviders']>().mockResolvedValue([]),
@@ -62,6 +63,8 @@ function makeMockBridge() {
     agentCancel,
     agentPollEvent,
     agentListTools: vi.fn<MahoBridge['agentListTools']>().mockResolvedValue([]),
+    agentListArtifacts: vi.fn<MahoBridge['agentListArtifacts']>().mockResolvedValue([]),
+    artifactShare,
     capturePhoto: vi.fn<MahoBridge['capturePhoto']>().mockResolvedValue(null),
     captureScreenshot: vi.fn<MahoBridge['captureScreenshot']>().mockResolvedValue(null),
     openSettings: vi.fn<MahoBridge['openSettings']>().mockResolvedValue(undefined),
@@ -78,6 +81,7 @@ function makeMockBridge() {
     agentCreateSession,
     agentFreeSession,
     agentSendMessage,
+    artifactShare,
     bridge,
     clearQueue: () => {
       eventQueue = [];
@@ -219,6 +223,59 @@ describe('AgentScreen CompactShell contract', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId('agent-screen')).toBeInTheDocument());
+  });
+
+  it('shares an artifact with the active opaque handle and shows busy then success state', async () => {
+    let resolveShare: ((shared: boolean) => void) | undefined;
+    mockCtx.artifactShare.mockImplementation(() => new Promise<boolean>((resolve) => {
+      resolveShare = resolve;
+    }));
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Create a plan');
+
+    act(() => mockCtx.enqueueEvent('artifact_created', {
+      artifact_id: 'artifact-42',
+      session_id: 'session-private',
+      display_name: 'plan.html',
+      mime_type: 'text/html',
+      size_bytes: 128,
+      created_at: 1,
+      path: '/private/native/path/plan.html',
+    }));
+
+    const shareButton = await screen.findByRole('button', { name: 'Share plan.html' });
+    fireEvent.click(shareButton);
+
+    expect(mockCtx.artifactShare).toHaveBeenCalledWith('handle-1', 'artifact-42');
+    expect(mockCtx.artifactShare).toHaveBeenCalledTimes(1);
+    expect(shareButton).toBeDisabled();
+    expect(shareButton).toHaveTextContent('Sharing…');
+
+    act(() => resolveShare?.(true));
+    await waitFor(() => expect(shareButton).toHaveTextContent('Shared'));
+  });
+
+  it('surfaces native artifact-share rejection and restores the Share action', async () => {
+    mockCtx.artifactShare.mockRejectedValue(new Error('Native share sheet unavailable'));
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Create a plan');
+
+    act(() => mockCtx.enqueueEvent('artifact_created', {
+      artifact_id: 'artifact-42',
+      session_id: 'session-private',
+      display_name: 'plan.html',
+      mime_type: 'text/html',
+      size_bytes: 128,
+      created_at: 1,
+    }));
+
+    const shareButton = await screen.findByRole('button', { name: 'Share plan.html' });
+    fireEvent.click(shareButton);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Native share sheet unavailable'));
+    expect(shareButton).toBeEnabled();
+    expect(shareButton).toHaveTextContent('Share');
+    expect(mockCtx.artifactShare).toHaveBeenCalledWith('handle-1', 'artifact-42');
   });
 
   it('renders thinking, tool calls, tool results, and interleaving in arrival order', async () => {

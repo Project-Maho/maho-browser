@@ -252,7 +252,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                               base::Unretained(this))));
   if (context_class_ != MahoPrivateContextClass::kRegular &&
       context_class_ != MahoPrivateContextClass::kNull) {
-    action_selector_->SetEnabled(false);
+    action_selector_->SetVisible(false);
   }
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
@@ -378,7 +378,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       select_initial_text_(select_initial_text) {
   DCHECK(browser_);
   context_class_ =
-      ClassifyProfileForTesting(browser_ ? browser_->profile() : nullptr);
+      MahoClassifyProfile(browser_ ? browser_->profile() : nullptr);
   GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
   GetViewAccessibility().SetName(u"Command Palette");
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -462,7 +462,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                               base::Unretained(this))));
   if (context_class_ != MahoPrivateContextClass::kRegular &&
       context_class_ != MahoPrivateContextClass::kNull) {
-    action_selector_->SetEnabled(false);
+    action_selector_->SetVisible(false);
   }
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
@@ -1044,10 +1044,23 @@ void MahoCommandOverlayView::OnSearchResults(
       }
     }
   }
-  // Arc-parity: sync model with rotated results and always select first row.
+  // The model owns selection restoration by stable key. Current-tab rotation
+  // is presentation-generic, so map that selected key into the rotated list
+  // rather than resetting every republished snapshot to row zero.
+  int selected_index = results.empty() ? -1 : 0;
+  if (model_ && model_->selected_index() >= 0 &&
+      model_->selected_index() < static_cast<int>(model_->results().size())) {
+    const std::string selected_key =
+        model_->results()[model_->selected_index()].key;
+    const auto selected = std::ranges::find(results, selected_key,
+                                            &CommandSuggestion::key);
+    if (selected != results.end()) {
+      selected_index = static_cast<int>(selected - results.begin());
+    }
+  }
   if (model_) {
     model_->set_results(results);
-    model_->set_selected_index(results.empty() ? -1 : 0);
+    model_->set_selected_index(selected_index);
   }
   UpdateResultViews(results);
   UpdateSearchLeadingAccessory();
@@ -1055,6 +1068,7 @@ void MahoCommandOverlayView::OnSearchResults(
 
 void MahoCommandOverlayView::UpdateResultViews(
     const std::vector<CommandSuggestion>& results) {
+  ++result_view_rebuild_count_for_testing_;
   results_container_->RemoveAllChildViews();
   hint_label_ = nullptr;
 
@@ -1070,14 +1084,24 @@ void MahoCommandOverlayView::UpdateResultViews(
         const auto& stored = model_->results();
         const int stored_size = static_cast<int>(stored.size());
         for (size_t i = 0; i < stored.size(); ++i) {
+          const bool is_ask_row =
+              i == 0 && palette_action_ == PaletteAction::kAskMaho;
+          CommandSuggestion presented_suggestion = stored[i];
+          if (is_ask_row) {
+            presented_suggestion.title =
+                base::UTF16ToUTF8(textfield_->GetText());
+          }
           auto* row = results_container_->AddChildView(
               std::make_unique<MahoCommandResultRowView>(
-                  stored[i], static_cast<int>(i), stored_size,
+                  presented_suggestion, static_cast<int>(i), stored_size,
                   base::BindRepeating(&MahoCommandOverlayView::UpdateSelection,
                                       weak_factory_.GetWeakPtr()),
                   base::BindRepeating(
                       &MahoCommandOverlayView::ActivateResultAtIndex,
                       weak_factory_.GetWeakPtr())));
+          if (is_ask_row) {
+            row->SetAskAffordance(true);
+          }
           if (static_cast<int>(i) == 0) {
             row->SetSelected(true);
           }
@@ -1135,13 +1159,22 @@ void MahoCommandOverlayView::UpdateResultViews(
 
   const int results_size = static_cast<int>(results.size());
   for (size_t i = 0; i < results.size(); ++i) {
+    const bool is_ask_row =
+        i == 0 && palette_action_ == PaletteAction::kAskMaho;
+    CommandSuggestion presented_suggestion = results[i];
+    if (is_ask_row) {
+      presented_suggestion.title = base::UTF16ToUTF8(textfield_->GetText());
+    }
     auto* row = results_container_->AddChildView(
         std::make_unique<MahoCommandResultRowView>(
-            results[i], static_cast<int>(i), results_size,
+            presented_suggestion, static_cast<int>(i), results_size,
             base::BindRepeating(&MahoCommandOverlayView::UpdateSelection,
                                 weak_factory_.GetWeakPtr()),
             base::BindRepeating(&MahoCommandOverlayView::ActivateResultAtIndex,
                                 weak_factory_.GetWeakPtr())));
+    if (is_ask_row) {
+      row->SetAskAffordance(true);
+    }
     if (static_cast<int>(i) == (model_ ? model_->selected_index() : 0)) {
       row->SetSelected(true);
     }
@@ -1528,9 +1561,10 @@ void MahoCommandOverlayView::UpdateModeChipVisibility() {
     mode_chip_->SetVisible(show_chip);
   }
   if (action_selector_) {
-    const bool show_selector = mode_ == CommandOverlayMode::kSearch ||
-                               mode_ == CommandOverlayMode::kNewTab ||
-                               mode_ == CommandOverlayMode::kCurrentTab;
+    const bool show_selector = (mode_ == CommandOverlayMode::kSearch ||
+                                mode_ == CommandOverlayMode::kNewTab ||
+                                mode_ == CommandOverlayMode::kCurrentTab) &&
+                               AiIngressAllowed();
     action_selector_->SetVisible(show_selector);
   }
 }

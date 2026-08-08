@@ -2,6 +2,7 @@ pub mod account;
 pub mod ai;
 pub mod air_traffic;
 pub mod animation;
+pub mod artifact;
 pub mod autofill;
 pub mod boost;
 pub mod chat;

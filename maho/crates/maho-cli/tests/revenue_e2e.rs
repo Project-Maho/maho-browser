@@ -151,7 +151,7 @@ fn mock_relay(state: SharedState) -> Router {
         .route("/auth/me", get(handle_me))
         .route("/auth/introspect", post(handle_introspect))
         .route("/billing/lemonsqueezy", post(handle_webhook))
-        .route("/billing/credit_balance", get(handle_credit_balance))
+        .route("/auth/subscription", get(handle_subscription))
         .with_state(state)
 }
 
@@ -372,10 +372,7 @@ async fn handle_webhook(State(state): State<SharedState>, req: Request) -> impl 
     }
 }
 
-async fn handle_credit_balance(
-    State(state): State<SharedState>,
-    req: Request,
-) -> impl IntoResponse {
+async fn handle_subscription(State(state): State<SharedState>, req: Request) -> impl IntoResponse {
     let auth = req
         .headers()
         .get("authorization")
@@ -385,13 +382,21 @@ async fn handle_credit_balance(
 
     let users = state.users.lock().unwrap();
     if let Some(user) = users.iter().find(|u| u.access_token == token) {
+        // Canonical CLI self-balance contract: GET /auth/subscription with the
+        // user bearer token returns the SubscriptionResponse shape, from which
+        // the CLI reads `credit_balance_usd`.
         (
             axum::http::StatusCode::OK,
             axum::Json(json!({
-                "user_id": user.id,
-                "balance_usd": user.balance_usd,
-                "last_purchase_at": null,
-                "last_consumption_at": null,
+                "tier": user.tier,
+                "tier_ceiling_usd": user.base_ceiling_usd,
+                "subscription_status": user.subscription_status,
+                "subscription_expires_at": null,
+                "period_start_at": null,
+                "anniversary_reset_day": null,
+                "credit_balance_usd": user.balance_usd,
+                "lifetime_purchased_usd": user.balance_usd,
+                "has_payment_method": false,
             })),
         )
     } else {

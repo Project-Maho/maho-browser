@@ -84,6 +84,14 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
           messageId: createId('assistant'),
         });
         break;
+      case 'artifact_created':
+        dispatch({
+          type: 'AGENT_ARTIFACT',
+          createdAt: new Date(),
+          artifact: event.artifact,
+          messageId: createId('assistant'),
+        });
+        break;
       case 'complete':
         dispatch({
           type: 'AGENT_COMPLETE',
@@ -160,6 +168,14 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
     window.location.hash = 'byok';
   }, []);
 
+  const handleShareArtifact = useCallback(async (artifactId: string): Promise<boolean> => {
+    const handle = handleRef.current;
+    if (handle === null) {
+      throw new Error('Agent session is no longer available.');
+    }
+    return bridge.artifactShare(handle, artifactId);
+  }, [bridge]);
+
   const showThread = state.messages.length > 0 || state.errorMessage !== null;
 
   return (
@@ -175,6 +191,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
           errorMessage={state.errorMessage}
           messages={state.messages}
           onScroll={onScroll}
+          onShareArtifact={handleShareArtifact}
           phase={state.phase}
           scrollRef={scrollRef}
         />

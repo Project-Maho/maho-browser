@@ -545,13 +545,12 @@ impl TabLifecycleManager {
                 t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })
             }) // L3-EXEMPT: role query
             .filter_map(|t| t.role.favorite_order())
-            .max()
-            .unwrap_or(0);
+            .max();
 
         self.transition_tab_role(
             tab_id,
             TabRole::Favorite {
-                order: max_order + 1,
+                order: max_order.map_or(0, |order| order + 1),
             },
         );
     }
@@ -833,7 +832,10 @@ impl TabLifecycleManager {
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
             }) // L3-EXEMPT: role query
             .collect();
-        tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
+        tabs.sort_by(|a, b| {
+            (a.role.favorite_order().unwrap_or(u32::MAX), a.id.as_ref())
+                .cmp(&(b.role.favorite_order().unwrap_or(u32::MAX), b.id.as_ref()))
+        });
         tabs
     }
 
@@ -853,7 +855,10 @@ impl TabLifecycleManager {
             }) // L3-EXEMPT: role query
             .cloned()
             .collect();
-        favorite_tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
+        favorite_tabs.sort_by(|a, b| {
+            (a.role.favorite_order().unwrap_or(u32::MAX), a.id.as_ref())
+                .cmp(&(b.role.favorite_order().unwrap_or(u32::MAX), b.id.as_ref()))
+        });
 
         let Some(tab_pos) = favorite_tabs.iter().position(|t| &t.id == tab_id) else {
             return;
@@ -973,6 +978,31 @@ impl TabLifecycleManager {
                 t.space_id == *space_id && matches!(t.state, TabLifecycleState::Archived { .. })
             })
             .collect()
+    }
+
+    /// Returns non-archived tabs ordered by `last_active_at` descending (most recent
+    /// first), capped to `limit`. Tabs whose `last_active_at` fails RFC3339 parsing are
+    /// deprioritized to the end rather than dropped, and never panic.
+    pub fn get_recent_tabs(&self, limit: usize) -> Vec<&Tab> {
+        let mut candidates: Vec<&Tab> = self
+            .tabs
+            .values()
+            .filter(|tab| !matches!(tab.state, TabLifecycleState::Archived { .. }))
+            .collect();
+        candidates.sort_by(|a, b| {
+            let parse = |tab: &Tab| {
+                chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0)
+                    .ok()
+                    .map(|dt| dt.timestamp_millis())
+            };
+            match (parse(a), parse(b)) {
+                (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+        candidates.into_iter().take(limit).collect()
     }
 
     pub fn restore_archived_tab(&mut self, tab_id: &TabId) {
@@ -1396,7 +1426,7 @@ mod tests {
 
         let after_first_call = manager.get_tab(&tab_id).unwrap();
         assert!(after_first_call.role.is_favorite()); // L3-EXEMPT: test assert
-        assert_eq!(after_first_call.role.favorite_order(), Some(1));
+        assert_eq!(after_first_call.role.favorite_order(), Some(0));
         assert_eq!(manager.get_favorite_tabs(&space_id).len(), 1);
 
         let first_call_updates = updates.borrow().clone();
@@ -1406,14 +1436,14 @@ mod tests {
             CoreUpdate::TabCreated { .. }
         ));
         assert!(
-            matches!(&first_call_updates[1], CoreUpdate::TabUpdated { tab_id: update_tab_id, changes } if update_tab_id == &tab_id && changes.is_favorite == Some(true) && changes.favorite_order == Some(Some(1)))
+            matches!(&first_call_updates[1], CoreUpdate::TabUpdated { tab_id: update_tab_id, changes } if update_tab_id == &tab_id && changes.is_favorite == Some(true) && changes.favorite_order == Some(Some(0)))
         ); // L3-EXEMPT: test assert
 
         manager.favorite_tab(&tab_id);
 
         let after_second_call = manager.get_tab(&tab_id).unwrap();
         assert!(after_second_call.role.is_favorite()); // L3-EXEMPT: test assert
-        assert_eq!(after_second_call.role.favorite_order(), Some(1));
+        assert_eq!(after_second_call.role.favorite_order(), Some(0));
         assert_eq!(manager.get_favorite_tabs(&space_id).len(), 1);
 
         let all_updates = updates.borrow();
@@ -1430,6 +1460,86 @@ mod tests {
             1,
             "favorite_tab should emit exactly one CoreUpdate::TabUpdated for the first call only"
         );
+    }
+
+    #[test]
+    fn get_favorite_tabs_tie_breaks_equal_order_by_tab_id() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab_b = manager.create_tab_with_id(
+            TabId::new("tab-b"),
+            space_id.clone(),
+            Some(Url::new("https://b.example")),
+            None,
+            None,
+            false,
+        );
+        let tab_a = manager.create_tab_with_id(
+            TabId::new("tab-a"),
+            space_id.clone(),
+            Some(Url::new("https://a.example")),
+            None,
+            None,
+            false,
+        );
+        manager.transition_tab_role(&tab_b.id, TabRole::Favorite { order: 0 });
+        manager.transition_tab_role(&tab_a.id, TabRole::Favorite { order: 0 });
+
+        let ordered_ids: Vec<TabId> = manager
+            .get_favorite_tabs(&space_id)
+            .into_iter()
+            .map(|tab| tab.id.clone())
+            .collect();
+
+        assert_eq!(ordered_ids, vec![tab_a.id, tab_b.id]);
+    }
+
+    #[test]
+    fn reorder_favorite_writes_contiguous_order_after_tie_break() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab_a = manager.create_tab_with_id(
+            TabId::new("tab-a"),
+            space_id.clone(),
+            Some(Url::new("https://a.example")),
+            None,
+            None,
+            false,
+        );
+        let tab_b = manager.create_tab_with_id(
+            TabId::new("tab-b"),
+            space_id.clone(),
+            Some(Url::new("https://b.example")),
+            None,
+            None,
+            false,
+        );
+        let tab_c = manager.create_tab_with_id(
+            TabId::new("tab-c"),
+            space_id.clone(),
+            Some(Url::new("https://c.example")),
+            None,
+            None,
+            false,
+        );
+        manager.transition_tab_role(&tab_c.id, TabRole::Favorite { order: 0 });
+        manager.transition_tab_role(&tab_b.id, TabRole::Favorite { order: 0 });
+        manager.transition_tab_role(&tab_a.id, TabRole::Favorite { order: 0 });
+        let mut space_ids = HashSet::new();
+        space_ids.insert(space_id.clone());
+
+        manager.reorder_favorite(&tab_a.id, 2, &space_ids);
+
+        let favorites = manager.get_favorite_tabs(&space_id);
+        let ordered_ids: Vec<TabId> = favorites.iter().map(|tab| tab.id.clone()).collect();
+        let orders: Vec<Option<u32>> = favorites
+            .iter()
+            .map(|tab| tab.role.favorite_order())
+            .collect();
+        println!("manager happy reorder B/C/A ids: {:?}", ordered_ids);
+        println!("manager happy reorder B/C/A orders: {:?}", orders);
+        assert_eq!(ordered_ids, vec![tab_b.id, tab_c.id, tab_a.id]);
+        assert_eq!(orders, vec![Some(0), Some(1), Some(2)]);
     }
 
     #[test]
@@ -1853,5 +1963,104 @@ mod tests {
         let t = manager.get_tab(&tab_id).unwrap();
         assert!(matches!(t.state, TabLifecycleState::Active));
         assert_ne!(t.last_active_at.0, old_stamp);
+    }
+
+    #[test]
+    fn get_recent_tabs_orders_by_recency_excludes_archived_and_caps() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let old = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://old.com")),
+            None,
+            None,
+            false,
+        );
+        let mid = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://mid.com")),
+            None,
+            None,
+            false,
+        );
+        let newest = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://new.com")),
+            None,
+            None,
+            false,
+        );
+        let archived = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://archived.com")),
+            None,
+            None,
+            false,
+        );
+
+        let old_id = old.id.clone();
+        let mid_id = mid.id.clone();
+        let new_id = newest.id.clone();
+        let archived_id = archived.id.clone();
+
+        if let Some(t) = manager.tabs.get_mut(&old_id) {
+            t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
+        }
+        if let Some(t) = manager.tabs.get_mut(&mid_id) {
+            t.last_active_at = DateTime::from_iso("2023-01-01T00:00:00.000Z");
+        }
+        if let Some(t) = manager.tabs.get_mut(&new_id) {
+            t.last_active_at = DateTime::from_iso("2024-06-01T00:00:00.000Z");
+        }
+        if let Some(t) = manager.tabs.get_mut(&archived_id) {
+            t.last_active_at = DateTime::from_iso("2025-01-01T00:00:00.000Z");
+            t.state = TabLifecycleState::Archived {
+                metadata_only: false,
+            };
+        }
+
+        let recent = manager.get_recent_tabs(10);
+        let ids: Vec<TabId> = recent.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ids, vec![new_id.clone(), mid_id, old_id]);
+        assert!(!ids.contains(&archived_id));
+
+        let capped = manager.get_recent_tabs(1);
+        assert_eq!(capped.len(), 1);
+        assert_eq!(capped[0].id, new_id);
+    }
+
+    #[test]
+    fn get_recent_tabs_deprioritizes_unparseable_timestamps() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let good = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://good.com")),
+            None,
+            None,
+            false,
+        );
+        let bad = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://bad.com")),
+            None,
+            None,
+            false,
+        );
+        let good_id = good.id.clone();
+        let bad_id = bad.id.clone();
+
+        if let Some(t) = manager.tabs.get_mut(&good_id) {
+            t.last_active_at = DateTime::from_iso("2024-06-01T00:00:00.000Z");
+        }
+        if let Some(t) = manager.tabs.get_mut(&bad_id) {
+            t.last_active_at = DateTime::from_iso("not-a-timestamp");
+        }
+
+        let recent = manager.get_recent_tabs(10);
+        let ids: Vec<TabId> = recent.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ids, vec![good_id, bad_id]);
     }
 }

@@ -39,12 +39,16 @@ source_set("maho_welcome") {
     "//components/prefs",
     "//components/search_engines",
     "//maho/browser/importer",
-    "//maho/browser/ui/webui/maho_settings:maho_settings_password_helpers",
+    "//maho/browser/mail_helper:maho_mail_service",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser:maho_theme_support",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_auth_utils",
+    "//maho/browser:maho_google_sign_in",
     "//maho/browser:maho_space_profile_bridge",
     "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
     "//maho/browser/ui/views/welcome:maho_welcome_window",
+    "//maho/browser/ui/webui/maho_settings:maho_settings_password_helpers",
     "//maho/browser/resources/maho_welcome:resources",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_bridge",
@@ -63,6 +67,7 @@ test("maho_welcome_completion_policy_test") {
   sources = [
     "maho_welcome_completion_policy_test_main.cc",
     "maho_welcome_completion_policy_unittest.cc",
+    "maho_welcome_prefs.cc",
   ]
 
   deps = [

@@ -87,6 +87,16 @@ impl std::error::Error for RoutineError {}
 // ---------------------------------------------------------------------------
 
 /// A non-cron event that can trigger a user-defined routine.
+///
+/// ## Emitter status per variant
+///
+/// - `OnStartup`, `OnManyTabs`: browser-side emitters exist (startup hook and
+///   the tab-count path via `maho_routines_fire_event`).
+/// - `OnNotification`, `OnInboxHeartbeat`: parsing/matching/firing are in
+///   place and reachable via `maho_routines_fire_event`, but no browser
+///   notification adapter or mail heartbeat emits them yet. A routine
+///   configured with one of these is stored and fires only once an emitter is
+///   added. Deferred wiring — not launch-claimed until an emitter lands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RoutineEvent {
@@ -94,11 +104,20 @@ pub enum RoutineEvent {
     OnStartup,
     /// Fired when the open-tab count reaches/exceeds a threshold.
     OnManyTabs { threshold: u32 },
+    /// Notification/push equivalent. `channel` scopes the routine to a
+    /// notification source; an empty configured channel matches any channel.
+    /// (Deferred wiring: no browser notification emitter yet.)
+    OnNotification { channel: String },
+    /// Inbox/mail heartbeat equivalent. `min_unread` is the minimum number of
+    /// new/unread items that must be observed for a configured routine to fire.
+    /// (Deferred wiring: no mail heartbeat emitter yet.)
+    OnInboxHeartbeat { min_unread: u32 },
 }
 
 impl RoutineEvent {
     /// Parse the compact form stored in `custom_routines.event_trigger`.
-    /// Forms: `on_startup`, `on_many_tabs:<n>`.
+    /// Forms: `on_startup`, `on_many_tabs:<n>`, `on_notification:<channel>`,
+    /// `on_inbox_heartbeat:<n>`.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         if s == "on_startup" {
@@ -111,6 +130,18 @@ impl RoutineEvent {
                 .ok()
                 .map(|threshold| Self::OnManyTabs { threshold });
         }
+        if let Some(rest) = s.strip_prefix("on_notification:") {
+            return Some(Self::OnNotification {
+                channel: rest.trim().to_string(),
+            });
+        }
+        if let Some(rest) = s.strip_prefix("on_inbox_heartbeat:") {
+            return rest
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .map(|min_unread| Self::OnInboxHeartbeat { min_unread });
+        }
         None
     }
 
@@ -119,19 +150,51 @@ impl RoutineEvent {
         match self {
             Self::OnStartup => "on_startup".to_string(),
             Self::OnManyTabs { threshold } => format!("on_many_tabs:{threshold}"),
+            Self::OnNotification { channel } => format!("on_notification:{channel}"),
+            Self::OnInboxHeartbeat { min_unread } => format!("on_inbox_heartbeat:{min_unread}"),
         }
     }
 
     /// Whether a routine configured with `self` should fire for `fired`.
-    /// For `OnManyTabs`, the fired event's count must meet the configured
-    /// threshold.
+    /// For threshold events (`OnManyTabs`, `OnInboxHeartbeat`), the fired
+    /// event's actual count must meet the configured threshold. For
+    /// `OnNotification`, the channels must match (an empty configured channel is
+    /// a wildcard matching any channel).
     pub fn matches(&self, fired: &RoutineEvent) -> bool {
         match (self, fired) {
             (Self::OnStartup, Self::OnStartup) => true,
             (Self::OnManyTabs { threshold }, Self::OnManyTabs { threshold: actual }) => {
                 actual >= threshold
             }
+            (Self::OnNotification { channel }, Self::OnNotification { channel: actual }) => {
+                channel.is_empty() || channel == actual
+            }
+            (
+                Self::OnInboxHeartbeat { min_unread },
+                Self::OnInboxHeartbeat { min_unread: actual },
+            ) => actual >= min_unread,
             _ => false,
+        }
+    }
+}
+
+/// How a routine run was triggered. Persisted with each result in the routine
+/// inbox so the UI/CLI can distinguish scheduled runs from manual/event runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutineRunSource {
+    Scheduled,
+    Manual,
+    Event,
+}
+
+impl RoutineRunSource {
+    /// The stable string persisted in `routine_results.source`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::Manual => "manual",
+            Self::Event => "event",
         }
     }
 }
@@ -365,14 +428,60 @@ where
     }
 }
 
+/// Best-effort persistence of a routine result into the routine inbox. A
+/// storage failure is logged and swallowed: it must never abort or fail the
+/// routine run itself.
+fn persist_result(storage: &SqliteStorage, result: &RoutineResult, source: RoutineRunSource) {
+    if let Err(e) = storage.record_routine_result(
+        &result.id,
+        result.ran_at,
+        result.success,
+        &result.content,
+        source.as_str(),
+    ) {
+        eprintln!("[routines] failed to persist result for {}: {e}", result.id);
+    }
+}
+
+/// Run a routine by id (built-in or custom) and record the outcome in the
+/// durable routine inbox, then return it. Both successful and failed runs are
+/// persisted: a failure is stored as a non-`success` record whose `content` is
+/// the error text. Tier-locked and not-found errors are returned without a
+/// record (there was no run to log).
+pub async fn run_routine_and_record<F, Fut>(
+    id: &str,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    source: RoutineRunSource,
+    agent_prompt_runner: F,
+) -> Result<RoutineResult, RoutineError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    let result = run_routine_resolved(id, user_tier, storage, agent_prompt_runner).await;
+    match &result {
+        Ok(res) => persist_result(storage, res, source),
+        Err(RoutineError::ExecutionFailed(msg)) => {
+            let failed = RoutineResult {
+                id: id.to_string(),
+                ran_at: chrono::Utc::now().timestamp(),
+                content: msg.clone(),
+                success: false,
+            };
+            persist_result(storage, &failed, source);
+        }
+        Err(_) => {}
+    }
+    result
+}
+
 /// Fire every enabled, event-triggered user routine whose configured trigger
 /// matches `event`. Non-Max tiers are a silent no-op (empty result), matching
 /// the scheduler's tier behavior. A per-routine agent failure is recorded as a
-/// non-`success` `RoutineResult` rather than aborting the whole batch.
-///
-/// The shell/core should call this from the browser event loop (e.g. on
-/// startup, or when a tab-count threshold is crossed). See the follow-up note:
-/// browser-side emission of these events is not yet wired.
+/// non-`success` `RoutineResult` rather than aborting the whole batch. Every
+/// result (success or failure) is persisted to the routine inbox with
+/// `source = event`.
 pub async fn fire_event_routines<F, Fut>(
     event: RoutineEvent,
     user_tier: UserTier,
@@ -406,20 +515,22 @@ where
 
         let prompt = build_custom_prompt(&c);
         let ran_at = chrono::Utc::now().timestamp();
-        match agent_prompt_runner(prompt).await {
-            Ok(content) => results.push(RoutineResult {
+        let result = match agent_prompt_runner(prompt).await {
+            Ok(content) => RoutineResult {
                 id: c.id,
                 ran_at,
                 content,
                 success: true,
-            }),
-            Err(e) => results.push(RoutineResult {
+            },
+            Err(e) => RoutineResult {
                 id: c.id,
                 ran_at,
                 content: e,
                 success: false,
-            }),
-        }
+            },
+        };
+        persist_result(storage, &result, RoutineRunSource::Event);
+        results.push(result);
     }
     Ok(results)
 }
@@ -1111,6 +1222,153 @@ mod tests {
         assert!(configured.matches(&RoutineEvent::OnManyTabs { threshold: 20 }));
         assert!(!configured.matches(&RoutineEvent::OnManyTabs { threshold: 10 }));
         assert!(!configured.matches(&RoutineEvent::OnStartup));
+    }
+
+    #[test]
+    fn test_notification_and_heartbeat_parse_roundtrip() {
+        let notif = RoutineEvent::OnNotification {
+            channel: "mail".to_string(),
+        };
+        assert_eq!(notif.to_trigger_string(), "on_notification:mail");
+        assert_eq!(RoutineEvent::parse("on_notification:mail"), Some(notif));
+
+        let hb = RoutineEvent::OnInboxHeartbeat { min_unread: 3 };
+        assert_eq!(hb.to_trigger_string(), "on_inbox_heartbeat:3");
+        assert_eq!(RoutineEvent::parse("on_inbox_heartbeat:3"), Some(hb));
+
+        assert_eq!(
+            RoutineEvent::parse("on_notification:"),
+            Some(RoutineEvent::OnNotification {
+                channel: String::new()
+            })
+        );
+        assert_eq!(RoutineEvent::parse("on_inbox_heartbeat:x"), None);
+    }
+
+    #[test]
+    fn test_notification_matches_channel_and_wildcard() {
+        let scoped = RoutineEvent::OnNotification {
+            channel: "mail".to_string(),
+        };
+        assert!(scoped.matches(&RoutineEvent::OnNotification {
+            channel: "mail".to_string()
+        }));
+        assert!(!scoped.matches(&RoutineEvent::OnNotification {
+            channel: "calendar".to_string()
+        }));
+
+        let wildcard = RoutineEvent::OnNotification {
+            channel: String::new(),
+        };
+        assert!(wildcard.matches(&RoutineEvent::OnNotification {
+            channel: "anything".to_string()
+        }));
+    }
+
+    #[test]
+    fn test_heartbeat_matches_threshold() {
+        let configured = RoutineEvent::OnInboxHeartbeat { min_unread: 5 };
+        assert!(configured.matches(&RoutineEvent::OnInboxHeartbeat { min_unread: 5 }));
+        assert!(configured.matches(&RoutineEvent::OnInboxHeartbeat { min_unread: 12 }));
+        assert!(!configured.matches(&RoutineEvent::OnInboxHeartbeat { min_unread: 1 }));
+        assert!(!configured.matches(&RoutineEvent::OnStartup));
+    }
+
+    #[tokio::test]
+    async fn test_run_and_record_persists_success() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let res = run_routine_and_record(
+            "morning_briefing",
+            UserTier::Max,
+            &storage,
+            RoutineRunSource::Manual,
+            |_| async { Ok("briefing body".to_string()) },
+        )
+        .await
+        .unwrap();
+        assert!(res.success);
+
+        let latest = storage
+            .latest_routine_result("morning_briefing")
+            .unwrap()
+            .expect("run must be recorded");
+        assert!(latest.success);
+        assert_eq!(latest.content, "briefing body");
+        assert_eq!(latest.source, "manual");
+    }
+
+    #[tokio::test]
+    async fn test_run_and_record_persists_failure_with_error() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let err = run_routine_and_record(
+            "close_old_tabs",
+            UserTier::Max,
+            &storage,
+            RoutineRunSource::Scheduled,
+            |_| async { Err("agent exploded".to_string()) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            RoutineError::ExecutionFailed("agent exploded".to_string())
+        );
+
+        let latest = storage
+            .latest_routine_result("close_old_tabs")
+            .unwrap()
+            .expect("a failed run must still be recorded");
+        assert!(!latest.success, "failed run persists success = false");
+        assert_eq!(latest.content, "agent exploded");
+        assert_eq!(latest.source, "scheduled");
+    }
+
+    #[tokio::test]
+    async fn test_run_and_record_tier_locked_writes_nothing() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let err = run_routine_and_record(
+            "morning_briefing",
+            UserTier::Pro,
+            &storage,
+            RoutineRunSource::Manual,
+            |_| async { Ok("nope".to_string()) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, RoutineError::TierLockedToMax);
+        assert_eq!(
+            storage.list_routine_results(10).unwrap().len(),
+            0,
+            "a tier-locked (never-ran) routine must not be recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_persists_each_result() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage
+            .create_custom_routine(&make_custom("evt", None, Some("on_inbox_heartbeat:2")))
+            .unwrap();
+
+        let fired = fire_event_routines(
+            RoutineEvent::OnInboxHeartbeat { min_unread: 5 },
+            UserTier::Max,
+            &storage,
+            |_| async { Ok("digest".to_string()) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(fired.len(), 1);
+
+        let recorded = storage.list_routine_results_for("evt", 10).unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert!(recorded[0].success);
+        assert_eq!(recorded[0].content, "digest");
+        assert_eq!(recorded[0].source, "event");
     }
 
     #[test]

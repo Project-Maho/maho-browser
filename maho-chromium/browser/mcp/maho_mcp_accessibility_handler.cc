@@ -173,6 +173,36 @@ base::Value MahoMcpAccessibilityHandler::SerializeNode(
     }
   }
 
+  // Browser-trusted credential signals; MahoMcpFirewall redacts values on these.
+  if (data.HasState(ax::mojom::State::kProtected)) {
+    dict.Set("protected", true);
+  }
+  if (data.HasStringAttribute(ax::mojom::StringAttribute::kAutoComplete)) {
+    const std::string& autocomplete =
+        data.GetStringAttribute(ax::mojom::StringAttribute::kAutoComplete);
+    if (!autocomplete.empty()) {
+      dict.Set("autocomplete", autocomplete);
+    }
+  }
+  for (const auto& attr : data.html_attributes) {
+    if (attr.second.empty()) {
+      continue;
+    }
+    if (attr.first == "type") {
+      dict.Set("inputType", attr.second);
+    } else if (attr.first == "aria-label") {
+      dict.Set("ariaLabel", attr.second);
+    } else if (attr.first == "name") {
+      dict.Set("fieldName", attr.second);
+    } else if (attr.first == "id") {
+      dict.Set("elementId", attr.second);
+    } else if (attr.first == "placeholder") {
+      dict.Set("placeholder", attr.second);
+    } else if (attr.first == "data-maho-field") {
+      dict.Set("dataField", attr.second);
+    }
+  }
+
   // Checked state (omit if not applicable).
   if (data.HasCheckedState()) {
     ax::mojom::CheckedState checked = data.GetCheckedState();

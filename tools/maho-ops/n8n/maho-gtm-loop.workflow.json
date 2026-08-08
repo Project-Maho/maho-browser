@@ -1,0 +1,70 @@
+{
+  "id": "maho-gtm-loop-0001",
+  "name": "maho GTM closed loop",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 9 * * *" } ] }
+      },
+      "id": "trigger-cron",
+      "name": "Daily 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [ 240, 400 ]
+    },
+    {
+      "parameters": {
+        "command": "cd /Users/indo/code/project/maho-workspace/tools/maho-ops && set -a && . ./.env && set +a && .venv/bin/python gtm_loop.py 'maho weekly: a calmer, faster everyday browser'"
+      },
+      "id": "step-brain",
+      "name": "Draft + validate (Quotio)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 480, 400 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [ { "value1": "={{ JSON.parse($json.stdout).safe_to_publish }}", "value2": true } ]
+        }
+      },
+      "id": "step-gate",
+      "name": "safe_to_publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [ 720, 400 ]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd /Users/indo/code/project/maho-workspace/tools/maho-ops && set -a && . ./.env && set +a && echo ' + JSON.stringify(Buffer.from($json.stdout).toString('base64')) + ' | base64 -d | .venv/bin/python publish_sns.py; echo sns_exit=$?' }}"
+      },
+      "id": "step-sns",
+      "name": "Schedule SNS (Buffer)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 960, 300 ]
+    },
+    {
+      "parameters": {
+        "command": "echo 'GTM loop blocked: copy failed validation — TODO wire Discord #moderator-only alert'"
+      },
+      "id": "step-alert",
+      "name": "Report exception",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 960, 500 ]
+    }
+  ],
+  "connections": {
+    "Daily 09:00": { "main": [ [ { "node": "Draft + validate (Quotio)", "type": "main", "index": 0 } ] ] },
+    "Draft + validate (Quotio)": { "main": [ [ { "node": "safe_to_publish?", "type": "main", "index": 0 } ] ] },
+    "safe_to_publish?": {
+      "main": [
+        [ { "node": "Schedule SNS (Buffer)", "type": "main", "index": 0 } ],
+        [ { "node": "Report exception", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

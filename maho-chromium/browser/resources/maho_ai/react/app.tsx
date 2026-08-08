@@ -418,7 +418,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   }
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-transparent text-foreground">
+    <div className="maho-ai-page-surface flex h-screen min-h-0 flex-col overflow-hidden rounded-l-xl border border-border bg-background/90 text-foreground shadow-[var(--shadow-overlay)] backdrop-blur-2xl">
       <section className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 p-3 max-[520px]:gap-2 max-[520px]:p-2">
         {state.bootError ? <BootErrorCard message={state.bootError} /> : (
           <>

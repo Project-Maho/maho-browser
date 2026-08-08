@@ -51,11 +51,11 @@
 
 **On-screen action**
 - Cut to a card on the Maho hero color. Text: "Every account: $0.50 of AI every month, free."
-- Below that: "Need more? Pro is $20/mo." Tiny print: "Bring your own key any time, no markup."
+- Below that: "Need more? Pro is $5/mo." Tiny print: "Bring your own key any time, no markup."
 - End card with the Maho logo and the URL.
 
 **Voiceover**
-> "Every Maho account gets fifty cents of AI a month, on us. Hit the ceiling and Pro is twenty a month. Or bring your own key and pay nothing. Download Maho."
+> "Every Maho account gets fifty cents of AI a month, on us. Hit the ceiling and Pro is five a month. Or bring your own key and pay nothing. Download Maho."
 
 ---
 

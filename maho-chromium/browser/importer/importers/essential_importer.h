@@ -37,7 +37,7 @@ class EssentialImporter {
   std::vector<std::string> urls_;
   bool cancelled_ = false;
 
-  base::SequenceChecker sequence_checker_;
+  [[maybe_unused]] base::SequenceChecker sequence_checker_;
   base::WeakPtrFactory<EssentialImporter> weak_factory_{this};
 };
 

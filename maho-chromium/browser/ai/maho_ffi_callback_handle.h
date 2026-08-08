@@ -5,10 +5,17 @@
 #define MAHO_BROWSER_AI_MAHO_FFI_CALLBACK_HANDLE_H_
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <set>
+#include <utility>
 
+#include "base/check.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 
 namespace maho {
@@ -23,26 +30,15 @@ namespace maho {
 //
 // === Ownership model (Option D) ===
 //
-// On construction, the handle allocates:
-//   1. A shared_ptr<Pointee> (the reference-counted payload).
-//   2. A heap-allocated `std::shared_ptr<Pointee>*` (the "user_data bridge").
+// On construction, the handle allocates a shared_ptr<Pointee> and a heap
+// bridge that owns another shared_ptr copy. Bridges start C++-owned, so
+// Cancel() and destruction delete them locally.
 //
-// `user_data()` returns the raw address of (2). Rust holds this pointer and
-// passes it back in callbacks. In callback thunks, C++ does:
-//   auto sp = *static_cast<std::shared_ptr<Pointee>*>(user_data);
-// This copies the shared_ptr into a local, incrementing the refcount. The
-// local keeps the Pointee alive for the duration of the callback, even if
-// the handle is concurrently destroyed.
-//
-// On Cancel() / destruction:
-//   - cancelled.store(true) atomically marks future callbacks as no-ops.
-//   - The bridge pointer is deleted exactly once (guarded by freed_ flag),
-//     decrementing the shared_ptr refcount. The Pointee is destroyed only
-//     when the last in-flight callback drops its local shared_ptr copy.
-//
-// This mirrors Rust's `Box::into_raw` pattern: one heap allocation per
-// handle, one delete per handle, refcounting via shared_ptr handles
-// in-flight callbacks.
+// HandOffToProducer() transfers bridge deletion to the FFI producer. A leased
+// bridge remains valid after the wrapper is destroyed, but its Pointee is
+// cancelled. The producer must call ReleaseFromProducer() exactly once after
+// it can no longer invoke callbacks. Local shared_ptr copies may outlive that
+// release.
 //
 // Contract:
 //   - Construct with the owner's WeakPtr<T> and a SequencedTaskRunner.
@@ -50,20 +46,24 @@ namespace maho {
 //   - In callback thunks, call FromUserData(user_data) to get a local
 //     shared_ptr<Pointee>. Check cancelled.load() to short-circuit.
 //     If alive, PostTask onto the sequence using the WeakPtr.
-//   - On handle destruction, Cancel() marks callbacks as no-ops and
-//     frees the bridge pointer. The Pointee outlives any in-flight
-//     callback because they hold their own shared_ptr copies.
+//   - Call HandOffToProducer() only after the producer accepts user_data(); if
+//     that call fails synchronously, release the producer lease immediately.
+//   - After ReleaseFromProducer(), user_data is invalid and must not be read.
 template <typename T>
 class FfiCallbackHandle {
  public:
   struct Pointee {
+    explicit Pointee(uint64_t generation = 0) : generation(generation) {}
+
+    const uint64_t generation;
     std::atomic<bool> cancelled{false};
     scoped_refptr<base::SequencedTaskRunner> task_runner;
     base::WeakPtr<T> owner;
   };
 
   FfiCallbackHandle(scoped_refptr<base::SequencedTaskRunner> runner,
-                    base::WeakPtr<T> owner);
+                    base::WeakPtr<T> owner,
+                    uint64_t generation = 0);
   ~FfiCallbackHandle();
 
   FfiCallbackHandle(const FfiCallbackHandle&) = delete;
@@ -72,38 +72,53 @@ class FfiCallbackHandle {
   FfiCallbackHandle& operator=(FfiCallbackHandle&&) = delete;
 
   // Returns the void* to hand to Rust as `user_data`.
-  // Caller MUST NOT free this pointer; the handle owns it.
+  // Caller MUST NOT free this pointer while the handle owns it.
   // Callers MAY pass it to a Rust FFI function that re-enters via the
   // callback signature `void (*cb)(void* user_data, ...)`.
   void* user_data() const;
 
-  // Atomically marks the underlying pointee cancelled and frees the
-  // bridge pointer. Any subsequent Rust callback that calls FromUserData
-  // on a stale copy will find cancelled==true and short-circuit.
+  // Atomically marks the underlying pointee cancelled. C++-owned bridges are
+  // freed locally; producer-leased bridges remain valid until released by the
+  // producer.
   // Idempotent: second call is a no-op.
   void Cancel();
 
   bool is_cancelled() const;
+
+  // Transfers one bridge deletion obligation to the producer. The wrapper
+  // relinquishes its raw bridge pointer, so it remains safe if the producer
+  // releases before this wrapper is destroyed.
+  void HandOffToProducer();
+
+  // Releases a bridge previously handed to the producer. Invalid or repeated
+  // releases DCHECK in debug builds and return without dereferencing user_data.
+  static void ReleaseFromProducer(void* user_data);
 
   // For callback implementations: retrieves the shared Pointee from a
   // user_data void*. The caller receives a shared_ptr<Pointee> that keeps
   // the Pointee alive regardless of handle lifetime. Caller must hold the
   // resulting shared_ptr for the duration of any work using it.
   //
-  // SAFETY: `user_data` MUST be a pointer previously returned by
-  // user_data() on a live (non-cancelled) handle. After Cancel(), the
-  // pointer is deleted; calling FromUserData on it is UB.
+  // SAFETY: `user_data` MUST be a pointer previously returned by user_data()
+  // whose bridge has not been released. A producer-leased bridge remains valid
+  // after wrapper destruction but not after ReleaseFromProducer().
   static std::shared_ptr<Pointee> FromUserData(void* user_data);
 
  private:
+  struct Bridge {
+    explicit Bridge(std::shared_ptr<Pointee> pointee)
+        : pointee(std::move(pointee)) {}
+
+    std::shared_ptr<Pointee> pointee;
+    std::atomic<bool> producer_leased{false};
+  };
+
+  static base::Lock& ProducerLeaseLock();
+  static std::set<Bridge*>& ProducerLeases();
+
   std::shared_ptr<Pointee> pointee_;
 
-  // Heap-allocated bridge: a shared_ptr<Pointee>* whose raw address is
-  // the user_data given to Rust. Deleted exactly once in Cancel().
-  raw_ptr<std::shared_ptr<Pointee>> user_data_bridge_ = nullptr;
-
-  // Guards one-shot deletion of user_data_bridge_.
-  bool freed_ = false;
+  raw_ptr<Bridge> user_data_bridge_ = nullptr;
 };
 
 }  // namespace maho

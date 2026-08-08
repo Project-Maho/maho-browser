@@ -8,6 +8,6 @@ bool MahoIsWebUIEnabled(content::BrowserContext* context) {
     return false;
   }
   Profile* profile = Profile::FromBrowserContext(context);
-  MahoPrivateContextClass cls = ClassifyProfileForTesting(profile);
+  MahoPrivateContextClass cls = MahoClassifyProfile(profile);
   return cls == MahoPrivateContextClass::kRegular;
 }

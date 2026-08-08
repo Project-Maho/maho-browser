@@ -59,4 +59,6 @@ class MahoTestUI : public content::WebUIController {
   ~MahoTestUI() override = default;
 };
 
+void SeedRuntimeVerificationState(Profile* profile, int level);
+
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_TEST_MAHO_TEST_UI_H_

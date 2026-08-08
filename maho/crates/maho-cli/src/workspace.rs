@@ -18,12 +18,15 @@ pub fn default_db_path() -> PathBuf {
     user_data_dir().join("MahoCore").join("maho.db")
 }
 
-pub fn open_storage(db_path: &std::path::Path) -> Result<SqliteStorage, maho_storage::StorageError> {
+pub fn open_storage(
+    db_path: &std::path::Path,
+) -> Result<SqliteStorage, maho_storage::StorageError> {
     if let Some(parent) = db_path.parent() {
         let key_path = parent.join("maho_storage.key");
         let mut key_bytes = [0u8; 16];
         let mut status = 0;
-        if maho_core::oscrypt::derive_key(&key_path.to_string_lossy(), &mut key_bytes, &mut status) {
+        if maho_core::oscrypt::derive_key(&key_path.to_string_lossy(), &mut key_bytes, &mut status)
+        {
             let hex_key: String = key_bytes.iter().map(|b| format!("{:02x}", b)).collect();
             let _ = maho_storage::sqlite::set_sqlcipher_key(&hex_key);
         }
@@ -43,22 +46,48 @@ pub async fn resolve_workspace_id(
         let storage = open_storage(&db_path_buf)
             .map_err(|e| anyhow::anyhow!("Failed to open database at {}: {}", db_path_str, e))?;
 
-        let workspaces = storage.list_workspaces()
+        let workspaces = storage
+            .list_workspaces()
             .map_err(|e| anyhow::anyhow!("Failed to list workspaces: {}", e))?;
 
         if workspaces.is_empty() {
-            anyhow::bail!(
-                "No AI workspace exists yet in the Maho registry at {db_path_str}.\n\
-                 AI workspaces are created by the browser the first time you open an AI space; \
-                 a fresh profile has none. To manage MCP servers from the CLI:\n  \
-                 1. Open Maho and use an AI space once (this creates the workspace the WebUI and CLI share), then retry; or\n  \
-                 2. Point --workspace <id|name> at an existing workspace, or MAHO_DB_PATH at another registry."
-            );
+            // A registry with no workspace is normal for a CLI-only or a
+            // benchmark profile: the browser creates one lazily on first AI
+            // use, and the CLI would otherwise be unusable until someone opens
+            // the UI. Bootstrap the shared default instead of failing.
+            if override_workspace.is_some() {
+                anyhow::bail!(
+                    "No AI workspace exists yet in the Maho registry at {db_path_str}, \
+                     so --workspace cannot be resolved. Drop --workspace to bootstrap \
+                     the default workspace, or point MAHO_DB_PATH at another registry."
+                );
+            }
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "0".to_string());
+            let bootstrap = maho_types::ai::AiWorkspace {
+                id: "default".to_string(),
+                name: "Default".to_string(),
+                space_id: None,
+                profile_id: Some("blank".to_string()),
+                workspace_root: None,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            storage
+                .create_workspace(&bootstrap)
+                .map_err(|e| anyhow::anyhow!("Failed to bootstrap default AI workspace: {}", e))?;
+            return Ok(bootstrap.id);
         }
 
         if let Some(ref target) = override_workspace {
             if target != "current" {
-                if let Some(ws) = workspaces.iter().find(|w| &w.id == target || &w.name == target) {
+                if let Some(ws) = workspaces
+                    .iter()
+                    .find(|w| &w.id == target || &w.name == target)
+                {
                     return Ok(ws.id.clone());
                 }
                 anyhow::bail!("Workspace '{}' not found", target);
@@ -69,7 +98,8 @@ pub async fn resolve_workspace_id(
         // list_workspaces returns rows ordered by created_at, id so this is deterministic.
         // Prefer passing --workspace <id|name> for explicit selection.
         Ok(workspaces[0].id.clone())
-    }).await?
+    })
+    .await?
 }
 
 #[cfg(test)]
@@ -79,6 +109,13 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // `open_storage` installs a *process-global* SQLCipher key
+    // (`maho_storage::sqlite::SQLCIPHER_KEY`). Each test derives a distinct
+    // key from its own tempdir, so two storage-opening tests running in
+    // parallel clobber each other's global key and one open then fails with
+    // "file is not a database". Serialize those tests through this lock.
+    static DB_KEY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn default_db_path_targets_maho_core_registry() {
@@ -125,6 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_workspace_by_id_or_name() {
+        let _db_guard = DB_KEY_TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("maho.db");
         let storage = open_storage(&db_path).unwrap();
@@ -152,6 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_workspace_current_fallback() {
+        let _db_guard = DB_KEY_TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("maho.db");
         let storage = open_storage(&db_path).unwrap();

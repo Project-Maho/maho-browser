@@ -3,6 +3,7 @@
 #include "maho/browser/updates/platform_updater_delegate.h"
 #include "maho/browser/updates/maho_update_manager.h"
 
+#include <crtdbg.h>
 #include <windows.h>
 #include <appmodel.h>
 #include <winrt/Windows.ApplicationModel.h>

@@ -14,22 +14,50 @@ struct CountingDest {
 }
 
 impl ImportDestination for CountingDest {
-    fn create_space(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("s".into()) }
-    fn create_tab(&self, _: &str, _: &str) -> Option<String> { Some("t".into()) }
-    fn create_tab_in_folder(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("t".into()) }
-    fn create_folder(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("f".into()) }
+    fn create_space(&self, _: &str, _: &str, _: &str) -> Option<String> {
+        Some("s".into())
+    }
+    fn create_tab(&self, _: &str, _: &str, _: &str) -> Option<String> {
+        Some("t".into())
+    }
+    fn create_tab_in_folder(&self, _: &str, _: &str, _: &str, _: &str) -> Option<String> {
+        Some("t".into())
+    }
+    fn create_folder(&self, _: &str, _: &str, _: &str) -> Option<String> {
+        Some("f".into())
+    }
     fn pin_tab(&self, _: &str) {}
     fn favorite_tab(&self, _: &str) {}
-    fn add_bookmark(&self, _: &str, _: &str, _: &[String]) -> Option<String> { None }
-    fn add_history(&self, _: &str, _: &str, _: f64, _: u32) -> bool { false }
-    fn add_cookie(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: bool, _: bool, _: i32) -> bool { false }
-    fn add_autofill(&self, _: &str, _: &str, _: i32, _: i64, _: i64) -> bool { false }
+    fn add_bookmark(&self, _: &str, _: &str, _: &[String]) -> Option<String> {
+        None
+    }
+    fn add_history(&self, _: &str, _: &str, _: f64, _: u32) -> bool {
+        false
+    }
+    fn add_cookie(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: i64,
+        _: bool,
+        _: bool,
+        _: i32,
+    ) -> bool {
+        false
+    }
+    fn add_autofill(&self, _: &str, _: &str, _: i32, _: i64, _: i64) -> bool {
+        false
+    }
     fn add_favicon(&self, _: &str, _: &[u8]) -> bool {
         self.favicons.fetch_add(1, Ordering::Relaxed);
         true
     }
     fn activate_space(&self, _: &str) {}
-    fn get_active_space_id(&self) -> Option<String> { None }
+    fn get_active_space_id(&self) -> Option<String> {
+        None
+    }
 }
 
 fn main() {
@@ -52,5 +80,8 @@ fn main() {
         eprintln!("PROGRESS: {:?}", p);
     }
     h.join().unwrap();
-    eprintln!("Total add_favicon calls: {}", dest.favicons.load(Ordering::Relaxed));
+    eprintln!(
+        "Total add_favicon calls: {}",
+        dest.favicons.load(Ordering::Relaxed)
+    );
 }

@@ -28,9 +28,10 @@ export enum WelcomePage {
   PasswordSetup = 8,
   SyncKeyBackup = 9,
   Completion = 10,
+  PlanSelect = 11,
 }
 
-export const TOTAL_PAGES = 11;
+export const TOTAL_PAGES = 12;
 export const PASSWORD_PROVIDER_KIND = {
   MahoNative: 0,
   Bitwarden: 1,

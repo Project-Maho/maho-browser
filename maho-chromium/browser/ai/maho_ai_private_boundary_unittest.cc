@@ -14,6 +14,8 @@
 #include "content/public/test/web_contents_tester.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_ai_page_context_extractor.h"
+#include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/ai/maho_model_list_fetcher.h"
 #include "maho/browser/ai/maho_tab_tidy_orchestrator.h"
 #include "maho/browser/maho_private_context_policy.h"
@@ -56,6 +58,7 @@ class MahoAiPrivateBoundaryTestBase : public ChromeRenderViewHostTestHarness {
 using MahoAiModelListFetcherTest = MahoAiPrivateBoundaryTestBase;
 using MahoTabTidyOrchestratorTest = MahoAiPrivateBoundaryTestBase;
 using MahoInlineEditHandlerTest = MahoAiPrivateBoundaryTestBase;
+using MahoArtifactRegistryPrivateBoundaryTest = MahoAiPrivateBoundaryTestBase;
 
 TEST_F(MahoAiModelListFetcherTest, OtrTokenStopsBeforeRequest) {
   auto token = MakeIncognitoToken();
@@ -81,6 +84,17 @@ TEST_F(MahoAiModelListFetcherTest, OtrTokenStopsBeforeRequest) {
   // PerformFetch / the network.
   EXPECT_TRUE(called);
   EXPECT_TRUE(returned_models.empty());
+}
+
+TEST_F(MahoArtifactRegistryPrivateBoundaryTest,
+       IncognitoProfileHasNoArtifactRegistry) {
+  // The artifact registry is regular-profile-only. An incognito/OTR profile
+  // gets no service instance, so every mojo artifact handler method fails
+  // closed (null registry) and no artifact metadata is ever exposed there.
+  Profile* incognito =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  EXPECT_EQ(maho::ai::MahoArtifactRegistry::GetForProfile(incognito), nullptr);
+  EXPECT_NE(maho::ai::MahoArtifactRegistry::GetForProfile(profile()), nullptr);
 }
 
 TEST_F(MahoTabTidyOrchestratorTest, OtrTokenStopsBeforeClient) {
@@ -132,6 +146,28 @@ TEST_F(MahoInlineEditHandlerTest, ForgedOtrHandlerStopsBeforeCoreAndClient) {
           [](std::string* out, const std::string& result) { *out = result; },
           &edit_result));
   EXPECT_EQ(edit_result, "");
+}
+
+TEST(MahoAiPageContextRedactionTest, ToValueRedactsEveryTextualEgressField) {
+  MahoAiPageContextExtractor::PageContextResult result;
+  result.extraction_status =
+      MahoAiPageContextExtractor::PageContextResult::Status::kSuccess;
+  result.title = "ordinary title";
+  result.url =
+      "https://example.test/page?token=S3NTINEL-url&keep=ordinary";
+  result.selected_text = "Authorization: Basic S3NTINEL-auth";
+  result.main_text = "password=S3NTINEL-password ordinary marker";
+  result.headings = {"Bearer S3NTINEL-bearer"};
+  result.meta_description = "Cookie: session=S3NTINEL-cookie";
+  result.links = {
+      "https://example.test/link?access_token=S3NTINEL-link&keep=1"};
+  result.extraction_warnings = {"token=S3NTINEL-warning"};
+
+  const std::string serialized = result.ToValue().DebugString();
+
+  EXPECT_EQ(serialized.find("S3NTINEL-"), std::string::npos);
+  EXPECT_NE(serialized.find("ordinary title"), std::string::npos);
+  EXPECT_NE(serialized.find("ordinary marker"), std::string::npos);
 }
 
 }  // namespace

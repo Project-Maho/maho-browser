@@ -5,6 +5,12 @@ Command-line interface for Maho — browser control, AI-agent loop, MCP host man
 ## Install
 
 ```bash
+curl -fsSL https://mahobrowser.com/install-cli.sh | sh
+```
+
+Build from source instead:
+
+```bash
 cd maho && cargo build -p maho-cli --release
 # Binary at: maho/target/release/maho
 ```
@@ -130,7 +136,7 @@ Supported providers for `maho run` and `maho chat --byok`:
 
 Prebuilt binaries and official packaging (dmg, AppImage, apk, exe) are hosted exclusively in the release-only repository.
 
-Download releases here: [Maho Browser Releases](https://github.com/maho-browser/maho-releases/releases)
+Download releases here: [Maho Browser Releases](https://github.com/Project-Maho/release/releases)
 
 ---
 

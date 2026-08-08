@@ -552,7 +552,7 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
   on_complete_ = std::move(on_complete);
   on_error_ = std::move(on_error);
 
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     FinishWithError("AI is not available in this context");
     return;
   }
@@ -570,7 +570,7 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
 void MahoAiLlmClient::PerformStartCompletion(CompletionRequest request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     FinishWithError("AI is not available in this context");
     return;
   }
@@ -647,7 +647,7 @@ void MahoAiLlmClient::OnResponseComplete(bool success) {
   }
 
   if (response_code == 401 && !is_retry_ && prefs_ && url_loader_factory_) {
-    if (ai_gate_ && !ai_gate_.Run()) {
+    if (!ai_gate_ || !ai_gate_.Run()) {
       FinishWithError("AI is not available in this context");
       return;
     }

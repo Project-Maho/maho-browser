@@ -2,6 +2,10 @@
 *.o
 *.a
 
+# Chromium install-time generated extension rulesets (regenerated per build;
+# version-stamped, so committing them breaks tests after a Chromium roll)
+**/_metadata/generated_indexed_rulesets/
+
 # IDE
 .vscode/
 .idea/

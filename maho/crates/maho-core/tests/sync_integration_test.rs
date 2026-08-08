@@ -3,9 +3,18 @@ use maho_core::sync_models::{SyncEntity, SyncEntityType, SyncStatus};
 
 #[test]
 fn test_sync_sqlite_integration_flow() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let mut core = MahoCore::new().with_storage(":memory:");
 
-    core.start_sync("wss://localhost:8080", "room-123");
+    // Fail-closed E2EE requires an installed key before entity transport.
+    let key_info: serde_json::Value =
+        serde_json::from_str(&core.generate_sync_key()).expect("key info");
+    let phrase = key_info["recoveryPhrase"]
+        .as_str()
+        .expect("phrase")
+        .to_string();
+    core.configure_sync_encryption_for_recovery_phrase("wss://localhost:8080", &phrase)
+        .expect("configure encryption");
 
     let payload = serde_json::json!({"action": "test-action", "enabled": true}).to_string();
     let version = core
@@ -52,6 +61,7 @@ fn test_sync_sqlite_integration_flow() {
 
 #[test]
 fn test_sync_survives_restart_sqlite() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let tmp = tempfile::NamedTempFile::new().expect("temp file");
     let db_path = tmp.path().to_str().expect("utf-8 path").to_string();
 
@@ -158,6 +168,7 @@ fn test_sync_survives_restart_sqlite() {
 
 #[test]
 fn test_sync_queue_survives_restart_and_flushes() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let tmp = tempfile::NamedTempFile::new().expect("temp file");
     let db_path = tmp.path().to_str().expect("utf-8 path").to_string();
 
@@ -202,14 +213,30 @@ fn test_sync_queue_survives_restart_and_flushes() {
             .unwrap();
         assert_eq!(pending_before.len(), 1, "queue entry must survive restart");
 
-        core2.start_sync("wss://localhost:8080", "room-queue");
+        // Fail-closed E2EE requires an installed key before the queue can flush.
+        let key_info: serde_json::Value =
+            serde_json::from_str(&core2.generate_sync_key()).expect("key info");
+        let phrase = key_info["recoveryPhrase"]
+            .as_str()
+            .expect("phrase")
+            .to_string();
+        core2
+            .configure_sync_encryption_for_recovery_phrase("wss://localhost:8080", &phrase)
+            .expect("configure encryption");
         core2.set_sync_status(SyncStatus::Synced);
 
         let msgs = core2.drain_sync_outgoing();
         assert_eq!(
             msgs.len(),
             1,
-            "restarted sync_manager must flush persisted queue entry"
+            "restarted sync_manager must flush persisted queue entry (encrypted)"
+        );
+        assert!(
+            matches!(
+                msgs[0],
+                maho_core::sync_models::SyncMessage::Encrypted { .. }
+            ),
+            "flushed queue entry must be encrypted, never plaintext"
         );
 
         let pending_after = core2

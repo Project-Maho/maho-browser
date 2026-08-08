@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/views/command/maho_remote_search_suggestions.h"
 
 #include <algorithm>
 #include <string>
@@ -10,6 +11,12 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "build/build_config.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
+#include "chrome/test/base/testing_profile_manager.h"
+#include "components/omnibox/browser/autocomplete_provider.h"
+#include "components/prefs/pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho {
@@ -28,7 +35,7 @@ class CapResultsTest : public ::testing::Test {};
 
 TEST_F(CapResultsTest, EmptyInputProducesEmptyOutput) {
   std::vector<CommandSuggestion> results;
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
   EXPECT_TRUE(results.empty());
 }
 
@@ -38,7 +45,7 @@ TEST_F(CapResultsTest, InputBelowLimitIsUnchanged) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kHistory, "hist:0"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kBookmark, "bm:0"));
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
   ASSERT_EQ(3u, results.size());
   EXPECT_EQ("tab:0", results[0].key);
@@ -48,29 +55,29 @@ TEST_F(CapResultsTest, InputBelowLimitIsUnchanged) {
 
 TEST_F(CapResultsTest, InputAtExactLimitIsUnchanged) {
   std::vector<CommandSuggestion> results;
-  for (int i = 0; i < 8; ++i) {
+  for (int i = 0; i < 5; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
-  ASSERT_EQ(8u, results.size());
-  for (int i = 0; i < 8; ++i) {
+  ASSERT_EQ(5u, results.size());
+  for (int i = 0; i < 5; ++i) {
     EXPECT_EQ("hist:" + std::to_string(i), results[i].key);
   }
 }
 
-TEST_F(CapResultsTest, InputAboveLimitTruncatesAtEight) {
+TEST_F(CapResultsTest, InputAboveLimitTruncatesAtFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 20; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
-  EXPECT_EQ(8u, results.size());
+  EXPECT_EQ(5u, results.size());
 }
 
 TEST_F(CapResultsTest, InputOrderIsPreservedAfterTruncation) {
@@ -86,17 +93,14 @@ TEST_F(CapResultsTest, InputOrderIsPreservedAfterTruncation) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kClosedTab, "closed:0"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kRecentSearch, "recent:0"));
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
-  ASSERT_EQ(8u, results.size());
+  ASSERT_EQ(5u, results.size());
   EXPECT_EQ("tab:0", results[0].key);
   EXPECT_EQ("hist:0", results[1].key);
   EXPECT_EQ("bm:0", results[2].key);
   EXPECT_EQ("action:0", results[3].key);
   EXPECT_EQ("nav:0", results[4].key);
-  EXPECT_EQ("folder:0", results[5].key);
-  EXPECT_EQ("calc:0", results[6].key);
-  EXPECT_EQ("arch:0", results[7].key);
 }
 
 TEST_F(CapResultsTest, MixedTypesPreserveRustRankingOrder) {
@@ -107,7 +111,7 @@ TEST_F(CapResultsTest, MixedTypesPreserveRustRankingOrder) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kHistory, "hist:rank4"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kTab, "tab:rank5"));
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
   ASSERT_EQ(5u, results.size());
   EXPECT_EQ("hist:rank1", results[0].key);
@@ -117,31 +121,34 @@ TEST_F(CapResultsTest, MixedTypesPreserveRustRankingOrder) {
   EXPECT_EQ("tab:rank5", results[4].key);
 }
 
-TEST_F(CapResultsTest, ActionOnlyInputAboveLimitTruncatesToEight) {
+TEST_F(CapResultsTest, ActionOnlyInputAboveLimitTruncatesToFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 15; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kAction,
                                      "action:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
-  ASSERT_EQ(8u, results.size());
-  for (int i = 0; i < 8; ++i) {
+  ASSERT_EQ(5u, results.size());
+  for (int i = 0; i < 5; ++i) {
     EXPECT_EQ("action:" + std::to_string(i), results[i].key);
   }
 }
 
 TEST_F(CapResultsTest, ActionOnlyInputAtExactLimitIsUnchanged) {
   std::vector<CommandSuggestion> results;
-  for (int i = 0; i < 8; ++i) {
+  for (int i = 0; i < 5; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kAction,
                                      "action:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
-  ASSERT_EQ(8u, results.size());
+  ASSERT_EQ(5u, results.size());
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ("action:" + std::to_string(i), results[i].key);
+  }
 }
 
 TEST_F(CapResultsTest, ActionOnlyInputBelowLimitIsUnchanged) {
@@ -150,7 +157,7 @@ TEST_F(CapResultsTest, ActionOnlyInputBelowLimitIsUnchanged) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:1"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:2"));
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
   ASSERT_EQ(3u, results.size());
   EXPECT_EQ("action:0", results[0].key);
@@ -158,64 +165,136 @@ TEST_F(CapResultsTest, ActionOnlyInputBelowLimitIsUnchanged) {
   EXPECT_EQ("action:2", results[2].key);
 }
 
-TEST_F(CapResultsTest, CommandsOnlyModeCapsAtTwenty) {
+TEST_F(CapResultsTest, CommandsOnlyModeCapsAtFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 30; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kAction,
                                      "action:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kCommandsOnly);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kCommandsOnly,
+                               "query");
 
-  EXPECT_EQ(20u, results.size());
+  EXPECT_EQ(5u, results.size());
 }
 
-TEST_F(CapResultsTest, SiteSearchModeCapsAtTwenty) {
+TEST_F(CapResultsTest, SiteSearchModeCapsAtFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 30; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSiteSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSiteSearch,
+                               "query");
 
-  EXPECT_EQ(20u, results.size());
+  EXPECT_EQ(5u, results.size());
 }
 
-TEST_F(CapResultsTest, CurrentTabModeCapsAtEight) {
+TEST_F(CapResultsTest, CurrentTabModeCapsAtFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 15; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kCurrentTab);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kCurrentTab,
+                               "query");
 
-  EXPECT_EQ(8u, results.size());
+  EXPECT_EQ(5u, results.size());
 }
 
-TEST_F(CapResultsTest, NewTabModeCapsAtEight) {
+TEST_F(CapResultsTest, NewTabModeCapsAtFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 15; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kNewTab);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kNewTab, "query");
 
-  EXPECT_EQ(8u, results.size());
+  EXPECT_EQ(5u, results.size());
 }
 
-TEST_F(CapResultsTest, AIModeCapsAtEight) {
+TEST_F(CapResultsTest, SearchModeCapsAtFive) {
   std::vector<CommandSuggestion> results;
   for (int i = 0; i < 15; ++i) {
     results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch, "query");
 
-  EXPECT_EQ(8u, results.size());
+  EXPECT_EQ(5u, results.size());
+}
+
+TEST_F(CapResultsTest, EmptyQueryBucketsNewTabResults) {
+  std::vector<CommandSuggestion> results = {
+      MakeSuggestion(CommandSuggestionType::kHistory, "hist:0"),
+      MakeSuggestion(CommandSuggestionType::kBookmark, "bm:0"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:0"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "hist:1"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:1"),
+      MakeSuggestion(CommandSuggestionType::kAction, "action:0"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:2"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "hist:2"),
+      MakeSuggestion(CommandSuggestionType::kBookmark, "bm:1"),
+  };
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kNewTab, "");
+
+  ASSERT_EQ(5u, results.size());
+  EXPECT_EQ("tab:0", results[0].key);
+  EXPECT_EQ("tab:1", results[1].key);
+  EXPECT_EQ("hist:0", results[2].key);
+  EXPECT_EQ("hist:1", results[3].key);
+  EXPECT_EQ("bm:0", results[4].key);
+}
+
+TEST_F(CapResultsTest, EmptyQueryBucketsCurrentTabResults) {
+  std::vector<CommandSuggestion> results = {
+      MakeSuggestion(CommandSuggestionType::kHistory, "hist:0"),
+      MakeSuggestion(CommandSuggestionType::kBookmark, "bm:0"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:0"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "hist:1"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:1"),
+      MakeSuggestion(CommandSuggestionType::kAction, "action:0"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:2"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "hist:2"),
+      MakeSuggestion(CommandSuggestionType::kBookmark, "bm:1"),
+  };
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kCurrentTab, "");
+
+  ASSERT_EQ(5u, results.size());
+  EXPECT_EQ("tab:0", results[0].key);
+  EXPECT_EQ("tab:1", results[1].key);
+  EXPECT_EQ("hist:0", results[2].key);
+  EXPECT_EQ("hist:1", results[3].key);
+  EXPECT_EQ("bm:0", results[4].key);
+}
+
+TEST_F(CapResultsTest, NonEmptyQueriesDoNotEngageTabModeBucketing) {
+  for (CommandOverlayMode mode : {CommandOverlayMode::kNewTab,
+                                  CommandOverlayMode::kCurrentTab}) {
+    std::vector<CommandSuggestion> results = {
+        MakeSuggestion(CommandSuggestionType::kHistory, "hist:0"),
+        MakeSuggestion(CommandSuggestionType::kBookmark, "bm:0"),
+        MakeSuggestion(CommandSuggestionType::kTab, "tab:0"),
+        MakeSuggestion(CommandSuggestionType::kHistory, "hist:1"),
+        MakeSuggestion(CommandSuggestionType::kTab, "tab:1"),
+        MakeSuggestion(CommandSuggestionType::kAction, "action:0"),
+    };
+
+    MahoCommandModel::CapResults(results, mode, "query");
+
+    ASSERT_EQ(5u, results.size());
+    EXPECT_EQ("hist:0", results[0].key);
+    EXPECT_EQ("bm:0", results[1].key);
+    EXPECT_EQ("tab:0", results[2].key);
+    EXPECT_EQ("hist:1", results[3].key);
+    EXPECT_EQ("tab:1", results[4].key);
+  }
 }
 
 class ParseTypeTest : public ::testing::Test {};
@@ -577,11 +656,1486 @@ TEST_F(QuickActionGateTest, CalculatorAndUnitConversionPreserved) {
   EXPECT_EQ("unit:0", results[1].key);
 }
 
+class MahoCommandModelTask4Test : public ::testing::Test {};
+
+CommandSuggestion MakeTask4Local(int index) {
+  CommandSuggestion suggestion = MakeSuggestion(
+      CommandSuggestionType::kHistory, "local:" + std::to_string(index));
+  suggestion.subtitle = "Local subtitle " + std::to_string(index);
+  suggestion.execution_payload =
+      "https://local.example/" + std::to_string(index);
+  return suggestion;
+}
+
+CommandSuggestion MakeTask4LocalSearch(const std::string& terms,
+                                       const std::string& destination) {
+  CommandSuggestion suggestion = MakeSuggestion(
+      CommandSuggestionType::kSearch, "search:" + terms);
+  suggestion.title = terms + " — Search with Local";
+  suggestion.execution_payload = destination;
+  return suggestion;
+}
+
+RemoteSearchSuggestion MakeTask4Remote(
+    const std::string& terms,
+    const std::string& destination,
+    const std::string& title = std::string(),
+    std::optional<std::string> subtitle = std::nullopt) {
+  return RemoteSearchSuggestion(terms, title.empty() ? terms : title,
+                                std::move(subtitle), GURL(destination));
+}
+
+std::vector<CommandSuggestion> MakeTask4Locals(size_t count) {
+  std::vector<CommandSuggestion> locals;
+  for (size_t i = 0; i < count; ++i) {
+    locals.push_back(MakeTask4Local(static_cast<int>(i)));
+  }
+  return locals;
+}
+
+std::vector<CommandSuggestion> MakeTask4RemoteRows(size_t count) {
+  std::vector<RemoteSearchSuggestion> remotes;
+  for (size_t i = 0; i < count; ++i) {
+    remotes.push_back(MakeTask4Remote(
+        "remote " + std::to_string(i),
+        "https://search.example/?q=remote" + std::to_string(i)));
+  }
+  return MahoCommandModel::NormalizeRemoteSuggestions(
+      "current query", {}, remotes);
+}
+
+TEST_F(MahoCommandModelTask4Test, PrepareLocalCandidatesPreservesPolicyWithoutCap) {
+  std::vector<CommandSuggestion> actions_only = MakeTask4Locals(6);
+  actions_only.push_back(
+      MakeSuggestion(CommandSuggestionType::kAction, "action:keep"));
+  actions_only = MahoCommandModel::PrepareLocalCandidates(
+      std::move(actions_only), /*actions_only=*/true,
+      CommandOverlayMode::kSearch, "query");
+  ASSERT_EQ(1u, actions_only.size());
+  EXPECT_EQ("action:keep", actions_only[0].key);
+
+  std::vector<CommandSuggestion> navigation = MakeTask4Locals(6);
+  navigation.push_back(MakeTask4LocalSearch(
+      "example.com/path", "https://search.example/?q=example"));
+  navigation = MahoCommandModel::PrepareLocalCandidates(
+      std::move(navigation), /*actions_only=*/false,
+      CommandOverlayMode::kSearch, "example.com/path");
+  ASSERT_EQ(8u, navigation.size());
+  EXPECT_EQ(CommandSuggestionType::kNavigation, navigation[0].type);
+  EXPECT_EQ("https://example.com/path", navigation[0].execution_payload);
+
+  navigation = MahoCommandModel::PrepareLocalCandidates(
+      std::move(navigation), /*actions_only=*/false,
+      CommandOverlayMode::kSearch, "example.com/path");
+  ASSERT_EQ(8u, navigation.size());
+  EXPECT_EQ(1, std::count_if(
+                   navigation.begin(), navigation.end(),
+                   [](const CommandSuggestion& suggestion) {
+                     return suggestion.type ==
+                            CommandSuggestionType::kNavigation;
+                   }));
+}
+
+TEST_F(MahoCommandModelTask4Test, FullAllocationMatrixIsCappedAndRemoteBottomContiguous) {
+  for (size_t local_count = 0; local_count <= 6; ++local_count) {
+    for (size_t remote_input_count = 0; remote_input_count <= 3;
+         ++remote_input_count) {
+      std::vector<CommandSuggestion> locals = MakeTask4Locals(local_count);
+      std::vector<CommandSuggestion> remote_rows =
+          MakeTask4RemoteRows(remote_input_count);
+      std::vector<CommandSuggestion> actual =
+          MahoCommandModel::AllocateFinalResults(
+              locals, remote_rows, CommandOverlayMode::kSearch, "query");
+
+      const size_t expected_remote_count =
+          std::min<size_t>(2, remote_input_count);
+      const size_t expected_local_count =
+          remote_input_count == 0
+              ? std::min<size_t>(MahoCommandModel::kMaxVisibleRows,
+                                 local_count)
+              : std::min<size_t>(MahoCommandModel::kMaxVisibleRows -
+                                     expected_remote_count,
+                                 local_count);
+      SCOPED_TRACE(testing::Message()
+                   << "locals=" << local_count
+                   << " remotes=" << remote_input_count);
+      ASSERT_EQ(expected_local_count + expected_remote_count, actual.size());
+      EXPECT_LE(actual.size(),
+                static_cast<size_t>(MahoCommandModel::kMaxVisibleRows));
+      for (size_t i = 0; i < expected_local_count; ++i) {
+        EXPECT_EQ("local:" + std::to_string(i), actual[i].key);
+      }
+      for (size_t i = 0; i < expected_remote_count; ++i) {
+        EXPECT_EQ("remote-search:remote " + std::to_string(i),
+                  actual[expected_local_count + i].key);
+      }
+    }
+  }
+}
+
+TEST_F(MahoCommandModelTask4Test, ApprovedAllocationExamplesHaveExactKeys) {
+  struct Case {
+    size_t locals;
+    size_t remotes;
+    std::vector<std::string> expected_keys;
+  };
+  const std::vector<Case> cases = {
+      {5, 2, {"local:0", "local:1", "local:2",
+              "remote-search:remote 0", "remote-search:remote 1"}},
+      {4, 1, {"local:0", "local:1", "local:2", "local:3",
+              "remote-search:remote 0"}},
+      {3, 2, {"local:0", "local:1", "local:2",
+              "remote-search:remote 0", "remote-search:remote 1"}},
+      {2, 2, {"local:0", "local:1", "remote-search:remote 0",
+              "remote-search:remote 1"}},
+  };
+
+  for (const Case& test_case : cases) {
+    std::vector<CommandSuggestion> actual =
+        MahoCommandModel::AllocateFinalResults(
+            MakeTask4Locals(test_case.locals),
+            MakeTask4RemoteRows(test_case.remotes),
+            CommandOverlayMode::kSearch, "query");
+    std::vector<std::string> actual_keys;
+    for (const auto& suggestion : actual) {
+      actual_keys.push_back(suggestion.key);
+    }
+    EXPECT_EQ(test_case.expected_keys, actual_keys);
+  }
+}
+
+TEST_F(MahoCommandModelTask4Test, NoRemoteUsesDirectCapResultsIncludingEmptyBuckets) {
+  std::vector<CommandSuggestion> ranked = MakeTask4Locals(7);
+  std::vector<CommandSuggestion> expected_ranked = ranked;
+  MahoCommandModel::CapResults(expected_ranked, CommandOverlayMode::kSearch,
+                               "query");
+  EXPECT_TRUE(MahoCommandModel::FinalSnapshotsEqual(
+      expected_ranked, MahoCommandModel::AllocateFinalResults(
+                           ranked, {}, CommandOverlayMode::kSearch, "query")));
+
+  std::vector<CommandSuggestion> bucketed = {
+      MakeSuggestion(CommandSuggestionType::kHistory, "history:0"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "history:1"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "history:2"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:0"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:1"),
+      MakeSuggestion(CommandSuggestionType::kBookmark, "bookmark:0"),
+  };
+  std::vector<CommandSuggestion> expected_bucketed = bucketed;
+  MahoCommandModel::CapResults(expected_bucketed,
+                               CommandOverlayMode::kNewTab, "");
+  std::vector<CommandSuggestion> actual_bucketed =
+      MahoCommandModel::AllocateFinalResults(
+          bucketed, {}, CommandOverlayMode::kNewTab, "");
+  ASSERT_TRUE(MahoCommandModel::FinalSnapshotsEqual(expected_bucketed,
+                                                     actual_bucketed));
+  ASSERT_EQ(5u, actual_bucketed.size());
+  EXPECT_EQ("tab:0", actual_bucketed[0].key);
+  EXPECT_EQ("tab:1", actual_bucketed[1].key);
+  EXPECT_EQ("history:0", actual_bucketed[2].key);
+  EXPECT_EQ("history:1", actual_bucketed[3].key);
+  EXPECT_EQ("bookmark:0", actual_bucketed[4].key);
+}
+
+TEST_F(MahoCommandModelTask4Test, NormalizesMapsAndDeduplicatesRemoteCandidates) {
+  std::vector<CommandSuggestion> locals = {
+      MakeTask4LocalSearch("Local Search", "https://local.example/search"),
+      MakeTask4Local(0),
+  };
+  std::vector<RemoteSearchSuggestion> remotes = {
+      MakeTask4Remote("  CURRENT QUERY  ",
+                      "https://search.example/current"),
+      MakeTask4Remote(" LOCAL SEARCH ", "https://search.example/local"),
+      MakeTask4Remote("Accepted", "https://search.example/accepted",
+                      "Provider title", "Provider description"),
+      MakeTask4Remote(" accepted ", "https://search.example/other"),
+      MakeTask4Remote("Different text", "https://search.example/accepted"),
+      MakeTask4Remote("Fallback subtitle", "https://search.example/fallback",
+                      "Fallback title", "   "),
+  };
+
+  std::vector<CommandSuggestion> actual =
+      MahoCommandModel::NormalizeRemoteSuggestions(
+          " Current Query ", locals, remotes);
+
+  ASSERT_EQ(2u, actual.size());
+  EXPECT_EQ(CommandSuggestionType::kSearch, actual[0].type);
+  EXPECT_EQ("remote-search:accepted", actual[0].key);
+  EXPECT_EQ("Provider title", actual[0].title);
+  EXPECT_EQ("Provider description", actual[0].subtitle);
+  EXPECT_EQ("https://search.example/accepted", actual[0].execution_payload);
+  EXPECT_EQ("remote-search:fallback subtitle", actual[1].key);
+  EXPECT_EQ("Fallback title", actual[1].title);
+  EXPECT_EQ("search.example", actual[1].subtitle);
+}
+
+TEST_F(MahoCommandModelTask4Test, RejectsLocalAndRemoteTextOrCanonicalUrlDuplicates) {
+  std::vector<CommandSuggestion> locals = {
+      MakeTask4LocalSearch("Local terms", "https://example.test/path"),
+  };
+  std::vector<RemoteSearchSuggestion> remotes = {
+      MakeTask4Remote("local terms", "https://different.test/search"),
+      MakeTask4Remote("different terms", "https://example.test/path"),
+      MakeTask4Remote("accepted", "https://example.test:443/accepted"),
+      MakeTask4Remote("same url different text",
+                      "https://example.test/accepted"),
+      MakeTask4Remote("ACCEPTED", "https://another.test/search"),
+      MakeTask4Remote("same text different url",
+                      "https://different.test/accepted"),
+  };
+
+  std::vector<CommandSuggestion> actual =
+      MahoCommandModel::NormalizeRemoteSuggestions("query", locals, remotes);
+
+  ASSERT_EQ(2u, actual.size());
+  EXPECT_EQ("remote-search:accepted", actual[0].key);
+  EXPECT_EQ("remote-search:same text different url", actual[1].key);
+}
+
+TEST_F(MahoCommandModelTask4Test, FinalSnapshotEqualityUsesOnlyFourPayloadFields) {
+  CommandSuggestion original = MakeTask4Local(0);
+  original.title = "Title";
+  original.subtitle = "Subtitle";
+  original.execution_payload = "https://example.test/original";
+  std::vector<CommandSuggestion> baseline = {original};
+
+  CommandSuggestion icon_only = original;
+  ImageData icon;
+  icon.format = "test";
+  icon_only.icon = std::move(icon);
+  EXPECT_TRUE(MahoCommandModel::FinalSnapshotsEqual(baseline, {icon_only}));
+
+  CommandSuggestion changed = original;
+  changed.key = "changed-key";
+  EXPECT_FALSE(MahoCommandModel::FinalSnapshotsEqual(baseline, {changed}));
+  changed = original;
+  changed.title = "Changed title";
+  EXPECT_FALSE(MahoCommandModel::FinalSnapshotsEqual(baseline, {changed}));
+  changed = original;
+  changed.subtitle = "Changed subtitle";
+  EXPECT_FALSE(MahoCommandModel::FinalSnapshotsEqual(baseline, {changed}));
+  changed = original;
+  changed.execution_payload = "https://example.test/changed";
+  EXPECT_FALSE(MahoCommandModel::FinalSnapshotsEqual(baseline, {changed}));
+  EXPECT_FALSE(MahoCommandModel::FinalSnapshotsEqual(baseline, {}));
+}
+
 // ---------------------------------------------------------------------------
 // Private-context (exact-primary-Incognito) contract — task-10-command-unit
 // ---------------------------------------------------------------------------
 
 class MahoCommandModelTest : public ::testing::Test {};
+
+class MahoRemoteSearchSuggestionsTest : public ::testing::Test {
+ protected:
+  base::test::TaskEnvironment task_environment_;
+};
+
+class LateNotifyingRemoteSearchController final
+    : public MahoRemoteSearchSuggestions::ControllerForTesting {
+ public:
+  LateNotifyingRemoteSearchController() = default;
+  ~LateNotifyingRemoteSearchController() override = default;
+
+  void SetResultChangedCallback(ResultChangedCallback callback) override {
+    if (callback) {
+      late_result_changed_callback_ = callback;
+    }
+    result_changed_callback_ = std::move(callback);
+  }
+
+  void Start(const std::string& query) override {
+    last_query_ = query;
+    ++start_count_;
+  }
+
+  void Stop() override { ++stop_count_; }
+
+  void EmitResultChanged() {
+    if (result_changed_callback_) {
+      result_changed_callback_.Run();
+    }
+  }
+
+  void EmitLateResultChanged() {
+    late_result_changed_attempted_ = true;
+    if (late_result_changed_callback_) {
+      late_result_changed_callback_.Run();
+    }
+  }
+
+  int start_count() const { return start_count_; }
+  int stop_count() const { return stop_count_; }
+  bool has_result_changed_callback() const {
+    return static_cast<bool>(result_changed_callback_);
+  }
+  bool late_result_changed_attempted() const {
+    return late_result_changed_attempted_;
+  }
+
+ private:
+  std::string last_query_;
+  ResultChangedCallback result_changed_callback_;
+  ResultChangedCallback late_result_changed_callback_;
+  int start_count_ = 0;
+  int stop_count_ = 0;
+  bool late_result_changed_attempted_ = false;
+};
+
+TEST_F(MahoRemoteSearchSuggestionsTest,
+       ProductionAdapterUsesSearchOnlyControllerConfig) {
+  EXPECT_EQ(AutocompleteProvider::TYPE_SEARCH,
+            MahoRemoteSearchSuggestions::ProviderTypesForTesting());
+}
+
+TEST_F(MahoRemoteSearchSuggestionsTest,
+       ProductionAdapterSuppressesLateControllerNotificationAfterCancel) {
+  auto controller = std::make_unique<LateNotifyingRemoteSearchController>();
+  LateNotifyingRemoteSearchController* controller_driver = controller.get();
+  std::unique_ptr<MahoRemoteSearchSuggestions> source =
+      MahoRemoteSearchSuggestions::CreateForTesting(std::move(controller));
+
+  int callback_count = 0;
+  source->Start("weather", base::BindRepeating(
+                               [](int* count,
+                                  std::vector<RemoteSearchSuggestion>) {
+                                 ++*count;
+                               },
+                               &callback_count));
+  EXPECT_EQ(1, controller_driver->start_count());
+
+  source->Cancel();
+  EXPECT_EQ(1, controller_driver->stop_count());
+  EXPECT_FALSE(controller_driver->has_result_changed_callback());
+  controller_driver->EmitLateResultChanged();
+
+  EXPECT_TRUE(controller_driver->late_result_changed_attempted());
+  EXPECT_EQ(0, callback_count);
+}
+
+TEST_F(MahoRemoteSearchSuggestionsTest,
+       ProductionAdapterRestartsAfterCancel) {
+  auto controller = std::make_unique<LateNotifyingRemoteSearchController>();
+  LateNotifyingRemoteSearchController* controller_driver = controller.get();
+  std::unique_ptr<MahoRemoteSearchSuggestions> source =
+      MahoRemoteSearchSuggestions::CreateForTesting(std::move(controller));
+
+  int callback_count = 0;
+  auto callback = base::BindRepeating(
+      [](int* count, std::vector<RemoteSearchSuggestion>) { ++*count; },
+      &callback_count);
+  source->Start("weather", callback);
+  source->Cancel();
+  source->Start("news", callback);
+  controller_driver->EmitResultChanged();
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(2, controller_driver->start_count());
+  EXPECT_TRUE(controller_driver->has_result_changed_callback());
+  EXPECT_EQ(1, callback_count);
+}
+
+struct ReentrantControllerState {
+  int destroy_count = 0;
+  int start_return_count = 0;
+  int stream_return_count = 0;
+  std::string terms = "weather today";
+};
+
+class ReentrantNotificationController final
+    : public MahoRemoteSearchSuggestions::ControllerForTesting {
+ public:
+  explicit ReentrantNotificationController(ReentrantControllerState* state)
+      : state_(state) {}
+  ~ReentrantNotificationController() override { ++state_->destroy_count; }
+
+  void SetResultChangedCallback(ResultChangedCallback callback) override {
+    callback_ = std::move(callback);
+  }
+
+  void Start(const std::string& query) override {
+    ReentrantControllerState* state = state_;
+    if (callback_) {
+      callback_.Run();
+    }
+    ++state->start_return_count;
+  }
+
+  void Stop() override {}
+
+  std::vector<RemoteSearchSuggestion> GetSuggestions() const override {
+    return {RemoteSearchSuggestion(
+        state_->terms, state_->terms, std::nullopt,
+        GURL("https://search.example/?q=" + state_->terms))};
+  }
+
+  void EmitStreamedSnapshot(std::string terms) {
+    state_->terms = std::move(terms);
+    ReentrantControllerState* state = state_;
+    if (callback_) {
+      callback_.Run();
+    }
+    ++state->stream_return_count;
+  }
+
+ private:
+  const raw_ptr<ReentrantControllerState> state_;
+  ResultChangedCallback callback_;
+};
+
+TEST_F(MahoRemoteSearchSuggestionsTest,
+       ConsumerDestructionIsDeferredPastSynchronousStartNotification) {
+  ReentrantControllerState state;
+  auto controller = std::make_unique<ReentrantNotificationController>(&state);
+  std::unique_ptr<MahoRemoteSearchSuggestions> source =
+      MahoRemoteSearchSuggestions::CreateForTesting(std::move(controller));
+  int callback_count = 0;
+
+  source->Start(
+      "weather",
+      base::BindRepeating(
+          [](std::unique_ptr<MahoRemoteSearchSuggestions>* source,
+             int* callback_count,
+             std::vector<RemoteSearchSuggestion>) {
+            ++*callback_count;
+            source->reset();
+          },
+          base::Unretained(&source), base::Unretained(&callback_count)));
+
+  EXPECT_TRUE(source);
+  EXPECT_EQ(1, state.start_return_count);
+  EXPECT_EQ(0, callback_count);
+  EXPECT_EQ(0, state.destroy_count);
+
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(source);
+  EXPECT_EQ(1, callback_count);
+  EXPECT_EQ(1, state.destroy_count);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(1, callback_count);
+}
+
+TEST_F(MahoRemoteSearchSuggestionsTest,
+       ConsumerDestructionIsDeferredPastStreamedNotification) {
+  ReentrantControllerState state;
+  auto controller = std::make_unique<ReentrantNotificationController>(&state);
+  ReentrantNotificationController* controller_driver = controller.get();
+  std::unique_ptr<MahoRemoteSearchSuggestions> source =
+      MahoRemoteSearchSuggestions::CreateForTesting(std::move(controller));
+  int callback_count = 0;
+
+  source->Start(
+      "weather",
+      base::BindRepeating(
+          [](std::unique_ptr<MahoRemoteSearchSuggestions>* source,
+             int* callback_count,
+             std::vector<RemoteSearchSuggestion>) {
+            ++*callback_count;
+            if (*callback_count == 2) {
+              source->reset();
+            }
+          },
+          base::Unretained(&source), base::Unretained(&callback_count)));
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(source);
+  ASSERT_EQ(1, callback_count);
+
+  controller_driver->EmitStreamedSnapshot("weather tomorrow");
+  EXPECT_TRUE(source);
+  EXPECT_EQ(1, state.stream_return_count);
+  EXPECT_EQ(1, callback_count);
+
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(source);
+  EXPECT_EQ(2, callback_count);
+  EXPECT_EQ(1, state.destroy_count);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(2, callback_count);
+}
+
+struct FakeRemoteSourceState {
+  int start_count = 0;
+  int cancel_count = 0;
+  int destroy_count = 0;
+};
+
+class LifecycleFakeRemoteSource final
+    : public MahoRemoteSearchSuggestionSource {
+ public:
+  explicit LifecycleFakeRemoteSource(FakeRemoteSourceState* state)
+      : state_(state) {}
+  ~LifecycleFakeRemoteSource() override { ++state_->destroy_count; }
+
+  void Start(const std::string& query, SnapshotCallback callback) override {
+    ++state_->start_count;
+    callback_ = std::move(callback);
+    if (!synchronous_snapshot_.empty()) {
+      callback_.Run(synchronous_snapshot_);
+    }
+  }
+
+  void Cancel() override {
+    ++state_->cancel_count;
+    if (emit_during_cancel_ && callback_) {
+      callback_.Run(cancel_snapshot_);
+    }
+  }
+
+  void Emit(std::vector<RemoteSearchSuggestion> snapshot) {
+    if (callback_) {
+      callback_.Run(std::move(snapshot));
+    }
+  }
+
+  void set_synchronous_snapshot(
+      std::vector<RemoteSearchSuggestion> snapshot) {
+    synchronous_snapshot_ = std::move(snapshot);
+  }
+  void set_cancel_snapshot(std::vector<RemoteSearchSuggestion> snapshot) {
+    cancel_snapshot_ = std::move(snapshot);
+    emit_during_cancel_ = true;
+  }
+
+ private:
+  const raw_ptr<FakeRemoteSourceState> state_;
+  SnapshotCallback callback_;
+  std::vector<RemoteSearchSuggestion> synchronous_snapshot_;
+  std::vector<RemoteSearchSuggestion> cancel_snapshot_;
+  bool emit_during_cancel_ = false;
+};
+
+RemoteSearchSuggestion MakeRemoteSuggestion(const std::string& terms) {
+  return RemoteSearchSuggestion(
+      terms, terms, std::nullopt,
+      GURL("https://search.example/?q=" + terms));
+}
+
+class MahoCommandModelLifecycleTask3Test : public ::testing::Test {
+ protected:
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+class MahoCommandModelTask4IntegrationTest : public ::testing::Test {
+ protected:
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+class MahoCommandModelUxRefinementsTest : public ::testing::Test {
+ protected:
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+std::vector<std::string> UxRefinementKeys(
+    const std::vector<CommandSuggestion>& results) {
+  std::vector<std::string> keys;
+  for (const CommandSuggestion& result : results) {
+    keys.push_back(result.key);
+  }
+  return keys;
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       RemoteSubtitlesPreferProviderThenHostAndNeverArtificialLiteral) {
+  std::vector<RemoteSearchSuggestion> remotes = {
+      MakeTask4Remote("provider", "https://www.provider.example/search",
+                      "Provider", "  Provider supplied text  "),
+      MakeTask4Remote("host", "https://www.host.example/search", "Host",
+                      " \t "),
+      MakeTask4Remote("host no www", "https://direct.example/search"),
+      MakeTask4Remote("host unavailable", "file:///search"),
+  };
+
+  std::vector<CommandSuggestion> actual =
+      MahoCommandModel::NormalizeRemoteSuggestions("query", {}, remotes);
+
+  ASSERT_EQ(4u, actual.size());
+  EXPECT_EQ("Provider supplied text", actual[0].subtitle);
+  EXPECT_EQ("host.example", actual[1].subtitle);
+  EXPECT_EQ("direct.example", actual[2].subtitle);
+  EXPECT_TRUE(actual[3].subtitle.empty());
+  for (const CommandSuggestion& result : actual) {
+    EXPECT_NE("Search suggestion", result.subtitle);
+  }
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       RemoteRowsFollowTypedSearchAndKeepLocalOrderAndContiguity) {
+  std::vector<CommandSuggestion> locals = {
+      MakeTask4Local(0),
+      MakeTask4LocalSearch("query", "https://local.example/?q=query"),
+      MakeSuggestion(CommandSuggestionType::kBookmark, "bookmark:0"),
+      MakeSuggestion(CommandSuggestionType::kTab, "tab:0"),
+      MakeSuggestion(CommandSuggestionType::kHistory, "history:tail"),
+  };
+
+  std::vector<CommandSuggestion> actual =
+      MahoCommandModel::AllocateFinalResults(
+          locals, MakeTask4RemoteRows(2), CommandOverlayMode::kSearch,
+          "query");
+
+  EXPECT_EQ((std::vector<std::string>{
+                "local:0", "search:query", "remote-search:remote 0",
+                "remote-search:remote 1", "bookmark:0"}),
+            UxRefinementKeys(actual));
+  ASSERT_LE(actual.size(),
+            static_cast<size_t>(MahoCommandModel::kMaxVisibleRows));
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       RemoteRowsAppendWithoutSurvivingTypedSearchRow) {
+  std::vector<CommandSuggestion> no_search = MakeTask4Locals(4);
+  EXPECT_EQ((std::vector<std::string>{
+                "local:0", "local:1", "local:2", "local:3",
+                "remote-search:remote 0"}),
+            UxRefinementKeys(MahoCommandModel::AllocateFinalResults(
+                no_search, MakeTask4RemoteRows(1),
+                CommandOverlayMode::kSearch, "query")));
+
+  std::vector<CommandSuggestion> trimmed_search = MakeTask4Locals(4);
+  trimmed_search.push_back(
+      MakeTask4LocalSearch("query", "https://local.example/?q=query"));
+  EXPECT_EQ((std::vector<std::string>{
+                "local:0", "local:1", "local:2",
+                "remote-search:remote 0", "remote-search:remote 1"}),
+            UxRefinementKeys(MahoCommandModel::AllocateFinalResults(
+                trimmed_search, MakeTask4RemoteRows(2),
+                CommandOverlayMode::kSearch, "query")));
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       FullAllocationMatrixReservesExactLocalSlotsAndCapsAtFive) {
+  for (size_t local_count = 0; local_count <= 7; ++local_count) {
+    for (size_t remote_input_count = 1; remote_input_count <= 4;
+         ++remote_input_count) {
+      const size_t remote_count = std::min<size_t>(2, remote_input_count);
+      const size_t local_slots =
+          MahoCommandModel::kMaxVisibleRows - remote_count;
+      std::vector<CommandSuggestion> actual =
+          MahoCommandModel::AllocateFinalResults(
+              MakeTask4Locals(local_count),
+              MakeTask4RemoteRows(remote_input_count),
+              CommandOverlayMode::kSearch, "query");
+
+      SCOPED_TRACE(testing::Message()
+                   << "locals=" << local_count
+                   << " remotes=" << remote_input_count);
+      ASSERT_EQ(std::min(local_count, local_slots) + remote_count,
+                actual.size());
+      EXPECT_LE(actual.size(),
+                static_cast<size_t>(MahoCommandModel::kMaxVisibleRows));
+      for (size_t i = 0; i < std::min(local_count, local_slots); ++i) {
+        EXPECT_EQ("local:" + std::to_string(i), actual[i].key);
+      }
+    }
+  }
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       NoValidRemoteIsByteForBehaviorDirectCapIncludingEmptyBuckets) {
+  const std::vector<RemoteSearchSuggestion> invalid_remotes = {
+      MakeTask4Remote("", "https://empty-terms.example/"),
+      MakeTask4Remote("invalid destination", "not a url"),
+  };
+  ASSERT_TRUE(MahoCommandModel::NormalizeRemoteSuggestions(
+                  "query", {}, invalid_remotes)
+                  .empty());
+
+  for (const auto& [mode, query] :
+       std::vector<std::pair<CommandOverlayMode, std::string>>{
+           {CommandOverlayMode::kSearch, "query"},
+           {CommandOverlayMode::kNewTab, ""}}) {
+    std::vector<CommandSuggestion> locals = {
+        MakeSuggestion(CommandSuggestionType::kHistory, "history:0"),
+        MakeSuggestion(CommandSuggestionType::kHistory, "history:1"),
+        MakeSuggestion(CommandSuggestionType::kHistory, "history:2"),
+        MakeSuggestion(CommandSuggestionType::kTab, "tab:0"),
+        MakeSuggestion(CommandSuggestionType::kTab, "tab:1"),
+        MakeSuggestion(CommandSuggestionType::kBookmark, "bookmark:0"),
+    };
+    std::vector<CommandSuggestion> expected = locals;
+    MahoCommandModel::CapResults(expected, mode, query);
+    std::vector<CommandSuggestion> actual =
+        MahoCommandModel::AllocateFinalResults(
+            locals,
+            MahoCommandModel::NormalizeRemoteSuggestions(
+                query, locals, invalid_remotes),
+            mode, query);
+    EXPECT_TRUE(MahoCommandModel::FinalSnapshotsEqual(expected, actual));
+  }
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       LateFirstRemoteSnapshotIsIgnoredWithoutRepublication) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  LifecycleFakeRemoteSource* source_driver = source.get();
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  model.Search("", CommandOverlayMode::kSearch,
+               base::BindRepeating(
+                   [](int* count, std::vector<CommandSuggestion>) {
+                     ++*count;
+                   },
+                   &callback_count));
+  const uint32_t generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(generation, MakeTask4Locals(3));
+  model.StartRemoteSearchForTesting(generation, "query");
+  const int count_after_local = callback_count;
+  const std::vector<std::string> local_keys =
+      UxRefinementKeys(model.results());
+
+  task_environment_.FastForwardBy(base::Milliseconds(601));
+  source_driver->Emit({MakeRemoteSuggestion("late remote")});
+
+  EXPECT_EQ(count_after_local, callback_count);
+  EXPECT_EQ(local_keys, UxRefinementKeys(model.results()));
+  EXPECT_TRUE(model.remote_snapshot_for_testing().empty());
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       FirstRemoteSnapshotWithinThresholdIsApplied) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  LifecycleFakeRemoteSource* source_driver = source.get();
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  model.Search("", CommandOverlayMode::kSearch,
+               base::BindRepeating(
+                   [](int* count, std::vector<CommandSuggestion>) {
+                     ++*count;
+                   },
+                   &callback_count));
+  const uint32_t generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(generation, MakeTask4Locals(3));
+  model.StartRemoteSearchForTesting(generation, "query");
+  const int count_after_local = callback_count;
+
+  task_environment_.FastForwardBy(base::Milliseconds(599));
+  source_driver->Emit({MakeRemoteSuggestion("timely remote")});
+
+  EXPECT_EQ(count_after_local + 1, callback_count);
+  EXPECT_NE(model.results().end(),
+            std::ranges::find_if(model.results(), [](const auto& result) {
+              return result.key == "remote-search:timely remote";
+            }));
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       VisibleRemoteAllowsStreamingUpdatePastThreshold) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  LifecycleFakeRemoteSource* source_driver = source.get();
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  model.Search("", CommandOverlayMode::kSearch,
+               base::BindRepeating(
+                   [](int* count, std::vector<CommandSuggestion>) {
+                     ++*count;
+                   },
+                   &callback_count));
+  const uint32_t generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(generation, MakeTask4Locals(3));
+  model.StartRemoteSearchForTesting(generation, "query");
+  source_driver->Emit({MakeRemoteSuggestion("remote initial")});
+  const int count_after_initial = callback_count;
+
+  task_environment_.FastForwardBy(base::Milliseconds(601));
+  source_driver->Emit({MakeRemoteSuggestion("remote refined")});
+
+  EXPECT_EQ(count_after_initial + 1, callback_count);
+  EXPECT_NE(model.results().end(),
+            std::ranges::find_if(model.results(), [](const auto& result) {
+              return result.key == "remote-search:remote refined";
+            }));
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       LateLocalSnapshotIsNeverSuppressed) {
+  MahoCommandModel model(nullptr);
+  int callback_count = 0;
+  model.Search("", CommandOverlayMode::kSearch,
+               base::BindRepeating(
+                   [](int* count, std::vector<CommandSuggestion>) {
+                     ++*count;
+                   },
+                   &callback_count));
+  const uint32_t generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(generation, MakeTask4Locals(2));
+  const int count_after_initial = callback_count;
+
+  task_environment_.FastForwardBy(base::Milliseconds(601));
+  std::vector<CommandSuggestion> updated = MakeTask4Locals(2);
+  updated[1].title = "updated late local";
+  model.AcceptLocalResultsForTesting(generation, std::move(updated));
+
+  EXPECT_EQ(count_after_initial + 1, callback_count);
+  ASSERT_EQ(2u, model.results().size());
+  EXPECT_EQ("updated late local", model.results()[1].title);
+}
+
+TEST_F(MahoCommandModelUxRefinementsTest,
+       SelectionKeyIsRestoredAcrossRemoteRepublication) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  LifecycleFakeRemoteSource* source_driver = source.get();
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  model.Search("", CommandOverlayMode::kSearch, base::DoNothing());
+  const uint32_t generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(
+      generation,
+      {MakeTask4Local(0),
+       MakeTask4LocalSearch("query", "https://local.example/?q=query"),
+       MakeTask4Local(1)});
+  model.set_selected_index(2);
+  model.StartRemoteSearchForTesting(generation, "query");
+
+  source_driver->Emit({MakeRemoteSuggestion("remote")});
+
+  ASSERT_EQ(3, model.selected_index());
+  EXPECT_EQ("local:1", model.results()[model.selected_index()].key);
+}
+
+TEST_F(MahoCommandModelTask4IntegrationTest,
+       PublishesFirstSnapshotSuppressesEqualRemoteChurnAndPublishesNextGeneration) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  LifecycleFakeRemoteSource* source_driver = source.get();
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  std::vector<CommandSuggestion> last_results;
+  auto callback = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>* received,
+         std::vector<CommandSuggestion> results) {
+        ++*count;
+        *received = std::move(results);
+      },
+      &callback_count, &last_results);
+
+  model.Search("weather", CommandOverlayMode::kSearch, callback);
+  uint32_t generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(generation, MakeTask4Locals(5));
+  ASSERT_EQ(1, callback_count);
+  model.StartRemoteSearchForTesting(generation, "weather");
+  std::vector<RemoteSearchSuggestion> remote = {
+      MakeTask4Remote("weather tomorrow",
+                      "https://search.example/?q=weather+tomorrow")};
+  source_driver->Emit(remote);
+  ASSERT_EQ(2, callback_count);
+  ASSERT_EQ(5u, last_results.size());
+  EXPECT_EQ("remote-search:weather tomorrow", last_results.back().key);
+
+  source_driver->Emit(remote);
+  EXPECT_EQ(2, callback_count);
+
+  model.Search("weather", CommandOverlayMode::kSearch, callback);
+  generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(generation, MakeTask4Locals(5));
+  EXPECT_EQ(3, callback_count);
+  model.Cancel();
+}
+
+struct Task5RemoteSourceState {
+  int factory_count = 0;
+  int start_count = 0;
+  int cancel_count = 0;
+  int destroy_count = 0;
+  raw_ptr<Profile> factory_profile = nullptr;
+  std::vector<std::string> queries;
+  std::vector<MahoRemoteSearchSuggestionSource::SnapshotCallback> callbacks;
+  std::vector<RemoteSearchSuggestion> synchronous_snapshot;
+};
+
+class Task5FakeRemoteSource final : public MahoRemoteSearchSuggestionSource {
+ public:
+  explicit Task5FakeRemoteSource(Task5RemoteSourceState* state)
+      : state_(state) {}
+  ~Task5FakeRemoteSource() override { ++state_->destroy_count; }
+
+  void Start(const std::string& query, SnapshotCallback callback) override {
+    ++state_->start_count;
+    state_->queries.push_back(query);
+    state_->callbacks.push_back(std::move(callback));
+    if (!state_->synchronous_snapshot.empty()) {
+      state_->callbacks.back().Run(state_->synchronous_snapshot);
+    }
+  }
+
+  void Cancel() override { ++state_->cancel_count; }
+
+ private:
+  const raw_ptr<Task5RemoteSourceState> state_;
+};
+
+MahoCommandModel::RemoteSourceFactory MakeTask5Factory(
+    Task5RemoteSourceState* state) {
+  return base::BindRepeating(
+      [](Task5RemoteSourceState* state, Profile* profile)
+          -> std::unique_ptr<MahoRemoteSearchSuggestionSource> {
+        ++state->factory_count;
+        state->factory_profile = profile;
+        return std::make_unique<Task5FakeRemoteSource>(state);
+      },
+      base::Unretained(state));
+}
+
+std::vector<std::string> Task5Keys(
+    const std::vector<CommandSuggestion>& results) {
+  std::vector<std::string> keys;
+  for (const CommandSuggestion& result : results) {
+    keys.push_back(result.key);
+  }
+  return keys;
+}
+
+class MahoCommandModelTask5Test : public BrowserWithTestWindowTest {
+ public:
+  MahoCommandModelTask5Test()
+      : BrowserWithTestWindowTest(
+            content::BrowserTaskEnvironment::TimeSource::MOCK_TIME,
+            base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED) {}
+
+  void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+    profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled, true);
+  }
+
+ protected:
+  void FireDebounce() { task_environment()->FastForwardBy(kModelDebounceDelay); }
+
+  void ExpectNoRemoteStart(Browser* test_browser,
+                           const std::string& query,
+                           CommandOverlayMode mode,
+                           bool add_site_keyword = false) {
+    Task5RemoteSourceState state;
+    MahoCommandModel model(test_browser);
+    model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+    if (add_site_keyword) {
+      model.AddSiteSearchEngineForTest({
+          .prefix = "gh",
+          .name = "GitHub",
+          .url_template = "https://github.com/search?q={searchTerms}",
+      });
+    }
+    model.Search(query, mode, base::DoNothing());
+    FireDebounce();
+    EXPECT_EQ(0, state.factory_count) << query;
+    EXPECT_EQ(0, state.start_count) << query;
+  }
+};
+
+TEST_F(MahoCommandModelTask5Test, LazyEligibleStartOccursOnlyAfterDebounce) {
+  Task5RemoteSourceState state;
+  MahoCommandModel model(browser());
+  model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+
+  model.Search("  weather seoul  ", CommandOverlayMode::kSearch,
+               base::DoNothing());
+  task_environment()->FastForwardBy(kModelDebounceDelay -
+                                    base::Milliseconds(1));
+  EXPECT_EQ(0, state.factory_count);
+  EXPECT_EQ(0, state.start_count);
+
+  task_environment()->FastForwardBy(base::Milliseconds(1));
+  ASSERT_EQ(1, state.factory_count);
+  ASSERT_EQ(1, state.start_count);
+  EXPECT_EQ(profile(), state.factory_profile);
+  ASSERT_EQ(1u, state.queries.size());
+  EXPECT_EQ("weather seoul", state.queries[0]);
+}
+
+TEST_F(MahoCommandModelTask5Test,
+       IneligibleInputsAndPrivateContextsNeverConstructSource) {
+  profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled, false);
+  ExpectNoRemoteStart(browser(), "weather", CommandOverlayMode::kSearch);
+  profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled, true);
+
+  for (const auto& [query, mode] :
+       std::vector<std::pair<std::string, CommandOverlayMode>>{
+           {"", CommandOverlayMode::kSearch},
+           {"   \t", CommandOverlayMode::kSearch},
+           {"https://maho.app", CommandOverlayMode::kSearch},
+           {"maho.app/path", CommandOverlayMode::kSearch},
+           {"localhost:3000", CommandOverlayMode::kSearch},
+           {"localhost/path", CommandOverlayMode::kSearch},
+           {"123:3000", CommandOverlayMode::kSearch},
+           {"devbox:3000", CommandOverlayMode::kSearch},
+           {"build-server:8080", CommandOverlayMode::kSearch},
+           {"weather", CommandOverlayMode::kCommandsOnly},
+           {">", CommandOverlayMode::kSearch},
+           {"  > weather", CommandOverlayMode::kSearch},
+           {"weather", CommandOverlayMode::kSiteSearch},
+       }) {
+    ExpectNoRemoteStart(browser(), query, mode);
+  }
+  ExpectNoRemoteStart(browser(), "@gh chromium", CommandOverlayMode::kSearch,
+                      /*add_site_keyword=*/true);
+
+  Profile* primary_otr = profile()->GetPrimaryOTRProfile(true);
+  auto primary_otr_browser =
+      CreateBrowser(primary_otr, Browser::TYPE_NORMAL, false);
+  ExpectNoRemoteStart(primary_otr_browser.get(), "weather",
+                      CommandOverlayMode::kSearch);
+
+  const Profile::OTRProfileID other_otr_id =
+      Profile::OTRProfileID::CreateUniqueForTesting();
+  Profile* other_otr =
+      profile()->GetOffTheRecordProfile(other_otr_id, true);
+  auto other_otr_browser =
+      CreateBrowser(other_otr, Browser::TYPE_NORMAL, false);
+  ExpectNoRemoteStart(other_otr_browser.get(), "weather",
+                      CommandOverlayMode::kSearch);
+
+  TestingProfile* guest_profile = profile_manager()->CreateGuestProfile();
+  auto guest_browser =
+      CreateBrowser(guest_profile, Browser::TYPE_APP, false);
+  ExpectNoRemoteStart(guest_browser.get(), "weather",
+                      CommandOverlayMode::kSearch);
+
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+  TestingProfile* system_profile = profile_manager()->CreateSystemProfile();
+  EXPECT_FALSE(MahoCommandModel::IsRemoteSearchEligible(
+      system_profile, MahoClassifyProfile(system_profile),
+      CommandOverlayMode::kSearch, "weather",
+      /*matches_site_search=*/false));
+#endif
+
+  ExpectNoRemoteStart(/*test_browser=*/nullptr, "weather",
+                      CommandOverlayMode::kSearch);
+}
+
+TEST_F(MahoCommandModelTask5Test, PreferenceIsReadAtDebouncedFireTime) {
+  Task5RemoteSourceState state;
+  MahoCommandModel model(browser());
+  model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+
+  model.Search("weather", CommandOverlayMode::kSearch, base::DoNothing());
+  profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled, false);
+  FireDebounce();
+  EXPECT_EQ(0, state.factory_count);
+  EXPECT_EQ(0, state.start_count);
+
+  profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled, true);
+  model.Search("news", CommandOverlayMode::kSearch, base::DoNothing());
+  FireDebounce();
+  EXPECT_EQ(1, state.factory_count);
+  EXPECT_EQ(1, state.start_count);
+  ASSERT_EQ(1u, state.queries.size());
+  EXPECT_EQ("news", state.queries[0]);
+}
+
+TEST_F(MahoCommandModelTask5Test,
+       SynchronousStartSnapshotPublishesForInitializedGeneration) {
+  Task5RemoteSourceState state;
+  state.synchronous_snapshot = {
+      MakeTask4Remote("weather tomorrow",
+                      "https://search.example/?q=weather+tomorrow")};
+  MahoCommandModel model(browser());
+  model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+  std::vector<std::vector<std::string>> publications;
+
+  model.Search(
+      "weather", CommandOverlayMode::kSearch,
+      base::BindRepeating(
+          [](std::vector<std::vector<std::string>>* publications,
+             std::vector<CommandSuggestion> results) {
+            publications->push_back(Task5Keys(results));
+          },
+          &publications));
+  FireDebounce();
+
+  ASSERT_EQ(1u, publications.size());
+  EXPECT_EQ((std::vector<std::string>{"remote-search:weather tomorrow"}),
+            publications[0]);
+  EXPECT_EQ(model.search_generation_for_testing(),
+            model.search_generation_for_testing());
+}
+
+TEST_F(MahoCommandModelTask5Test,
+       RemoteBeforeLocalLocalBeforeRemoteAndChangedStreamPublishExactKeys) {
+  {
+    Task5RemoteSourceState state;
+    MahoCommandModel model(browser());
+    model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+    std::vector<std::vector<std::string>> publications;
+    model.Search(
+        "weather", CommandOverlayMode::kSearch,
+        base::BindRepeating(
+            [](std::vector<std::vector<std::string>>* publications,
+               std::vector<CommandSuggestion> results) {
+              publications->push_back(Task5Keys(results));
+            },
+            &publications));
+    FireDebounce();
+    ASSERT_EQ(1u, state.callbacks.size());
+    state.callbacks[0].Run({
+        MakeTask4Remote("weather tomorrow", "https://search.example/?q=one"),
+        MakeTask4Remote("weather hourly", "https://search.example/?q=two"),
+    });
+    model.AcceptLocalResultsForTesting(model.search_generation_for_testing(),
+                                       MakeTask4Locals(5));
+    const std::vector<std::string> remote_only = {
+        "remote-search:weather tomorrow", "remote-search:weather hourly"};
+    const std::vector<std::string> merged = {
+        "local:0", "local:1", "local:2",
+        "remote-search:weather tomorrow", "remote-search:weather hourly"};
+    EXPECT_NE(publications.end(),
+              std::ranges::find(publications, remote_only));
+    EXPECT_NE(publications.end(), std::ranges::find(publications, merged));
+  }
+
+  {
+    Task5RemoteSourceState state;
+    MahoCommandModel model(browser());
+    model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+    std::vector<std::vector<std::string>> publications;
+    model.Search(
+        "news", CommandOverlayMode::kSearch,
+        base::BindRepeating(
+            [](std::vector<std::vector<std::string>>* publications,
+               std::vector<CommandSuggestion> results) {
+              publications->push_back(Task5Keys(results));
+            },
+            &publications));
+    FireDebounce();
+    model.AcceptLocalResultsForTesting(model.search_generation_for_testing(),
+                                       MakeTask4Locals(5));
+    ASSERT_EQ(1u, state.callbacks.size());
+    state.callbacks[0].Run({
+        MakeTask4Remote("news today", "https://search.example/?q=today"),
+        MakeTask4Remote("news live", "https://search.example/?q=live"),
+    });
+    state.callbacks[0].Run({
+        MakeTask4Remote("news latest", "https://search.example/?q=latest"),
+        MakeTask4Remote("news live", "https://search.example/?q=live"),
+    });
+    for (const std::vector<std::string>& expected : {
+             std::vector<std::string>{"local:0", "local:1", "local:2",
+                                      "local:3", "local:4"},
+             std::vector<std::string>{"local:0", "local:1", "local:2",
+                                      "remote-search:news today",
+                                      "remote-search:news live"},
+             std::vector<std::string>{"local:0", "local:1", "local:2",
+                                      "remote-search:news latest",
+                                      "remote-search:news live"}}) {
+      EXPECT_NE(publications.end(), std::ranges::find(publications, expected));
+    }
+  }
+}
+
+TEST_F(MahoCommandModelTask5Test,
+       IdenticalHiddenAndDuplicateChurnDoNotPublishOrRestartFavicons) {
+  Task5RemoteSourceState state;
+  MahoCommandModel model(browser());
+  model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+  int callback_count = 0;
+  model.Search(
+      "weather", CommandOverlayMode::kSearch,
+      base::BindRepeating(
+          [](int* callback_count, std::vector<CommandSuggestion>) {
+            ++*callback_count;
+          },
+          &callback_count));
+  FireDebounce();
+  model.AcceptLocalResultsForTesting(model.search_generation_for_testing(),
+                                     MakeTask4Locals(5));
+  ASSERT_EQ(1u, state.callbacks.size());
+  const std::vector<RemoteSearchSuggestion> visible = {
+      MakeTask4Remote("weather one", "https://search.example/?q=one"),
+      MakeTask4Remote("weather two", "https://search.example/?q=two"),
+      MakeTask4Remote("weather hidden", "https://search.example/?q=hidden"),
+  };
+  state.callbacks[0].Run(visible);
+  const int callback_count_after_visible = callback_count;
+  const int favicon_passes =
+      model.favicon_request_pass_count_for_testing();
+
+  state.callbacks[0].Run(visible);
+  state.callbacks[0].Run({
+      visible[0], visible[1],
+      MakeTask4Remote("weather hidden changed",
+                      "https://search.example/?q=hidden-changed"),
+  });
+  state.callbacks[0].Run({visible[0], visible[1], visible[0]});
+
+  EXPECT_EQ(callback_count_after_visible, callback_count);
+  EXPECT_EQ(favicon_passes,
+            model.favicon_request_pass_count_for_testing());
+}
+
+TEST_F(MahoCommandModelTask5Test,
+       QueryBCancelsAndRestartsSourceWhileLateQueryAIsSuppressed) {
+  Task5RemoteSourceState state;
+  MahoCommandModel model(browser());
+  model.SetRemoteSearchSourceFactoryForTesting(MakeTask5Factory(&state));
+  std::vector<std::vector<std::string>> publications;
+  auto callback = base::BindRepeating(
+      [](std::vector<std::vector<std::string>>* publications,
+         std::vector<CommandSuggestion> results) {
+        publications->push_back(Task5Keys(results));
+      },
+      &publications);
+
+  model.Search("query a", CommandOverlayMode::kSearch, callback);
+  FireDebounce();
+  ASSERT_EQ(1, state.factory_count);
+  ASSERT_EQ(1, state.start_count);
+  ASSERT_EQ(1u, state.callbacks.size());
+
+  model.Search("query b", CommandOverlayMode::kSearch, callback);
+  EXPECT_EQ(1, state.cancel_count);
+  FireDebounce();
+  ASSERT_EQ(1, state.factory_count);
+  ASSERT_EQ(2, state.start_count);
+  ASSERT_EQ(2u, state.callbacks.size());
+
+  state.callbacks[1].Run(
+      {MakeTask4Remote("query b result", "https://search.example/?q=b")});
+  ASSERT_FALSE(publications.empty());
+  const size_t publications_after_query_b = publications.size();
+  EXPECT_NE(std::ranges::find(publications.back(),
+                              "remote-search:query b result"),
+            publications.back().end());
+
+  state.callbacks[0].Run(
+      {MakeTask4Remote("query a result", "https://search.example/?q=a")});
+
+  EXPECT_EQ(publications_after_query_b, publications.size());
+  for (const auto& publication : publications) {
+    EXPECT_EQ(publication.end(),
+              std::ranges::find(publication,
+                                "remote-search:query a result"));
+  }
+  EXPECT_EQ((std::vector<std::string>{"query a", "query b"}), state.queries);
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       QueryBInvalidatesQueryABeforeDebounce) {
+  MahoCommandModel model(nullptr);
+  int callback_count = 0;
+  auto callback = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>) { ++*count; },
+      &callback_count);
+
+  model.Search("weather", CommandOverlayMode::kSearch, callback);
+  const uint32_t weather_generation = model.search_generation_for_testing();
+  model.Search("news", CommandOverlayMode::kSearch, callback);
+
+  EXPECT_NE(weather_generation, model.search_generation_for_testing());
+  model.AcceptLocalResultsForTesting(
+      weather_generation,
+      {MakeSuggestion(CommandSuggestionType::kHistory, "weather")});
+  EXPECT_EQ(0, callback_count);
+  EXPECT_TRUE(model.results().empty());
+  model.Cancel();
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       SynchronousRemoteSnapshotUsesInitializedGeneration) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  source->set_synchronous_snapshot({MakeRemoteSuggestion("weather today")});
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+
+  model.Search("weather", CommandOverlayMode::kSearch, base::DoNothing());
+  const uint32_t generation = model.search_generation_for_testing();
+  model.StartRemoteSearchForTesting(generation, "weather");
+
+  ASSERT_EQ(1u, model.remote_snapshot_for_testing().size());
+  EXPECT_EQ("weather today",
+            model.remote_snapshot_for_testing()[0].normalized_search_terms);
+  model.Cancel();
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       LateLocalRemoteAndFaviconCallbacksAreRejected) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  LifecycleFakeRemoteSource* source_driver = source.get();
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  auto callback = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>) { ++*count; },
+      &callback_count);
+
+  model.Search("weather", CommandOverlayMode::kSearch, callback);
+  const uint32_t weather_generation = model.search_generation_for_testing();
+  model.StartRemoteSearchForTesting(weather_generation, "weather");
+  model.Search("news", CommandOverlayMode::kSearch, callback);
+  const uint32_t news_generation = model.search_generation_for_testing();
+  model.AcceptLocalResultsForTesting(
+      news_generation,
+      {MakeSuggestion(CommandSuggestionType::kHistory, "news")});
+  ASSERT_EQ(1, callback_count);
+  ASSERT_EQ(1u, model.results().size());
+
+  model.AcceptLocalResultsForTesting(
+      weather_generation,
+      {MakeSuggestion(CommandSuggestionType::kHistory, "weather")});
+  source_driver->Emit({MakeRemoteSuggestion("weather tomorrow")});
+  model.ApplyFaviconForTesting(weather_generation, "news");
+
+  EXPECT_EQ(1, callback_count);
+  ASSERT_EQ(1u, model.results().size());
+  EXPECT_EQ("news", model.results()[0].key);
+  EXPECT_FALSE(model.results()[0].icon.has_value());
+  EXPECT_TRUE(model.remote_snapshot_for_testing().empty());
+  model.Cancel();
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       ReentrantRemoteCancelCannotPublish) {
+  MahoCommandModel model(nullptr);
+  FakeRemoteSourceState state;
+  auto source = std::make_unique<LifecycleFakeRemoteSource>(&state);
+  source->set_cancel_snapshot({MakeRemoteSuggestion("late cancel result")});
+  model.SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+
+  model.Search(
+      "weather", CommandOverlayMode::kSearch,
+      base::BindRepeating(
+          [](int* count, std::vector<CommandSuggestion>) { ++*count; },
+          &callback_count));
+  const uint32_t generation = model.search_generation_for_testing();
+  model.StartRemoteSearchForTesting(generation, "weather");
+  model.Cancel();
+
+  EXPECT_EQ(0, callback_count);
+  EXPECT_TRUE(model.results().empty());
+  EXPECT_TRUE(model.remote_snapshot_for_testing().empty());
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       SynchronousStartNotificationCanDestroyModelSafely) {
+  ReentrantControllerState state;
+  auto controller = std::make_unique<ReentrantNotificationController>(&state);
+  auto source =
+      MahoRemoteSearchSuggestions::CreateForTesting(std::move(controller));
+  auto model = std::make_unique<MahoCommandModel>(nullptr);
+  model->SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  model->Search(
+      "weather", CommandOverlayMode::kSearch,
+      base::BindRepeating(
+          [](std::unique_ptr<MahoCommandModel>* model, int* callback_count,
+             std::vector<CommandSuggestion>) {
+            ++*callback_count;
+            model->reset();
+          },
+          base::Unretained(&model), base::Unretained(&callback_count)));
+  const uint32_t generation = model->search_generation_for_testing();
+
+  model->StartRemoteSearchForTesting(generation, "weather");
+  EXPECT_TRUE(model);
+  EXPECT_EQ(1, state.start_return_count);
+  EXPECT_EQ(0, callback_count);
+
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(model);
+  EXPECT_EQ(1, callback_count);
+  EXPECT_EQ(1, state.destroy_count);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(1, callback_count);
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       StreamedNotificationCanDestroyModelSafely) {
+  ReentrantControllerState state;
+  auto controller = std::make_unique<ReentrantNotificationController>(&state);
+  ReentrantNotificationController* controller_driver = controller.get();
+  auto source =
+      MahoRemoteSearchSuggestions::CreateForTesting(std::move(controller));
+  auto model = std::make_unique<MahoCommandModel>(nullptr);
+  model->SetRemoteSearchSourceForTesting(std::move(source));
+  int callback_count = 0;
+  model->Search(
+      "weather", CommandOverlayMode::kSearch,
+      base::BindRepeating(
+          [](std::unique_ptr<MahoCommandModel>* model, int* callback_count,
+             std::vector<CommandSuggestion>) {
+            ++*callback_count;
+            if (*callback_count == 2) {
+              model->reset();
+            }
+          },
+          base::Unretained(&model), base::Unretained(&callback_count)));
+  model->StartRemoteSearchForTesting(model->search_generation_for_testing(),
+                                     "weather");
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(model);
+  ASSERT_EQ(1, callback_count);
+
+  controller_driver->EmitStreamedSnapshot("weather tomorrow");
+  EXPECT_TRUE(model);
+  EXPECT_EQ(1, state.stream_return_count);
+  EXPECT_EQ(1, callback_count);
+
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(model);
+  EXPECT_EQ(2, callback_count);
+  EXPECT_EQ(1, state.destroy_count);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(2, callback_count);
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test,
+       ModelDestructionFromOwnResultsCallbackIsSafe) {
+  auto model = std::make_unique<MahoCommandModel>(nullptr);
+  int callback_count = 0;
+  model->Search(
+      "weather", CommandOverlayMode::kSearch,
+      base::BindRepeating(
+          [](std::unique_ptr<MahoCommandModel>* model, int* callback_count,
+             std::vector<CommandSuggestion>) {
+            ++*callback_count;
+            model->reset();
+          },
+          base::Unretained(&model), base::Unretained(&callback_count)));
+  const uint32_t generation = model->search_generation_for_testing();
+
+  model->AcceptLocalResultsForTesting(
+      generation,
+      {MakeSuggestion(CommandSuggestionType::kHistory, "local:weather")});
+
+  EXPECT_FALSE(model);
+  EXPECT_EQ(1, callback_count);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(1, callback_count);
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test, RefetchAllocatesNewGeneration) {
+  MahoCommandModel model(nullptr);
+  model.Search("weather", CommandOverlayMode::kSearch, base::DoNothing());
+  const uint32_t first_generation = model.search_generation_for_testing();
+
+  model.RefetchCurrentQuery();
+
+  EXPECT_NE(first_generation, model.search_generation_for_testing());
+  model.Cancel();
+}
+
+TEST_F(MahoCommandModelLifecycleTask3Test, DestructionCancelsRemoteSource) {
+  FakeRemoteSourceState state;
+  {
+    MahoCommandModel model(nullptr);
+    model.SetRemoteSearchSourceForTesting(
+        std::make_unique<LifecycleFakeRemoteSource>(&state));
+    model.Search("weather", CommandOverlayMode::kSearch, base::DoNothing());
+  }
+
+  EXPECT_GE(state.cancel_count, 1);
+  EXPECT_EQ(1, state.destroy_count);
+}
 
 TEST_F(MahoCommandModelTest, PrivateSourcesAreNeverRead) {
   EXPECT_TRUE(MahoCommandModel::ShouldReadSavedSourcesForContext(

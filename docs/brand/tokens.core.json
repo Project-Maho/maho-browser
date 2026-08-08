@@ -1,0 +1,73 @@
+{
+  "$schema": "https://tr.designtokens.org/format/",
+  "$description": "maho core design token contract. SINGLE SOURCE for the STRUCTURE shared across all surfaces (Native C++, WebUI, web-ai, website): spacing scale, radius scale, semantic color roles, motion. Per-surface VALUES (dark background, accent, fonts) are intentionally NOT unified here — each surface overrides via its own layer (see token-conflict-matrix-2026-07.md). This file defines the contract; surfaces fill the values.",
+  "$extensions": {
+    "maho.scope": "core-contract",
+    "maho.audit": "docs/brand/token-conflict-matrix-2026-07.md",
+    "maho.surfaces": ["native-cpp", "webui", "web-ai", "website"],
+    "maho.note": "Values marked {{surface}} are override slots — each surface MUST supply its own. Values with concrete tokens are the unified contract (do not diverge per surface)."
+  },
+
+  "space": {
+    "$description": "Unified 4px-base spacing scale. Replaces per-surface --maho-settings-space-* / --maho-ai-space-* namespaces (the space-7 32-vs-28 bug). All surfaces map to THESE names.",
+    "$type": "dimension",
+    "0":  { "$value": "0px" },
+    "1":  { "$value": "4px" },
+    "2":  { "$value": "8px" },
+    "3":  { "$value": "12px" },
+    "4":  { "$value": "16px" },
+    "5":  { "$value": "20px" },
+    "6":  { "$value": "24px" },
+    "7":  { "$value": "32px" },
+    "8":  { "$value": "40px" },
+    "9":  { "$value": "48px" },
+    "10": { "$value": "64px" }
+  },
+
+  "radius": {
+    "$description": "Unified radius scale. Surfaces may scale the base but keep these step names. pill is universal.",
+    "$type": "dimension",
+    "sm":   { "$value": "8px" },
+    "md":   { "$value": "12px" },
+    "lg":   { "$value": "16px" },
+    "xl":   { "$value": "22px" },
+    "pill": { "$value": "9999px" }
+  },
+
+  "semantic": {
+    "$description": "Semantic color ROLES (unified vocabulary). Values default to Apple system palette (web-ai baseline, HIG-aligned); WebUI/Native may re-tint but MUST keep the role names.",
+    "$type": "color",
+    "success": { "$value": "#30d158", "$extensions": { "maho.subtle-dark": "#0d2e1a" } },
+    "error":   { "$value": "#ff453a", "$extensions": { "maho.subtle-dark": "#2e0d0b" } },
+    "warning": { "$value": "#ffd60a", "$extensions": { "maho.subtle-dark": "#2e2800" } },
+    "info":    { "$value": "#0a84ff", "$extensions": { "maho.subtle-dark": "#001e36" } }
+  },
+
+  "motion": {
+    "$description": "Unified motion durations + standard easing. Shared across surfaces.",
+    "duration": {
+      "$type": "duration",
+      "fast":   { "$value": "150ms" },
+      "medium": { "$value": "200ms" },
+      "slow":   { "$value": "300ms" }
+    },
+    "easing": {
+      "$type": "cubicBezier",
+      "standard":  { "$value": [0.4, 0, 0.2, 1] },
+      "out-quart": { "$value": [0.25, 1, 0.5, 1] }
+    }
+  },
+
+  "role": {
+    "$description": "Semantic surface/text/border ROLES — the shared vocabulary every surface must expose. VALUES are override slots ({{surface}}): each surface supplies its own hex because backgrounds/accents are intentionally different (Native purple-tint, WebUI neutral, web-ai Apple-gray, website monochrome). This unifies the NAMES, not the values.",
+    "$type": "color",
+    "background":        { "$value": "{{surface}}", "$description": "Primary surface bg. Native #100f15 / WebUI #1a1a1a / web-ai #1c1c1e / website monochrome." },
+    "surface-raised":    { "$value": "{{surface}}" },
+    "surface-hover":     { "$value": "{{surface}}" },
+    "foreground":        { "$value": "{{surface}}", "$description": "Primary text. Must hit WCAG AA (4.5:1) on background per surface." },
+    "foreground-muted":  { "$value": "{{surface}}" },
+    "border":            { "$value": "{{surface}}" },
+    "accent":            { "$value": "{{surface}}", "$description": "Native=dynamic Space theme / WebUI=neutral #e5e5e5 / web-ai=Apple blue #0a84ff / website=monochrome+OG violet #8b7ff5. NOT unified by design." },
+    "accent-foreground": { "$value": "{{surface}}" }
+  }
+}

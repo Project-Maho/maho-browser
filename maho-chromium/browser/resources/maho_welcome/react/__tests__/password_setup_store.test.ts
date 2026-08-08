@@ -121,10 +121,10 @@ describe('PasswordSetup store flow', () => {
   });
 
   it('keeps PasswordSetup before SyncKeyBackup and Completion', () => {
-    expect(WelcomePage.PasswordSetup).toBe(7);
-    expect(WelcomePage.SyncKeyBackup).toBe(8);
-    expect(WelcomePage.Completion).toBe(9);
-    expect(TOTAL_PAGES).toBe(10);
+    expect(WelcomePage.PasswordSetup).toBe(8);
+    expect(WelcomePage.SyncKeyBackup).toBe(9);
+    expect(WelcomePage.Completion).toBe(10);
+    expect(TOTAL_PAGES).toBe(12);
     expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.SyncKeyBackup);
     expect(WelcomePage.SyncKeyBackup + 1).toBe(WelcomePage.Completion);
   });
@@ -148,7 +148,7 @@ describe('PasswordSetup store flow', () => {
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
 
     store.prevPage();
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Essentials);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
   });
 
   it('persists the provider and advances to SyncKeyBackup when unlocked', async () => {

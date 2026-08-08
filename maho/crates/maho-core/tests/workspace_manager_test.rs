@@ -6,6 +6,7 @@ use maho_types::tool::{ToolDescriptor, ToolPermission, ToolProvenance};
 
 #[test]
 fn test_create_workspace_assigns_blank_profile() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
@@ -19,6 +20,7 @@ fn test_create_workspace_assigns_blank_profile() {
 
 #[test]
 fn test_switch_profile_updates_workspace() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
@@ -33,6 +35,7 @@ fn test_switch_profile_updates_workspace() {
 
 #[test]
 fn test_get_active_workspace_creates_if_missing() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
@@ -46,6 +49,7 @@ fn test_get_active_workspace_creates_if_missing() {
 
 #[test]
 fn test_register_mcp_server_and_tools() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
@@ -89,6 +93,7 @@ fn test_register_mcp_server_and_tools() {
 
 #[test]
 fn test_register_cli_tool_namespaced() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
@@ -119,6 +124,7 @@ fn test_register_cli_tool_namespaced() {
 
 #[test]
 fn test_import_profile_from_toml_success() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
@@ -177,6 +183,7 @@ parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string"}}
 
 #[test]
 fn test_import_profile_from_toml_forces_trusted_false() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
     let ws = manager.create_workspace("Test WS", None).unwrap();
@@ -221,6 +228,7 @@ sensitive = false
 
 #[test]
 fn test_import_profile_from_toml_invalid_schemas() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
     let ws = manager.create_workspace("Test WS", None).unwrap();

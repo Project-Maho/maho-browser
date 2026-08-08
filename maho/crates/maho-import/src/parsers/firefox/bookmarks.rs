@@ -71,7 +71,10 @@ pub fn parse_firefox_bookmarks(profile_dir: &Path) -> ImportResult<Vec<BookmarkE
 
     if let Some(root_children) = children_by_parent.get(&ROOT_ID) {
         for root_id in root_folders {
-            if let Some(folder_row) = root_children.iter().find(|r| r.id == root_id && r.row_type == FOLDER_TYPE) {
+            if let Some(folder_row) = root_children
+                .iter()
+                .find(|r| r.id == root_id && r.row_type == FOLDER_TYPE)
+            {
                 let mut folder = BookmarkEntry {
                     title: folder_row.title.clone(),
                     url: String::new(),

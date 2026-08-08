@@ -3,7 +3,10 @@
 #include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
 
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/library_overlay/maho_library_overlay_controller.h"
+#include "maho/browser/ui/views/peek/maho_peek_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
@@ -35,6 +38,7 @@ MahoBrowserFrameOverlayHost::MahoBrowserFrameOverlayHost(
 MahoBrowserFrameOverlayHost::~MahoBrowserFrameOverlayHost() = default;
 
 void MahoBrowserFrameOverlayHost::ToggleSpacesOverlay() {
+  DismissAllOverlaysExcept(OverlayKind::kSpaces);
   if (!spaces_overlay_controller_) {
     spaces_overlay_controller_ =
         std::make_unique<MahoSpacesOverlayController>(browser_);
@@ -73,6 +77,7 @@ bool MahoBrowserFrameOverlayHost::IsSpacesOverlayVisible() const {
 
 void MahoBrowserFrameOverlayHost::ToggleLibraryOverlay(
     MahoSidebarLibraryRailView::Category category) {
+  DismissAllOverlaysExcept(OverlayKind::kLibrary);
   if (!library_overlay_controller_) {
     library_overlay_controller_ =
         std::make_unique<MahoLibraryOverlayController>(browser_);
@@ -115,6 +120,17 @@ bool MahoBrowserFrameOverlayHost::IsLibraryOverlayVisible() const {
          library_overlay_controller_->IsVisible();
 }
 
+MahoPeekController* MahoBrowserFrameOverlayHost::peek_controller() {
+  if (!peek_controller_ && GetWidget()) {
+    peek_controller_ = std::make_unique<MahoPeekController>(
+        browser_, GetWidget(),
+        base::BindRepeating(
+            &MahoBrowserFrameOverlayHost::DismissAllOverlaysExcept,
+            base::Unretained(this), OverlayKind::kPeek));
+  }
+  return peek_controller_.get();
+}
+
 void MahoBrowserFrameOverlayHost::OnSidebarPaletteChanged(
     const MahoSidebarPalette& palette) {
   sidebar_palette_ = palette;
@@ -130,6 +146,28 @@ void MahoBrowserFrameOverlayHost::OnSidebarPaletteChanged(
 void MahoBrowserFrameOverlayHost::UpdateLibraryOverlayBounds() {
   if (library_overlay_controller_) {
     library_overlay_controller_->UpdateBounds();
+  }
+}
+
+void MahoBrowserFrameOverlayHost::DismissAllOverlaysExcept(OverlayKind kind) {
+  if (kind != OverlayKind::kSpaces) {
+    DismissSpacesOverlay();
+  }
+  if (kind != OverlayKind::kLibrary) {
+    DismissLibraryOverlay();
+  }
+  if (kind != OverlayKind::kPeek && peek_controller_) {
+    peek_controller_->Hide();
+  }
+  if (kind != OverlayKind::kCommand) {
+    BrowserView* browser_view =
+        BrowserView::GetBrowserViewForBrowser(browser_.get());
+    if (browser_view) {
+      if (auto* command_controller =
+              browser_view->GetMahoCommandOverlayControllerForTesting()) {
+        command_controller->Hide();
+      }
+    }
   }
 }
 

@@ -47,18 +47,15 @@ pub fn parse_zen_workspaces(profile_dir: &Path) -> ImportResult<ZenParseResult> 
     })?;
 
     let json_str = decompress_mozlz4(&raw).ok_or_else(|| {
-        ImportError::DecompressFailed(format!(
-            "Failed to decompress {}",
-            sessions_path.display()
-        ))
+        ImportError::DecompressFailed(format!("Failed to decompress {}", sessions_path.display()))
     })?;
 
     let root: Value = serde_json::from_str(&json_str)
         .map_err(|e| ImportError::Parse(format!("zen-sessions JSON: {}", e)))?;
 
-    let root_obj = root.as_object().ok_or_else(|| {
-        ImportError::Parse("zen-sessions root is not a JSON object".into())
-    })?;
+    let root_obj = root
+        .as_object()
+        .ok_or_else(|| ImportError::Parse("zen-sessions root is not a JSON object".into()))?;
 
     let spaces_list = root_obj
         .get("spaces")
@@ -164,9 +161,7 @@ pub fn parse_zen_workspaces(profile_dir: &Path) -> ImportResult<ZenParseResult> 
                         if depth >= 5 {
                             return false;
                         }
-                        let found = ws_folders
-                            .iter()
-                            .find(|p| p.id == current_parent);
+                        let found = ws_folders.iter().find(|p| p.id == current_parent);
                         match found {
                             Some(parent) => {
                                 if parent.id == folder.id {
@@ -570,8 +565,11 @@ mod tests {
         assert!(names.contains(&"L2"));
         assert!(names.contains(&"L3"));
         assert!(names.contains(&"L4"));
-        assert!(!names.contains(&"TooDeep"),
-                "folders nested >5 ancestors deep must be rejected, got {:?}", names);
+        assert!(
+            !names.contains(&"TooDeep"),
+            "folders nested >5 ancestors deep must be rejected, got {:?}",
+            names
+        );
         assert_eq!(result.workspaces[0].folders.len(), 5);
     }
 }

@@ -76,11 +76,11 @@ The ordering is also a funnel: #1 is awareness, #2 is interest, #3 is conversion
 
 ## Hard constraints (do not break)
 
-- No claims about iOS or Android. The mobile shells are reference-only as of launch.
-- No claims about Routines, MCP host, or CLI. Not shipping at launch.
+- Scoped mobile claims: Mobile claims are limited strictly to mobile chat (`#chat`, `#conversations`). Full mobile browser parity is not claimed (Superseded for mobile chat by ADR 0015; historical note: prior policy banned all iOS or Android claims).
+- Scoped MCP/CLI & Routines claims: Claims for tools-only MCP GA, single `maho` CLI, and automation routines are permitted as defined in ADR 0015 (historical note: prior policy banned all claims about Routines, MCP host, or CLI). MCP resources/prompts remain out of scope (ADR 0014).
 - No mention of "Aside" or any other competitor by name in the voiceover. The comparison work belongs on the compare pages, not in the demos.
-- Pricing on every CTA card: Free $0.50/mo, Pro $20/mo, Max $200/mo.
+- Pricing on every CTA card: Free $0/mo (with a $0.50 included AI ceiling), Pro $5/mo, Max $20/mo.
 
 ---
 
-**Last updated:** 2026-06-28
+**Last updated:** 2026-07-22

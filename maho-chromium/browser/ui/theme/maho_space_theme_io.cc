@@ -2,19 +2,33 @@
 
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
-#include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 namespace maho_theme {
 
 namespace {
+
+SkScalar NormalizeHueToDegrees(double hue) {
+  if (hue <= 1.0) {
+    hue *= 360.0;
+  }
+  hue = std::fmod(hue, 360.0);
+  if (hue < 0.0) {
+    hue += 360.0;
+  }
+  return static_cast<SkScalar>(hue);
+}
 
 bool ValidateColorStop(const base::DictValue& entry) {
   std::optional<bool> is_primary = entry.FindBool("isPrimary");
@@ -175,18 +189,44 @@ std::optional<std::string> GetSpaceThemeJson(MahoCore* core,
       return std::nullopt;
     }
 
-    base::Value theme_value(theme->Clone());
-    std::string theme_json;
-    base::JSONWriter::WriteWithOptions(theme_value,
-                                       base::JSONWriter::OPTIONS_PRETTY_PRINT,
-                                       &theme_json);
-    return theme_json;
+    return SerializeSpaceThemeJson(*theme);
   }
 
   return std::nullopt;
 }
 
 }  // namespace
+
+std::optional<std::string> SpaceColorDictToHex(
+    const base::DictValue& color) {
+  const std::optional<double> hue = color.FindDouble("hue");
+  const std::optional<double> saturation = color.FindDouble("saturation");
+  const std::optional<double> brightness = color.FindDouble("brightness");
+  if (!hue || !saturation || !brightness) {
+    return std::nullopt;
+  }
+
+  const SkScalar hsv[] = {
+      NormalizeHueToDegrees(*hue),
+      static_cast<SkScalar>(std::clamp(*saturation, 0.0, 1.0)),
+      static_cast<SkScalar>(std::clamp(*brightness, 0.0, 1.0)),
+  };
+  const SkColor color_value = SkHSVToColor(hsv);
+  return base::StringPrintf("#%02X%02X%02X", SkColorGetR(color_value),
+                            SkColorGetG(color_value),
+                            SkColorGetB(color_value));
+}
+
+std::optional<std::string> SerializeSpaceThemeJson(
+    const base::DictValue& theme) {
+  std::string theme_json;
+  if (!base::JSONWriter::WriteWithOptions(
+          base::Value(theme.Clone()), base::JSONWriter::OPTIONS_PRETTY_PRINT,
+          &theme_json)) {
+    return std::nullopt;
+  }
+  return theme_json;
+}
 
 std::optional<std::string> SerializeSpaceThemeJson(MahoCore* core,
                                                    const std::string& space_id) {

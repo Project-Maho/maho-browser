@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "base/functional/callback.h"
@@ -34,6 +35,13 @@ class WebContents;
 class MahoBrowserToolExecutor {
  public:
   struct BrowserActionAuthorization {
+    BrowserActionAuthorization();
+    BrowserActionAuthorization(const BrowserActionAuthorization&);
+    BrowserActionAuthorization(BrowserActionAuthorization&&);
+    BrowserActionAuthorization& operator=(const BrowserActionAuthorization&);
+    BrowserActionAuthorization& operator=(BrowserActionAuthorization&&);
+    ~BrowserActionAuthorization();
+
     std::string tool_name;
     std::string kind;
     std::string sensitivity;
@@ -77,6 +85,12 @@ class MahoBrowserToolExecutor {
   static base::DictValue BuildErrorResult(const std::string& tool_name,
                                             const std::string& error);
 
+  // True for the mutating mail tools (mail_send / mail_save_draft /
+  // mail_update_draft). Shared with the agent adapter so the pre-dispatch
+  // approval prompt and the executor-side enforcement agree on which mail
+  // tools require user approval.
+  static bool IsMailWriteTool(std::string_view tool_name);
+
  private:
   void ExecuteReadCurrentPage(ToolResultCallback callback);
   void ExecuteGetSelectedText(ToolResultCallback callback);
@@ -84,6 +98,23 @@ class MahoBrowserToolExecutor {
   void ExecuteSearchInPage(const base::DictValue& arguments,
                            ToolResultCallback callback);
   void ExecuteExtractStructuredPageContext(ToolResultCallback callback);
+  void ExecuteMailTool(const std::string& tool_name,
+                       const base::DictValue& arguments,
+                       ToolResultCallback callback);
+  // Runs the agent approval callback for a mail write tool. Returns true when
+  // approved; on denial (or when no approval callback is wired) fills *error
+  // and returns false.
+  bool ApproveMailWrite(const std::string& tool_name, std::string* error);
+  // Serializes structured mail-compose tool arguments into the JSON request
+  // string the mail broker expects. Returns std::nullopt with *error set when
+  // required fields are missing or an attachment is malformed.
+  static std::optional<std::string> BuildComposeRequestJson(
+      const base::DictValue& arguments,
+      std::string* error);
+  void OnMailToolResult(const std::string& tool_name,
+                        ToolResultCallback callback,
+                        bool ok,
+                        std::string result_json);
   void ExecuteBrowserAction(const maho::ai::BrowserActionContract& contract,
                             const base::DictValue& arguments,
                             ToolResultCallback callback);

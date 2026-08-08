@@ -105,6 +105,7 @@ pub struct TabTreeViewModel {
 #[serde(rename_all = "camelCase")]
 pub struct ArchivedTabViewModel {
     pub id: TabId,
+    pub space_id: SpaceId,
     pub title: String,
     pub url: String,
     pub favicon: Option<ImageData>,
@@ -173,6 +174,14 @@ pub struct SuggestionViewModel {
     pub match_ranges: Option<Vec<(usize, usize)>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shortcut: Option<String>,
+    /// Core-side tab identifier used by the C++ layer to reconcile a switch-to-tab
+    /// suggestion with a suspended tab it needs to wake. Serialized as `tabCoreId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_core_id: Option<String>,
+    /// True when this suggestion refers to a suspended tab that lives only in the
+    /// Rust core and must be woken by the shell. Serialized as `isSuspended`.
+    #[serde(default)]
+    pub is_suspended: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -188,6 +197,8 @@ pub struct SearchContext {
     pub closed_tabs: Vec<TabViewModel>,
     pub extensions: Vec<(String, String)>,
     pub is_incognito: bool,
+    #[serde(default)]
+    pub recent_tabs: Vec<TabViewModel>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

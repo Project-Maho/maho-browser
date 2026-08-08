@@ -9,11 +9,13 @@
 #include <unordered_map>
 
 #include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 
+class Browser;
 class BrowserWindowInterface;
 class GlobalBrowserCollection;
 class Profile;
@@ -51,6 +53,11 @@ class MahoTabRegistry : public BrowserCollectionObserver {
 
   static std::set<std::string> GetLiveTabIdsForProfile(Profile* profile);
 
+  void ArchiveTabsAndRemoveFromStrip(Browser* browser,
+                                     const std::vector<std::string>& tab_ids);
+  bool ConsumeArchiveRemovalSuppression(const std::string& tab_id);
+  void EraseArchiveRemovalSuppression(const std::string& tab_id);
+
   // Retries create_tab announcement for every observed tab still carrying
   // has_been_announced()==false (inserted before the bridge resolved the
   // active space, which makes DispatchCreateTabForContents no-op with no retry
@@ -79,6 +86,7 @@ class MahoTabRegistry : public BrowserCollectionObserver {
       browser_collection_observation_{this};
 
   std::unordered_map<std::string, LastDispatchedTabState> dispatch_cache_;
+  base::flat_set<std::string> archive_removal_suppressions_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

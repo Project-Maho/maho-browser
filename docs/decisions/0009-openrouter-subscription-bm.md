@@ -217,7 +217,7 @@ Targets updated for v2 pricing (Q-5 no-auto-kill-switch preserved):
 - **ADR 0010** (PAYG credits model): companion ADR defining credit lifecycle, variant mapping, consumption flow, and storage spec. See `docs/decisions/0010-payg-credits-model.md`.
 - **ADR 0002** (on-device LLM library): unaffected.
 - **ADR 0003** (realtime voice provider): unaffected.
-- **ADR 0004** (open-source maho-core): unaffected.
+- **ADR 0004** (open-source maho-core): **superseded / reversed** by the current proprietary, closed-source posture (2026-07). Maho ships no open-source license and no public source repository; do not cite it for any OSS or public-source claim.
 - **ADR 0005** (MCP curation policy): unaffected.
 - **ADR 0006** (i18n architecture): related — tier names and pricing page need locale handling.
 

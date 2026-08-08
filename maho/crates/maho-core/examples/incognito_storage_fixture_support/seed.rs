@@ -64,6 +64,9 @@ fn seed_sqlite(sqlite: &SqliteStorage) -> Result<u64, String> {
             "complete",
             Some("/tmp/regular.bin"),
             CREATED_AT,
+            None,
+            None,
+            None,
         )
         .map_err(e("download"))?;
     sqlite
@@ -91,6 +94,7 @@ fn seed_sqlite(sqlite: &SqliteStorage) -> Result<u64, String> {
             Some(24),
             Some(20),
             true,
+            None,
         )
         .map_err(e("atc"))?;
     sqlite

@@ -2,7 +2,7 @@
  * LemonSqueezy overlay checkout utility.
  *
  * Loads `lemon.js` from the LemonSqueezy CDN on demand and opens a checkout
- * overlay for a given URL. Falls back to a plain new-tab redirect when the
+ * overlay for a given URL. Falls back to a separate checkout window when the
  * CDN script cannot be loaded (offline, CSP mismatch, or LS outage).
  *
  * Docs: https://docs.lemonsqueezy.com/help/lemonjs
@@ -67,13 +67,19 @@ export interface OverlayOpenOptions {
   onError?: (error: Error) => void;
 }
 
+function openCheckoutWindow(checkoutUrl: string): void {
+  window.open(
+      checkoutUrl,
+      'maho-checkout',
+      'popup,width=960,height=760,noopener,noreferrer');
+}
+
 /**
  * Open a checkout URL as a LemonSqueezy overlay iframe.
  *
  * On any failure (CDN blocked, LemonSqueezy not initialised, load timeout),
- * falls back to opening the URL in a new tab via `window.open`. This matches
- * the AgentsMesh production pattern and keeps the purchase flow robust when
- * the WebUI is offline from `app.lemonsqueezy.com`.
+ * falls back to a separate checkout window. This keeps the purchase flow
+ * robust when the WebUI is offline from `app.lemonsqueezy.com`.
  */
 export async function openCheckoutOverlay(opts: OverlayOpenOptions): Promise<void> {
   const overlayUrl = opts.checkoutUrl.includes('?')
@@ -84,13 +90,13 @@ export async function openCheckoutOverlay(opts: OverlayOpenOptions): Promise<voi
     await loadLemonJS();
   } catch (err) {
     opts.onError?.(err instanceof Error ? err : new Error(String(err)));
-    window.open(opts.checkoutUrl, '_blank', 'noopener,noreferrer');
+    openCheckoutWindow(opts.checkoutUrl);
     return;
   }
 
   if (!window.LemonSqueezy) {
     opts.onError?.(new Error('LemonSqueezy global not available after script load'));
-    window.open(opts.checkoutUrl, '_blank', 'noopener,noreferrer');
+    openCheckoutWindow(opts.checkoutUrl);
     return;
   }
 

@@ -20,6 +20,13 @@ config("whisper_private_config") {
     "GGML_STATIC",
     "WHISPER_VERSION=\"v1.9.1\"",
     "WHISPER_STATIC",
+
+    # whisper.cpp's Windows (_MSC_VER) model-load path uses std::wstring_convert
+    # / std::codecvt_utf8, which Chromium's libc++ removes. Re-enable the
+    # C++26-removed facets for this vendored code so it builds on clang-cl.
+    # POSIX builds never compile that block (#ifdef _MSC_VER).
+    "_LIBCPP_ENABLE_CXX26_REMOVED_WSTRING_CONVERT",
+    "_LIBCPP_ENABLE_CXX26_REMOVED_CODECVT",
   ]
   cflags = [
     "-Wno-deprecated-declarations",
@@ -28,15 +35,29 @@ config("whisper_private_config") {
     "-Wno-unsafe-buffer-usage",
     "-Wno-unused-function",
     "-Wno-unused-variable",
+    "-Wno-macro-redefined",
   ]
   cflags_cc = [
-    "-include",
-    "errno.h",
     "-Wno-c++98-compat-extra-semi",
     "-Wno-covered-switch-default",
     "-Wno-implicit-fallthrough",
     "-Wno-missing-field-initializers",
+    "-Wno-macro-redefined",
+    "-Wno-unused-function",
+    "-Wno-unused-variable",
   ]
+
+  # ggml sources rely on errno.h being force-included. Use the clang-cl
+  # force-include flag on Windows (`-include` is not a valid clang-cl arg and
+  # trips -Werror,-Wunknown-argument); keep the GCC/clang syntax elsewhere.
+  if (is_win) {
+    cflags_cc += [ "/FIerrno.h" ]
+  } else {
+    cflags_cc += [
+      "-include",
+      "errno.h",
+    ]
+  }
 }
 
 template("whisper_source_set") {
@@ -48,7 +69,6 @@ template("whisper_source_set") {
                            ])
 
     public_configs = [ ":whisper_public_config" ]
-    configs += [ ":whisper_private_config" ]
 
     configs -= [
       "//build/config/compiler:chromium_code",
@@ -58,6 +78,12 @@ template("whisper_source_set") {
       "//build/config/compiler:no_chromium_code",
       "//build/config/compiler:exceptions",
     ]
+
+    # Added AFTER no_chromium_code so its -Wno-* suppressions land last and win
+    # over the /W3 warning level no_chromium_code sets for clang-cl on Windows
+    # (otherwise -Wunused-function etc. are re-enabled and /WX fails the
+    # vendored ggml/whisper sources). No-op ordering change on POSIX.
+    configs += [ ":whisper_private_config" ]
 
     cflags = [
       "-Wno-deprecated-declarations",

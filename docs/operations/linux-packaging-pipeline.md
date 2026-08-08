@@ -209,3 +209,34 @@ To submit Maho for Phoronix review:
 4. **x86_64 only** — `args_linux.gn` sets `target_cpu = "x64"`. ARM64 Linux is not currently configured.
 
 5. **Linux test machine required** — the script cannot run on macOS/Windows. CI/CD or a dedicated Linux machine is needed for distro verification (P0-4 items A4.1-A4.3).
+
+---
+
+## Sandbox and AppArmor Configuration
+
+Maho Browser requires a sandboxed environment to run securely. On modern Linux distributions (such as Ubuntu 23.10+ and Debian 12+), unprivileged user namespaces are restricted by default.
+
+### Hardened Kernels and User Namespaces
+On distros that restrict unprivileged user namespaces (e.g. `linux-hardened` kernels or system settings restricting `userns`), the browser may crash at launch. If this occurs, users can either:
+1. Apply the system-level workaround to allow unprivileged user namespaces:
+   ```bash
+   sudo sysctl -w kernel.unprivileged_userns_clone=1
+   ```
+   To make this change permanent, add `kernel.unprivileged_userns_clone=1` to `/etc/sysctl.d/99-userns.conf`.
+2. Ensure the packaged AppArmor profile is loaded correctly:
+   ```bash
+   sudo apparmor_parser -r /etc/apparmor.d/maho
+   ```
+
+### SUID Sandbox Fallback
+If user namespaces are not available or restricted, Maho falls back to using the SUID helper `chrome-sandbox`. The packaging script handles configuring the helper with `root:root` owner and `4755` permissions automatically during installation.
+
+> [!WARNING]
+> Do NOT configure Maho Browser to launch with `--no-sandbox` by default in release builds. Disabling the sandbox exposes the user to severe security risks and should only be used as a temporary diagnostic tool during development.
+
+### Dependency Preflight
+Before launching on minimal or container environments, verify that all hard-linked dependencies are present:
+```bash
+ldd /usr/lib/maho/chrome | grep "not found"
+```
+Ensure there are no missing libraries in the output.

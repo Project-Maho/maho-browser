@@ -10,13 +10,13 @@ import {TOTAL_PAGES, WelcomePage} from '../types.js';
 const REACT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('PasswordSetup isolated frontend contract', () => {
-  it('is page 7 followed by SyncKeyBackup, with six user-facing progress steps (ImportProgress excluded)', () => {
+  it('is page 8 followed by SyncKeyBackup, with eight user-facing progress steps (ImportProgress excluded)', () => {
     const source = readFileSync(path.join(REACT_DIR, 'app.tsx'), 'utf8');
 
-    expect(WelcomePage.PasswordSetup).toBe(7);
-    expect(WelcomePage.SyncKeyBackup).toBe(8);
-    expect(WelcomePage.Completion).toBe(9);
-    expect(TOTAL_PAGES).toBe(10);
+    expect(WelcomePage.PasswordSetup).toBe(8);
+    expect(WelcomePage.SyncKeyBackup).toBe(9);
+    expect(WelcomePage.Completion).toBe(10);
+    expect(TOTAL_PAGES).toBe(12);
     expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.SyncKeyBackup);
     expect(WelcomePage.SyncKeyBackup + 1).toBe(WelcomePage.Completion);
     expect(source).toContain('const WIZARD_STEP_PAGES: readonly WelcomePage[] = [');

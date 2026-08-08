@@ -38,6 +38,7 @@ fn empty_ctx() -> SearchContext {
         closed_tabs: vec![],
         extensions: vec![],
         is_incognito: false,
+        recent_tabs: vec![],
     }
 }
 
@@ -679,6 +680,61 @@ fn empty_query_yields_no_action_suggestions() {
 }
 
 #[test]
+fn empty_query_returns_recent_tabs_as_switch_to_tab() {
+    let engine = CommandBarEngine::new();
+    let mut ctx = empty_ctx();
+    ctx.recent_tabs = vec![
+        make_tab("recent-1", "First", "https://first.test/"),
+        make_tab("recent-2", "Second", "https://second.test/"),
+        make_tab("recent-3", "Third", "https://third.test/"),
+    ];
+
+    let results = engine.search("", None, &ctx);
+
+    assert_eq!(results.len(), 3);
+    assert!(results.iter().all(|r| is_kind(r, &SuggestionType::Tab)));
+    assert_eq!(
+        results.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec!["tab:recent-1", "tab:recent-2", "tab:recent-3"]
+    );
+    assert!(results.iter().all(|r| r.is_suspended));
+    assert_eq!(results[0].tab_core_id.as_deref(), Some("recent-1"));
+    assert_eq!(
+        results[0].execution_payload.as_deref(),
+        Some("https://first.test/")
+    );
+    assert!(results[0].relevance_score > results[1].relevance_score);
+    assert!(results[1].relevance_score > results[2].relevance_score);
+}
+
+#[test]
+fn empty_query_with_no_recent_tabs_returns_empty() {
+    let engine = CommandBarEngine::new();
+    let ctx = empty_ctx();
+    let results = engine.search("", None, &ctx);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn empty_query_dedups_recent_tabs_against_live_tabs() {
+    let engine = CommandBarEngine::new();
+    let mut ctx = empty_ctx();
+    ctx.tabs = vec![
+        make_tab("recent-1", "Live One", "https://live-one.test/"),
+        make_tab("live-2", "Live Two", "https://second.test/"),
+    ];
+    ctx.recent_tabs = vec![
+        make_tab("recent-1", "First", "https://first.test/"),
+        make_tab("recent-2", "Second", "https://second.test"),
+        make_tab("recent-3", "Third", "https://third.test/"),
+    ];
+
+    let results = engine.search("", None, &ctx);
+    let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(keys, vec!["tab:recent-3"]);
+}
+
+#[test]
 fn text_match_surfaces_action_inline() {
     let mut engine = CommandBarEngine::new();
     engine.add_action(
@@ -957,6 +1013,7 @@ fn normal_search_fixture_matches_preedit_sha() {
         closed_tabs: vec![tab_closed],
         extensions: vec![("extension-v1".to_string(), "Maho Extension".to_string())],
         is_incognito: false,
+        recent_tabs: vec![],
     };
 
     #[derive(serde::Serialize)]
@@ -1062,7 +1119,6 @@ fn normal_search_fixture_matches_preedit_sha() {
 
     let golden_path = golden_path.expect("Failed to locate command-normal-v1.json golden file");
     let golden_bytes = fs::read(golden_path).expect("Failed to read golden file");
-
     assert_eq!(
         serialized_bytes, golden_bytes,
         "Serialized output does not match pre-edit golden file"

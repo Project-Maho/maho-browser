@@ -18,6 +18,29 @@ pub enum MatchType {
     Contains,
     Equals,
     Regex,
+    Glob,
+}
+
+impl MatchType {
+    /// Stable storage identifier; must round-trip through [`MatchType::parse`].
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MatchType::Contains => "contains",
+            MatchType::Equals => "equals",
+            MatchType::Regex => "regex",
+            MatchType::Glob => "glob",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "contains" => Some(MatchType::Contains),
+            "equals" => Some(MatchType::Equals),
+            "regex" => Some(MatchType::Regex),
+            "glob" => Some(MatchType::Glob),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_NET_MAHO_PROXYING_URL_LOADER_FACTORY_H_
 
 #include "base/memory/weak_ptr.h"
+#include "content/public/browser/global_routing_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -15,6 +16,7 @@ class RenderFrameHost;
 }  // namespace content
 
 namespace network {
+struct ResourceRequest;
 class URLLoaderFactoryBuilder;
 }  // namespace network
 
@@ -43,7 +45,8 @@ class MahoProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   MahoProxyingURLLoaderFactory(
       mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
       mojo::PendingRemote<network::mojom::URLLoaderFactory> target,
-      base::WeakPtr<MahoAdBlockTabHelper> tab_helper);
+      base::WeakPtr<MahoAdBlockTabHelper> tab_helper,
+      content::GlobalRenderFrameHostId page_id);
   ~MahoProxyingURLLoaderFactory() override;
 
   MahoProxyingURLLoaderFactory(const MahoProxyingURLLoaderFactory&) = delete;
@@ -63,12 +66,15 @@ class MahoProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       override;
 
  private:
+  void RecordBlockedRequest(const network::ResourceRequest& request,
+                            const char* request_type);
   void OnDisconnect();
   void MaybeDeleteSelf();
 
   mojo::ReceiverSet<network::mojom::URLLoaderFactory> proxy_receivers_;
   mojo::Remote<network::mojom::URLLoaderFactory> target_factory_;
   base::WeakPtr<MahoAdBlockTabHelper> tab_helper_;
+  content::GlobalRenderFrameHostId page_id_;
 };
 
 #endif  // MAHO_BROWSER_NET_MAHO_PROXYING_URL_LOADER_FACTORY_H_

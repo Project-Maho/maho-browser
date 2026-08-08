@@ -9,22 +9,30 @@
 
 ---
 
+> **⚠️ 상태 안내 (2026-07 갱신)** — 본 문서는 **2026-06-27 v1.0 시점의 역사적(historical) 경쟁 분석**입니다. 아래 본문의 "Maho 현재 상태" 서술 일부는 이후 구현이 진행되어 **더 이상 최신이 아닙니다**. Maho 측 현재 구현 상태의 캐논 소스는 다음 두 문서입니다:
+> - 구현 증거 원장: `docs/competitive-analysis/aside-benchmark-evidence-2026-07.md`
+> - 상태 요약: `docs/competitive-analysis/aside-benchmark-status-2026-07.md`
+>
+> Aside 측 사실(가격 Free/$20 Pro/$200 Max, Online-Mind2Web SOTA 주장 등)은 **경쟁사 사실로서 원문 그대로 보존**합니다. 본문에 `정정(2026-07)` 표기가 붙은 항목은 Maho 측 최신 상태로 갱신된 부분입니다. Maho는 proprietary/closed-source이며, 본 문서 어디에도 OSS 주장은 없습니다.
+
+---
+
 ## §1 TL;DR — Executive Summary
 
 ### 한 문장 포지셔닝
 
 - **Aside Browser**는 한국계 창업자(Jun Kim 등 3인) 주도의 **YC F25 배치 출신 Aside Computer Inc.**가 만든 **Chromium 142 fork (branch-heads/7827)** 기반 AI 에이전트 브라우저로, "AI 에이전트가 로그인된 웹사이트에서 실제 업무를 완수한다"를 표방한다. Online-Mind2Web 벤치 99% SOTA 주장, Gemini 번들 내장, AsideAgentManager 자체 에이전트 시스템, Split View / Vertical Tabs / MCP 호스트 / CLI를 1.0 시점에 출하했다. **2026-06-23 macOS 공개 출시** (4일 차), 무료 / Pro $20 / Max $200 / Enterprise 4-tier.
-- **Maho Browser**는 Brave-style Chromium fork + Rust 9-crates 백엔드 + ACP 외부 agent 런타임 + iOS/Android 네이티브 셸 + E2EE self-hostable sync relay를 갖춘 cross-platform 브라우저로, BYOK 다중-프로바이더 LLM과 사용자 통제형 approval flow를 추구한다. 출시 전 상태.
+- **Maho Browser**는 Brave-style Chromium fork + Rust 백엔드 크레이트 + Swiftide 기반 agent 런타임(Maho-managed 빌링 프록시 경유) + iOS/Android 네이티브 셸 + E2EE self-hostable sync relay를 갖춘 cross-platform 브라우저로, **Maho-managed zero-setup AI(키 불필요)** 를 기본으로 하고 선택적 BYOK 다중-프로바이더 LLM과 사용자 통제형 approval flow를 지원한다. 출시 전 상태. `정정(2026-07)`: 원문의 "ACP 외부 agent 런타임 / BYOK 다중-프로바이더를 추구"는 stale. 현재 agent 경로는 `maho-agent`의 Swiftide 백엔드가 access token 존재 시 managed 프록시를 기본 사용하고 BYOK는 fallback (evidence 원장 §1 참조).
 
 ### 핵심 차별 7가지
 
 | 차원 | 우위자 | 핵심 |
 |---|---|---|
-| Zero-setup AI | Aside | Gemini 키 번들로 즉시 동작 — Maho는 BYOK 강제 |
+| Zero-setup AI | 동등 `정정(2026-07)` | Aside=Gemini 키 번들 / Maho=Maho-managed 프록시로 **키 없이 즉시 동작(shipped-in-browser)**. 원문의 구 BYOK-only 표현은 stale |
 | Agentic 자동화 깊이 | Aside | Routines (cron/이벤트 트리거), Ultrabrowse, Cloud handoff, MCP 호스트, CLI |
-| Tab auto-organization | Aside | `aside.verticalTabsTidy` AI 기반 자동 그룹화 |
-| 아키텍처 깊이 | Maho | Rust 9-crate 백엔드, ACP 표준 watchdog, 멀티 프로바이더 BYOK |
-| Cross-platform 범위 | Maho | iOS + Android 네이티브 셸 (Aside는 macOS-only, Windows 작업 중) |
+| Tab auto-organization | 동등 `정정(2026-07)` | Aside `aside.verticalTabsTidy` / Maho **Tab Tidy shipped-in-browser** (Mojo `RequestTabTidy`/`ApplyTabTidyFolders`). 원문의 구 Tidy-gap 표현은 stale |
+| 아키텍처 깊이 | Maho | Rust 백엔드 크레이트, Swiftide agent 런타임 + managed 빌링 프록시, managed+BYOK 다중 프로바이더 `정정(2026-07)`: 원문의 구 ACP-watchdog 표현은 stale |
+| Cross-platform 범위 | Maho | iOS + Android 네이티브 셸 코드 보유(현재 reference-only, 출시 미확정) — Aside는 macOS-only |
 | 통합 productivity | Maho | Spaces (테마 탭 그룹), Easel, Notes, Command palette, ad/tracker block, Maho Mail |
 | 데이터 주권 | Maho | Self-hostable sync relay, BYOK, 광고/트래커 차단 |
 
@@ -35,11 +43,13 @@
 
 ### 즉시 실행 가능한 5가지 권장 사항
 
-1. **AI 사이드패널의 zero-setup 경험 확보**: BYOK 정책은 유지하되, 첫 사용자에게 무료 평가 키(rate-limited, Maho 호스팅 OpenRouter 프록시 등) 옵션 제공. Aside의 핵심 onboarding 차별을 무력화.
-2. **Tab Tidy 기능 추가**: `maho-core::space_manager` 위에 AI 클러스터링 step 추가. 기존 sidebar folder/section 인프라를 그대로 사용. 작업량 대비 마케팅 임팩트 큼.
-3. **Routines (자동화 스케줄러) 차용 고려**: Aside의 "Routines" 개념은 agentic 브라우저의 표준 UX가 될 가능성. Maho ACP 스택에 cron + 이벤트 트리거 도입.
-4. **MCP 호스트 진입**: Aside가 1.0에서 MCP 호스트로 출하. Maho는 이미 ACP 외부 런타임 보유 → MCP 어댑터 추가로 외부 도구 생태계 즉시 연결.
-5. **모바일 차별화 마케팅**: Aside는 iOS/Android 로드맵 silent. Maho의 `maho/ios-shell` + `maho/android-shell` 출시는 Aside가 따라올 수 없는 차별축. **"AI 브라우저인데 폰에서도 동작"**이 헤드라인.
+> `정정(2026-07)`: 아래 원문 5개 항목은 대부분 이미 구현되어 우선순위가 바뀌었습니다. 현재 벤치 우선순위는 evidence 원장 기준으로 갱신했습니다.
+
+1. **Zero-setup AI 유지·폴리시(parity/maintain)**: Maho-managed 프록시 경로는 이미 shipped(키 없이 동작). 신규 개발이 아니라 **데모/QA로 first-run 경험을 다듬는 것**이 과제. 선택적 BYOK는 fallback으로 보존.
+2. **Tab Tidy — shipped, 데모/QA 크리티컬**: AI 클러스터링은 이미 Mojo로 출하됨. 남은 리스크는 신규 기능 개발이 아니라 **데모 촬영·수동 QA 신뢰성**(evidence 원장 §2 caveat: webui `.d.ts` 스텁 갱신).
+3. **Routines — 구현됨, 단 launch 비커밋**: CLI/MCP/`chrome://maho-routines` 표면 존재(Max-tier 게이트). 그러나 `docs/demos/README.md`가 launch 클레임에서 명시 제외 → **출시 마케팅에 넣지 말 것**.
+4. **MCP 호스트 — 구현됨(tools-only), launch 비커밋**: `maho-browser-mcp`가 tools-only 표면 제공(ADR 0014 NO-GO for resources/prompts). launch 클레임 제외 유지.
+5. **모바일 — 과대주장 금지**: `ios-shell`/`android-shell` 코드는 있으나 **reference-only, 출시 미확정**. "폰에서도 동작"을 **런치 패리티로 주장 금지** — 코드 존재와 출시 커밋은 다름.
 
 ---
 
@@ -310,18 +320,17 @@ YC F25 입주 시 **"Live answers for enterprise tech sales"** (영업 통화 �
   - `maho-chromium/browser/ui/views/side_panel/maho_ai_side_panel_coordinator.h` — Chromium `SidePanelRegistry`에 native 등록
   - `maho-chromium/browser/ai/maho_ai_llm_client.cc:28` — `const char kOpenAIEndpoint[] = "https://api.openai.com/v1/chat/completions"` (OpenAI-compatible 기본)
   - `maho-chromium/browser/ai/maho_unified_agent_adapter.h:76-77` — `openai` + `anthropic` BYOK 키를 prefs에 암호화 저장
-- **차이**: Maho는 **multi-provider BYOK**, Aside는 Gemini hardwire + bundled key. Aside의 zero-setup 우위는 분명.
+- **차이**: Maho는 **multi-provider**(managed 프록시 기본 + 선택적 BYOK), Aside는 Gemini hardwire + bundled key. `정정(2026-07)`: 원문의 "Aside의 zero-setup 우위는 분명"은 stale — Maho의 Maho-managed 경로는 access token만 있으면 키 없이 동작하므로 **zero-setup은 현재 동등(parity)**. Aside 우위 아님 (evidence 원장 §1).
 
 ### 6.2 Agentic Browsing 시스템 (Aside: AsideAgentManager)
 
-- **Maho 상태**: ✅ **SHIPPED — ACP 표준 + MahoUnifiedAgentAdapter**
+- **Maho 상태**: ✅ **SHIPPED — Swiftide agent 런타임 + human-in-the-loop 승인 게이트** `정정(2026-07)`
 - 증거:
   - `maho-chromium/browser/ai/maho_unified_agent_adapter.h` — `MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter`, `SubmitMessage`, `CancelCurrentTurn`, `RespondToApproval` (사람-인-루프 승인 게이트)
   - `maho-chromium/browser/ai/maho_browser_tool_registry.h` — agent tool registry
   - `maho-chromium/browser/ai/maho_browser_tool_executor.h` — tool 실행기
-  - `maho-chromium/browser/ai/maho_acp_event_decoder.h` — **ACP (Agent Client Protocol)** 이벤트 디코더
-  - `maho/crates/maho-acp/` + `maho-acp-watchdog` 바이너리 (JSON-RPC over stdio)
-- **차이**: Maho는 **ACP 표준 프로토콜 + 감독된 watchdog 프로세스** (더 견고). Aside는 ChatGPT-Atlas 의존. Maho 우위.
+  - `maho/crates/maho-agent/src/swiftide_backend.rs` — **현재 캐논 agent 백엔드**: managed 프록시 경로 + BYOK fallback + tool 셋(fs/shell/browser/mail/MCP/CLI)
+- **차이**: `정정(2026-07)`: 원문은 "ACP 표준 프로토콜 + watchdog가 현재 아키텍처"라 서술했으나 이는 stale. 현재 캐논 agent 경로는 `maho-agent`의 **Swiftide 멀티턴 백엔드**이며, managed 빌링 프록시를 기본 사용한다 (evidence 원장 §1, ADR 0009 Decision Drivers). ACP 계열 심볼은 잔재/보조 경로로 취급하고 "현재 아키텍처"로 인용하지 말 것. Aside는 ChatGPT-Atlas 의존.
 
 ### 6.3 First-class Split View (Aside: splitViewId in Tabs API)
 
@@ -334,13 +343,13 @@ YC F25 입주 시 **"Live answers for enterprise tech sales"** (영업 통화 �
 
 ### 6.4 Vertical Tabs + Tidy (Aside: 자동 그룹화)
 
-- **Maho 상태**: 🟡 **PARTIAL — vertical tab UI 우수, AI tidy 부재**
+- **Maho 상태**: ✅ **SHIPPED — vertical tab UI + AI Tab Tidy** `정정(2026-07)`
 - 증거:
   - `maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h` — `MahoSidebarTabListView` + `SidebarTabRowView` + `SidebarFolderRowView` + DnD (`WriteDragDataForView`, `GetDropCallback`) + 핀 sections + folder expand/collapse + 인라인 rename + hover preview
   - `maho_sidebar_state_models.h` — 섹션 모델 (pinned, normal)
   - sidebar 디렉토리 ~25 파일 (spaces, favorites, search 등 포함)
-  - `tidy` / 자동 클러스터 키워드 grep 결과 **없음**
-- **차이**: Maho의 vertical tab UI는 폴더/섹션/DnD/핀 측면에서 Aside보다 **구조적으로 풍부**할 수 있음. 그러나 **AI 기반 자동 정리(tidy)는 없음** — 명확한 갭. **§9 권장사항 #2 후보**.
+  - AI Tidy: `maho_ai.mojom` `RequestTabTidy(array<TabInfo>) => (array<TidyFolder>)` + `ApplyTabTidyFolders(...)`, 사이드바 `wand-2` 아이콘 → 폴더 제안 다이얼로그 (evidence 원장 §2)
+- **차이**: `정정(2026-07)`: 원문의 "AI tidy 부재 — 명확한 갭"은 stale. Tab Tidy는 이제 **shipped-in-browser**(Mojo 배선 + full `chrome` 링크 확인). 남은 리스크는 신규 개발이 아니라 **데모/수동 QA 신뢰성**(webui `.d.ts` 스텁이 `TabInfo`/`TidyFolder` 누락 — IDE 타입체크 한정, 빌드 영향 없음).
 
 ### 6.5 Extension SidePanel API (Aside: left/right 레이아웃)
 
@@ -352,15 +361,14 @@ YC F25 입주 시 **"Live answers for enterprise tech sales"** (영업 통화 �
 
 ### 6.6 자체 Password Manager (Aside: AsidePasswordManager)
 
-- **Maho 상태**: ✅ **SHIPPED — Rust 네이티브**
+- **Maho 상태**: 🟡 **구현 존재하나 gated/insecure — "secure agent 볼트" 클레임 불가** `정정(2026-07)`
 - 증거:
-  - `maho/crates/maho-core/src/password_manager.rs` — `struct PasswordManager`, `list_passwords()`, `search_passwords()`, `add_password()`, `delete_password()`
+  - `maho/crates/maho-core/src/password_manager.rs` — `struct PasswordManager`, `list_passwords()`, `search_passwords()`, `add_password()`, `delete_password()` (단, 현재 시크릿을 평문 `Option<String>`로 메모리 보관 — 암호화 미적용)
   - `maho/crates/maho-types/src/passwords.rs` — `SavedPassword` (id, domain, username)
   - `maho-chromium/browser/ui/webui/maho_settings/maho_settings_password_helpers.h` — 설정 UI 통합
   - `maho/crates/maho-import/src/parsers/chromium/passwords.rs` + `firefox/passwords.rs` — Chrome/Firefox import
   - `maho/crates/maho-import/src/decrypt/chromium_keychain.rs` + `firefox_nss.rs` — keychain/NSS 복호화
-  - `maho/crates/maho-core/src/oscrypt.rs` — OS-level 암호화
-- **차이**: 거의 동등. Aside의 "Secure Enclave + post-quantum" 마케팅은 Maho도 mac 키체인/OS keystore 통합으로 매칭 가능. **마케팅 메시지 보강 필요**.
+- **차이**: `정정(2026-07)`: 원문의 "거의 동등, Secure Enclave/post-quantum 매칭 가능, 마케팅 메시지 보강"은 **위험한 stale**. 현재 보안 문서(`docs/password-manager-security-fix-plan.md`)는 **평문 디스크 저장(SQLCipher 키 미배선), 잔존 평문 백업, reveal 시 OS/생체 재인증 부재**를 명시하며, 신규 저장 기능은 Milestone 1 전 사용자 노출 금지. 또한 agent tool 셋에 **password-manager 도구가 배선돼 있지 않음**. 따라서 "secure agent autofill / shipped 볼트" 메시지는 **보안 fix 완료 전까지 금지** (evidence 원장 §4).
 
 ### 6.7 자체 Updater (Aside: AsideUpdater + AsideDaemon)
 
@@ -398,15 +406,15 @@ YC F25 입주 시 **"Live answers for enterprise tech sales"** (영업 통화 �
 
 | # | 기능 | Aside | Maho | 우위 |
 |---|---|---|---|---|
-| 1 | AI 사이드패널 | ✅ Gemini 번들 | ✅ Multi-provider BYOK | Aside (UX onboarding), Maho (선택의 자유) |
-| 2 | Agentic 시스템 | ✅ AsideAgentManager | ✅ ACP + watchdog | **Maho** (표준 + 견고) |
+| 1 | AI 사이드패널 | ✅ Gemini 번들 | ✅ Managed 프록시(키 불필요) + 선택적 BYOK | 동등 `정정(2026-07)` (원문 "Aside onboarding 우위" stale) |
+| 2 | Agentic 시스템 | ✅ AsideAgentManager | ✅ Swiftide 백엔드 + 승인 게이트 | Maho `정정(2026-07)` (원문 "ACP watchdog" stale) |
 | 3 | Split View | ✅ + JS API | ✅ native만 | Aside (extension API), Maho (구현 깊이 동등) |
-| 4 | Vertical Tabs | ✅ + Tidy | ✅ folder/sections, **Tidy 없음** | **Aside** (Tidy 차별) |
+| 4 | Vertical Tabs | ✅ + Tidy | ✅ folder/sections **+ Tab Tidy shipped** | 동등 `정정(2026-07)` (원문 구 Tidy-gap 표현 stale) |
 | 5 | Extension SidePanel API | ✅ left/right | 🟡 자체만 | Aside |
-| 6 | Password Manager | ✅ SE + PQ 클레임 | ✅ Rust + import | 동등 (마케팅은 Aside 우위) |
+| 6 | Password Manager | ✅ SE + PQ 클레임 | 🟡 구현 존재하나 gated/insecure | Aside `정정(2026-07)` (Maho는 보안 fix 전까지 secure 클레임 불가) |
 | 7 | Updater | ✅ daemon 모델 | ✅ Sparkle/MSIX + staged | **Maho** (설계 견고) |
 | 8 | Chrome 확장 | ✅ | ✅ | 동등 |
-| 9 | 멀티플랫폼 | ❌ macOS only | 🟢 macOS/iOS/Android/Linux | **Maho** |
+| 9 | 멀티플랫폼 | ❌ macOS only | 🟡 macOS 데스크탑 + iOS/Android 셸(reference-only, 출시 미확정) | Maho (코드 폭), 단 모바일 런치 패리티 주장 금지 |
 
 ---
 
@@ -472,40 +480,43 @@ YC F25 입주 시 **"Live answers for enterprise tech sales"** (영업 통화 �
 
 - `maho-acp-watchdog` — 감독된 AI agent 프로세스 모델
 - Aside의 in-process AgentManager보다 견고 (crash isolation)
+- `정정(2026-07)`: 현재 캐논 agent 경로는 `maho-agent`의 **Swiftide 백엔드 + managed 프록시**(§6.2 참조). ACP watchdog을 "현재 agent 아키텍처"로 인용하지 말 것 — 잔재/보조 경로로 취급.
 
 ---
 
 ## §8 Aside가 앞서는 영역 (Maho 갭)
 
-### 8.1 Zero-setup AI 온보딩
+> `정정(2026-07)`: 원문의 §8.1~§8.5는 대부분 **이미 해소되었거나(구현 완료) launch 정책상 갭이 아닙니다**. 아래에 현재 상태를 반영해 갱신했습니다 (evidence 원장 §1~§5).
+
+### 8.1 Zero-setup AI 온보딩 — `정정(2026-07)`: 갭 아님(parity)
 
 - Aside는 Gemini 키 번들 → 다운로드 즉시 AI 사용 가능
-- Maho는 BYOK 필수 → 첫 사용자에게 마찰
-- **사용자 첫인상에 결정적**
+- Maho도 **Maho-managed 프록시로 키 없이 즉시 동작(shipped-in-browser)**; BYOK는 선택적 fallback. 원문의 구 BYOK-only 표현(→ 온보딩 마찰 주장)은 stale
+- 현재 과제는 신규 개발이 아니라 first-run UX **폴리시/데모/QA**
 
-### 8.2 Tab Tidy (AI 자동 정리)
+### 8.2 Tab Tidy (AI 자동 정리) — `정정(2026-07)`: 갭 아님(shipped)
 
-- Aside의 `aside.verticalTabsTidy`는 AI 기반 자동 그룹화로 추정
-- Maho는 수동 폴더/섹션만
-- 사이드바 인프라는 이미 충분 → 클러스터링 단계 추가만 필요
+- Aside의 `aside.verticalTabsTidy`는 AI 기반 자동 그룹화
+- Maho도 **Tab Tidy shipped-in-browser** (`RequestTabTidy`/`ApplyTabTidyFolders` Mojo, `wand-2` 사이드바 액션). 원문의 "수동 폴더/섹션만"은 stale
+- 남은 리스크: 데모/수동 QA 신뢰성
 
-### 8.3 Routines (자동화 스케줄러)
+### 8.3 Routines (자동화 스케줄러) — `정정(2026-07)`: 구현됨, launch 비커밋
 
-- cron + 이벤트 트리거 + push notification heartbeat
-- agentic 브라우저의 표준 UX가 될 가능성
-- Maho ACP 스택에 추가 가능 (높지 않은 비용)
+- cron + 이벤트 트리거 + push notification heartbeat (Aside)
+- Maho도 **구현 존재**: CLI `Routine` 서브커맨드 + MCP `browser_routines_*` + `chrome://maho-routines` WebUI (Max-tier 게이트)
+- 단, `docs/demos/README.md`가 launch 클레임에서 명시 제외 → **출시 마케팅 금지**
 
-### 8.4 MCP 호스트
+### 8.4 MCP 호스트 — `정정(2026-07)`: 구현됨(tools-only), launch 비커밋
 
-- 외부 MCP 도구가 브라우저를 driver
-- Aside는 1.0에서 출하
-- Maho는 미진입 (ACP는 있으나 MCP 별개)
+- 외부 MCP 도구가 브라우저를 driver (Aside)
+- Maho도 **`maho-browser-mcp` tools-only 표면 구현** (ADR 0014: resources/prompts는 v1 NO-GO). 원문의 "미진입"은 stale
+- launch 클레임 제외 유지
 
-### 8.5 CLI 인터페이스
+### 8.5 CLI 인터페이스 — `정정(2026-07)`: 구현됨, launch 비커밋
 
 - 터미널에서 agent 세션 launch / REPL
-- 개발자 페르소나에 어필 큼
-- Maho 미진입
+- Maho도 **`maho-cli` 구현**: `Mcp`/`Run`/`tool list|call` 서브커맨드. 원문의 "미진입"은 stale
+- launch 클레임 제외 유지
 
 ### 8.6 Extension SidePanel left/right API
 
@@ -529,71 +540,67 @@ YC F25 입주 시 **"Live answers for enterprise tech sales"** (영업 통화 �
 
 ## §9 Maho를 위한 권장 사항
 
+> `정정(2026-07)`: 원문의 §9는 "이 기능들을 만들자"는 개발 로드맵이었으나, 대부분 **이미 구현**되었습니다. 아래는 현재 벤치마크 우선순위로 재작성했습니다 (evidence 원장 §1~§6 기준). 핵심 전환: **신규 기능 개발 → 데모/QA/포지셔닝 + 보안 fix + launch 정책 준수.**
+
 ### 9.1 즉시 행동 (1-2 sprint)
 
-1. **AI 사이드패널 zero-setup UX**:
-   - Maho 호스팅 OpenRouter 프록시 또는 평가용 rate-limited 키 옵션 추가
-   - "BYOK or use trial key" 토글
-   - 첫 사용자 경험에서 Aside의 핵심 차별을 무력화
+1. **Zero-setup AI — 유지·폴리시(parity/maintain)**:
+   - Maho-managed 프록시 경로는 이미 shipped(키 없이 동작). 신규 개발 아님
+   - first-run 경험을 **데모/수동 QA로 다듬기**; 선택적 BYOK fallback 보존
+   - evidence caveat: agent 기본 모델 slug(`google/gemini-3-flash-lite:free`)와 ADR 0009 Annex A allowlist(`gemini-3` 계열) 간 정합은 이미 맞춰짐(과거 `gemini-2.5-flash` drift 해소). 허용목록 회전 시 재확인만 필요
 
-2. **Tab Tidy 기능**:
-   - `maho-core::space_manager` 위에 클러스터링 단계 추가
-   - 입력: 현재 열린 탭들의 URL/title/content snippet
-   - 출력: 제안된 그룹 (LLM 호출 1회)
-   - UI: 사이드바 상단 "Tidy" 버튼 → 미리보기 → 사용자 confirm
-   - 작업 추정: ~3-5일
+2. **Tab Tidy — shipped, 데모/QA 크리티컬**:
+   - AI 클러스터링은 이미 Mojo로 출하됨 (`RequestTabTidy`/`ApplyTabTidyFolders`)
+   - 남은 리스크는 **데모 촬영·수동 QA 신뢰성** (webui `.d.ts` 스텁이 `TabInfo`/`TidyFolder` 누락 — IDE 타입체크 한정)
 
-3. **Password Manager 마케팅 메시지 정비**:
-   - Secure Enclave / TPM 통합 명시
-   - 외부 password manager 연결 지원 추가 (1Password CLI, Bitwarden)
+3. **Password Manager — 보안 fix 완료 전 메시지 동결**:
+   - 현재 평문 저장(SQLCipher 미배선)/평문 백업/reveal 재인증 부재 (`docs/password-manager-security-fix-plan.md`)
+   - **"secure agent autofill / shipped 볼트" 마케팅 금지** — Milestone 1 보안 fix 이후로 연기
+   - agent tool 셋에 password 도구 미배선 → agent-vault 클레임 불가
 
 ### 9.2 단기 (1-2달)
 
-4. **MCP 호스트 모드 진입**:
-   - 기존 ACP 어댑터 위에 MCP 변환 레이어 추가
-   - MCP 서버 디렉토리 자동 발견
-   - Aside의 핵심 차별 무력화
+4. **MCP 호스트 — 구현됨(tools-only), launch 비커밋 유지**:
+   - `maho-browser-mcp`가 tools-only 표면 제공 (ADR 0014: resources/prompts v1 NO-GO)
+   - `docs/demos/README.md` launch 클레임 제외 준수 → **출시 마케팅에 넣지 말 것**
 
-5. **Routines (자동화)**:
-   - ACP 스택에 cron + 이벤트 트리거
-   - `chrome://maho-routines` WebUI
-   - Maho Mail 트리거 (이메일 → 작업) 연동 — Aside가 못 하는 영역
+5. **Routines — 구현됨, launch 비커밋 유지**:
+   - CLI/MCP/`chrome://maho-routines` 표면 존재 (Max-tier 게이트)
+   - Maho Mail 트리거 연동은 향후 차별 아이디어이나, **현재 launch 클레임 금지**
 
-6. **CLI**:
-   - `maho` 바이너리 + `maho run "task description"` 서브커맨드
-   - macOS Homebrew 패키지
-   - 개발자 페르소나 진입 + Aside-like 차별
+6. **CLI — 구현됨, launch 비커밋 유지**:
+   - `maho-cli` `Mcp`/`Run`/`tool` 서브커맨드 존재
+   - 개발자 페르소나 자산이나 **출시 마케팅 제외** (README 하드 제약)
 
 ### 9.3 중장기 (3-6개월)
 
-7. **iOS / Android 셸 출하 가속**:
-   - `maho/ios-shell` Swift 셸 reference-only 상태 탈출
-   - 핵심 사용 케이스 한정 출시 (탭 + sync + AI 패널만)
-   - **Maho의 가장 강력한 차별축** — Aside가 따라올 수 없음
+7. **iOS / Android — 코드 보유, 출시 미확정 (과대주장 금지)**:
+   - `ios-shell`/`android-shell` 코드는 있으나 **reference-only**
+   - "폰에서도 동작"을 **런치 패리티로 주장 금지**; 구체 출시 커밋 확정 후에만 마케팅
 
 8. **Linux 데스크탑**:
    - Maho updater 설계에 Linux 패키징 포함됨 → 출시 가속
    - Aside 미진입 시장 → first-mover
 
-9. **Verifiable privacy 마케팅**:
-   - sync relay 코드 공개 + 외부 감사
-   - "마케팅뿐인 privacy"가 아닌 검증 가능 차별
-   - Aside의 "Secure Enclave + post-quantum" 문구 대비
+9. **검증 가능 privacy 마케팅**:
+   - Maho는 proprietary/closed-source이므로 **"소스 공개/외부 감사" 류 OSS 프레이밍 금지**
+   - relay E2EE("데이터를 못 본다") + LLM 프록시 물리 분리(ADR 0009)를 검증 서사로 활용
 
 ### 9.4 포지셔닝 (마케팅)
 
 10. **AI 브라우저 카테고리 직접 충돌 회피**:
     - Aside의 "AI가 일을 끝낸다" 메시지와 정면 충돌 금지
-    - Maho 메시지: **"You + AI, on every device"** 또는 **"AI 도구 + Privacy 아키텍처"**
+    - Maho 메시지: **"You + AI"** 또는 **"AI 도구 + Privacy 아키텍처"**
     - 사용자 멘탈 모델: "AI에게 위임" vs "AI를 도구로 사용" — 후자 선택
 
-11. **모바일을 헤드라인으로**:
-    - "Aside는 Mac에서만 — Maho는 iPhone과 Android에서도"
-    - 모바일 데모 영상이 단일 차별 자산
+11. **모바일 마케팅은 출시 커밋 이후로**:
+    - 코드 존재 ≠ 출시. reference-only 상태에서 "iPhone/Android에서도" 헤드라인 금지
+    - 출시 확정 시에만 모바일 데모 자산화
 
-12. **벤치마크 정정 자세**:
-    - Aside의 99% 벤치 클레임이 회의 받는 만큼, Maho는 **외부 검증 가능 벤치**로 차별화
-    - 사용자 검증 가능 평가 (e.g. 동일 task X→ 양 브라우저 → 결과 비교 영상)
+12. **벤치마크 — SOTA 숫자 아닌 데모 기반으로**:
+    - Aside의 99% SOTA 클레임은 방법론 회의 대상 → Maho는 **숫자 경쟁 지양**
+    - `docs/brand/BRAND.md` §5/§7: 자가당착적·미검증 벤치 금지, 사실·공식 출처만
+    - 차별 자산은 **재현 가능한 데모**(동일 task를 실제로 수행하는 영상), 조작된 벤치 숫자 아님
 
 ---
 

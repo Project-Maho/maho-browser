@@ -100,7 +100,12 @@ impl ImportWorker for PasswordWorker {
             destination.add_password(entry);
             count += 1;
             if count % 100 == 0 {
-                send_update(progress, ImportType::Passwords, count, "Importing passwords...");
+                send_update(
+                    progress,
+                    ImportType::Passwords,
+                    count,
+                    "Importing passwords...",
+                );
             }
         }
         Ok(count)

@@ -3,15 +3,15 @@
 //! Ports `importers/workspace_importer.cc`. Reads parsed workspaces (Arc/Zen)
 //! and creates spaces, tabs, folders, pinned/favorite tabs in the destination.
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::orchestrator::{ImportDestination, ImportProgress, ImportType};
 use crate::parsers;
-use crate::{BrowserType, DetectedBrowser, ImportResult, ParsedFolder};
+use crate::{BrowserType, DetectedBrowser, ImportResult};
 
+use super::workspace_folders::import_folders;
 use super::{is_cancelled, send_update, ImportWorker};
 
 pub struct WorkspaceWorker;
@@ -53,8 +53,7 @@ impl ImportWorker for WorkspaceWorker {
                 break;
             }
 
-            let space_id = match destination.create_space(&ws.name, &ws.theme_color_hex, &ws.icon)
-            {
+            let space_id = match destination.create_space(&ws.name, &ws.theme_color_hex, &ws.icon) {
                 Some(id) => id,
                 None => continue,
             };
@@ -69,7 +68,7 @@ impl ImportWorker for WorkspaceWorker {
                 if is_cancelled(cancelled) {
                     break;
                 }
-                if let Some(tab_id) = destination.create_tab(&space_id, &tab.url) {
+                if let Some(tab_id) = destination.create_tab(&space_id, &tab.url, &tab.title) {
                     destination.pin_tab(&tab_id);
                 }
             }
@@ -79,7 +78,7 @@ impl ImportWorker for WorkspaceWorker {
                 if is_cancelled(cancelled) {
                     break;
                 }
-                if let Some(tab_id) = destination.create_tab(&space_id, &tab.url) {
+                if let Some(tab_id) = destination.create_tab(&space_id, &tab.url, &tab.title) {
                     destination.favorite_tab(&tab_id);
                 }
             }
@@ -89,7 +88,7 @@ impl ImportWorker for WorkspaceWorker {
                 if is_cancelled(cancelled) {
                     break;
                 }
-                destination.create_tab(&space_id, &tab.url);
+                destination.create_tab(&space_id, &tab.url, &tab.title);
             }
 
             // Folders and their tabs
@@ -112,73 +111,12 @@ impl ImportWorker for WorkspaceWorker {
     }
 }
 
-/// Import folders with parent-child relationships (recursive resolution).
-fn import_folders(
-    destination: &dyn ImportDestination,
-    space_id: &str,
-    folders: &[ParsedFolder],
-    cancelled: &Arc<AtomicBool>,
-) {
-    let mut id_map: HashMap<String, String> = HashMap::new();
-
-    for folder in folders {
-        if is_cancelled(cancelled) {
-            break;
-        }
-        get_or_create_folder(destination, space_id, folders, &folder.id, &mut id_map);
-
-        // Create tabs in this folder
-        let maho_folder_id = id_map.get(&folder.id).cloned().unwrap_or_default();
-        for tab in &folder.tabs {
-            if is_cancelled(cancelled) {
-                break;
-            }
-            if maho_folder_id.is_empty() {
-                destination.create_tab(space_id, &tab.url);
-            } else {
-                destination.create_tab_in_folder(space_id, &tab.url, &maho_folder_id);
-            }
-        }
-    }
-}
-
-/// Recursively get or create a folder, resolving parent chains.
-fn get_or_create_folder(
-    destination: &dyn ImportDestination,
-    space_id: &str,
-    all_folders: &[ParsedFolder],
-    folder_id: &str,
-    id_map: &mut HashMap<String, String>,
-) -> Option<String> {
-    if folder_id.is_empty() {
-        return None;
-    }
-
-    if let Some(existing) = id_map.get(folder_id) {
-        return Some(existing.clone());
-    }
-
-    let folder_info = all_folders.iter().find(|f| f.id == folder_id)?;
-
-    // Resolve parent first
-    let parent_maho_id = if !folder_info.parent_id.is_empty() {
-        get_or_create_folder(destination, space_id, all_folders, &folder_info.parent_id, id_map)
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-
-    let maho_id = destination.create_folder(space_id, &folder_info.name, &parent_maho_id)?;
-    id_map.insert(folder_id.to_string(), maho_id.clone());
-    Some(maho_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::orchestrator::ImportDestination;
     use crate::workers::tests::MockDestination;
-    use crate::{ParsedFolder, ParsedTab, ParsedWorkspace};
+    use crate::{ParsedTab, ParsedWorkspace};
     use std::sync::mpsc;
 
     #[test]
@@ -202,60 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn test_import_folders_with_mock() {
-        let dest = Arc::new(MockDestination::new());
-        let cancelled = Arc::new(AtomicBool::new(false));
-
-        // Create a space first
-        let space_id = dest.create_space("Test Space", "#ff0000", "star").unwrap();
-
-        let folders = vec![
-            ParsedFolder {
-                id: "f1".to_string(),
-                name: "Root Folder".to_string(),
-                parent_id: String::new(),
-                workspace_id: "ws1".to_string(),
-                tabs: vec![ParsedTab {
-                    url: "https://example.com".to_string(),
-                    title: "Example".to_string(),
-                    is_pinned: false,
-                    is_essential: false,
-                }],
-            },
-            ParsedFolder {
-                id: "f2".to_string(),
-                name: "Child Folder".to_string(),
-                parent_id: "f1".to_string(),
-                workspace_id: "ws1".to_string(),
-                tabs: vec![ParsedTab {
-                    url: "https://child.example.com".to_string(),
-                    title: "Child".to_string(),
-                    is_pinned: false,
-                    is_essential: false,
-                }],
-            },
-        ];
-
-        import_folders(&*dest, &space_id, &folders, &cancelled);
-
-        let created_folders = dest.folders.lock().unwrap();
-        assert_eq!(created_folders.len(), 2);
-        assert_eq!(created_folders[0].name, "Root Folder");
-        assert!(created_folders[0].parent_id.is_empty());
-        assert_eq!(created_folders[1].name, "Child Folder");
-        // Child folder's parent is the root folder's maho ID
-        assert_eq!(created_folders[1].parent_id, created_folders[0].id);
-
-        let tabs = dest.tabs.lock().unwrap();
-        // Space tab + 2 folder tabs
-        assert!(tabs.len() >= 2);
-    }
-
-    #[test]
     fn test_workspace_with_pinned_and_favorites() {
         let dest = Arc::new(MockDestination::new());
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let (tx, _rx) = mpsc::channel::<ImportProgress>();
+        let _cancelled = Arc::new(AtomicBool::new(false));
+        let (_tx, _rx) = mpsc::channel::<ImportProgress>();
 
         let workspaces = vec![ParsedWorkspace {
             uuid: "ws-1".to_string(),
@@ -287,23 +175,23 @@ mod tests {
         // Directly test the import logic
         let mut spaces_created = 0u32;
         for ws in &workspaces {
-            let space_id =
-                dest.create_space(&ws.name, &ws.theme_color_hex, &ws.icon)
-                    .unwrap();
+            let space_id = dest
+                .create_space(&ws.name, &ws.theme_color_hex, &ws.icon)
+                .unwrap();
             spaces_created += 1;
 
             for tab in &ws.pinned_tabs {
-                if let Some(tab_id) = dest.create_tab(&space_id, &tab.url) {
+                if let Some(tab_id) = dest.create_tab(&space_id, &tab.url, &tab.title) {
                     dest.pin_tab(&tab_id);
                 }
             }
             for tab in &ws.favorites {
-                if let Some(tab_id) = dest.create_tab(&space_id, &tab.url) {
+                if let Some(tab_id) = dest.create_tab(&space_id, &tab.url, &tab.title) {
                     dest.favorite_tab(&tab_id);
                 }
             }
             for tab in &ws.regular_tabs {
-                dest.create_tab(&space_id, &tab.url);
+                dest.create_tab(&space_id, &tab.url, &tab.title);
             }
         }
 
@@ -314,5 +202,8 @@ mod tests {
         assert_eq!(favorited.len(), 1);
         let tabs = dest.tabs.lock().unwrap();
         assert_eq!(tabs.len(), 3); // pinned + fav + regular
+        assert_eq!(tabs[0].title, "Pinned");
+        assert_eq!(tabs[1].title, "Fav");
+        assert_eq!(tabs[2].title, "Regular");
     }
 }

@@ -92,8 +92,7 @@ fn locate_cookies_file(safari_dir: &Path) -> Option<PathBuf> {
 
     let candidates = [
         // macOS 14+ sandboxed container location.
-        library_dir
-            .join("Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"),
+        library_dir.join("Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"),
         // Legacy shared per-user location.
         library_dir.join("Cookies/Cookies.binarycookies"),
     ];
@@ -244,7 +243,14 @@ mod tests {
     use super::*;
 
     /// Builds one cookie record blob.
-    fn build_cookie(domain: &str, name: &str, path: &str, value: &str, flags: u32, expiry: f64) -> Vec<u8> {
+    fn build_cookie(
+        domain: &str,
+        name: &str,
+        path: &str,
+        value: &str,
+        flags: u32,
+        expiry: f64,
+    ) -> Vec<u8> {
         let header = COOKIE_HEADER_LEN as u32;
         let domain_off = header;
         let name_off = domain_off + domain.len() as u32 + 1;
@@ -337,7 +343,14 @@ mod tests {
     #[test]
     fn parses_single_cookie() {
         // expiry: 0 Mac-epoch seconds -> Unix 978307200.
-        let cookie = build_cookie(".example.com", "session", "/", "abc123", FLAG_SECURE | FLAG_HTTPONLY, 0.0);
+        let cookie = build_cookie(
+            ".example.com",
+            "session",
+            "/",
+            "abc123",
+            FLAG_SECURE | FLAG_HTTPONLY,
+            0.0,
+        );
         let page = build_page(&[cookie]);
         let file = build_file(&[page]);
 
@@ -431,8 +444,7 @@ mod tests {
         let library = tmp.path().join("Library");
         let safari_dir = library.join("Safari");
         std::fs::create_dir_all(&safari_dir).unwrap();
-        let container_dir =
-            library.join("Containers/com.apple.Safari/Data/Library/Cookies");
+        let container_dir = library.join("Containers/com.apple.Safari/Data/Library/Cookies");
         std::fs::create_dir_all(&container_dir).unwrap();
 
         let cookie = build_cookie(".container.com", "k", "/", "v", 0, 0.0);

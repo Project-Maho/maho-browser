@@ -27,6 +27,7 @@ async fn browser_action_shims_list_tools_requires_bridge_and_flag() {
     assert!(has_tool(&flag_off, "read_current_page"));
     assert!(!has_tool(&flag_off, "browser_scroll"));
     assert!(!has_tool(&flag_off, "browser_navigate"));
+    assert!(!has_tool(&flag_off, "browser_accessibility_snapshot"));
 
     harness.backend.set_browser_action_tools_enabled(true);
 
@@ -35,6 +36,10 @@ async fn browser_action_shims_list_tools_requires_bridge_and_flag() {
     assert!(has_tool(&flag_on, "browser_scroll"));
     assert!(has_tool(&flag_on, "browser_navigate"));
     assert!(has_tool(&flag_on, "browser_click"));
+    assert!(
+        has_tool(&flag_on, "browser_accessibility_snapshot"),
+        "click/type/select require @ref values from the accessibility snapshot"
+    );
 }
 
 #[tokio::test]
@@ -102,16 +107,70 @@ async fn browser_action_shims_allow_invokes_bridge_exactly_once() {
 
     assert!(result.is_ok(), "allowed action turn completes: {result:?}");
     let calls = bridge.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "browser_scroll");
-    assert_eq!(calls[0].1, r#"{"direction":"down","pixels":200}"#);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(tool_name, _)| tool_name == "browser_tab_list")
+            .count(),
+        1
+    );
+    let action_calls: Vec<_> = calls
+        .iter()
+        .filter(|(tool_name, _)| tool_name != "browser_tab_list")
+        .collect();
+    assert_eq!(action_calls.len(), 1);
+    assert_eq!(action_calls[0].0, "browser_scroll");
+    assert_eq!(action_calls[0].1, r#"{"direction":"down","pixels":200}"#);
+    // Parity: browser actions are auto-approved at the agent layer, so no
+    // permission request is raised even under a Prompt-capable callback; the
+    // browser capability sandbox (grant + lease) is the enforcement boundary.
     let requests = support::clone_locked(&permission_requests);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].tool_name, "browser_scroll");
+    assert!(
+        requests.is_empty(),
+        "auto-approved browser actions must not raise a permission prompt; requests={requests:?}"
+    );
 }
 
 #[tokio::test]
-async fn browser_action_shims_deny_prevents_bridge_invocation() {
+async fn tool_using_turn_streams_only_the_authoritative_final_answer() {
+    let harness = backend_with_profile_tools(&[]);
+    let _bridge = install_bridge(&harness.backend);
+    harness.backend.set_browser_action_tools_enabled(true);
+    harness
+        .backend
+        .set_llm_override(Box::new(OneToolCallLlm::new(
+            "browser_scroll",
+            r#"{"direction":"down","pixels":200}"#,
+        )) as Box<dyn ChatCompletion>);
+    harness
+        .backend
+        .set_permission_callback(Box::new(|_| Box::pin(async { PermissionDecision::Allow })))
+        .expect("permission callback installs");
+    let streamed = Arc::new(Mutex::new(String::new()));
+    let captured = Arc::clone(&streamed);
+
+    let response = harness
+        .backend
+        .run_turn(
+            "session-authoritative-stream",
+            ChatMessage::user(ChatContent::text("scroll down".to_string())),
+            Some(Box::new(move |chunk| {
+                support::lock(&captured).push_str(chunk);
+            })),
+            None,
+        )
+        .await
+        .expect("tool-using turn completes");
+    let returned = match response.content {
+        ChatContent::Text(text) => text,
+        other => panic!("expected text response, got {other:?}"),
+    };
+
+    assert_eq!(support::clone_locked(&streamed), returned);
+}
+
+#[tokio::test]
+async fn browser_action_auto_approved_bypasses_permission_callback() {
     let harness = backend_with_profile_tools(&[]);
     let bridge = install_bridge(&harness.backend);
     harness.backend.set_browser_action_tools_enabled(true);
@@ -144,10 +203,21 @@ async fn browser_action_shims_deny_prevents_bridge_invocation() {
         )
         .await;
 
-    assert!(
-        result.is_ok(),
-        "denied tool returns an error to the model: {result:?}"
+    assert!(result.is_ok(), "browser action turn completes: {result:?}");
+    // Parity: browser actions are auto-approved at the agent layer, so the
+    // permission callback is never consulted (even one that would deny), and
+    // the action reaches the browser bridge. Enforcement lives in the browser
+    // capability sandbox (origin grant + lease), not in an agent-side prompt.
+    assert_eq!(
+        *support::lock(&permission_calls),
+        0,
+        "auto-approved browser actions must not consult the permission callback"
     );
-    assert_eq!(bridge.calls().len(), 0);
-    assert_eq!(*support::lock(&permission_calls), 1);
+    let calls = bridge.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|(tool_name, _)| tool_name == "browser_navigate"),
+        "an auto-approved browser action must reach the bridge: {calls:?}"
+    );
 }

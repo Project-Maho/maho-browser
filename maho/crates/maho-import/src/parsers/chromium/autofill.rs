@@ -58,7 +58,8 @@ pub fn parse_chromium_autofill(profile_dir: &Path) -> ImportResult<Vec<AutofillE
             .map_err(|e| ImportError::Parse(format!("querying autofill: {e}")))?;
 
         for row in rows {
-            let entry = row.map_err(|e| ImportError::Parse(format!("reading autofill row: {e}")))?;
+            let entry =
+                row.map_err(|e| ImportError::Parse(format!("reading autofill row: {e}")))?;
             if !entry.field_name.is_empty() && !entry.value.is_empty() {
                 entries.push(entry);
             }

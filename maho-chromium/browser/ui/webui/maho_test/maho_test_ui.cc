@@ -234,7 +234,7 @@ void SeedLevel1(Profile* profile) {
       bookmark_model->bookmark_bar_node()->children().empty()) {
     bookmark_model->AddURL(bookmark_model->bookmark_bar_node(), 0,
                            u"Maho Test Seed",
-                           GURL("https://maho.test/runtime-seed"));
+                           GURL("about:blank#runtime-seed"));
   }
 
   Browser* browser = chrome::FindBrowserWithProfile(profile);
@@ -310,17 +310,17 @@ void SeedLevel2(Profile* profile) {
     const char* folder_name;
   };
   static constexpr SeedTab kFavoriteSeedTabs[] = {
-      {"https://github.com/maho-browser", true, true, nullptr},
-      {"https://docs.maho.dev/getting-started", true, false, "Research"},
-      {"https://example.com/news", false, true, "Planning"},
-      {"https://example.com/shop", false, true, "Planning"},
-      {"https://example.com/blog", false, false, "Work"},
-      {"https://example.com/about", false, false, "Planning"},
+      {"about:blank#github", true, true, nullptr},
+      {"about:blank#docs", true, false, "Research"},
+      {"about:blank#news", false, true, "Planning"},
+      {"about:blank#shop", false, true, "Planning"},
+      {"about:blank#blog", false, false, "Work"},
+      {"about:blank#about", false, false, "Planning"},
   };
   static constexpr SeedTab kSupportSeedTabs[] = {
-      {"https://github.com/maho-browser", true, false, nullptr},
-      {"https://news.ycombinator.com", false, false, nullptr},
-      {"https://maho.test/runtime-seed", false, false, nullptr},
+      {"about:blank#github", true, false, nullptr},
+      {"about:blank#ycombinator", false, false, nullptr},
+      {"about:blank#runtime-seed", false, false, nullptr},
   };
 
   // Open all tabs first WITHOUT pinning. Pin state is applied later, after
@@ -567,7 +567,10 @@ void SeedLevel2(Profile* profile) {
         return tab_id;
       }
       if (attempt + 1 < kMaxAttempts) {
-        base::RunLoop().RunUntilIdle();
+        base::RunLoop run_loop;
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+            FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(10));
+        run_loop.Run();
       }
     }
     return std::string();
@@ -637,13 +640,13 @@ void SeedLevel2(Profile* profile) {
   };
 
   auto custom_title_for_favorite_seed = [](const std::string& url) -> std::string {
-    if (url == "https://github.com/maho-browser") {
+    if (url == "about:blank#github") {
       return "GitHub";
     }
-    if (url == "https://example.com/news") {
+    if (url == "about:blank#news") {
       return "Example News";
     }
-    if (url == "https://example.com/shop") {
+    if (url == "about:blank#shop") {
       return "Example Shop";
     }
     return {};
@@ -786,10 +789,10 @@ void SeedLevel2(Profile* profile) {
   }
 
   auto custom_title_for_support_seed = [](const std::string& url) -> std::string {
-    if (url == "https://github.com/maho-browser") {
+    if (url == "about:blank#github") {
       return "Page not found · GitHub · GitHub";
     }
-    if (url == "https://maho.test/runtime-seed") {
+    if (url == "about:blank#runtime-seed") {
       return "Maho Test Page";
     }
     return {};
@@ -938,16 +941,7 @@ void SeedLevel2(Profile* profile) {
       }));
 }
 
-void SeedRuntimeVerificationState(Profile* profile, int level) {
-  if (level <= 0) {
-    return;
-  }
-  if (level == 1) {
-    SeedLevel1(profile);
-  } else {
-    SeedLevel2(profile);
-  }
-}
+
 
 std::string BuildSidebarSnapshotHtml(Profile* profile) {
   std::string html = R"html(<!DOCTYPE html>
@@ -1204,6 +1198,17 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
 
 }  // namespace
 
+void SeedRuntimeVerificationState(Profile* profile, int level) {
+  if (level <= 0) {
+    return;
+  }
+  if (level == 1) {
+    SeedLevel1(profile);
+  } else {
+    SeedLevel2(profile);
+  }
+}
+
 // MahoTestUIConfig
 
 #include "maho/browser/ui/webui/maho_webui_private_boundary.h"
@@ -1218,7 +1223,9 @@ bool MahoTestUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) 
 // MahoTestHTMLSource
 
 MahoTestHTMLSource::MahoTestHTMLSource(Profile* profile)
-    : profile_(profile) {}
+    : profile_(profile) {
+  LOG(INFO) << "MahoTestHTMLSource constructor";
+}
 
 MahoTestHTMLSource::~MahoTestHTMLSource() = default;
 
@@ -1226,17 +1233,24 @@ std::string MahoTestHTMLSource::GetSource() {
   return maho::kMahoTestHost;
 }
 
+#include "base/task/single_thread_task_runner.h"
+
 void MahoTestHTMLSource::StartDataRequest(
     const GURL& url,
     const content::WebContents::Getter& wc_getter,
     content::URLDataSource::GotDataCallback callback) {
+  LOG(INFO) << "MahoTestHTMLSource::StartDataRequest URL=" << url.spec();
   if (ShouldSeedRuntimeVerificationState(url)) {
-    SeedRuntimeVerificationState(profile_, GetSeedLevel(url));
+    LOG(INFO) << "MahoTestHTMLSource: posting seeding runtime verification state level=" << GetSeedLevel(url);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&SeedRuntimeVerificationState, profile_, GetSeedLevel(url)));
   }
 
   std::move(callback).Run(
       base::MakeRefCounted<base::RefCountedString>(
           BuildSidebarSnapshotHtml(profile_)));
+  LOG(INFO) << "MahoTestHTMLSource::StartDataRequest finished";
 }
 
 std::string MahoTestHTMLSource::GetMimeType(const GURL& url) {
@@ -1247,6 +1261,7 @@ std::string MahoTestHTMLSource::GetMimeType(const GURL& url) {
 
 MahoTestUI::MahoTestUI(content::WebUI* web_ui)
     : WebUIController(web_ui) {
+  LOG(INFO) << "MahoTestUI constructor";
   Profile* profile = Profile::FromWebUI(web_ui);
   content::URLDataSource::Add(
       profile, std::make_unique<MahoTestHTMLSource>(profile));

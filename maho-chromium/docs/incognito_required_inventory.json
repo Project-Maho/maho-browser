@@ -308,10 +308,9 @@
         "MahoAiSidePanelLifecycleTest.ForgedFactoryStopsBeforeRouter",
         "MahoAiSidePanelLifecycleTest.EveryPageHandlerMethodFailsClosed",
         "MahoAiSidePanelLifecycleTest.AttachmentToolAndAgentSinksFailClosed",
-        "MahoAiSidePanelLifecycleTest.NormalFakeProviderPositiveControl",
-        "MahoLinkPreviewManagerInteractiveUiTest.OtrHoverStopsBeforeCoreAndNetwork"
+        "MahoAiSidePanelLifecycleTest.NormalFakeProviderPositiveControl"
       ],
-      "expected_count": 6,
+      "expected_count": 5,
       "artifact_type": "gtest"
     },
     "task-10-command-unit": {

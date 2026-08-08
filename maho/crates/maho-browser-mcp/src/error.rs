@@ -27,6 +27,9 @@ pub enum McpBridgeError {
         code: i32,
         /// Human-readable error message.
         message: String,
+        /// Structured error data carried by the JSON-RPC error object.
+        /// Policy decisions must use this, never `message`.
+        data: Option<serde_json::Value>,
     },
 
     /// The initialize handshake response did not match expectations.

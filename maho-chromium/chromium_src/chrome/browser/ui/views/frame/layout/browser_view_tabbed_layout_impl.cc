@@ -25,6 +25,11 @@
 //
 // 6. GetMinimumSize(): accounts for rail width in Arc mode.
 //
+// 7. CalculateMahoArcLayout(): sizes BrowserView's nested
+//    maho_content_gradient_view to the local contents-container bounds. The
+//    gradient remains the first child behind MultiContentsView and is visible
+//    only while the BrowserView-observed TabStripModel has zero live tabs.
+//
 // OLD APPROACH (retired):
 // Previously, CalculateProposedLayout() had a block at the end that shifted
 // all existing child layouts rightward by sidebar_width. This preserved the

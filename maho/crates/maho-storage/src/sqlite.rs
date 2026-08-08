@@ -1117,6 +1117,16 @@ impl SqliteStorage {
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_conversation_turns_session ON conversation_turns(session_id, created_at);
+            CREATE TABLE IF NOT EXISTS session_artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                storage_rel_path TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_artifacts_session ON session_artifacts(session_id, created_at_ms);
             CREATE TABLE IF NOT EXISTS memory_facts (
                 id TEXT PRIMARY KEY,
                 fact TEXT NOT NULL,
@@ -2983,6 +2993,46 @@ mod tests {
     }
 
     #[test]
+    fn session_artifacts_persist_across_reopen() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("artifacts.db");
+        let path_str = db_path.to_str().unwrap();
+        let key = test_key();
+
+        let artifact = maho_types::artifact::ArtifactInfo {
+            artifact_id: "artifact-1".to_string(),
+            session_id: "sess-1".to_string(),
+            display_name: "Report.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size_bytes: 2048,
+            storage_rel_path: "sess-1/report.pdf".to_string(),
+            created_at_ms: 1_754_000_000_000,
+        };
+
+        {
+            let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+            storage.insert_artifact(&artifact).unwrap();
+            // A different session must not leak into sess-1's listing.
+            storage
+                .insert_artifact(&maho_types::artifact::ArtifactInfo {
+                    artifact_id: "artifact-2".to_string(),
+                    session_id: "other-sess".to_string(),
+                    ..artifact.clone()
+                })
+                .unwrap();
+        }
+
+        // Reopen the same database (simulates a session reload / restart).
+        let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+        let listed = storage.list_artifacts("sess-1").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0], artifact);
+
+        // Unknown session yields an empty list, not an error.
+        assert!(storage.list_artifacts("nope").unwrap().is_empty());
+    }
+
+    #[test]
     fn test_enqueue_sync_entity() {
         let db = test_store();
         let id = db
@@ -3725,6 +3775,53 @@ impl SqliteStorage {
                 content: row.get(3)?,
                 url_context: row.get(4)?,
                 created_at: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn insert_artifact(
+        &self,
+        artifact: &maho_types::artifact::ArtifactInfo,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO session_artifacts \
+             (artifact_id, session_id, display_name, mime_type, size_bytes, storage_rel_path, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                artifact.artifact_id,
+                artifact.session_id,
+                artifact.display_name,
+                artifact.mime_type,
+                artifact.size_bytes as i64,
+                artifact.storage_rel_path,
+                artifact.created_at_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT artifact_id, session_id, display_name, mime_type, size_bytes, storage_rel_path, created_at_ms \
+             FROM session_artifacts WHERE session_id = ?1 ORDER BY created_at_ms ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok(maho_types::artifact::ArtifactInfo {
+                artifact_id: row.get(0)?,
+                session_id: row.get(1)?,
+                display_name: row.get(2)?,
+                mime_type: row.get(3)?,
+                size_bytes: row.get::<_, i64>(4)? as u64,
+                storage_rel_path: row.get(5)?,
+                created_at_ms: row.get(6)?,
             })
         })?;
         let mut out = Vec::new();

@@ -10,6 +10,7 @@
 
 namespace {
 constexpr char kDefaultModel[] = "gpt-4o-mini";
+constexpr char kDefaultReasoningEffort[] = "medium";
 }  // namespace
 
 namespace maho::ai {
@@ -19,6 +20,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(ai_prefs::kBaseUrl, std::string());
   registry->RegisterStringPref(ai_prefs::kApiKey, std::string());
   registry->RegisterStringPref(ai_prefs::kModel, kDefaultModel);
+  registry->RegisterStringPref(ai_prefs::kReasoningEffort,
+                               kDefaultReasoningEffort);
   registry->RegisterBooleanPref(ai_prefs::kStructuredContextV2Enabled, false);
   registry->RegisterBooleanPref(ai_prefs::kBrowserToolsV1Enabled, true);
   registry->RegisterBooleanPref(ai_prefs::kChatOrchestratorV2Enabled, false);
@@ -55,6 +58,11 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(
       account_prefs::kRelayUserDisplayName, std::string());
   registry->RegisterStringPref(account_prefs::kRelayUserTier, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelayOAuthProvider, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelayOAuthProviderSub, std::string());
+  registry->RegisterStringPref(account_prefs::kRelayDeviceId, std::string());
   registry->RegisterStringPref(
       account_prefs::kRelaySubscriptionStatus, std::string());
   registry->RegisterInt64Pref(

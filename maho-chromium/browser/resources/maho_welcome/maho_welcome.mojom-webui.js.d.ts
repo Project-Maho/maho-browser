@@ -70,6 +70,7 @@ export class PageHandlerRemote {
   unlockVault(masterPassphrase: string): Promise<{result: VaultOperationResult}>;
   generateSyncKey(): Promise<{syncKey: string, roomId: string, recoveryPhrase: string}>;
   startSync(roomId: string, recoveryPhrase: string): Promise<{ok: boolean, errorMessage: string}>;
+  setTranslationProvider(provider: string): Promise<{ok: boolean}>;
   getSubscriptionCheckoutUrl(tier: string): Promise<{checkoutUrl: string}>;
   finishOnboarding(): void;
   devSkipOnboarding(): void;

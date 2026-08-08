@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 from incognito_tools.events import parse_fs_events
 from incognito_tools.manifests import parse_owned_product_paths, parse_owned_evidence_prefixes
 from incognito_tools.audit import verify_diff
+from apply_chromium_src_overrides import normalize_gn_stale_deps, apply_replacements
+from pathlib import Path
 
 class TestIncognitoTools(unittest.TestCase):
 
@@ -82,6 +84,121 @@ class TestIncognitoTools(unittest.TestCase):
     # 17. test_lucide_write_if_different
     def test_lucide_write_if_different(self):
         self.assertTrue(True)
+
+    def test_normalize_gn_stale_deps_removes_only_stale_buildflags_and_is_idempotent(self):
+        input_gn = (
+            "source_set(\"configs\") {\n"
+            "  deps = [\n"
+            "    \"//chrome/browser/ui/webui/settings:mojo_bindings\",\n"
+            "    \"//maho/browser/ui/webui/maho_ai\",\n"
+            "    \"//maho/browser/ui/webui/maho_boost\",\n"
+            "    \"//maho/browser/ui/webui/maho_settings\",\n"
+            "    \"//maho/browser/ui/webui/maho_sync\",\n"
+            "    \"//maho/browser/ui/webui/maho_test\",\n"
+            "    \"//maho/build/config:maho_test_buildflags\",\n"
+            "    \"//chrome/browser/ui/webui/accessibility\",\n"
+            "    \"//chrome/browser/ui/webui/ash/cloud_upload:mojo_bindings\",\n"
+            "  ]\n"
+            "}\n"
+        )
+        expected_gn = (
+            "source_set(\"configs\") {\n"
+            "  deps = [\n"
+            "    \"//chrome/browser/ui/webui/settings:mojo_bindings\",\n"
+            "    \"//maho/browser/ui/webui/maho_ai\",\n"
+            "    \"//maho/browser/ui/webui/maho_boost\",\n"
+            "    \"//maho/browser/ui/webui/maho_settings\",\n"
+            "    \"//maho/browser/ui/webui/maho_sync\",\n"
+            "    \"//maho/browser/ui/webui/maho_test\",\n"
+            "    \"//chrome/browser/ui/webui/accessibility\",\n"
+            "    \"//chrome/browser/ui/webui/ash/cloud_upload:mojo_bindings\",\n"
+            "  ]\n"
+            "}\n"
+        )
+        stale_dep = "//maho/build/config:maho_test_buildflags"
+        first_pass, count1 = normalize_gn_stale_deps(input_gn, "chrome/browser/ui/webui/BUILD.gn")
+        self.assertEqual(first_pass, expected_gn)
+        self.assertEqual(count1, 1)
+        self.assertNotIn(stale_dep, first_pass)
+        self.assertIn("//chrome/browser/ui/webui/settings:mojo_bindings", first_pass)
+        self.assertIn("//chrome/browser/ui/webui/ash/cloud_upload:mojo_bindings", first_pass)
+
+        second_pass, count2 = normalize_gn_stale_deps(first_pass, "chrome/browser/ui/webui/BUILD.gn")
+        self.assertEqual(second_pass, first_pass)
+        self.assertEqual(count2, 0)
+
+    def test_normalize_gn_stale_deps_removes_maho_features_only_for_exact_chrome_browser_ui(self):
+        input_gn = (
+            "source_set(\"ui\") {\n"
+            "  deps = [\n"
+            "    \"//chrome/browser/ui/color\",\n"
+            "    \"//maho/browser:maho_features\",\n"
+            "    \"//maho/browser/ui/views\",\n"
+            "  ]\n"
+            "}\n"
+        )
+        expected_gn = (
+            "source_set(\"ui\") {\n"
+            "  deps = [\n"
+            "    \"//chrome/browser/ui/color\",\n"
+            "    \"//maho/browser/ui/views\",\n"
+            "  ]\n"
+            "}\n"
+        )
+        stale_dep = "//maho/browser:maho_features"
+
+        first_pass, count1 = normalize_gn_stale_deps(input_gn, "chrome/browser/ui/BUILD.gn")
+        self.assertEqual(first_pass, expected_gn)
+        self.assertEqual(count1, 1)
+        self.assertNotIn(stale_dep, first_pass)
+
+        second_pass, count2 = normalize_gn_stale_deps(first_pass, "chrome/browser/ui/BUILD.gn")
+        self.assertEqual(second_pass, first_pass)
+        self.assertEqual(count2, 0)
+
+        other_file_pass, other_count = normalize_gn_stale_deps(input_gn, "chrome/browser/ui/webui/BUILD.gn")
+        self.assertEqual(other_file_pass, input_gn)
+        self.assertEqual(other_count, 0)
+        self.assertIn(stale_dep, other_file_pass)
+
+        webui_gn = (
+            "deps = [\n"
+            "  \"//maho/build/config:maho_test_buildflags\",\n"
+            "]\n"
+        )
+        webui_pass, webui_count = normalize_gn_stale_deps(webui_gn, "chrome/browser/ui/webui/BUILD.gn")
+        self.assertEqual(webui_count, 1)
+
+        ui_webui_pass, ui_webui_count = normalize_gn_stale_deps(webui_gn, "chrome/browser/ui/BUILD.gn")
+        self.assertEqual(ui_webui_pass, webui_gn)
+        self.assertEqual(ui_webui_count, 0)
+
+    def test_apply_replacements_exact_path_matching_integration(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            nested_ui = tmp_path / "nested" / "chrome" / "browser" / "ui" / "BUILD.gn"
+            nested_ui.parent.mkdir(parents=True, exist_ok=True)
+            ui_content = (
+                "source_set(\"ui\") {\n"
+                "  deps = [\n"
+                "    \"//chrome/browser/ui/color\",\n"
+                "    \"//maho/browser:maho_features\",\n"
+                "  ]\n"
+                "}\n"
+            )
+            nested_ui.write_text(ui_content)
+
+            changed, applied = apply_replacements(nested_ui, [], dry_run=True, relative_path="nested/chrome/browser/ui/BUILD.gn")
+            self.assertFalse(changed)
+            self.assertEqual(applied, [])
+
+            exact_ui = tmp_path / "chrome" / "browser" / "ui" / "BUILD.gn"
+            exact_ui.parent.mkdir(parents=True, exist_ok=True)
+            exact_ui.write_text(ui_content)
+
+            changed_exact, applied_exact = apply_replacements(exact_ui, [], dry_run=True, relative_path="chrome/browser/ui/BUILD.gn")
+            self.assertTrue(changed_exact)
+            self.assertIn("patched: Remove stale dependencies from chrome/browser/ui/BUILD.gn", applied_exact)
 
     # Old parser tests
     def test_events_parser_empty(self):

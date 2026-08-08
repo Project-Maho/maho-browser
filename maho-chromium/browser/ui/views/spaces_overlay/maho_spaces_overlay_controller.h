@@ -9,6 +9,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget_observer.h"
@@ -43,6 +44,7 @@ class MahoSpacesOverlayController : public views::WidgetObserver,
   void Show(views::Widget* parent_widget);
   void Dismiss(DismissReason reason);
   bool IsVisible() const;
+  void SetPalette(const MahoSidebarPalette& palette);
 
   views::Widget* GetOverlayWidgetForTesting() const { return widget_.get(); }
 
@@ -90,6 +92,7 @@ class MahoSpacesOverlayController : public views::WidgetObserver,
   bool is_showing_ = false;
   bool disable_animation_for_testing_ = false;
   base::RepeatingClosure dismiss_callback_;
+  MahoSidebarPalette palette_;
   base::WeakPtrFactory<MahoSpacesOverlayController> weak_factory_{this};
 };
 

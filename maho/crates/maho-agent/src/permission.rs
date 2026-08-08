@@ -28,9 +28,10 @@ impl PermissionDecision {
 
 impl PermissionRequest {
     pub fn new(tool_name: impl Into<String>, raw_args: &str, sensitivity: ToolSensitivity) -> Self {
+        let tool_name = tool_name.into();
         Self {
-            tool_name: tool_name.into(),
-            arguments: sanitize_tool_arguments(raw_args),
+            arguments: sanitize_tool_arguments_for_tool(&tool_name, raw_args),
+            tool_name,
             sensitivity,
         }
     }
@@ -43,6 +44,20 @@ impl PermissionRequest {
 // stream tool-call args.
 pub fn sanitize_tool_arguments(raw: &str) -> String {
     sanitize_json_payload(raw, "\"[REDACTED_INVALID_ARGUMENTS]\"")
+}
+
+pub fn sanitize_tool_arguments_for_tool(tool_name: &str, raw: &str) -> String {
+    let mut value = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => value,
+        Err(_) => return "\"[REDACTED_INVALID_ARGUMENTS]\"".to_string(),
+    };
+    redact_value(&mut value);
+    if tool_name == "browser_type" {
+        if let Some(text) = value.get_mut("text") {
+            *text = serde_json::json!("[REDACTED]");
+        }
+    }
+    value.to_string()
 }
 
 // Sanitizes a tool result before it is emitted on the stream / persisted to
@@ -125,14 +140,14 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_arguments_pass_through_unredacted() {
+    fn browser_type_text_is_redacted() {
         let req = PermissionRequest::new(
             "browser_type",
             r#"{"ref": 2, "text": "hello world"}"#,
             ToolSensitivity::Sensitive,
         );
-        assert!(req.arguments.contains("hello world"));
-        assert!(!req.arguments.contains("[REDACTED"));
+        assert!(!req.arguments.contains("hello world"));
+        assert!(req.arguments.contains("[REDACTED]"));
     }
 
     #[test]

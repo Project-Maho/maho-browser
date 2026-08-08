@@ -23,6 +23,7 @@ export function MailBehaviorPane({pane, store}: {pane: PaneDefinition; store: Ma
     block_remote_images: true,
     block_trackers: true,
     desktop_notifications: true,
+    unread_badge_enabled: true,
     sound_enabled: true,
     undo_send_delay: 5,
     auto_save_drafts: true,
@@ -225,6 +226,14 @@ export function MailBehaviorPane({pane, store}: {pane: PaneDefinition; store: Ma
                   <p className="text-xs text-muted-foreground">Receive system notification prompts for incoming emails.</p>
                 </div>
                 <Switch checked={prefs.desktop_notifications} onCheckedChange={(checked) => updatePref('desktop_notifications', checked)} />
+              </div>
+
+              <div className="flex items-center justify-between p-4">
+                <div>
+                  <h4 className="font-semibold text-sm">Unread Badge</h4>
+                  <p className="text-xs text-muted-foreground">Show the unread count on the sidebar Mail icon and the app (Dock) icon.</p>
+                </div>
+                <Switch checked={prefs.unread_badge_enabled} onCheckedChange={(checked) => updatePref('unread_badge_enabled', checked)} />
               </div>
             </div>
           </SectionCard>

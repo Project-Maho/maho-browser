@@ -1,22 +1,62 @@
 use std::net::SocketAddr;
 use std::process::Command;
 
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::Router;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-async fn spawn_mock_relay_with_balance(balance_usd: f64) -> SocketAddr {
+/// Mock relay serving ONLY `/auth/subscription`, gated on a user bearer token.
+/// It intentionally does not serve `/billing/credit_balance`, so a client that
+/// targets the wrong (service-token) endpoint gets a 404 and fails the test.
+async fn spawn_mock_subscription_relay(balance_usd: f64, lifetime_usd: f64) -> SocketAddr {
     let app = Router::new().route(
-        "/billing/credit_balance",
-        get(move || async move {
-            axum::Json(serde_json::json!({
-                "user_id": 1,
-                "balance_usd": balance_usd,
-                "last_purchase_at": 1_718_460_720i64,
-                "last_consumption_at": 1_719_476_100i64,
-            }))
+        "/auth/subscription",
+        get(move |headers: HeaderMap| async move {
+            let authed = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| {
+                    v.strip_prefix("Bearer ")
+                        .is_some_and(|t| !t.trim().is_empty())
+                })
+                .unwrap_or(false);
+            if !authed {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({ "error": "missing_user_token" })),
+                );
+            }
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "tier": "payg",
+                    "subscription_status": "active",
+                    "subscription_expires_at": null,
+                    "period_start_at": null,
+                    "anniversary_reset_day": null,
+                    "tier_ceiling_usd": 0.5,
+                    "credit_balance_usd": balance_usd,
+                    "lifetime_purchased_usd": lifetime_usd,
+                    "has_payment_method": true
+                })),
+            )
         }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+/// Mock relay whose `/auth/subscription` always fails with the given status.
+async fn spawn_mock_failing_relay(status: StatusCode) -> SocketAddr {
+    let app = Router::new().route(
+        "/auth/subscription",
+        get(move || async move { (status, axum::Json(serde_json::json!({ "error": "boom" }))) }),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -45,8 +85,8 @@ fn maho_cmd_no_token(config_dir: &std::path::Path) -> Command {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_balance_subcommand_prints_value() {
-    let addr = spawn_mock_relay_with_balance(42.50).await;
+async fn test_balance_subcommand_prints_value_from_subscription_contract() {
+    let addr = spawn_mock_subscription_relay(42.50, 100.0).await;
     let relay_url = format!("http://{addr}");
     let tmp = TempDir::new().unwrap();
 
@@ -63,11 +103,56 @@ async fn test_balance_subcommand_prints_value() {
     );
     assert!(
         stdout.contains("$42.50"),
-        "stdout should contain $42.50, got: {stdout}"
+        "stdout should contain credit balance $42.50, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("$100.00"),
+        "stdout should contain lifetime purchased $100.00, got: {stdout}"
     );
     assert!(
         stdout.to_lowercase().contains("payg credit balance"),
         "stdout should contain balance header, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_balance_requires_user_token_endpoint() {
+    // The mock only accepts a bearer token on /auth/subscription. A success
+    // here proves the CLI targets the user-authenticated endpoint and sends
+    // the caller's own token, not the service-token /billing/credit_balance.
+    let addr = spawn_mock_subscription_relay(7.0, 7.0).await;
+    let relay_url = format!("http://{addr}");
+    let tmp = TempDir::new().unwrap();
+
+    let output = maho_cmd_with_token(tmp.path(), "user-token-abc")
+        .args(["--relay-url", &relay_url, "balance"])
+        .output()
+        .expect("failed to run maho balance");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "balance should succeed: {stdout}");
+    assert!(stdout.contains("$7.00"), "got: {stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_balance_surfaces_relay_failure_instead_of_faking_success() {
+    let addr = spawn_mock_failing_relay(StatusCode::UNAUTHORIZED).await;
+    let relay_url = format!("http://{addr}");
+    let tmp = TempDir::new().unwrap();
+
+    let output = maho_cmd_with_token(tmp.path(), "test-access-token")
+        .args(["--relay-url", &relay_url, "balance"])
+        .output()
+        .expect("failed to run maho balance");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "balance must fail when relay rejects the token, got stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("PAYG Credit Balance"),
+        "must not print a balance on failure, got: {stdout}"
     );
 }
 
@@ -117,7 +202,7 @@ async fn test_buy_credits_suppresses_browser_open_messages_in_test_env() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_balance_without_login_errors() {
-    let addr = spawn_mock_relay_with_balance(0.0).await;
+    let addr = spawn_mock_subscription_relay(0.0, 0.0).await;
     let relay_url = format!("http://{addr}");
     let tmp = TempDir::new().unwrap();
 

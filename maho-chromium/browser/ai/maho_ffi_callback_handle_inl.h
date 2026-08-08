@@ -12,14 +12,13 @@ namespace maho {
 template <typename T>
 FfiCallbackHandle<T>::FfiCallbackHandle(
     scoped_refptr<base::SequencedTaskRunner> runner,
-    base::WeakPtr<T> owner)
-    : pointee_(std::make_shared<Pointee>()) {
+    base::WeakPtr<T> owner,
+    uint64_t generation)
+    : pointee_(std::make_shared<Pointee>(generation)) {
   pointee_->task_runner = std::move(runner);
   pointee_->owner = std::move(owner);
 
-  // Allocate the bridge: a heap shared_ptr whose address is the user_data
-  // pointer given to Rust. Equivalent to Rust's Box::into_raw(Box::new(sp)).
-  user_data_bridge_ = new std::shared_ptr<Pointee>(pointee_);
+  user_data_bridge_ = new Bridge(pointee_);
 }
 
 template <typename T>
@@ -29,24 +28,25 @@ FfiCallbackHandle<T>::~FfiCallbackHandle() {
 
 template <typename T>
 void* FfiCallbackHandle<T>::user_data() const {
-  return static_cast<void*>(user_data_bridge_);
+  return static_cast<void*>(user_data_bridge_.get());
 }
 
 template <typename T>
 void FfiCallbackHandle<T>::Cancel() {
-  // Mark cancelled first — ensures any in-flight callback that loads the
-  // flag after this point will short-circuit.
   pointee_->cancelled.store(true, std::memory_order_release);
 
-  // Delete the bridge pointer exactly once. After this, Rust holds a
-  // dangling pointer — but since cancelled is true, well-behaved callbacks
-  // will have already loaded their shared_ptr copy and will find
-  // cancelled==true when they check.
-  if (!freed_) {
-    freed_ = true;
-    delete user_data_bridge_;
-    user_data_bridge_ = nullptr;
+  Bridge* bridge = user_data_bridge_.get();
+  if (!bridge) {
+    return;
   }
+
+  if (bridge->producer_leased.load(std::memory_order_acquire)) {
+    user_data_bridge_ = nullptr;
+    return;
+  }
+
+  delete bridge;
+  user_data_bridge_ = nullptr;
 }
 
 template <typename T>
@@ -55,13 +55,71 @@ bool FfiCallbackHandle<T>::is_cancelled() const {
 }
 
 template <typename T>
+void FfiCallbackHandle<T>::HandOffToProducer() {
+  Bridge* bridge = user_data_bridge_.get();
+  DCHECK(bridge);
+  if (!bridge) {
+    return;
+  }
+
+  bool was_leased =
+      bridge->producer_leased.exchange(true, std::memory_order_acq_rel);
+  DCHECK(!was_leased);
+  if (was_leased) {
+    return;
+  }
+
+  base::AutoLock lock(ProducerLeaseLock());
+  const bool inserted = ProducerLeases().insert(bridge).second;
+  DCHECK(inserted);
+  if (!inserted) {
+    bridge->producer_leased.store(false, std::memory_order_release);
+    return;
+  }
+  user_data_bridge_ = nullptr;
+}
+
+template <typename T>
+void FfiCallbackHandle<T>::ReleaseFromProducer(void* user_data) {
+  Bridge* bridge = static_cast<Bridge*>(user_data);
+  DCHECK(bridge);
+  if (!bridge) {
+    return;
+  }
+
+  {
+    base::AutoLock lock(ProducerLeaseLock());
+    auto& leases = ProducerLeases();
+    auto it = leases.find(bridge);
+    DCHECK(it != leases.end());
+    if (it == leases.end()) {
+      return;
+    }
+    leases.erase(it);
+  }
+
+  DCHECK(bridge->producer_leased.load(std::memory_order_acquire));
+  delete bridge;
+}
+
+template <typename T>
 std::shared_ptr<typename FfiCallbackHandle<T>::Pointee>
 FfiCallbackHandle<T>::FromUserData(void* user_data) {
-  // Copy the shared_ptr out of the bridge. This increments the refcount,
-  // keeping the Pointee alive for the caller even if Cancel() runs
-  // concurrently and deletes the bridge.
-  auto* bridge = static_cast<std::shared_ptr<Pointee>*>(user_data);
-  return *bridge;
+  auto* bridge = static_cast<Bridge*>(user_data);
+  return bridge->pointee;
+}
+
+template <typename T>
+base::Lock& FfiCallbackHandle<T>::ProducerLeaseLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
+
+template <typename T>
+std::set<typename FfiCallbackHandle<T>::Bridge*>&
+FfiCallbackHandle<T>::ProducerLeases() {
+  static base::NoDestructor<std::set<Bridge*>> leases;
+  return *leases;
 }
 
 }  // namespace maho

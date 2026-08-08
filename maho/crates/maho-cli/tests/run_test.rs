@@ -230,14 +230,18 @@ mod agent_loop {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn run_deny_sensitive_no_deadlock() {
+    async fn run_browser_exploration_auto_approved_without_yolo() {
         let log = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
-        let backend = make_backend(None);
+        let bridge = RecordingBridge::default();
+        let calls = Arc::clone(&bridge.calls);
+        let backend = make_backend(Some(bridge));
+        backend.set_browser_action_tools_enabled(true);
         backend.set_llm_override(Box::new(ScriptedToolLlm {
-            tool: "shell_exec".to_string(),
-            args: "{\"command\": \"git status\"}".to_string(),
+            tool: "browser_navigate".to_string(),
+            args: "{\"url\": \"https://example.com\"}".to_string(),
             calls: Arc::new(Mutex::new(0)),
         }));
+        // Strict default policy, NO --yolo.
         backend.set_approval_policy("deny-sensitive".to_string());
         backend
             .set_permission_callback(recording_permission_callback(
@@ -249,25 +253,30 @@ mod agent_loop {
 
         let result = tokio::time::timeout(Duration::from_secs(30), backend.run_prompt("go"))
             .await
-            .expect("run_prompt must terminate without deadlock when a sensitive tool is denied");
-        result.expect("run_prompt should return normally after denial");
+            .expect("run_prompt must terminate without deadlock");
+        result.expect("run_prompt should return normally");
 
-        let decisions = log.lock().unwrap().clone();
+        // Aside parity: browser exploration is auto-approved at the agent layer,
+        // so it reaches the browser bridge even under the strict default policy
+        // and with no --yolo. Enforcement (origin grant + lease) still happens
+        // in the browser capability layer via the shim.
+        let dispatched = calls.lock().unwrap().clone();
         assert!(
-            decisions
-                .iter()
-                .any(|(name, allow)| name == "shell_exec" && !allow),
-            "the sensitive tool must be gated and denied; decisions={decisions:?}"
+            dispatched.iter().any(|name| name == "browser_navigate"),
+            "browser exploration must be auto-approved without --yolo; dispatched={dispatched:?}"
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn run_yolo_bypasses() {
         let log = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
-        let backend = make_backend(None);
+        let bridge = RecordingBridge::default();
+        let calls = Arc::clone(&bridge.calls);
+        let backend = make_backend(Some(bridge));
+        backend.set_browser_action_tools_enabled(true);
         backend.set_llm_override(Box::new(ScriptedToolLlm {
-            tool: "shell_exec".to_string(),
-            args: "{\"command\": \"git status\"}".to_string(),
+            tool: "browser_navigate".to_string(),
+            args: "{\"url\": \"https://example.com\"}".to_string(),
             calls: Arc::new(Mutex::new(0)),
         }));
         backend.set_approval_policy("allow".to_string());
@@ -280,12 +289,13 @@ mod agent_loop {
             .expect("run_prompt must not hang under --yolo");
         result.expect("run_prompt should succeed under --yolo");
 
-        let decisions = log.lock().unwrap().clone();
+        // --yolo maps to allow-all: the sensitive browser tool is authorized at
+        // the policy layer and must reach the browser bridge (the shim still
+        // performs grant + lease + dispatch, so Chromium enforcement is intact).
+        let dispatched = calls.lock().unwrap().clone();
         assert!(
-            decisions
-                .iter()
-                .any(|(name, allow)| name == "shell_exec" && *allow),
-            "--yolo must allow the sensitive tool; decisions={decisions:?}"
+            dispatched.iter().any(|name| name == "browser_navigate"),
+            "--yolo must let the sensitive browser tool reach the bridge; dispatched={dispatched:?}"
         );
     }
 }

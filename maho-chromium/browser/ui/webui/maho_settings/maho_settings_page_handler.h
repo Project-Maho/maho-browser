@@ -46,6 +46,10 @@ class MahoModelListFetcher;
 class MahoManagedConnectionTest;
 }  // namespace maho::ai
 
+namespace content {
+class WebContents;
+}
+
 namespace device_reauth {
 class DeviceAuthenticator;
 }
@@ -79,7 +83,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   MahoSettingsPageHandler(
       mojo::PendingReceiver<maho_settings::mojom::PageHandler> receiver,
       mojo::PendingRemote<maho_settings::mojom::Page> page,
-      Profile* profile);
+      Profile* profile,
+      content::WebContents* host_web_contents = nullptr);
   MahoSettingsPageHandler(const MahoSettingsPageHandler&) = delete;
   MahoSettingsPageHandler& operator=(const MahoSettingsPageHandler&) = delete;
   ~MahoSettingsPageHandler() override;
@@ -871,6 +876,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   mojo::Receiver<maho_settings::mojom::PageHandler> receiver_;
   mojo::Remote<maho_settings::mojom::Page> page_;
   raw_ptr<Profile> profile_;
+  raw_ptr<content::WebContents> host_web_contents_ = nullptr;
   raw_ptr<PrefService> prefs_;
   PrefChangeRegistrar pref_registrar_;
   raw_ptr<PrefService> local_state_;

@@ -54,7 +54,7 @@ MahoModelListFetcher::~MahoModelListFetcher() = default;
 void MahoModelListFetcher::FetchModels(const std::string& provider_id,
                                        ModelsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     std::move(callback).Run({}, false);
     return;
   }
@@ -77,7 +77,7 @@ void MahoModelListFetcher::FetchModels(const std::string& provider_id,
 void MahoModelListFetcher::RefreshModels(const std::string& provider_id,
                                          ModelsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     std::move(callback).Run({}, false);
     return;
   }
@@ -216,7 +216,7 @@ void MahoModelListFetcher::OnFetchComplete(
     std::unique_ptr<network::SimpleURLLoader> loader,
     std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     if (callback) {
       std::move(callback).Run({}, false);
     }
@@ -292,14 +292,14 @@ void MahoModelListFetcher::WriteCache(const std::string& provider_id,
 }
 
 std::vector<std::string> MahoModelListFetcher::GetHardcodedFallback(
-    const std::string& provider_id) const {
+    const std::string& provider_id) {
   if (provider_id == "openai") {
     return {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"};
   } else if (provider_id == "anthropic") {
     return {"claude-sonnet-4-20250514", "claude-opus-4-20250514",
             "claude-3-5-haiku-20241022"};
   } else if (provider_id == "maho-managed") {
-    return {"google/gemini-2.5-flash"};
+    return {"google/gemini-3-flash-lite:free"};
   }
   return {};
 }

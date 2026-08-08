@@ -20,7 +20,6 @@ impl FallbackTier {
             Self::ScreenshotCua => "screenshot_cua",
         }
     }
-
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -119,7 +118,12 @@ impl FallbackLadderError {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum FallbackActionClass {
     Navigation,
-    ElementAction,
+    AccessibilitySnapshot,
+    Click,
+    Type,
+    Select,
+    Scroll,
+    Hover,
     Keyboard,
     PageRead,
 }
@@ -130,18 +134,22 @@ impl FallbackActionClass {
             "browser_navigate" | "browser_wait_for_navigation" => Self::Navigation,
             "browser_key_press" => Self::Keyboard,
             "read_current_page"
+            | "list_browser_tabs"
             | "get_selected_text"
             | "get_active_tab"
             | "search_in_page"
             | "extract_structured_page_context"
-            | "browser_accessibility_snapshot"
             | "page_query_selector"
             | "page_get_text"
             | "page_get_attribute"
             | "page_wait_for_selector" => Self::PageRead,
-            "browser_click" | "browser_type" | "browser_select" | "browser_scroll"
-            | "browser_hover" => Self::ElementAction,
-            _ => Self::ElementAction,
+            "browser_accessibility_snapshot" => Self::AccessibilitySnapshot,
+            "browser_click" => Self::Click,
+            "browser_type" => Self::Type,
+            "browser_select" => Self::Select,
+            "browser_scroll" => Self::Scroll,
+            "browser_hover" => Self::Hover,
+            _ => Self::PageRead,
         }
     }
 }
@@ -244,24 +252,24 @@ impl FallbackLadderState {
                     approval_required,
                 ))
             }
-            ScreenshotCuaApproval::Denied => Err(FallbackLadderError::ScreenshotCuaDenied(
-                decision(
+            ScreenshotCuaApproval::Denied => {
+                Err(FallbackLadderError::ScreenshotCuaDenied(decision(
                     FallbackTier::AccessibilitySnapshot,
                     FallbackTier::ScreenshotCua,
                     FallbackDecisionReason::ScreenshotCuaDenied,
                     FallbackSafetyState::EscalationDenied,
                     approval_required,
-                ),
-            )),
-            ScreenshotCuaApproval::NotRequested => {
-                Err(FallbackLadderError::ScreenshotCuaApprovalRequired(decision(
+                )))
+            }
+            ScreenshotCuaApproval::NotRequested => Err(
+                FallbackLadderError::ScreenshotCuaApprovalRequired(decision(
                     FallbackTier::AccessibilitySnapshot,
                     FallbackTier::ScreenshotCua,
                     FallbackDecisionReason::ScreenshotCuaApprovalRequired,
                     FallbackSafetyState::EscalationApprovalRequired,
                     true,
-                )))
-            }
+                )),
+            ),
         }
     }
 }
@@ -279,5 +287,58 @@ fn decision(
         reason,
         safety_state,
         approval_required,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(tool_name: &str, tier: FallbackTier) -> FallbackSelectionRequest<'_> {
+        FallbackSelectionRequest {
+            tool_name,
+            requested_tier: tier,
+            sensitivity: ToolSensitivity::ReadOnly,
+            screenshot_cua_approval: ScreenshotCuaApproval::NotRequested,
+        }
+    }
+
+    #[test]
+    fn page_read_does_not_block_snapshot_needed_for_element_refs() {
+        let mut state = FallbackLadderState::new("form-session");
+
+        state
+            .decide(request("read_current_page", FallbackTier::TypedDomainApi))
+            .expect("page read is allowed");
+        state
+            .decide(request("list_browser_tabs", FallbackTier::TypedDomainApi))
+            .expect("tab listing is a page-read prerequisite");
+        let snapshot = state.decide(request(
+            "browser_accessibility_snapshot",
+            FallbackTier::AccessibilitySnapshot,
+        ));
+
+        assert!(
+            snapshot.is_ok(),
+            "snapshot supplies @refs for click/type/select and is not a downgrade from a page read: {snapshot:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_does_not_block_snapshot_and_click_sequence() {
+        let mut state = FallbackLadderState::new("scroll-form-session");
+
+        state
+            .decide(request("browser_scroll", FallbackTier::TypedDomainApi))
+            .expect("viewport scroll is allowed");
+        state
+            .decide(request(
+                "browser_accessibility_snapshot",
+                FallbackTier::AccessibilitySnapshot,
+            ))
+            .expect("snapshot after scrolling supplies fresh element refs");
+        state
+            .decide(request("browser_click", FallbackTier::DomRefLocator))
+            .expect("click may consume the snapshot ref");
     }
 }

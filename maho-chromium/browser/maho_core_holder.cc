@@ -6,9 +6,13 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
+#include "base/run_loop.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "content/public/browser/browser_thread.h"
@@ -23,7 +27,12 @@ namespace {
 std::atomic<::MahoCore*> g_core{nullptr};
 std::atomic<bool> g_blocker_quiesced{false};
 std::atomic<bool> g_vault_backend_quiesced{false};
-base::Lock g_vault_backend_creation_lock;
+std::atomic<bool> g_core_tasks_quiesced{true};
+
+base::Lock& GetVaultBackendCreationLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
 
 // UI-sequence-owned compile coalescing state. Both flags are only ever touched
 // on the BrowserThread::UI sequence (the PostBlockerEngineCompileAndInstall
@@ -33,6 +42,13 @@ base::Lock g_vault_backend_creation_lock;
 // UI-sequence reply reads it to suppress any queued rerun.
 bool g_compile_in_flight = false;
 bool g_compile_coalesced = false;
+
+scoped_refptr<base::SequencedTaskRunner>& CoreTaskRunnerStorage() {
+  static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
+      base::ThreadPool::CreateSequencedTaskRunner(
+          {base::TaskPriority::USER_VISIBLE, base::MayBlock()}));
+  return *runner;
+}
 
 // RAII owners for the opaque content-blocker handles. Ownership crosses
 // several callback boundaries (worker task, UI reply) that Chromium may drop
@@ -62,18 +78,47 @@ using ScopedCompiledEngine =
 }
 
 void SetCore(::MahoCore* core) {
-  base::AutoLock lock(g_vault_backend_creation_lock);
+  base::AutoLock lock(GetVaultBackendCreationLock());
   if (!core) {
     g_vault_backend_quiesced.store(true, std::memory_order_release);
     maho::core::QuiesceVaultBackendSessions();
   } else {
     g_vault_backend_quiesced.store(false, std::memory_order_release);
+    g_core_tasks_quiesced.store(false, std::memory_order_release);
   }
   g_core.store(core, std::memory_order_release);
 }
 
+scoped_refptr<base::SequencedTaskRunner> GetCoreTaskRunner() {
+  return CoreTaskRunnerStorage();
+}
+
+base::Lock& GetCoreTaskAdmissionLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
+
+bool IsCoreTaskWorkQuiesced() {
+  return g_core_tasks_quiesced.load(std::memory_order_acquire);
+}
+
+void QuiesceCoreTasksAndWait() {
+  base::RunLoop drained;
+  {
+    base::AutoLock admission(GetCoreTaskAdmissionLock());
+    if (g_core_tasks_quiesced.exchange(true, std::memory_order_acq_rel)) {
+      return;
+    }
+    if (!GetCoreTaskRunner()->PostTaskAndReply(
+            FROM_HERE, base::DoNothing(), drained.QuitClosure())) {
+      return;
+    }
+  }
+  drained.Run();
+}
+
 maho::core::VaultBackendSession CreateVaultBackendSession() {
-  base::AutoLock lock(g_vault_backend_creation_lock);
+  base::AutoLock lock(GetVaultBackendCreationLock());
   if (g_vault_backend_quiesced.load(std::memory_order_acquire)) {
     return maho::core::VaultBackendSession();
   }
@@ -82,7 +127,7 @@ maho::core::VaultBackendSession CreateVaultBackendSession() {
 }
 
 void QuiesceVaultBackendSessions() {
-  base::AutoLock lock(g_vault_backend_creation_lock);
+  base::AutoLock lock(GetVaultBackendCreationLock());
   g_vault_backend_quiesced.store(true, std::memory_order_release);
   maho::core::QuiesceVaultBackendSessions();
 }

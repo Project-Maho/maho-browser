@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod config;
 pub mod credits;
+pub mod vault;
 pub mod workspace;
 
 /// Session-binding browser tools whose side effects outlive a one-shot

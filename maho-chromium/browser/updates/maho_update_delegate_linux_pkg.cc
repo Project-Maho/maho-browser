@@ -6,9 +6,12 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include <optional>
+
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "components/prefs/pref_service.h"
@@ -19,6 +22,7 @@
 #include "maho/browser/updates/rollout_bucket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 
 #include "maho/browser/updates/manifest_pubkey.h"
@@ -80,7 +84,7 @@ class PlatformUpdaterDelegateLinuxPkg : public PlatformUpdaterDelegate {
   }
 
  private:
-  void OnManifestFetched(std::unique_ptr<std::string> body) {
+  void OnManifestFetched(std::optional<std::string> body) {
     std::unique_ptr<network::SimpleURLLoader> l = std::move(loader_);
     if (!body || l->NetError() != net::OK) {
       MahoUpdateManager::GetInstance()->TransitionToError(
@@ -88,13 +92,13 @@ class PlatformUpdaterDelegateLinuxPkg : public PlatformUpdaterDelegate {
       return;
     }
 
-    auto envelope = base::JSONReader::Read(*body);
+    auto envelope = base::JSONReader::Read(*body, base::JSON_PARSE_RFC);
     if (!envelope || !envelope->is_dict()) {
       MahoUpdateManager::GetInstance()->TransitionToError(
           UpdateError::kManifestUnsigned);
       return;
     }
-    const base::Value::Dict& env_dict = envelope->GetDict();
+    const auto& env_dict = envelope->GetDict();
     const std::string* sig_hex = env_dict.FindString("signature");
     const std::string* payload_str = env_dict.FindString("payload");
     if (!sig_hex || !payload_str) {
@@ -116,7 +120,7 @@ class PlatformUpdaterDelegateLinuxPkg : public PlatformUpdaterDelegate {
       return;
     }
 
-    auto payload = base::JSONReader::Read(*payload_str);
+    auto payload = base::JSONReader::Read(*payload_str, base::JSON_PARSE_RFC);
     if (!payload || !payload->is_dict()) {
       MahoUpdateManager::GetInstance()->TransitionToError(
           UpdateError::kUnknown);

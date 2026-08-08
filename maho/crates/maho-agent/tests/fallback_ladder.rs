@@ -42,7 +42,10 @@ fn fallback_ladder_typed_success_does_not_downgrade() {
         downgrade.decision().reason,
         FallbackDecisionReason::TypedDomainAlreadySucceeded
     );
-    assert_eq!(downgrade.decision().safety_state, FallbackSafetyState::Blocked);
+    assert_eq!(
+        downgrade.decision().safety_state,
+        FallbackSafetyState::Blocked
+    );
 }
 
 #[test]
@@ -59,12 +62,15 @@ fn fallback_ladder_dom_ref_follows_typed_miss() {
 
     assert_eq!(decision.attempted_tier, FallbackTier::TypedDomainApi);
     assert_eq!(decision.selected_tier, FallbackTier::DomRefLocator);
-    assert_eq!(decision.reason, FallbackDecisionReason::TypedDomainUnavailable);
+    assert_eq!(
+        decision.reason,
+        FallbackDecisionReason::TypedDomainUnavailable
+    );
     assert_eq!(decision.safety_state, FallbackSafetyState::Downgraded);
 }
 
 #[test]
-fn fallback_ladder_accessibility_follows_missing_ref() {
+fn fallback_ladder_accessibility_snapshot_selected_after_page_ref_read() {
     let mut ladder = FallbackLadderState::new("session-fallback-accessibility");
     let _ = ladder
         .decide(request(
@@ -80,11 +86,18 @@ fn fallback_ladder_accessibility_follows_missing_ref() {
             FallbackTier::AccessibilitySnapshot,
             ScreenshotCuaApproval::NotRequested,
         ))
-        .expect("accessibility snapshot follows missing DOM/ref");
+        .expect("accessibility snapshot is selected on its own merits");
 
     assert_eq!(decision.attempted_tier, FallbackTier::DomRefLocator);
     assert_eq!(decision.selected_tier, FallbackTier::AccessibilitySnapshot);
-    assert_eq!(decision.reason, FallbackDecisionReason::DomRefMissing);
+    // A page-read DOM/ref lookup belongs to a different action class than the
+    // accessibility snapshot, so it does not turn the snapshot into a
+    // ref-missing downgrade: the snapshot supplies @refs for click/type/select
+    // and is selected on its own merits.
+    assert_eq!(
+        decision.reason,
+        FallbackDecisionReason::AccessibilitySelected
+    );
     assert_eq!(decision.safety_state, FallbackSafetyState::Downgraded);
 }
 
@@ -140,9 +153,7 @@ fn fallback_ladder_audit_records_reason_without_sentinels() {
     let mut ladder = FallbackLadderState::new("session-fallback-audit");
     let request = browser_tool_fallback_request(
         "browser_click",
-        &format!(
-            r#"{{"fallback_tier":"screenshot_cua","text":"{sentinel}"}}"#
-        ),
+        &format!(r#"{{"fallback_tier":"screenshot_cua","text":"{sentinel}"}}"#),
         ToolSensitivity::Sensitive,
     );
 

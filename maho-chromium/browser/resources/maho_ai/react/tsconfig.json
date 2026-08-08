@@ -42,6 +42,9 @@
       "@radix-ui/react-dropdown-menu": [
         "../../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.d.ts"
       ],
+      "@radix-ui/react-context-menu": [
+        "../../../../../website/node_modules/@radix-ui/react-context-menu/dist/index.d.ts"
+      ],
       "@radix-ui/react-tooltip": [
         "../../../../../website/node_modules/@radix-ui/react-tooltip/dist/index.d.ts"
       ],

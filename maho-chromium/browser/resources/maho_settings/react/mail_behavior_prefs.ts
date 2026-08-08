@@ -6,6 +6,7 @@ export interface BehaviorPrefs {
   block_remote_images: boolean;
   block_trackers: boolean;
   desktop_notifications: boolean;
+  unread_badge_enabled: boolean;
   sound_enabled: boolean;
   undo_send_delay: number;
   auto_save_drafts: boolean;
@@ -31,6 +32,7 @@ export function parseBehaviorPrefs(raw: string): BehaviorPrefs | null {
       block_remote_images: booleanValue(record.block_remote_images, true),
       block_trackers: booleanValue(record.block_trackers, true),
       desktop_notifications: booleanValue(record.desktop_notifications, false),
+      unread_badge_enabled: booleanValue(record.unread_badge_enabled, true),
       sound_enabled: booleanValue(record.sound_enabled, true),
       undo_send_delay: Number(record.undo_send_delay ?? 5),
       auto_save_drafts: booleanValue(record.auto_save_drafts, true),

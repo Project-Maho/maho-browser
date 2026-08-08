@@ -1,7 +1,10 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -17,10 +20,20 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/test/base/test_browser_window.h"
+#include "chrome/test/base/testing_profile.h"
+#include "content/public/test/browser_task_environment.h"
 
 namespace maho_theme {
 namespace {
@@ -975,6 +988,270 @@ TEST_F(MahoSpaceThemeIoValidationTest, RejectsZenTypeWithInvalidHarmony) {
       << "zen type with unknown harmony value must be rejected";
 }
 
+class MahoSpaceThemeStateTest : public testing::Test {
+ protected:
+  Browser* CreateBrowserForProfile(Profile* profile) {
+    Browser::CreateParams params(profile, /*user_gesture=*/true);
+    std::unique_ptr<Browser> owned_browser =
+        CreateBrowserWithTestWindowForParams(params);
+    Browser* browser = owned_browser.get();
+    browsers_.push_back(std::move(owned_browser));
+    return browser;
+  }
+
+  bool DestroyBrowser(Browser* browser) {
+    auto it = std::find_if(
+        browsers_.begin(), browsers_.end(),
+        [browser](const std::unique_ptr<Browser>& candidate) {
+          return candidate.get() == browser;
+        });
+    if (it == browsers_.end()) {
+      return false;
+    }
+    browsers_.erase(it);
+    task_environment_.RunUntilIdle();
+    return true;
+  }
+
+  void SetUp() override {
+    MahoSpaceThemeState::Clear();
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    bridge->ClearBrowserActiveSpacesForTesting();
+    bridge->EnsureBrowserCollectionObservationForTesting();
+    bridge->SetActiveSpaceId("");
+    profile_ = TestingProfile::Builder().Build();
+    browser_a_ = CreateBrowserForProfile(profile_.get());
+    browser_b_ = CreateBrowserForProfile(profile_.get());
+  }
+
+  void TearDown() override {
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    browsers_.clear();
+    task_environment_.RunUntilIdle();
+    browser_a_ = nullptr;
+    browser_b_ = nullptr;
+    bridge->ClearBrowserActiveSpacesForTesting();
+    bridge->SetActiveSpaceId("");
+    MahoSpaceThemeState::Clear();
+    bridge->ResetBrowserCollectionObservationForTesting();
+  }
+
+  TestingProfile* CreateAdditionalProfile() {
+    additional_profiles_.push_back(TestingProfile::Builder().Build());
+    return additional_profiles_.back().get();
+  }
+
+  static std::string TwoSpaceSnapshot(double hue_a, double hue_b) {
+    return base::StringPrintf(
+        R"([{"id":"space-a","theme":{"type":"solid","color":{"hue":%.1f,"saturation":0.6,"brightness":0.8,"grain":0.3}},"color":{"hue":%.1f,"saturation":0.6,"brightness":0.8}},)"
+        R"({"id":"space-b","theme":{"type":"gradient","gradientColors":[{"hue":%.1f,"saturation":0.7,"brightness":0.9,"isPrimary":true,"isCustom":false}],"opacity":0.75,"texture":0.2},"color":{"hue":%.1f,"saturation":0.7,"brightness":0.9}}])",
+        hue_a, hue_a, hue_b, hue_b);
+  }
+
+  content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfile> profile_;
+  std::vector<std::unique_ptr<TestingProfile>> additional_profiles_;
+  std::vector<std::unique_ptr<Browser>> browsers_;
+  raw_ptr<Browser> browser_a_ = nullptr;
+  raw_ptr<Browser> browser_b_ = nullptr;
+};
+
+TEST_F(MahoSpaceThemeStateTest,
+       ResolvesCommittedThemesByOwningBrowserActiveSpace) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId(browser_a_, "space-a");
+  bridge->SetActiveSpaceId(browser_b_, "space-b");
+
+  const std::vector<std::string> changed =
+      MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+          TwoSpaceSnapshot(30.0, 210.0));
+
+  EXPECT_EQ(changed, (std::vector<std::string>{"space-a", "space-b"}));
+  const std::optional<MahoSpaceThemeState::ThemeData> theme_a =
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_);
+  const std::optional<MahoSpaceThemeState::ThemeData> theme_b =
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_);
+  ASSERT_TRUE(theme_a);
+  ASSERT_TRUE(theme_b);
+  EXPECT_FLOAT_EQ(theme_a->primary_hsv.hue, 30.0f);
+  EXPECT_FLOAT_EQ(theme_a->grain, 0.3f);
+  EXPECT_FLOAT_EQ(theme_b->primary_hsv.hue, 210.0f);
+  EXPECT_FLOAT_EQ(theme_b->opacity, 0.75f);
+  EXPECT_FLOAT_EQ(theme_b->texture, 0.2f);
+}
+
+TEST_F(MahoSpaceThemeStateTest,
+       UnmappedRegularBrowserDoesNotInheritGlobalCommittedTheme) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  Browser* other_profile_browser =
+      CreateBrowserForProfile(CreateAdditionalProfile());
+  bridge->SetActiveSpaceId("space-a");
+  MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+      TwoSpaceSnapshot(30.0, 210.0));
+
+  EXPECT_TRUE(bridge->GetActiveSpaceId(browser_a_).empty());
+  EXPECT_TRUE(bridge->GetActiveSpaceId(other_profile_browser).empty());
+  EXPECT_FALSE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_));
+  EXPECT_FALSE(
+      MahoSpaceThemeState::GetThemeDataForBrowser(other_profile_browser));
+  EXPECT_TRUE(bridge->GetBrowsersForSpaces({"space-a"}).empty());
+}
+
+TEST_F(MahoSpaceThemeStateTest, PreviewIsIsolatedAndInvalidJsonPreservesOwner) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId("space-a");
+  bridge->SetActiveSpaceId(browser_a_, "space-a");
+  bridge->SetActiveSpaceId(browser_b_, "space-b");
+  MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+      TwoSpaceSnapshot(30.0, 210.0));
+
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_a_,
+      R"({"type":"solid","color":{"hue":120.0,"saturation":0.9,"brightness":0.7,"grain":0.4}})"));
+  EXPECT_TRUE(MahoSpaceThemeState::HasPreviewOverride(browser_a_));
+  EXPECT_FALSE(MahoSpaceThemeState::HasPreviewOverride(browser_b_));
+  ASSERT_FALSE(MahoSpaceThemeState::SetPreviewOverride(browser_a_, "{bad"));
+
+  const auto theme_a = MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_);
+  const auto theme_b = MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_);
+  ASSERT_TRUE(theme_a);
+  ASSERT_TRUE(theme_b);
+  EXPECT_FLOAT_EQ(theme_a->primary_hsv.hue, 120.0f);
+  EXPECT_FLOAT_EQ(theme_a->grain, 0.4f);
+  EXPECT_FLOAT_EQ(theme_b->primary_hsv.hue, 210.0f);
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeData());
+  EXPECT_FLOAT_EQ(MahoSpaceThemeState::GetThemeData()->primary_hsv.hue, 30.0f);
+}
+
+TEST_F(MahoSpaceThemeStateTest,
+       ClearAndBridgeCleanupRemoveOnlyOwnedPreviewAndMapping) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId(browser_a_, "space-a");
+  bridge->SetActiveSpaceId(browser_b_, "space-b");
+  MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+      TwoSpaceSnapshot(30.0, 210.0));
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_a_,
+      R"({"type":"solid","color":{"hue":120.0,"saturation":0.9,"brightness":0.7,"grain":0.4}})"));
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_b_,
+      R"({"type":"solid","color":{"hue":280.0,"saturation":0.5,"brightness":0.6,"grain":0.1}})"));
+
+  MahoSpaceThemeState::ClearPreviewOverride(browser_a_);
+  EXPECT_FALSE(MahoSpaceThemeState::HasPreviewOverride(browser_a_));
+  EXPECT_TRUE(MahoSpaceThemeState::HasPreviewOverride(browser_b_));
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_));
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_));
+  EXPECT_FLOAT_EQ(
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_)->primary_hsv.hue,
+      30.0f);
+  EXPECT_FLOAT_EQ(
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_)->primary_hsv.hue,
+      280.0f);
+
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_a_,
+      R"({"type":"solid","color":{"hue":120.0,"saturation":0.9,"brightness":0.7,"grain":0.4}})"));
+  bridge->ClearBrowserActiveSpace(browser_a_);
+  EXPECT_FALSE(MahoSpaceThemeState::HasPreviewOverride(browser_a_));
+  EXPECT_TRUE(MahoSpaceThemeState::HasPreviewOverride(browser_b_));
+  EXPECT_TRUE(bridge->GetActiveSpaceId(browser_a_).empty());
+  EXPECT_FALSE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_));
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_));
+  EXPECT_FLOAT_EQ(
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_)->primary_hsv.hue,
+      280.0f);
+}
+
+TEST_F(MahoSpaceThemeStateTest,
+       BrowserCollectionCloseRemovesOnlyClosedBrowserState) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId(browser_a_, "space-a");
+  bridge->SetActiveSpaceId(browser_b_, "space-b");
+  MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+      TwoSpaceSnapshot(30.0, 210.0));
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_a_,
+      R"({"type":"solid","color":{"hue":120.0,"saturation":0.9,"brightness":0.7,"grain":0.4}})"));
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_b_,
+      R"({"type":"solid","color":{"hue":280.0,"saturation":0.5,"brightness":0.6,"grain":0.1}})"));
+  ASSERT_EQ(MahoSpaceThemeState::GetPreviewOverrideCountForTesting(), 2u);
+
+  const size_t browser_count_before =
+      GlobalBrowserCollection::GetInstance()->GetSize();
+  Browser* closed_browser = browser_a_;
+  browser_a_ = nullptr;
+  ASSERT_TRUE(DestroyBrowser(closed_browser));
+
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(),
+            browser_count_before - 1);
+  EXPECT_EQ(MahoSpaceThemeState::GetPreviewOverrideCountForTesting(), 1u);
+  EXPECT_TRUE(bridge->GetBrowsersForSpaces({"space-a"}).empty());
+  EXPECT_EQ(bridge->GetBrowsersForSpaces({"space-b"}),
+            (std::vector<Browser*>{browser_b_}));
+  EXPECT_TRUE(MahoSpaceThemeState::HasPreviewOverride(browser_b_));
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_));
+  EXPECT_FLOAT_EQ(
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_)->primary_hsv.hue,
+      280.0f);
+}
+
+TEST_F(MahoSpaceThemeStateTest,
+       SharedSpaceUpdateIdentifiesEveryDisplayingBrowser) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId(browser_a_, "space-a");
+  bridge->SetActiveSpaceId(browser_b_, "space-a");
+  MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+      TwoSpaceSnapshot(30.0, 210.0));
+
+  const std::vector<std::string> changed =
+      MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+          TwoSpaceSnapshot(60.0, 210.0));
+  std::vector<Browser*> affected = bridge->GetBrowsersForSpaces(changed);
+
+  EXPECT_EQ(changed, (std::vector<std::string>{"space-a"}));
+  EXPECT_EQ(affected.size(), 2u);
+  EXPECT_NE(std::find(affected.begin(), affected.end(), browser_a_),
+            affected.end());
+  EXPECT_NE(std::find(affected.begin(), affected.end(), browser_b_),
+            affected.end());
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_));
+  ASSERT_TRUE(MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_));
+  EXPECT_FLOAT_EQ(
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_a_)->primary_hsv.hue,
+      60.0f);
+  EXPECT_FLOAT_EQ(
+      MahoSpaceThemeState::GetThemeDataForBrowser(browser_b_)->primary_hsv.hue,
+      60.0f);
+}
+
+TEST_F(MahoSpaceThemeStateTest, OtrAndNoBrowserNeverInheritRegularPreview) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId(browser_a_, "space-a");
+  MahoSpaceThemeState::UpdateFromSnapshotForTesting(
+      TwoSpaceSnapshot(30.0, 210.0));
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_a_,
+      R"({"type":"solid","color":{"hue":120.0,"saturation":0.9,"brightness":0.7,"grain":0.4}})"));
+
+  TestingProfile* otr_profile =
+      TestingProfile::Builder().BuildIncognito(profile_.get());
+  Browser* otr_browser = CreateBrowserForProfile(otr_profile);
+  bridge->SetActiveSpaceId(otr_browser, "space-a");
+
+  EXPECT_FALSE(MahoSpaceThemeState::GetThemeDataForBrowser(nullptr));
+  EXPECT_FALSE(MahoSpaceThemeState::GetThemeDataForBrowser(otr_browser));
+  EXPECT_FALSE(MahoSpaceThemeState::HasPreviewOverride(nullptr));
+  EXPECT_FALSE(MahoSpaceThemeState::HasPreviewOverride(otr_browser));
+  EXPECT_FALSE(MahoSpaceThemeState::SetPreviewOverride(
+      otr_browser,
+      R"({"type":"solid","color":{"hue":280.0,"saturation":0.5,"brightness":0.6,"grain":0.1}})"));
+  const std::vector<Browser*> affected =
+      bridge->GetBrowsersForSpaces({"space-a"});
+  EXPECT_EQ(affected, (std::vector<Browser*>{browser_a_}));
+}
+
 }  // namespace
 }  // namespace maho_theme
 
@@ -1251,4 +1528,3 @@ TEST(MahoAuthUtilsTest, HasValidRelaySession) {
   prefs.SetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt, base::Time::Now().ToTimeT() - 3600);
   EXPECT_FALSE(maho::auth::HasValidRelaySession(&prefs));
 }
-

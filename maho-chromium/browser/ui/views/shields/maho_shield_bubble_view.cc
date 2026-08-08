@@ -175,6 +175,8 @@ views::Widget* CreateShieldBubble(
 BEGIN_METADATA(MahoShieldBubbleView)
 END_METADATA
 
+MahoShieldBubbleView::~MahoShieldBubbleView() = default;
+
 MahoShieldBubbleView::MahoShieldBubbleView(
     Browser* browser,
     const std::string& origin,

@@ -137,6 +137,7 @@ export enum RuntimeEventKind {
   kConnectionStateChanged,
   kBrowserContextInjected,
   kToolAvailabilityChanged,
+  kArtifactCreated,
 }
 
 export enum ToolCallStatus {
@@ -209,6 +210,15 @@ export interface ApprovalResultInfo {
   pageDerivedJustification: boolean;
 }
 
+export interface ArtifactInfo {
+  artifactId: string;
+  sessionId: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: bigint;
+  createdAt: number;
+}
+
 export interface RuntimeEvent {
   kind: RuntimeEventKind;
   sequence: number;
@@ -219,6 +229,7 @@ export interface RuntimeEvent {
   approvalRequest?: ApprovalRequestInfo | null;
   approvalResult?: ApprovalResultInfo | null;
   browserContext?: BrowserContextPayload | null;
+  artifact?: ArtifactInfo | null;
   sessionId: string;
   requestId?: string | null;
 }
@@ -300,6 +311,12 @@ export class PageHandlerRemote {
     events: RuntimeEvent[];
     totalCount: number;
   }>;
+  listArtifacts(sessionId: string): Promise<{artifacts: ArtifactInfo[]}>;
+  renameArtifact(artifactId: string, displayName: string):
+      Promise<{success: boolean; error: string | null}>;
+  deleteArtifact(artifactId: string): Promise<{success: boolean}>;
+  getArtifactPreviewUrl(artifactId: string): Promise<{url: string | null}>;
+  getArtifactExportUrl(artifactId: string): Promise<{url: string | null}>;
   getOpenTabs(): Promise<{tabs: TabItem[]}>;
   searchHistory(query: string, maxResults: number): Promise<{items: HistoryItem[]}>;
   searchBookmarks(query: string, maxResults: number): Promise<{items: BookmarkItem[]}>;

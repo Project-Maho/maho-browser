@@ -9,6 +9,12 @@ members = [
     "crates/maho-import", "crates/maho-agent", "crates/maho-jni",
     "crates/maho-cli",
     "crates/maho-browser-mcp",
+    # maho-stt / maho-stt-ffi must share this workspace: as separate workspaces
+    # each staticlib embedded its own copy of the Rust runtime, so linking both
+    # maho_ffi and maho_stt_ffi into chrome.dll produced duplicate std symbols
+    # (Arc::drop_slow, thread-local shims, __rust_no_alloc_shim_is_unstable).
+    "crates/maho-stt",
+    "crates/maho-stt-ffi",
 ]
 exclude = ["billing-proxy"]
 

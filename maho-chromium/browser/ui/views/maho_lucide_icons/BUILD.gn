@@ -19,6 +19,7 @@ aggregate_vector_icons("maho_lucide_icons") {
     "images.icon",
     "inbox.icon",
     "link.icon",
+    "message_circle.icon",
     "message_square.icon",
     "minus.icon",
     "notebook_text.icon",
@@ -52,7 +53,12 @@ aggregate_vector_icons("maho_lucide_icons") {
     "arrow_left.icon",
     "gift.icon",
     "glasses.icon",
+    "cookie.icon",
+    "settings.icon",
+    "arrow_up_right.icon",
+    "trash_2.icon",
     "globe.icon",
+    "file.icon",
   ]
 }
 

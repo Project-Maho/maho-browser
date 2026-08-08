@@ -19,6 +19,7 @@ import {CompletionContent, CompletionSidebar} from './pages/completion.js';
 import {EssentialsContent, EssentialsSidebar} from './pages/essentials.js';
 import {ImportDataContent, ImportDataSidebar} from './pages/import-data.js';
 import {PasswordSetupContent, PasswordSetupSidebar} from './pages/password-setup.js';
+import {PlanSelect} from './pages/plan-select.js';
 import {SearchEngineContent, SearchEngineSidebar} from './pages/search-engine.js';
 import {SyncKeyBackupContent, SyncKeyBackupSidebar} from './pages/sync-key-backup.js';
 import {WelcomeSplash} from './pages/welcome-splash.js';
@@ -41,6 +42,7 @@ const WIZARD_STEP_PAGES: readonly WelcomePage[] = [
   WelcomePage.SearchEngine,
   WelcomePage.Essentials,
   WelcomePage.AIProvider,
+  WelcomePage.PlanSelect,
   WelcomePage.PasswordSetup,
   WelcomePage.SyncKeyBackup,
 ];
@@ -51,7 +53,7 @@ const GOOGLE_LOGO_SRC = 'chrome://maho-welcome/icons/search-engines/google.svg';
 type AuthMode = AuthState['mode'];
 
 const isStandalonePage = (page: WelcomePage) =>
-  page === WelcomePage.Splash;
+  page === WelcomePage.Splash || page === WelcomePage.PlanSelect;
 
 type AnimationPlaybackControls = {
   cancel: () => void;
@@ -253,6 +255,10 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
         <WelcomeSplash onStart={() => store.nextPage()} />
       </>
     );
+  }
+
+  if (snapshot.currentPage === WelcomePage.PlanSelect) {
+    return <PlanSelect store={store} aiSetup={snapshot.aiSetup} />;
   }
 
   const isAuthPage = pageForRender === WelcomePage.Auth;

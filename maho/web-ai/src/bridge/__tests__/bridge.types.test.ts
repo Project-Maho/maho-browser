@@ -130,20 +130,22 @@ describe('bridge type exports', () => {
       'setSpaceAIConfig',
       // Pinch (1)
       'pinchEstimateCost',
-      // Agent Session (6)
+      // Agent Session (8)
       'agentCreateSession',
       'agentFreeSession',
       'agentSendMessage',
       'agentCancel',
       'agentPollEvent',
       'agentListTools',
+      'agentListArtifacts',
+      'artifactShare',
       // Native-only (4)
       'capturePhoto',
       'captureScreenshot',
       'openSettings',
       'hapticFeedback',
     ];
-    expect(methodNames).toHaveLength(39);
+    expect(methodNames).toHaveLength(41);
   });
 
   it('chatSessionStart returns Promise<SessionHandle> (string), not number', () => {

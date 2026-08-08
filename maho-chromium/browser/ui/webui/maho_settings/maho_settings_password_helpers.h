@@ -105,9 +105,9 @@ bool ReadPasswordsEnabledFromCore();
 
 std::string ReadSelectedPasswordProviderModeFromCore();
 
-// Password setup is complete when the persisted raw provider token is
-// approved and the Vault has been initialized. Locked, unlocked, and
-// auto-locked Vaults are all initialized.
+// Password setup is complete only when the persisted raw provider token is an
+// approved provider and the Vault reports an unlocked status. Provider
+// extension availability deliberately has no bearing on this gate.
 bool IsPasswordSetupComplete();
 
 bool IsPasswordSetupCompleteForTesting(

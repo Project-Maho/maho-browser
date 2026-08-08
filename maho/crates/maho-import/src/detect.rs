@@ -208,9 +208,7 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
         let installed_dirs: Vec<PathBuf> = profile_dirs
             .into_iter()
             .filter(|dir| {
-                dir.join("Bookmarks").exists()
-                    || dir.join("Login Data").exists()
-                    || dir.is_dir()
+                dir.join("Bookmarks").exists() || dir.join("Login Data").exists() || dir.is_dir()
             })
             .collect();
 
@@ -275,10 +273,11 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
 /// Representative profile for `collapse_profiles` browsers: prefer `Default`,
 /// then any profile with importable data, then the first available.
 fn pick_representative_profile(dirs: &[PathBuf]) -> Option<PathBuf> {
-    if let Some(default_dir) = dirs
-        .iter()
-        .find(|dir| dir.file_name().map(|n| n.to_string_lossy() == "Default").unwrap_or(false))
-    {
+    if let Some(default_dir) = dirs.iter().find(|dir| {
+        dir.file_name()
+            .map(|n| n.to_string_lossy() == "Default")
+            .unwrap_or(false)
+    }) {
         return Some(default_dir.clone());
     }
     if let Some(with_data) = dirs
@@ -294,9 +293,7 @@ fn read_chromium_profile_name(profile_dir: &Path) -> Option<String> {
     let prefs_path = profile_dir.join("Preferences");
     let content = std::fs::read_to_string(&prefs_path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let name = parsed
-        .pointer("/profile/name")
-        .and_then(|v| v.as_str())?;
+    let name = parsed.pointer("/profile/name").and_then(|v| v.as_str())?;
     if name.is_empty() {
         None
     } else {
@@ -379,11 +376,11 @@ fn resolve_default_gecko_profile(browser_data_dir: &Path) -> Option<PathBuf> {
     let lines: Vec<&str> = contents.lines().collect();
 
     let flush_profile = |kind: &SectionKind,
-                             path: &str,
-                             is_relative: bool,
-                             marked_default: bool,
-                             all: &mut Vec<PathBuf>,
-                             defaults: &mut Vec<PathBuf>| {
+                         path: &str,
+                         is_relative: bool,
+                         marked_default: bool,
+                         all: &mut Vec<PathBuf>,
+                         defaults: &mut Vec<PathBuf>| {
         if *kind != SectionKind::Profile || path.is_empty() {
             return;
         }
@@ -551,7 +548,11 @@ mod tests {
             std::fs::create_dir_all(&p).unwrap();
             std::fs::write(p.join("Bookmarks"), "{}").unwrap();
             let prefs = serde_json::json!({"profile": {"name": name}});
-            std::fs::write(p.join("Preferences"), serde_json::to_string(&prefs).unwrap()).unwrap();
+            std::fs::write(
+                p.join("Preferences"),
+                serde_json::to_string(&prefs).unwrap(),
+            )
+            .unwrap();
         }
 
         let results = detect_chromium_browsers_in(tmp.path());
@@ -613,7 +614,11 @@ mod tests {
             .iter()
             .filter(|b| b.browser_type == BrowserType::Arc)
             .collect();
-        assert_eq!(arc.len(), 1, "empty Arc profiles still collapse to one entry");
+        assert_eq!(
+            arc.len(),
+            1,
+            "empty Arc profiles still collapse to one entry"
+        );
         assert_eq!(arc[0].display_name, "Arc");
         assert!(arc[0].services_supported & ImportServices::WORKSPACES != 0);
     }
@@ -644,7 +649,8 @@ mod tests {
         let profile_dir = zen_dir.join("abc.default");
         std::fs::create_dir_all(&profile_dir).unwrap();
 
-        let ini = "[Install123]\nDefault=abc.default\n\n[Profile0]\nPath=abc.default\nIsRelative=1\n";
+        let ini =
+            "[Install123]\nDefault=abc.default\n\n[Profile0]\nPath=abc.default\nIsRelative=1\n";
         std::fs::write(zen_dir.join("profiles.ini"), ini).unwrap();
         std::fs::write(profile_dir.join("places.sqlite"), "fake").unwrap();
 

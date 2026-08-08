@@ -1,0 +1,110 @@
+name: Release CLI
+
+# Uploads artifacts only; a human publishes them to Project-Maho/release via gh.
+# Asset names are version-free so /releases/latest/download resolves them.
+
+on:
+  push:
+    tags:
+      - 'cli-v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-arm64
+            labels: [self-hosted, chromium-builder, macos, arm64]
+          - os: linux-x64
+            labels: [self-hosted, chromium-builder, linux, x64]
+          - os: linux-arm64
+            labels: [self-hosted, chromium-builder, linux, arm64]
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: maho
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import Developer ID certificate
+        if: matrix.os == 'macos-arm64'
+        shell: bash
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          kc="$RUNNER_TEMP/maho-signing.keychain-db"
+          kcpw="$(openssl rand -hex 20)"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Authorize codesign to use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpw" "$kc"
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+
+      - name: Build and package
+        shell: bash
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/cli-dist"
+          mkdir -p "$out"
+
+          package() {
+            triple="$1"; os_token="$2"; arch_token="$3"
+            if [ -n "$triple" ]; then
+              rustup target add "$triple"
+              cargo build -p maho-cli --release --target "$triple"
+              bin="target/${triple}/release/maho"
+            else
+              cargo build -p maho-cli --release
+              bin="target/release/maho"
+            fi
+            strip "$bin" || true
+            if [ "$os_token" = "darwin" ]; then
+              sh scripts/sign_maho_cli.sh "$bin"
+            fi
+            asset="maho-cli-${os_token}-${arch_token}.tar.gz"
+            tar -czf "${out}/${asset}" -C "$(dirname "$bin")" maho
+            ( cd "$out" && { command -v sha256sum >/dev/null && sha256sum "$asset" || shasum -a 256 "$asset"; } \
+              | awk '{print $1}' > "${asset}.sha256" )
+          }
+
+          case "${{ matrix.os }}" in
+            macos-arm64)
+              package "" darwin arm64
+              package x86_64-apple-darwin darwin x86_64
+              ;;
+            linux-x64)
+              package "" linux x86_64
+              ;;
+            linux-arm64)
+              package "" linux arm64
+              ;;
+          esac
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: maho-cli-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            cli-dist/maho-cli-*.tar.gz
+            cli-dist/maho-cli-*.tar.gz.sha256
+
+      - name: Clean up signing keychain
+        if: always() && matrix.os == 'macos-arm64'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/maho-signing.keychain-db" 2>/dev/null || true

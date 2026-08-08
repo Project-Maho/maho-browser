@@ -2,6 +2,7 @@ import type {RefObject} from 'react';
 import {CompactStage} from './compact-stage.js';
 import {CompactTopbar} from './compact-topbar.js';
 import {ConversationThread} from './conversation-thread.js';
+import {OutputsSection} from './outputs-section.js';
 import type {MahoAiStore} from '../../../store.js';
 import type {TimelineEntry, ViewMode} from '../../../types.js';
 
@@ -43,6 +44,19 @@ export function CompactShell(
       topOverlayRef?: RefObject<HTMLDivElement | null>;
       topPadding?: number;
     }) {
+  const renameArtifact = (artifactId: string, displayName: string): Promise<string | null> => {
+    const sessionId = store.getSnapshot().currentSessionId;
+    return sessionId ? store.renameArtifact(sessionId, artifactId, displayName)
+                     : Promise.resolve(null);
+  };
+  const deleteArtifact = (artifactId: string): Promise<boolean> => {
+    const sessionId = store.getSnapshot().currentSessionId;
+    return sessionId ? store.deleteArtifact(sessionId, artifactId) : Promise.resolve(false);
+  };
+  const previewArtifactUrl = (artifactId: string): Promise<string | null> =>
+      store.getArtifactPreviewUrl(artifactId);
+  const exportArtifactUrl = (artifactId: string): Promise<string | null> =>
+      store.getArtifactExportUrl(artifactId);
   if (hasMessages || thinkingLabel) {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -65,10 +79,15 @@ export function CompactShell(
           onOpenSettings={onOpenSettings}
           onRegenerate={onRegenerate}
           onRespondToApproval={onRespondToApproval}
+          onRenameArtifact={renameArtifact}
+          onDeleteArtifact={deleteArtifact}
+          onGetArtifactPreviewUrl={previewArtifactUrl}
+          onGetArtifactExportUrl={exportArtifactUrl}
           readOnly={readOnly}
           thinkingLabel={thinkingLabel}
           topPadding={topPadding}
         />
+        <OutputsSection store={store} />
       </div>
     );
   }

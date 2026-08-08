@@ -1,6 +1,14 @@
 # Aside Followup Implementation Plan — Maho Browser
 
 > **⚠️ SUPERSEDED (2026-06-27, same day)**: 본 plan은 v2.0인 `aside-followup-bm-redesign-2026-06-27.md`로 대체됨. 사용자가 8개 의사결정 (ACP 백지화, OpenRouter markup 구독 BM, 3-tier 가격 등)을 확정함에 따라 v1의 6-feature 범위는 BM 전환을 포함한 13-workstream 재설계로 확장됨. v1은 의사결정 진행 과정의 역사 보존 목적으로 유지.
+>
+> **⚠️ HISTORICAL PLANNING ARTIFACT (updated 2026-07)**: 이 문서는 역사 기록용입니다. 편집하지 말고 참조 용도로만 사용하세요. 현재 진실(current truth)은 아래 정본 문서에 있습니다:
+> - `docs/competitive-analysis/aside-benchmark-status-2026-07.md`
+> - `docs/competitive-analysis/aside-benchmark-evidence-2026-07.md`
+> - `docs/decisions/0009-openrouter-subscription-bm.md` (v2)
+> - `docs/decisions/0010-payg-credits-model.md`
+>
+> 본문에 남아 있는 Maho $20 / $200 가격과 과거 token cap 수치는 v1 잔재이며 현재 pricing으로 대체되었습니다: **Free $0 / Pro $5 / Max $20 구독 + PAYG 크레딧 $10 / $50 / $100 + BYOK (무료, 무제한, frontier는 BYOK 전용)**.
 
 **작성일**: 2026-06-27
 **버전**: 1.0 (SUPERSEDED)

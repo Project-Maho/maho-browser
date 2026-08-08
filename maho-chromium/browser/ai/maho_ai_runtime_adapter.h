@@ -15,6 +15,7 @@
 #ifndef MAHO_BROWSER_AI_MAHO_AI_RUNTIME_ADAPTER_H_
 #define MAHO_BROWSER_AI_MAHO_AI_RUNTIME_ADAPTER_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,21 @@ enum class MahoAiRuntimeEventType {
   // warnings — mirroring the Mojo BrowserContextPayload.
   kBrowserContextInjected,
   kToolAvailabilityChanged,
+  // An output artifact was created by the agent (fs_write path). text carries
+  // the JSON ArtifactInfo; the page handler maps it to the Mojo ArtifactInfo.
+  kArtifactCreated,
+};
+
+// Closed, non-secret credential failure codes produced by the Rust agent
+// runtime. These stay in the C++ runtime contract until a later Mojo revision
+// deliberately persists an additive representation.
+enum class MahoAiRuntimeErrorCode {
+  kProviderNotConfigured,
+  kCredentialUnusable,
+  kSecureStoreUnavailable,
+  kCredentialDecryptFailed,
+  kManagedAuthUnavailable,
+  kUnsupportedProvider,
 };
 
 // A single runtime event. Adapters produce these; the proxy/page handler
@@ -69,6 +85,11 @@ struct MahoAiRuntimeEvent {
   // For kTurnComplete: the full accumulated text.
   // For kError: the error message.
   std::string text;
+
+  // Set only for a strict, allowlisted credential-error envelope from Rust.
+  // This never contains provider input, credentials, ciphertext, endpoints,
+  // or platform diagnostic text.
+  std::optional<MahoAiRuntimeErrorCode> runtime_error_code;
 
   // For kToolRequest: structured tool call info.
   // For kToolResult: the tool execution result.

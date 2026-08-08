@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 
 namespace maho::ai {
@@ -15,10 +16,18 @@ struct BrowserActionContract;
 class MahoBrowserToolRegistry {
  public:
   struct ToolSchema {
+    ToolSchema();
+    ToolSchema(const ToolSchema&) = delete;
+    ToolSchema(ToolSchema&&);
+    ToolSchema& operator=(const ToolSchema&) = delete;
+    ToolSchema& operator=(ToolSchema&&);
+    ~ToolSchema();
+
     std::string name;
     std::string description;
     base::DictValue input_schema;
-    const maho::ai::BrowserActionContract* browser_action_contract = nullptr;
+    raw_ptr<const maho::ai::BrowserActionContract> browser_action_contract =
+        nullptr;
   };
 
   static const std::vector<ToolSchema>& GetPhase1ToolSchemas();

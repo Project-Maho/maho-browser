@@ -7,10 +7,17 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/values.h"
 
 struct MahoCore;
 
 namespace maho_theme {
+
+std::optional<std::string> SpaceColorDictToHex(
+    const base::DictValue& color);
+
+std::optional<std::string> SerializeSpaceThemeJson(
+    const base::DictValue& theme);
 
 // Serializes the current theme for |space_id| as pretty-printed JSON.
 std::optional<std::string> SerializeSpaceThemeJson(MahoCore* core,

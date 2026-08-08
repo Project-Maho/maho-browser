@@ -10,6 +10,7 @@
 
 #include "base/check.h"
 #include "base/command_line.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -27,7 +28,9 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
+#include "components/prefs/pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
@@ -144,6 +147,7 @@ class MahoUrlSchemeBrowserTest : public InProcessBrowserTest {
 };
 
 class MahoSettingsNavigationAliasTest : public MahoUrlSchemeBrowserTest {};
+class MahoSettingsPersistenceBrowserTest : public MahoUrlSchemeBrowserTest {};
 class MahoAiPopupAliasTest : public MahoUrlSchemeBrowserTest {};
 class MahoCommandAliasCompatibilityTest : public MahoUrlSchemeBrowserTest {};
 
@@ -186,14 +190,126 @@ IN_PROC_BROWSER_TEST_F(MahoSettingsNavigationAliasTest,
   ExpectCommittedWebUI(ActiveWebContents(browser()), appearance_actual,
                        appearance_alias);
 
-  OpenMahoSettingsPane(browser(), "privacy");
+  OpenMahoSettingsPane(browser(), "notifications");
   WaitForActiveTabLoad(browser());
 
-  const GURL privacy_alias = WithPane(GURL(kMahoSettingsPublicURL), "privacy");
-  const GURL privacy_actual = RequiredActualUrlForAlias(privacy_alias);
+  const GURL notifications_alias =
+      WithPane(GURL(kMahoSettingsPublicURL), "notifications");
+  const GURL notifications_actual = RequiredActualUrlForAlias(notifications_alias);
   EXPECT_EQ(tab_count_after_first_open, browser()->tab_strip_model()->count());
-  ExpectCommittedWebUI(ActiveWebContents(browser()), privacy_actual,
-                       privacy_alias);
+  ExpectCommittedWebUI(ActiveWebContents(browser()), notifications_actual,
+                       notifications_alias);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSettingsPersistenceBrowserTest,
+                       PeekTogglesPersistAcrossReload) {
+  OpenMahoSettingsPane(browser(), "maho-mini");
+  WaitForActiveTabLoad(browser());
+  content::WebContents* contents = ActiveWebContents(browser());
+
+  const std::string toggle_and_wait_script = R"js(
+    (async () => {
+      const labels = [
+        'Enable Peek',
+        'Open links in Peek',
+        'Open popups in Peek',
+      ];
+      const toggles = await new Promise((resolve, reject) => {
+        const findToggles = () => labels.map(label =>
+            document.querySelector(`button[aria-label="${label}"]`));
+        const verify = () => {
+          const candidates = findToggles();
+          if (candidates.every(toggle => toggle !== null)) {
+            observer.disconnect();
+            clearTimeout(timeout);
+            resolve(candidates);
+          }
+        };
+        const observer = new MutationObserver(verify);
+        const timeout = setTimeout(() => {
+          observer.disconnect();
+          reject(new Error('Peek toggles did not render'));
+        }, 5000);
+        observer.observe(document.documentElement, {childList: true, subtree: true});
+        verify();
+      });
+      if (toggles.some(toggle => toggle.getAttribute('aria-checked') !== 'true')) {
+        return 'unexpected-initial-state';
+      }
+      for (const toggle of toggles) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            observer.disconnect();
+            reject(new Error(`toggle did not settle: ${toggle.getAttribute('aria-label')}`));
+          }, 5000);
+          const observer = new MutationObserver(() => {
+            if (toggle.getAttribute('aria-checked') === 'false' &&
+                !toggle.hasAttribute('disabled')) {
+              clearTimeout(timeout);
+              observer.disconnect();
+              resolve(undefined);
+            }
+          });
+          observer.observe(toggle, {attributes: true});
+          toggle.click();
+        });
+      }
+      return 'ok';
+    })()
+  )js";
+  EXPECT_EQ("ok", content::EvalJs(contents, toggle_and_wait_script));
+
+  PrefService* handler_prefs = browser()->profile()->GetPrefs();
+  EXPECT_FALSE(
+      handler_prefs->GetBoolean(maho::sidebar_prefs::kPeekEnabled));
+  EXPECT_FALSE(handler_prefs->GetBoolean(
+      maho::sidebar_prefs::kPeekLinkRoutingEnabled));
+  EXPECT_FALSE(handler_prefs->GetBoolean(
+      maho::sidebar_prefs::kPeekPopupRoutingEnabled));
+
+  content::TestNavigationObserver reload_observer(contents);
+  contents->GetController().Reload(content::ReloadType::NORMAL,
+                                   /*check_for_repost=*/true);
+  reload_observer.Wait();
+
+  EXPECT_EQ(true, content::EvalJs(contents, R"js(
+    (async () => {
+      const labels = [
+        'Enable Peek',
+        'Open links in Peek',
+        'Open popups in Peek',
+      ];
+      return new Promise((resolve, reject) => {
+        const verify = () => {
+          const toggles = labels.map(label =>
+              document.querySelector(`button[aria-label="${label}"]`));
+          if (toggles.every(toggle =>
+              toggle?.getAttribute('aria-checked') === 'false')) {
+            observer.disconnect();
+            clearTimeout(timeout);
+            resolve(true);
+          }
+        };
+        const observer = new MutationObserver(verify);
+        const timeout = setTimeout(() => {
+          observer.disconnect();
+          reject(new Error('reloaded Peek toggles did not restore'));
+        }, 5000);
+        observer.observe(document.documentElement, {
+          attributes: true,
+          childList: true,
+          subtree: true,
+        });
+        verify();
+      });
+    })()
+  )js"));
+  EXPECT_FALSE(
+      handler_prefs->GetBoolean(maho::sidebar_prefs::kPeekEnabled));
+  EXPECT_FALSE(handler_prefs->GetBoolean(
+      maho::sidebar_prefs::kPeekLinkRoutingEnabled));
+  EXPECT_FALSE(handler_prefs->GetBoolean(
+      maho::sidebar_prefs::kPeekPopupRoutingEnabled));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoAiPopupAliasTest,

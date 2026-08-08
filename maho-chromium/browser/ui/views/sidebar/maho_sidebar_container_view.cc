@@ -6,6 +6,7 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
@@ -15,7 +16,9 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
@@ -136,6 +139,49 @@ void MahoSidebarContainerView::ShowCommandOverlayForCurrentTab() {
 bool MahoSidebarContainerView::TryActivateFavoriteByIndex(size_t index) {
   auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
   return sidebar && sidebar->ActivateFavoriteByIndex(index);
+}
+
+// static
+PeekSourceRole MahoSidebarContainerView::GetPeekSourceRole(
+    Browser* browser,
+    content::WebContents* web_contents) {
+  if (!browser || !web_contents) {
+    return PeekSourceRole::kUnresolved;
+  }
+
+  TabStripModel* tab_strip = browser->tab_strip_model();
+  const int index = tab_strip ? tab_strip->GetIndexOfWebContents(web_contents)
+                              : TabStripModel::kNoTab;
+  if (!tab_strip || index == TabStripModel::kNoTab) {
+    return PeekSourceRole::kUnresolved;
+  }
+  if (tab_strip->IsTabPinned(index)) {
+    return PeekSourceRole::kPinned;
+  }
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+  auto* container =
+      browser_view
+          ? views::AsViewClass<MahoSidebarContainerView>(
+                browser_view->maho_sidebar_container())
+          : nullptr;
+  auto* sidebar =
+      container ? views::AsViewClass<MahoSidebarView>(container->sidebar_view())
+                : nullptr;
+  MahoSidebarTabListView* tab_list = sidebar ? sidebar->tab_list_view() : nullptr;
+  if (!tab_list) {
+    return PeekSourceRole::kUnresolved;
+  }
+
+  const std::string core_tab_id =
+      tab_list->FindCoreTabIdByWebContents(web_contents);
+  if (core_tab_id.empty()) {
+    return PeekSourceRole::kUnresolved;
+  }
+  return IsCoreCloseProtectedTab(core_tab_id) &&
+                 !IsCorePinnedTab(core_tab_id)
+             ? PeekSourceRole::kFavorite
+             : PeekSourceRole::kNormal;
 }
 
 void MahoSidebarContainerView::ShowCommandOverlayForNewTab() {
@@ -587,6 +633,12 @@ void MahoSidebarContainerView::AttachOverlayHost() {
     auto host = std::make_unique<MahoBrowserFrameOverlayHost>(browser_, this);
     overlay_host_ = browser_view->AddChildView(std::move(host));
   }
+}
+
+MahoBrowserFrameOverlayHost*
+MahoSidebarContainerView::GetOrCreateOverlayHost() {
+  AttachOverlayHost();
+  return overlay_host_;
 }
 
 void MahoSidebarContainerView::ToggleSpacesOverlay() {

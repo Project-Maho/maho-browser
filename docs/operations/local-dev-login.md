@@ -6,6 +6,11 @@ some flows, refuses to open a browser window until a valid relay session exists.
 This runbook explains the gate, how to bypass it for local development, how to run
 a local relay server, and the local test account that was created for this purpose.
 
+> **Related:** this doc is about getting *past* the login gate for dev. For the
+> "Continue with Google" sign-in that *legitimately clears* the gate — its four
+> historical flakiness root causes and the invariants that must never regress —
+> see `docs/operations/google-signin-loopback-reliability.md`.
+
 ---
 
 ## 1. How the login gate works

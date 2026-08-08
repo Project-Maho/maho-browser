@@ -14,7 +14,7 @@ This document is the contract for the first implementation wave of Arc-style Spa
 
 - The feature in scope is Arc-style Spaces for the macOS shell.
 - Spaces are tab containers with reorder, rename, active tracking, and persistence responsibilities in `maho-core` and `maho-types`.
-- Little Arc already exists as a separate behavior track, and its Space selection flow is part of the parity work.
+- Maho Mini already exists as a separate behavior track, and its Space selection flow is part of the parity work.
 - The repo already has a core `space_manager.rs` and shared `SpaceId` and space types, so this work extends an existing model rather than inventing a new one.
 
 ### Inferred
@@ -55,7 +55,7 @@ This document is the contract for the first implementation wave of Arc-style Spa
 2. Spaces can be reordered.
 3. Spaces can be renamed.
 4. Active space state is tracked and persisted.
-5. Little Arc can open content in a selected Space.
+5. Maho Mini can open content in a selected Space.
 6. The core already exposes space management as a concern, so the shell must reflect core truth instead of maintaining a separate hidden model.
 
 ### Inferred
@@ -70,7 +70,7 @@ This document is the contract for the first implementation wave of Arc-style Spa
 ### Confirmed
 
 - The app must expose Space controls in a way that supports rename, reorder, and active-state switching.
-- The current repo notes identify a Space selection pop-up flow for Little Arc.
+- The current repo notes identify a Space selection pop-up flow for Maho Mini.
 
 ### Inferred
 
@@ -82,7 +82,7 @@ This document is the contract for the first implementation wave of Arc-style Spa
 
 ### Confirmed
 
-- Little Arc already has keyboard-driven open behaviors in the repo notes.
+- Maho Mini already has keyboard-driven open behaviors in the repo notes.
 - `⌘⌥O` is tied to opening in a different Space through a Space selection menu flow.
 
 ### Inferred
@@ -91,18 +91,18 @@ This document is the contract for the first implementation wave of Arc-style Spa
 - Keyboard flows must not create hidden per-window state for normal windows.
 - If a keyboard action opens content in a target Space, that target Space must be the same one persisted in core state.
 
-## Little Arc behaviors
+## Maho Mini behaviors
 
 ### Confirmed
 
-- `LittleArcWindowController` already owns the Space selection menu flow for `⌘⌥O`.
+- `MahoMiniWindowController` already owns the Space selection menu flow for `⌘⌥O`.
 - The repo notes confirm `⌘⌥N` for open, `⌘O` for open in current Space, and `⌘⌥O` for open in a different Space.
 
 ### Inferred
 
-- Little Arc is the place where users choose a Space before opening a tab when they do not want the current active Space.
-- Little Arc must respect the same Space ordering and naming that the main shell exposes.
-- If the user selects a Space from Little Arc, that action should be reflected in the shared core state and not just in the pop-up UI.
+- Maho Mini is the place where users choose a Space before opening a tab when they do not want the current active Space.
+- Maho Mini must respect the same Space ordering and naming that the main shell exposes.
+- If the user selects a Space from Maho Mini, that action should be reflected in the shared core state and not just in the pop-up UI.
 
 ## Profile linkage rules
 
@@ -142,7 +142,7 @@ This document is the contract for the first implementation wave of Arc-style Spa
 
 - Whether Space reordering is purely local or sync-backed is not yet proven here.
 - Whether Space order is deterministic across all profiles and sessions or only within a profile is not fully proven here.
-- Whether Little Arc selection should auto-switch the active Space or only target the open action is not fully proven here.
+- Whether Maho Mini selection should auto-switch the active Space or only target the open action is not fully proven here.
 - Whether Space icons are editable separately from names, and how those edits persist, is only partially proven here.
 
 ## Known current-code gaps that must be closed
@@ -165,7 +165,7 @@ This document is the contract for the first implementation wave of Arc-style Spa
 ### Confirmed
 
 - The normal-window active-space behavior matches the global model in this document.
-- Little Arc can target a Space using the existing selection flow.
+- Maho Mini can target a Space using the existing selection flow.
 - Space rename, reorder, and active tracking behave as a single coherent model across core and shell.
 - Space icon edits are handled as part of Space config updates and round-trip through the shared update model.
 

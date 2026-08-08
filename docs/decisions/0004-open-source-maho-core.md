@@ -1,7 +1,9 @@
 # 0004. Open-Source License for maho-core and Public Crates
 
+> **⚠️ SUPERSEDED / REVERSED (2026-07)**: This ADR is no longer in force. Maho is **proprietary and closed-source**. There is no public source repository for the Maho codebase, no Apache 2.0 (or any OSI) license grant on `maho-core` or any other crate, and no open-source marketing claim. Do NOT rely on this ADR for any current license, contribution, or positioning decision, and do NOT introduce "open source", "auditable source", "view source on GitHub", or public-source-repo language anywhere based on it. Trust positioning now rests on **trust by architecture**: self-hostable sync relay, zero-retention LLM proxy, end-to-end encryption, and locally verifiable behavior. The body below is retained unchanged for historical audit only. See root `AGENTS.md` (LICENSING & DISTRIBUTION) for the current posture.
+
 Date: 2026-06-17
-Status: Accepted
+Status: Superseded / Reversed (2026-07) — was: Accepted (2026-06-17)
 
 ## Context and Problem Statement
 

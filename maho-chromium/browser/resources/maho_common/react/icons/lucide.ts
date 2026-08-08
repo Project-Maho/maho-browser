@@ -46,6 +46,7 @@ export {
   CreditCard,
   History,
   Download,
+  GripVertical,
   Key,
   Database,
   Volume2,

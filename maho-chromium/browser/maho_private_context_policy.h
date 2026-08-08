@@ -46,6 +46,8 @@ class MahoPrivateContextToken {
 
   MahoPrivateContextClass context_class() const { return context_class_; }
 
+  content::WebContents* web_contents() const { return web_contents_.get(); }
+
  private:
   MahoPrivateContextClass context_class_;
   base::WeakPtr<BrowserWindowInterface> browser_window_;

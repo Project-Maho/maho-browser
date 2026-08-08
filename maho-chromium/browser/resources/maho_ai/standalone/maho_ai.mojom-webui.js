@@ -158,6 +158,7 @@ export const RuntimeEventKind = {
   kSessionStatus: 8,
   kConnectionStateChanged: 9,
   kBrowserContextInjected: 10,
+  kArtifactCreated: 11,
 };
 
 export const ToolCallStatus = {

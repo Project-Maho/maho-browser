@@ -39,8 +39,15 @@ MahoWelcomeUI::MahoWelcomeUI(content::WebUI* web_ui)
   webui::SetupWebUIDataSource(source, kMahoWelcomeResources,
                                IDR_MAHO_WELCOME_WELCOME_HTML);
   source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ScriptSrc,
+      "script-src chrome://resources 'self' https://app.lemonsqueezy.com;");
+  source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FrameSrc,
-      "frame-src chrome://maho-space-create;");
+      "frame-src chrome://maho-space-create https://*.lemonsqueezy.com "
+      "https://lemonsqueezy.com;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ConnectSrc,
+      "connect-src 'self' https://api.lemonsqueezy.com;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
       "trusted-types default static-types;");

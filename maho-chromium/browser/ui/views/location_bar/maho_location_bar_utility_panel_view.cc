@@ -83,7 +83,6 @@ constexpr int kPanelChipButtonHeight = 32;
 constexpr int kPanelChipButtonCornerRadius = 10;
 constexpr int kPanelChipButtonHorizontalPadding = 10;
 constexpr int kPanelChipButtonIconLabelSpacing = 6;
-constexpr int kPanelChipButtonDefaultIconSize = 14;
 constexpr int kToolbarRowHeight = 36;
 constexpr int kToolbarIconSize = 13;
 constexpr int kToolbarIconSpacing = 8;

@@ -181,6 +181,7 @@ fn main() {
         closed_tabs: vec![tab_closed],
         extensions: vec![("extension-v1".to_string(), "Maho Extension".to_string())],
         is_incognito: false,
+        recent_tabs: vec![],
     };
 
     let queries = vec!["", "maho", "https://example.test/a", "close", "비공개 탭"];

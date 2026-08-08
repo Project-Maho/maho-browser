@@ -14,7 +14,7 @@
  *   Both use identical JSON wire format; normalization is platform-agnostic.
  */
 import { useCallback, useEffect, useRef } from 'preact/hooks';
-import type { AgentEvent, AgentHandle, MahoBridge } from '../bridge/types';
+import type { AgentEvent, AgentHandle, ArtifactInfo, MahoBridge } from '../bridge/types';
 
 const POLL_INTERVAL_MS = 50;
 
@@ -83,6 +83,27 @@ export function normalizeAgentEvent(raw: string): AgentEvent | null {
         if (typeof d.result === 'string') result = d.result;
       }
       return { kind: 'tool_result', id, name, result };
+    }
+    case 'artifact_created': {
+      if (typeof envelope.data !== 'object' || envelope.data === null) {
+        return null;
+      }
+      const d = envelope.data as Record<string, unknown>;
+      const artifactId = typeof d.artifact_id === 'string' ? d.artifact_id : '';
+      const displayName = typeof d.display_name === 'string' ? d.display_name : '';
+      const mimeType = typeof d.mime_type === 'string' ? d.mime_type : '';
+      if (!artifactId || !displayName || !mimeType) {
+        return null;
+      }
+      const artifact: ArtifactInfo = {
+        artifactId,
+        sessionId: typeof d.session_id === 'string' ? d.session_id : '',
+        displayName,
+        mimeType,
+        sizeBytes: typeof d.size_bytes === 'number' ? d.size_bytes : 0,
+        createdAt: typeof d.created_at === 'number' ? d.created_at : 0,
+      };
+      return { kind: 'artifact_created', artifact };
     }
     case 'complete': {
       // data is `{ full_text: string, tool_calls_json: string }`

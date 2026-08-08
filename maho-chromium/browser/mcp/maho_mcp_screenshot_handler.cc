@@ -4,9 +4,13 @@
 
 #include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 
+#include <algorithm>
+#include <string>
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/strings/string_util.h"
+#include "maho/browser/ai/maho_credential_redaction.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -205,12 +209,32 @@ bool MahoMcpScreenshotHandler::IsPasswordField(const ui::AXNode* node) {
     return true;
   }
 
-  // Fallback: check html_attributes vector for type="password".
-  if (data.role == ax::mojom::Role::kTextField) {
-    for (const auto& attr : data.html_attributes) {
-      if (attr.first == "type" && attr.second == "password") {
-        return true;
-      }
+  // Method 2: sensitive autocomplete token (one-time-code, cc-*, *password).
+  if (data.HasStringAttribute(ax::mojom::StringAttribute::kAutoComplete)) {
+    std::string token =
+        data.GetStringAttribute(ax::mojom::StringAttribute::kAutoComplete);
+    std::transform(token.begin(), token.end(), token.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (credential_redaction::IsSensitiveAutocomplete(token)) {
+      return true;
+    }
+  }
+
+  if (data.HasStringAttribute(ax::mojom::StringAttribute::kName) &&
+      credential_redaction::IsCredentialName(
+          data.GetStringAttribute(ax::mojom::StringAttribute::kName))) {
+    return true;
+  }
+
+  for (const auto& attr : data.html_attributes) {
+    if ((attr.first == "type" &&
+         base::EqualsCaseInsensitiveASCII(attr.second, "password")) ||
+        ((attr.first == "autocomplete" || attr.first == "aria-label" ||
+          attr.first == "name" || attr.first == "id" ||
+          attr.first == "placeholder" || attr.first == "data-maho-field") &&
+         (credential_redaction::IsSensitiveAutocomplete(attr.second) ||
+          credential_redaction::IsCredentialName(attr.second)))) {
+      return true;
     }
   }
 

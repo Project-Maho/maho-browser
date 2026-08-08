@@ -11,6 +11,7 @@ pub mod favicon;
 pub mod history;
 pub mod password;
 pub mod workspace;
+mod workspace_folders;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -110,6 +111,10 @@ pub(crate) fn fetch_keychain_key_with_timeout(
 #[cfg(test)]
 pub mod tests {
     use super::super::orchestrator::ImportDestination;
+    pub(in crate::workers) use super::workspace_folders::test_support::{
+        MockAutofill, MockBookmark, MockCookie, MockFavicon, MockFolder, MockHistory, MockPassword,
+        MockSpace, MockTab,
+    };
     use std::sync::Mutex;
 
     /// Mock destination for testing workers.
@@ -128,71 +133,6 @@ pub mod tests {
         pub favorited: Mutex<Vec<String>>,
         pub active_space: Mutex<Option<String>>,
         next_id: Mutex<u32>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockSpace {
-        pub id: String,
-        pub name: String,
-        pub theme: String,
-        pub icon: String,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockTab {
-        pub id: String,
-        pub space_id: String,
-        pub url: String,
-        pub folder_id: Option<String>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockFolder {
-        pub id: String,
-        pub space_id: String,
-        pub name: String,
-        pub parent_id: String,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockBookmark {
-        pub title: String,
-        pub url: String,
-        pub folder_path: Vec<String>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockHistory {
-        pub url: String,
-        pub title: String,
-        pub visit_time: f64,
-        pub visit_count: u32,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockCookie {
-        pub host: String,
-        pub name: String,
-        pub value: String,
-        pub path: String,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockAutofill {
-        pub field_name: String,
-        pub value: String,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockFavicon {
-        pub url: String,
-        pub data_len: usize,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct MockPassword {
-        pub origin_url: String,
-        pub username: String,
     }
 
     impl MockDestination {
@@ -234,12 +174,13 @@ pub mod tests {
             Some(id)
         }
 
-        fn create_tab(&self, space_id: &str, url: &str) -> Option<String> {
+        fn create_tab(&self, space_id: &str, url: &str, title: &str) -> Option<String> {
             let id = self.next_id();
             self.tabs.lock().unwrap().push(MockTab {
                 id: id.clone(),
                 space_id: space_id.to_string(),
                 url: url.to_string(),
+                title: title.to_string(),
                 folder_id: None,
             });
             Some(id)
@@ -249,6 +190,7 @@ pub mod tests {
             &self,
             space_id: &str,
             url: &str,
+            title: &str,
             folder_id: &str,
         ) -> Option<String> {
             let id = self.next_id();
@@ -256,6 +198,7 @@ pub mod tests {
                 id: id.clone(),
                 space_id: space_id.to_string(),
                 url: url.to_string(),
+                title: title.to_string(),
                 folder_id: Some(folder_id.to_string()),
             });
             Some(id)
@@ -298,13 +241,7 @@ pub mod tests {
             Some(id)
         }
 
-        fn add_history(
-            &self,
-            url: &str,
-            title: &str,
-            visit_time: f64,
-            visit_count: u32,
-        ) -> bool {
+        fn add_history(&self, url: &str, title: &str, visit_time: f64, visit_count: u32) -> bool {
             self.history.lock().unwrap().push(MockHistory {
                 url: url.to_string(),
                 title: title.to_string(),

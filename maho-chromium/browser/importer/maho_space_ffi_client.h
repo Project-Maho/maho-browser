@@ -73,7 +73,9 @@ class MahoSpaceFFIClient {
 
   std::map<std::string, int> folder_depths_;
 
-  base::SequenceChecker sequence_checker_;
+  // maybe_unused: only touched by DCHECK_CALLED_ON_VALID_SEQUENCE (compiled out
+  // when dcheck_always_on=false), else -Wunused-private-field fails release.
+  [[maybe_unused]] base::SequenceChecker sequence_checker_;
 };
 
 }  // namespace maho

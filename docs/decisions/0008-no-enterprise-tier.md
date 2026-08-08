@@ -26,8 +26,10 @@ plan template, not derived from a customer or revenue signal. Specifically:
    contract closes.
 4. Maho's current operating cost is small enough to run without Enterprise
    revenue. The trust-by-architecture positioning is also stronger when the
-   only product story is "free, BYOK, open source, self-hostable" with no
-   B2B price wall on the side.
+   only product story is "free, BYOK, self-hostable relay, zero-retention"
+   with no B2B price wall on the side. (Note, 2026-07: an earlier draft of
+   this line said "open source"; Maho is proprietary / closed-source, so the
+   trust story rests on architecture, not on a public source license.)
 
 ## Decision Drivers
 

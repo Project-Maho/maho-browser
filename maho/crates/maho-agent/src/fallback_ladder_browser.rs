@@ -1,7 +1,5 @@
 use crate::approval::ToolSensitivity;
-use crate::fallback_ladder::{
-    FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval,
-};
+use crate::fallback_ladder::{FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval};
 
 pub fn browser_tool_fallback_request<'a>(
     tool_name: &'a str,
@@ -33,8 +31,11 @@ fn infer_requested_tier(tool_name: &str, args: Option<&serde_json::Value>) -> Fa
     }
     match tool_name {
         "browser_navigate" | "browser_key_press" => FallbackTier::TypedDomainApi,
-        "page_query_selector" | "page_get_text" | "page_get_attribute"
-        | "page_wait_for_selector" | "browser_wait_for_navigation" => FallbackTier::DomRefLocator,
+        "page_query_selector"
+        | "page_get_text"
+        | "page_get_attribute"
+        | "page_wait_for_selector"
+        | "browser_wait_for_navigation" => FallbackTier::DomRefLocator,
         "browser_accessibility_snapshot" => FallbackTier::AccessibilitySnapshot,
         "browser_click" | "browser_type" | "browser_select" | "browser_scroll"
         | "browser_hover" => element_action_tier(tool_name, args),

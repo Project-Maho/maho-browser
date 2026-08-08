@@ -34,11 +34,7 @@ fn is_valid_favicon_data(data: &[u8]) -> bool {
         return false;
     }
     // PNG dimension check
-    if data.len() >= 24
-        && data[0] == 0x89
-        && data[1] == 0x50
-        && data[2] == 0x4E
-        && data[3] == 0x47
+    if data.len() >= 24 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47
     {
         let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
         let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
@@ -47,12 +43,7 @@ fn is_valid_favicon_data(data: &[u8]) -> bool {
         }
     }
     // ICO dimension check
-    if data.len() >= 8
-        && data[0] == 0x00
-        && data[1] == 0x00
-        && data[2] == 0x01
-        && data[3] == 0x00
-    {
+    if data.len() >= 8 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x00 {
         let num_images = u16::from_le_bytes([data[4], data[5]]) as usize;
         if data.len() >= 6 + num_images * 16 {
             for i in 0..num_images {
@@ -302,8 +293,12 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].favicon_url, "https://example.com/favicon.png");
         assert_eq!(entries[0].page_urls.len(), 2);
-        assert!(entries[0].page_urls.contains(&"https://example.com".to_string()));
-        assert!(entries[0].page_urls.contains(&"https://example.com/page".to_string()));
+        assert!(entries[0]
+            .page_urls
+            .contains(&"https://example.com".to_string()));
+        assert!(entries[0]
+            .page_urls
+            .contains(&"https://example.com/page".to_string()));
         assert!(!entries[0].image_data.is_empty());
     }
 

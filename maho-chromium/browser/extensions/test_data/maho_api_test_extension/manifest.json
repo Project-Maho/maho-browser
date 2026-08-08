@@ -1,0 +1,8 @@
+{
+  "name": "Maho API Test",
+  "version": "1.0",
+  "manifest_version": 3,
+  "description": "Exercises chrome.maho.* to verify the 'maho' API permission is registered (C1 runtime check).",
+  "permissions": ["maho"],
+  "background": { "service_worker": "background.js" }
+}

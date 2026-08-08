@@ -13,6 +13,12 @@
 #include <utility>
 #include <vector>
 
+#include "build/build_config.h"
+
+#if !BUILDFLAG(IS_WIN)
+#include <unistd.h>
+#endif
+
 #include "base/json/json_reader.h"
 #include "base/json/string_escape.h"
 #include "base/values.h"
@@ -20,10 +26,25 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
+#include "maho/browser/mcp/maho_mcp_capability_registry.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho {
 namespace {
+
+// Constructs a session the way a same-user client connection would appear on
+// each platform: POSIX authenticates by peer UID, Windows by an auth token
+// presented during the initialize handshake. A null token skips token
+// validation, which is the Windows analogue of the matching-UID case.
+std::unique_ptr<MahoMcpSession> MakeTestSession(
+    MahoMcpLeaseRegistry* lease_registry = nullptr) {
+#if BUILDFLAG(IS_WIN)
+  return std::make_unique<MahoMcpSession>(
+      static_cast<MahoMcpSessionToken*>(nullptr), lease_registry);
+#else
+  return std::make_unique<MahoMcpSession>(getuid(), lease_registry);
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // R-8: non-revealing, generation-bound target resolution (task-8-mcp-session).
@@ -47,6 +68,7 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
   int resolve_tab_calls = 0;
   int resolve_profile_calls = 0;
   int revalidate_calls = 0;
+  std::string last_navigated_url;
 
   struct PendingStart {
     std::string capture_id;
@@ -56,6 +78,11 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
   std::deque<PendingStart> pending_starts;
   std::deque<StopNetworkCaptureCallback> pending_stops;
   std::vector<std::string> canceled_capture_ids;
+  int same_origin_fetch_calls = 0;
+  GURL last_fetch_url;
+  std::string last_fetch_method;
+  std::string last_fetch_body;
+  std::string last_fetch_headers_json;
 
   MahoMcpTargetResolution ResolveTabTarget(int requested_tab_id) override {
     ++resolve_tab_calls;
@@ -152,7 +179,11 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
       MahoMcpSession::RefTable* out_refs) override {
     return base::Value(base::DictValue());
   }
-  PageContentResult GetPageContent(int tab_id) override { return {}; }
+  PageContentResult GetPageContent(int tab_id) override {
+    PageContentResult result;
+    result.url = "https://example.com/page";
+    return result;
+  }
   PageContextResult GetPageContext(int tab_id) override { return {}; }
   SearchResult SearchInPage(int tab_id, const std::string& query) override {
     return {};
@@ -173,6 +204,25 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
                        const std::string& selector,
                        int timeout_ms) override {
     return false;
+  }
+  void SameOriginFetch(int tab_id,
+                       const GURL& url,
+                       const std::string& method,
+                       const std::string& body,
+                       const std::string& headers_json,
+                       SameOriginFetchCallback callback) override {
+    ++same_origin_fetch_calls;
+    last_fetch_url = url;
+    last_fetch_method = method;
+    last_fetch_body = body;
+    last_fetch_headers_json = headers_json;
+    SameOriginFetchResult result;
+    result.success = true;
+    result.status = 200;
+    result.final_url = url.spec();
+    result.content_type = "application/json";
+    result.text = R"({"ok":true})";
+    std::move(callback).Run(std::move(result));
   }
   int CreateNewTab(const GURL& url) override { return 99; }
   bool CloseTab(int tab_id) override { return true; }
@@ -221,7 +271,10 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
     return false;
   }
   bool ActivateTab(int tab_id) override { return true; }
-  bool Navigate(int tab_id, const GURL& url) override { return true; }
+  bool Navigate(int tab_id, const GURL& url) override {
+    last_navigated_url = url.spec();
+    return true;
+  }
   bool SetViewportSize(int tab_id, int width, int height) override {
     return true;
   }
@@ -230,8 +283,8 @@ class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
 class MahoMcpSessionTest : public testing::Test {
  protected:
   void SetUp() override {
-    // Create session with matching UID (simulates same-user connection).
-    session_ = std::make_unique<MahoMcpSession>(getuid());
+    // Create session as a same-user connection (see MakeTestSession).
+    session_ = MakeTestSession();
   }
 
   void TearDown() override {
@@ -253,8 +306,7 @@ class MahoMcpSessionTest : public testing::Test {
     delegate_ = std::make_unique<ResolvingFakeDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
     lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
-    session_ =
-        std::make_unique<MahoMcpSession>(getuid(), lease_registry_.get());
+    session_ = MakeTestSession(lease_registry_.get());
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionTest::CaptureDeferred, base::Unretained(this)));
     auto responses = session_->ProcessData(
@@ -397,6 +449,10 @@ TEST_F(MahoMcpSessionTest, ToolsListAfterInitialize) {
   EXPECT_TRUE(result->FindList("tools"));
 }
 
+#if !BUILDFLAG(IS_WIN)
+// Peer-UID authentication is POSIX-only; Windows rejects mismatched clients
+// through MahoMcpSessionToken instead (see
+// maho_mcp_session_token_win_unittest.cc).
 TEST_F(MahoMcpSessionTest, RejectsPeerUidMismatch) {
   auto foreign_session = std::make_unique<MahoMcpSession>(getuid() + 1);
 
@@ -409,8 +465,9 @@ TEST_F(MahoMcpSessionTest, RejectsPeerUidMismatch) {
   auto responses = foreign_session->ProcessData(input);
   EXPECT_EQ(foreign_session->state(), MahoMcpSession::State::kClosed);
 }
+#endif  // !BUILDFLAG(IS_WIN)
 
-// D1 allowed_domains: helper to drive a session through initialize
+// D1 disallow list: helper to drive a session through initialize
 // followed by an arbitrary payload, returning the LAST response parsed.
 class MahoMcpSessionAllowedDomainsTest : public MahoMcpSessionTest {
  protected:
@@ -435,25 +492,22 @@ class MahoMcpSessionAllowedDomainsTest : public MahoMcpSessionTest {
   }
 };
 
-TEST_F(MahoMcpSessionAllowedDomainsTest, NavigateBlockedWhenEmptyAllowlist) {
+TEST_F(MahoMcpSessionAllowedDomainsTest, NavigateAllowedWhenEmptyBlocklist) {
   InitializeSession();
   base::Value resp = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
       R"("params":{"name":"browser_navigate",)"
       R"("arguments":{"url":"https://example.com/"}}})" "\n");
-  const auto* error = resp.GetDict().FindDict("error");
-  ASSERT_TRUE(error);
-  EXPECT_EQ(error->FindInt("code").value(), -32000);
-  const auto* data = error->FindDict("data");
-  ASSERT_TRUE(data);
-  EXPECT_EQ(*data->FindString("status"), "domain_approval_required");
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->FindBool("navigated").value(), true);
 }
 
-TEST_F(MahoMcpSessionAllowedDomainsTest, SetAllowedDomainsThenNavigateOk) {
+TEST_F(MahoMcpSessionAllowedDomainsTest, SetBlockedDomainsThenNavigateElsewhereOk) {
   InitializeSession();
   base::Value set_resp = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
-      R"("params":{"name":"browser_set_allowed_domains",)"
+      R"("params":{"name":"browser_set_blocked_domains",)"
       R"("arguments":{"domains":["example.com"]}}})" "\n");
   const auto* set_result = set_resp.GetDict().FindDict("result");
   ASSERT_TRUE(set_result);
@@ -462,7 +516,7 @@ TEST_F(MahoMcpSessionAllowedDomainsTest, SetAllowedDomainsThenNavigateOk) {
   base::Value nav_resp = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
       R"("params":{"name":"browser_navigate",)"
-      R"("arguments":{"url":"https://example.com/foo"}}})" "\n");
+      R"("arguments":{"url":"https://example.org/foo"}}})" "\n");
   const auto* nav_result = nav_resp.GetDict().FindDict("result");
   ASSERT_TRUE(nav_result);
   EXPECT_EQ(nav_result->FindBool("navigated").value(), true);
@@ -472,45 +526,58 @@ TEST_F(MahoMcpSessionAllowedDomainsTest, WildcardMatchesSubdomainAndBare) {
   InitializeSession();
   (void)CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
-      R"("params":{"name":"browser_set_allowed_domains",)"
+      R"("params":{"name":"browser_set_blocked_domains",)"
       R"("arguments":{"domains":["*.github.com"]}}})" "\n");
 
   base::Value r1 = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
       R"("params":{"name":"browser_navigate",)"
       R"("arguments":{"url":"https://api.github.com/repos"}}})" "\n");
-  ASSERT_TRUE(r1.GetDict().FindDict("result"));
+  ASSERT_FALSE(r1.GetDict().FindDict("result"));
 
   base::Value r2 = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":4,)"
       R"("params":{"name":"browser_navigate",)"
       R"("arguments":{"url":"https://github.com/"}}})" "\n");
-  ASSERT_TRUE(r2.GetDict().FindDict("result"));
+  ASSERT_FALSE(r2.GetDict().FindDict("result"));
 }
 
-TEST_F(MahoMcpSessionAllowedDomainsTest, DisallowedHostBlockedAfterSet) {
+TEST_F(MahoMcpSessionAllowedDomainsTest, BlockedHostRejectedAfterSet) {
   InitializeSession();
   (void)CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
-      R"("params":{"name":"browser_set_allowed_domains",)"
+      R"("params":{"name":"browser_set_blocked_domains",)"
       R"("arguments":{"domains":["example.com"]}}})" "\n");
 
   base::Value resp = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
       R"("params":{"name":"browser_navigate",)"
-      R"("arguments":{"url":"https://evil.example.org/"}}})" "\n");
+      R"("arguments":{"url":"https://example.com/"}}})" "\n");
   const auto* error = resp.GetDict().FindDict("error");
   ASSERT_TRUE(error);
   EXPECT_EQ(error->FindInt("code").value(), -32000);
   const auto* data = error->FindDict("data");
   ASSERT_TRUE(data);
-  EXPECT_EQ(*data->FindString("status"), "domain_not_allowed");
+  EXPECT_EQ(*data->FindString("status"), "domain_blocked");
 }
 
-TEST_F(MahoMcpSessionAllowedDomainsTest, TabNewWithUrlEnforced) {
+TEST_F(MahoMcpSessionAllowedDomainsTest, TabNewWithUrlAllowedByDefault) {
   InitializeSession();
   base::Value resp = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_tab_new",)"
+      R"("arguments":{"url":"https://example.com/"}}})" "\n");
+  ASSERT_TRUE(resp.GetDict().FindDict("result"));
+}
+
+TEST_F(MahoMcpSessionAllowedDomainsTest, TabNewWithUrlBlockedWhenDisallowed) {
+  InitializeSession();
+  (void)CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_set_blocked_domains",)"
+      R"("arguments":{"domains":["example.com"]}}})" "\n");
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
       R"("params":{"name":"browser_tab_new",)"
       R"("arguments":{"url":"https://example.com/"}}})" "\n");
   const auto* error = resp.GetDict().FindDict("error");
@@ -950,7 +1017,7 @@ class MahoMcpSessionMailReadTest : public testing::Test {
   void SetUp() override {
     delegate_ = std::make_unique<FakeMailReadDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
-    session_ = std::make_unique<MahoMcpSession>(getuid());
+    session_ = MakeTestSession();
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionMailReadTest::CaptureDeferred,
         base::Unretained(this)));
@@ -1194,7 +1261,7 @@ class MahoMcpSessionNetworkCaptureTest : public testing::Test {
   void SetUp() override {
     delegate_ = std::make_unique<FakeAsyncNetworkDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
-    session_ = std::make_unique<MahoMcpSession>(getuid());
+    session_ = MakeTestSession();
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionNetworkCaptureTest::CaptureDeferred,
         base::Unretained(this)));
@@ -1657,11 +1724,6 @@ TEST_F(MahoMcpSessionNewFeaturesTest, WaitForNavigation_TimesOutForUnknownTab) {
 }
 
 TEST_F(MahoMcpSessionNewFeaturesTest, TabSwitch_UpdatesActiveTab) {
-  (void)CallTool(
-      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
-      R"("params":{"name":"browser_set_allowed_domains",)"
-      R"("arguments":{"domains":["example.com"]}}})" "\n");
-
   base::Value new_tab_resp = CallTool(
       R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
       R"("params":{"name":"browser_tab_new",)"
@@ -1890,8 +1952,9 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
       "page_get_text",
       "page_get_attribute",
       "page_wait_for_selector",
-      "browser_set_allowed_domains",
-      "browser_get_allowed_domains",
+      "browser_same_origin_fetch",
+      "browser_set_blocked_domains",
+      "browser_get_blocked_domains",
       "browser_routines_list",
       "browser_routines_run",
       "mail_list_accounts",
@@ -1981,6 +2044,7 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
       "page_get_text",
       "page_get_attribute",
       "page_wait_for_selector",
+      "browser_same_origin_fetch",
       "browser_accessibility_snapshot",
       "browser_click",
       "browser_type",
@@ -2023,7 +2087,7 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
   const int prof_before = delegate_->resolve_profile_calls;
   CallToolRaw("ping", "{}", id++);
   CallToolRaw("browser_tab_list", "{}", id++);
-  CallToolRaw("browser_get_allowed_domains", "{}", id++);
+  CallToolRaw("browser_get_blocked_domains", "{}", id++);
   EXPECT_EQ(delegate_->resolve_tab_calls, tab_before);
   EXPECT_EQ(delegate_->resolve_profile_calls, prof_before);
 }
@@ -2065,6 +2129,92 @@ TEST_F(MahoMcpSessionTest, MutationRequiresActiveLease) {
           << "held lease must let the mutation past the gate";
     }
   }
+}
+
+TEST_F(MahoMcpSessionTest, NavigateResolvesRelativeUrlAgainstActiveTab) {
+  InitResolvingSession();
+
+  {
+    auto responses = CallToolRaw("browser_acquire_lease", R"({"tab_id":7})", 301);
+    ASSERT_EQ(responses.size(), 1u);
+    base::Value r = ParseLine(responses[0]);
+    ASSERT_FALSE(r.GetDict().FindDict("error"))
+        << "lease acquisition unexpectedly failed";
+  }
+
+  auto responses = CallToolRaw("browser_navigate", R"({"url":"/sites"})", 302);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value r = ParseLine(responses[0]);
+  const auto* result = r.GetDict().FindDict("result");
+  ASSERT_TRUE(result) << "relative navigation must succeed, got: "
+                      << responses[0];
+  EXPECT_TRUE(result->FindBool("navigated").value());
+  EXPECT_EQ(delegate_->last_navigated_url, "https://example.com/sites");
+}
+
+TEST_F(MahoMcpSessionTest, SameOriginFetchRequiresLeaseAndRejectsCrossOrigin) {
+  InitResolvingSession();
+
+  auto no_lease = CallToolRaw(
+      "browser_same_origin_fetch",
+      R"({"tab_id":7,"url":"https://example.com/graphql","method":"POST","body":"{}"})",
+      330);
+  ASSERT_EQ(no_lease.size(), 1u);
+  base::Value no_lease_value = ParseLine(no_lease[0]);
+  const auto* lease_error = no_lease_value.GetDict().FindDict("error");
+  ASSERT_TRUE(lease_error);
+  EXPECT_EQ(lease_error->FindInt("code").value(),
+            kMahoMcpErrorLeaseRequired);
+
+  auto acquired = CallToolRaw("browser_acquire_lease", R"({"tab_id":7})", 331);
+  ASSERT_EQ(acquired.size(), 1u);
+  ASSERT_FALSE(ParseLine(acquired[0]).GetDict().FindDict("error"));
+
+  auto cross_origin = CallToolRaw(
+      "browser_same_origin_fetch",
+      R"({"tab_id":7,"url":"https://other.example/graphql","method":"POST","body":"{}"})",
+      332);
+  ASSERT_EQ(cross_origin.size(), 1u);
+  base::Value cross_origin_value = ParseLine(cross_origin[0]);
+  const auto* origin_error =
+      cross_origin_value.GetDict().FindDict("error");
+  ASSERT_TRUE(origin_error);
+  EXPECT_NE(origin_error->FindString("message")->find("origin"),
+            std::string::npos);
+  EXPECT_EQ(delegate_->same_origin_fetch_calls, 0);
+}
+
+TEST_F(MahoMcpSessionTest, SameOriginFetchReturnsBoundedRendererPayload) {
+  InitResolvingSession();
+  auto acquired = CallToolRaw("browser_acquire_lease", R"({"tab_id":7})", 340);
+  ASSERT_EQ(acquired.size(), 1u);
+
+  auto immediate = CallToolRaw(
+      "browser_same_origin_fetch",
+      R"({"tab_id":7,"url":"https://example.com/graphql","method":"POST","body":"{\"query\":\"query Dogs { animals }\"}","headers":{"x-apollo-operation-name":"Dogs"}})",
+      341);
+  EXPECT_TRUE(immediate.empty());
+  ASSERT_EQ(delegate_->same_origin_fetch_calls, 1);
+  EXPECT_EQ(delegate_->last_fetch_url.spec(), "https://example.com/graphql");
+  EXPECT_EQ(delegate_->last_fetch_method, "POST");
+  EXPECT_EQ(delegate_->last_fetch_body,
+            R"({"query":"query Dogs { animals }"})");
+  std::optional<base::Value> headers = base::JSONReader::Read(
+      delegate_->last_fetch_headers_json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(headers && headers->is_dict());
+  EXPECT_EQ(*headers->GetDict().FindString("content-type"),
+            "application/json");
+  EXPECT_EQ(*headers->GetDict().FindString("x-apollo-operation-name"),
+            "Dogs");
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  base::Value deferred_value = ParseLine(deferred_responses_[0]);
+  const auto* result =
+      deferred_value.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->FindInt("status").value(), 200);
+  EXPECT_EQ(*result->FindString("content_type"), "application/json");
+  EXPECT_EQ(*result->FindString("text"), R"({"ok":true})");
+  EXPECT_FALSE(result->FindBool("truncated").value());
 }
 
 // Todo 6: read-only tools remain available with no lease held.
@@ -2309,7 +2459,7 @@ class MahoMcpSessionTypeGuardTest : public testing::Test {
     delegate_ = std::make_unique<TypeGuardFakeDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
     lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
-    session_ = std::make_unique<MahoMcpSession>(getuid(), lease_registry_.get());
+    session_ = MakeTestSession(lease_registry_.get());
     auto responses = session_->ProcessData(
         R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
         R"("params":{"protocolVersion":"2025-03-26",)"
@@ -2553,6 +2703,119 @@ TEST(MahoMcpCredentialClassifierTest, ClassifiesTrustedSignals) {
   MahoMcpFieldMetadata unclassified;
   EXPECT_TRUE(MahoMcpSession::IsCredentialField(unclassified));
 }
+
+// ======================================================================
+// MahoMcpCapabilityRegistry unit tests (B1 exact-origin, additivity,
+// validation, tab ownership, teardown)
+// ======================================================================
+
+TEST(MahoMcpCapabilityRegistryTest, GrantExactOriginAdditive) {
+  MahoMcpCapabilityRegistry reg;
+  const url::Origin a = url::Origin::Create(GURL("https://example.com"));
+  const url::Origin b = url::Origin::Create(GURL("https://iana.org"));
+  EXPECT_TRUE(reg.GrantExactOrigin(a));
+  EXPECT_TRUE(reg.GrantExactOrigin(b));
+  EXPECT_TRUE(reg.IsOriginGranted(a));
+  EXPECT_TRUE(reg.IsOriginGranted(b));
+  EXPECT_EQ(reg.ListGrantedOrigins().size(), 2u);
+}
+
+TEST(MahoMcpCapabilityRegistryTest, RevokeExactOriginRemovesOne) {
+  MahoMcpCapabilityRegistry reg;
+  const url::Origin a = url::Origin::Create(GURL("https://example.com"));
+  const url::Origin b = url::Origin::Create(GURL("https://iana.org"));
+  reg.GrantExactOrigin(a);
+  reg.GrantExactOrigin(b);
+  EXPECT_TRUE(reg.RevokeExactOrigin(a));
+  EXPECT_FALSE(reg.IsOriginGranted(a));
+  EXPECT_TRUE(reg.IsOriginGranted(b));
+  EXPECT_FALSE(reg.RevokeExactOrigin(a));  // already gone
+}
+
+TEST(MahoMcpCapabilityRegistryTest, SchemeAndPortDistinction) {
+  MahoMcpCapabilityRegistry reg;
+  const url::Origin https_443 =
+      url::Origin::Create(GURL("https://example.com"));
+  const url::Origin http_80 =
+      url::Origin::Create(GURL("http://example.com"));
+  const url::Origin https_8443 =
+      url::Origin::Create(GURL("https://example.com:8443"));
+  reg.GrantExactOrigin(https_443);
+  EXPECT_FALSE(reg.IsOriginGranted(http_80));
+  EXPECT_FALSE(reg.IsOriginGranted(https_8443));
+  reg.GrantExactOrigin(https_8443);
+  EXPECT_TRUE(reg.IsOriginGranted(https_8443));
+  EXPECT_EQ(reg.ListGrantedOrigins().size(), 2u);
+}
+
+TEST(MahoMcpCapabilityRegistryTest, WwwAndApexAreDistinct) {
+  MahoMcpCapabilityRegistry reg;
+  const url::Origin apex =
+      url::Origin::Create(GURL("https://example.com"));
+  const url::Origin www =
+      url::Origin::Create(GURL("https://www.example.com"));
+  reg.GrantExactOrigin(apex);
+  EXPECT_FALSE(reg.IsOriginGranted(www));
+}
+
+TEST(MahoMcpCapabilityRegistryTest, RejectsOpaqueOrigin) {
+  MahoMcpCapabilityRegistry reg;
+  const url::Origin opaque;
+  EXPECT_FALSE(reg.IsValidGrantOrigin(opaque));
+  EXPECT_FALSE(reg.GrantExactOrigin(opaque));
+}
+
+TEST(MahoMcpCapabilityRegistryTest, RejectsDangerousSchemes) {
+  MahoMcpCapabilityRegistry reg;
+  EXPECT_FALSE(reg.IsValidGrantOrigin(
+      url::Origin::Create(GURL("file:///etc/passwd"))));
+  EXPECT_FALSE(reg.IsValidGrantOrigin(
+      url::Origin::Create(GURL("javascript:void(0)"))));
+  EXPECT_FALSE(reg.IsValidGrantOrigin(
+      url::Origin::Create(GURL("data:text/html,hello"))));
+  EXPECT_FALSE(
+      reg.IsValidGrantOrigin(url::Origin::Create(GURL("chrome://version"))));
+}
+
+TEST(MahoMcpCapabilityRegistryTest, HandlesIncomingDomainList) {
+  MahoMcpCapabilityRegistry reg;
+  // The rust-side sandbox handler validates origin strings before calling
+  // GrantExactOrigin. Wildcards cannot be constructed as url::Origin
+  // at all, so the registry itself never sees them.
+  // Verify that the handler path (the only caller that can receive wildcard
+  // strings) is tested through the session-level tool-call tests.
+  const url::Origin a = url::Origin::Create(GURL("https://example.com"));
+  EXPECT_TRUE(reg.GrantExactOrigin(a));
+  EXPECT_TRUE(reg.IsOriginGranted(a));
+}
+
+TEST(MahoMcpCapabilityRegistryTest, TabOwnership) {
+  MahoMcpCapabilityRegistry reg;
+  EXPECT_EQ(reg.AdoptTab(42),
+            MahoMcpCapabilityRegistry::AdoptResult::kOk);
+  EXPECT_TRUE(reg.IsTabOwned(42));
+  EXPECT_EQ(reg.AdoptTab(42),
+            MahoMcpCapabilityRegistry::AdoptResult::kAlreadyOwnedByThisSession);
+  reg.ReleaseTab(42);
+  EXPECT_FALSE(reg.IsTabOwned(42));
+  EXPECT_EQ(reg.ListOwnedTabs().size(), 0u);
+}
+
+TEST(MahoMcpCapabilityRegistryTest, ClearResetsEverything) {
+  MahoMcpCapabilityRegistry reg;
+  const url::Origin a = url::Origin::Create(GURL("https://example.com"));
+  reg.GrantExactOrigin(a);
+  reg.AdoptTab(99);
+  EXPECT_EQ(reg.ListGrantedOrigins().size(), 1u);
+  EXPECT_EQ(reg.ListOwnedTabs().size(), 1u);
+  reg.Clear();
+  EXPECT_EQ(reg.ListGrantedOrigins().size(), 0u);
+  EXPECT_EQ(reg.ListOwnedTabs().size(), 0u);
+  EXPECT_FALSE(reg.IsOriginGranted(a));
+  EXPECT_FALSE(reg.IsTabOwned(99));
+}
+
+
 
 }  // namespace
 }  // namespace maho

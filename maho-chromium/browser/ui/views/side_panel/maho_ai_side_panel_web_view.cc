@@ -5,7 +5,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/functional/callback.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_scope.h"
@@ -14,6 +13,8 @@
 #include "content/public/browser/web_contents.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer.h"
+#include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "url/gurl.h"
 
 using SidePanelWebUIViewT_MahoAIUI = SidePanelWebUIViewT<MahoAIUI>;
@@ -31,7 +32,13 @@ MahoAiSidePanelWebView::MahoAiSidePanelWebView(Profile* profile,
               profile,
               /*task_manager_string_id=*/0,
               /*esc_closes_ui=*/false,
-              /*supports_draggable_regions=*/false)) {}
+              /*supports_draggable_regions=*/false)) {
+  SetPaintToLayer();
+  layer()->SetFillsBoundsOpaquely(false);
+  views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
+      web_contents(), SK_ColorTRANSPARENT);
+  web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
+}
 
 MahoAiSidePanelWebView::~MahoAiSidePanelWebView() = default;
 

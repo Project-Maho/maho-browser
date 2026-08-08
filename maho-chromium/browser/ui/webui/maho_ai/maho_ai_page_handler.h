@@ -35,6 +35,10 @@ namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
 
+namespace content {
+class WebContents;
+}  // namespace content
+
 class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
  public:
   MahoAIPageHandler(
@@ -42,6 +46,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
       mojo::PendingRemote<maho_ai::mojom::Page> page,
       std::unique_ptr<MahoPrivateContextToken> token,
       Browser* browser,
+      content::WebContents* host_web_contents,
       PrefService* prefs,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
@@ -64,6 +69,17 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                          uint32_t offset,
                          uint32_t limit,
                          GetSessionHistoryCallback callback) override;
+  void ListArtifacts(const std::string& session_id,
+                     ListArtifactsCallback callback) override;
+  void RenameArtifact(const std::string& artifact_id,
+                      const std::string& display_name,
+                      RenameArtifactCallback callback) override;
+  void DeleteArtifact(const std::string& artifact_id,
+                      DeleteArtifactCallback callback) override;
+  void GetArtifactPreviewUrl(const std::string& artifact_id,
+                             GetArtifactPreviewUrlCallback callback) override;
+  void GetArtifactExportUrl(const std::string& artifact_id,
+                            GetArtifactExportUrlCallback callback) override;
   void GetOpenTabs(GetOpenTabsCallback callback) override;
   void SearchHistory(const std::string& query,
                      uint32_t max_results,
@@ -166,6 +182,15 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   friend class MahoAIPageHandlerTestPeer;
 
   struct Correlation {
+    Correlation();
+    Correlation(std::string session_id,
+                std::optional<std::string> request_id);
+    Correlation(const Correlation&);
+    Correlation(Correlation&&);
+    Correlation& operator=(const Correlation&);
+    Correlation& operator=(Correlation&&);
+    ~Correlation();
+
     std::string session_id;
     std::optional<std::string> request_id;
   };
@@ -294,6 +319,10 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   mojo::Receiver<maho_ai::mojom::PageHandler> receiver_;
   mojo::Remote<maho_ai::mojom::Page> page_;
   std::unique_ptr<MahoPrivateContextToken> token_;
+  // The WebUI host (side panel or tab) WebContents. The capability tokens for
+  // the untrusted preview/export iframes must bind to THIS WebContents (the
+  // token_ intentionally carries no web_contents for the R-9 classification).
+  base::WeakPtr<content::WebContents> host_web_contents_;
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;

@@ -14,7 +14,13 @@ _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _MAHO_CHROMIUM_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
 _WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
 _MAHO_SCRIPTS_DIR = os.path.join(_WORKSPACE_ROOT, 'maho', 'scripts')
-_CHROMIUM_SRC_ROOT = os.path.join(_WORKSPACE_ROOT, 'chromium', 'src')
+
+
+def chromium_src_root(workspace_root):
+    return os.path.realpath(os.path.join(workspace_root, 'chromium', 'src'))
+
+
+_CHROMIUM_SRC_ROOT = chromium_src_root(_WORKSPACE_ROOT)
 _DEPOT_TOOLS_DIR = os.path.join(_CHROMIUM_SRC_ROOT, 'third_party', 'depot_tools')
 _APPLY_OVERRIDES_SCRIPT = os.path.join(_SCRIPT_DIR, 'apply_chromium_src_overrides.py')
 _BUILD_CONFIG_DIR = os.path.join(_MAHO_CHROMIUM_DIR, 'build', 'config')
@@ -39,7 +45,9 @@ def load_module(module_name, module_path):
     return module
 
 
-build_lock = load_module('maho_build_lock', os.path.join(_MAHO_SCRIPTS_DIR, 'build_lock.py')).build_lock
+_build_lock_mod = load_module('maho_build_lock', os.path.join(_MAHO_SCRIPTS_DIR, 'build_lock.py'))
+build_lock = _build_lock_mod.build_lock
+classify_targets = _build_lock_mod.classify_targets
 build_maho_core = load_module(
     'maho_build_maho_core', os.path.join(_SCRIPT_DIR, 'build_maho_core.py')
 )
@@ -133,6 +141,30 @@ def embed_sparkle_framework(app_path: str) -> bool:
     return True
 
 
+def embed_mail_helper(app_path: str, out_dir: str) -> bool:
+    """Copy the maho_mail_helper executable into the app's MacOS dir.
+
+    The GN build produces maho_mail_helper as a standalone executable but does
+    not stage it into the bundle; MahoMailHelperLauncher resolves it from
+    <DIR_EXE>/maho_mail_helper (i.e. Contents/MacOS/) at runtime. Copies with
+    shutil.copy2 so the exec bit and the linker-signed adhoc signature are
+    preserved. Does NOT fabricate the binary — a missing source is a hard error.
+    """
+    src = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'maho_mail_helper')
+    if not os.path.isfile(src):
+        print(f"error: maho_mail_helper executable not found: {src}; "
+              "cannot embed into app bundle", file=sys.stderr)
+        return False
+    macos_dir = os.path.join(app_path, 'Contents', 'MacOS')
+    os.makedirs(macos_dir, exist_ok=True)
+    dest = os.path.join(macos_dir, 'maho_mail_helper')
+    if os.path.islink(dest) or os.path.isfile(dest):
+        os.remove(dest)
+    print(f"Embedding maho_mail_helper into {macos_dir}")
+    shutil.copy2(src, dest)
+    return True
+
+
 def find_codesign_identity() -> str | None:
     try:
         res = subprocess.run(
@@ -158,7 +190,77 @@ def codesign_app(identity: str, app_path: str) -> bool:
         print(f"error: app bundle not found: {app_path}", file=sys.stderr)
         return False
     try:
+        provisioning_profile = os.environ.get('MAHO_MAC_PROVISIONING_PROFILE')
+        if provisioning_profile:
+            if not os.path.isfile(provisioning_profile):
+                print(
+                    'codesign failed: MAHO_MAC_PROVISIONING_PROFILE does not '
+                    f'exist: {provisioning_profile}',
+                    file=sys.stderr,
+                )
+                return False
+            embedded_profile = os.path.join(
+                app_path, 'Contents', 'embedded.provisionprofile'
+            )
+            print(f"Embedding macOS provisioning profile: {provisioning_profile}")
+            shutil.copy2(provisioning_profile, embedded_profile)
+
         frameworks_dir = os.path.join(app_path, 'Contents', 'Frameworks')
+        entitlements_path = os.path.join(
+            _MAHO_CHROMIUM_DIR, 'branding', 'mac', 'entitlements.plist'
+        )
+        helper_entitlements_path = os.path.join(
+            _MAHO_CHROMIUM_DIR,
+            'branding',
+            'mac',
+            'helper-entitlements.plist',
+        )
+        maho_framework_path = os.path.join(
+            frameworks_dir, 'Maho Framework.framework'
+        )
+        if os.path.isdir(maho_framework_path):
+            helpers_dir = os.path.join(
+                maho_framework_path, 'Versions', 'Current', 'Helpers'
+            )
+            for helper_name in (
+                'Maho Helper.app',
+                'Maho Helper (Alerts).app',
+                'Maho Helper (GPU).app',
+                'Maho Helper (Renderer).app',
+            ):
+                helper_path = os.path.join(helpers_dir, helper_name)
+                if os.path.isdir(helper_path):
+                    subprocess.run(
+                        [
+                            'codesign',
+                            '--force',
+                            '--sign',
+                            identity,
+                            '--options',
+                            'runtime',
+                            '--entitlements',
+                            helper_entitlements_path,
+                            helper_path,
+                        ],
+                        check=True,
+                        timeout=120,
+                    )
+
+            print("Signing Maho Framework...")
+            subprocess.run(
+                [
+                    'codesign',
+                    '--force',
+                    '--sign',
+                    identity,
+                    '--options',
+                    'runtime',
+                    maho_framework_path,
+                ],
+                check=True,
+                timeout=120,
+            )
+
         sparkle_path = os.path.join(frameworks_dir, 'Sparkle.framework')
 
         if os.path.isdir(sparkle_path):
@@ -181,7 +283,17 @@ def codesign_app(identity: str, app_path: str) -> bool:
 
             subprocess.run(['codesign', '--force', '--sign', identity, '--options', 'runtime', sparkle_path], check=True, timeout=120)
 
-        entitlements_path = os.path.join(_MAHO_CHROMIUM_DIR, 'branding', 'mac', 'entitlements.plist')
+        # Sign the embedded mail helper before the outer bundle is sealed
+        # (inside-out order, same as the Sparkle components above).
+        mail_helper = os.path.join(app_path, 'Contents', 'MacOS', 'maho_mail_helper')
+        if os.path.isfile(mail_helper):
+            print("Signing maho_mail_helper...")
+            helper_cmd = ['codesign', '--force', '--sign', identity, '--options', 'runtime']
+            if os.path.isfile(helper_entitlements_path):
+                helper_cmd += ['--entitlements', helper_entitlements_path]
+            helper_cmd += [mail_helper]
+            subprocess.run(helper_cmd, check=True, timeout=120)
+
         cmd = ['codesign', '--force', '--sign', identity, '--options', 'runtime']
         if os.path.isfile(entitlements_path):
             cmd += ['--entitlements', entitlements_path]
@@ -264,9 +376,9 @@ def launch_app(app_path: str) -> None:
     subprocess.Popen(['open', app_path])
 
 
-def ensure_args_gn(chromium_src, out_dir, platform, force, release=False):
+def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=False):
     args_gn_path = os.path.join(chromium_src, out_dir, 'args.gn')
-    suffix = '_release' if release else ''
+    suffix = '_release' if release else '_debug' if debug else ''
     template_path = os.path.join(_BUILD_CONFIG_DIR, f'args_{platform}{suffix}.gn')
 
     if not os.path.isfile(template_path):
@@ -303,14 +415,33 @@ def run_gn_gen(chromium_src, out_dir, depot_tools_dir):
 
 
 def build_chromium_app(out_dir, targets, extra_args):
-    autoninja_bin = 'autoninja.bat' if host_platform() == 'win' else 'autoninja'
     env = os.environ.copy()
     path = env.get('PATH', '')
     env['PATH'] = os.pathsep.join([_DEPOT_TOOLS_DIR, path]) if path else _DEPOT_TOOLS_DIR
-    for target in targets:
-        command = [autoninja_bin, '-C', out_dir, target, *extra_args]
-        print(f'Building Chromium target {target} with autoninja...')
-        subprocess.run(command, cwd=_CHROMIUM_SRC_ROOT, check=True, env=env)
+    # Oversubscribe -j past core count: with the sccache remote cache, most edges
+    # are network fetches (CPU idle waiting), so extra jobs overlap fetches with
+    # real compiles. Override via MAHO_NINJA_JOBS; unset falls back to autoninja default.
+    jobs = os.environ.get('MAHO_NINJA_JOBS', '16')
+    caller_set_j = any(a == '-j' or a.startswith('-j') for a in extra_args)
+    if not targets:
+        # Never fall through to a bare autoninja: with no target ninja builds
+        # the default (all), which pulls in the whole test tree.
+        print('warning: no ninja targets requested; skipping chromium build')
+        return
+    # One invocation for every target. ninja reloads the entire build graph per
+    # run, and that fixed cost measures ~25s on out/Default (68% .ninja parse,
+    # 27% node stat). Passing the targets together pays it once instead of once
+    # per target, and lets ninja schedule them in a single parallel pass.
+    if host_platform() == 'win':
+        env['PYTHONUTF8'] = '0'
+        command = [sys.executable, os.path.join(_DEPOT_TOOLS_DIR, 'autoninja.py'), '-C', out_dir]
+    else:
+        command = ['autoninja', '-C', out_dir]
+    if jobs and not caller_set_j:
+        command += ['-j', jobs]
+    command += [*targets, *extra_args]
+    print(f"Building Chromium targets {' '.join(targets)} with autoninja...")
+    subprocess.run(command, cwd=_CHROMIUM_SRC_ROOT, check=True, env=env)
 
 
 def apply_tracked_chromium_overrides(platform):
@@ -405,11 +536,13 @@ def main():
     parser.add_argument('--no-launch', action='store_true', help='Do not launch the built app on macOS.')
     parser.add_argument('--codesign-identity', help='Explicit codesigning identity to use.')
     parser.add_argument('--release', action='store_true', help='Build in production release mode.')
+    parser.add_argument('--debug', action='store_true', help='Build with debug GN settings.')
     parser.add_argument(
         '--ninja-target',
         action='append',
         default=[],
-        help='Sequential, repeatable ninja target to build. Cannot be used with legacy remainder args.',
+        help='Repeatable ninja target to build. All targets are passed to a single '
+             'autoninja invocation. Cannot be used with legacy remainder args.',
     )
     parser.add_argument('autoninja_args', nargs=argparse.REMAINDER, help='Extra args passed to autoninja after --.')
     args = parser.parse_args()
@@ -420,28 +553,47 @@ def main():
 
     if args.skip_rust and args.skip_chromium:
         parser.error('nothing to do; remove one of --skip-rust or --skip-chromium')
+    if args.release and args.debug:
+        parser.error('cannot specify both --release and --debug')
 
     platform = args.platform
-    out_dir = args.out_dir
-    with build_lock():
+    # Route the default out dir through the build queue: the daemon assigns
+    # out/Default for full builds or a narrow out dir for single-target builds,
+    # bounding concurrency. An explicit --out-dir opts out (legacy global lock).
+    use_queue = args.out_dir == 'out/Default'
+    build_class = classify_targets(args.ninja_target) if use_queue else None
+    with build_lock(build_class) as assigned_out_dir:
+        out_dir = assigned_out_dir or args.out_dir
         run_lucide_icon_check(args.skip_lucide_check)
-        if not args.skip_rust:
-            build_maho_core.build_rust_prebuilt(args.target)
+        # Narrow builds link the existing Rust prebuilt; only full builds rebuild it.
+        if not args.skip_rust and build_class != 'narrow':
+            build_maho_core.build_rust_prebuilt(args.target, incremental=not args.release)
         if not args.skip_chromium:
             ensure_overlay_mount(_CHROMIUM_SRC_ROOT, args.skip_overlay_mount)
-            ensure_args_gn(_CHROMIUM_SRC_ROOT, out_dir, platform, args.force_args_template, args.release)
+            ensure_args_gn(
+                _CHROMIUM_SRC_ROOT,
+                out_dir,
+                platform,
+                args.force_args_template,
+                args.release,
+                args.debug,
+            )
             apply_tracked_chromium_overrides(platform)
             build_ninja_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'build.ninja')
             if not os.path.isfile(build_ninja_path) or args.force_gn_gen:
                 run_gn_gen(_CHROMIUM_SRC_ROOT, out_dir, _DEPOT_TOOLS_DIR)
 
-            targets = args.ninja_target if args.ninja_target else ['chrome']
+            targets = list(args.ninja_target) if args.ninja_target else ['chrome']
+            if (not args.ninja_target and 'chrome' in targets and
+                    'maho_mail_helper' not in targets):
+                targets.append('maho_mail_helper')
             build_chromium_app(out_dir, targets, extra_args)
 
             app_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'Maho.app')
             if 'chrome' in targets:
                 if platform == 'mac':
                     embed_sparkle_framework(app_path)
+                    embed_mail_helper(app_path, out_dir)
                 if platform == 'mac' and not args.skip_codesign:
                     identity = args.codesign_identity
                     if not identity:

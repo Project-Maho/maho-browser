@@ -44,6 +44,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const mockLlm = require('./e2e_mock_llm_server.js');
+
+// Set in --mock mode: a running local mock LLM server the panel is pointed at.
+let MOCK = null;
 
 if (typeof WebSocket === 'undefined' || typeof fetch === 'undefined') {
   console.error(`FATAL: needs Node >= 21 for global WebSocket/fetch (running ${process.version}).`);
@@ -171,6 +175,29 @@ async function openAiPanel(port) {
   }
 }
 
+async function openPage(url, port) {
+  await cdpHttp(`/json/new?${encodeURIComponent(url)}`, port);
+  const deadline = Date.now() + 8000;
+  let target;
+  while (Date.now() < deadline) {
+    const targets = await cdpHttp('/json', port);
+    target = targets.find((candidate) => candidate.url === url && candidate.webSocketDebuggerUrl);
+    if (target) break;
+    await sleep(250);
+  }
+  if (!target) throw new Error(`no debugger target for ${url}`);
+  const page = new Page(target.webSocketDebuggerUrl);
+  try {
+    await page.open();
+    await page.send('Runtime.enable');
+    await page.send('Page.enable');
+    return page;
+  } catch (e) {
+    page.close();
+    throw e;
+  }
+}
+
 // --- Scenarios ---------------------------------------------------------------
 
 async function scenario_ai_panel_renders(port) {
@@ -217,9 +244,134 @@ async function scenario_ai_real_turn(port) {
   } finally { await page.close(); }
 }
 
+async function submitPromptViaComposer(page, text) {
+  await page.evalJs(`document.querySelector('textarea').focus()`);
+  await page.send('Input.insertText', { text });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+}
+
+async function waitForBodyText(page, needle, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const text = await page.evalJs(`document.body.innerText`) || '';
+    if (text.includes(needle)) return text;
+    await sleep(1000);
+  }
+  return null;
+}
+
+// mock scenarios require a running MOCK (set by --mock). MOCK.marker only ever
+// appears in a model reply (never in the echoed prompt), so its presence in the
+// DOM proves a completed streaming turn.
+async function scenario_ai_mock_general_turn(port) {
+  if (!MOCK) throw new Error('ai_mock_general_turn requires --mock');
+  MOCK.reset();
+  const page = await openAiPanel(port);
+  try {
+    // When: a general message is submitted through the composer.
+    await submitPromptViaComposer(page, 'Explain quantum tunneling in one sentence.');
+    const body = await waitForBodyText(page, MOCK.marker, 40000);
+    if (!body) throw new Error(`no streamed reply (marker "${MOCK.marker}") within 40s`);
+
+    // Then: the mock received a request with the configured provider/model and prompt.
+    const captured = MOCK.captured();
+    const req = captured[captured.length - 1];
+    if (!req) throw new Error('mock captured no request');
+    if (req.family !== 'openai') throw new Error(`unexpected family ${req.family}`);
+    if (!req.model) throw new Error('request carried no model');
+    if (!(req.raw || '').includes('quantum tunneling')) throw new Error('request did not carry the prompt');
+    return `general turn: model=${req.model}, prompt forwarded, reply streamed to DOM`;
+  } finally { await page.close(); }
+}
+
+async function scenario_ai_mock_quick_action_context(port) {
+  if (!MOCK) throw new Error('ai_mock_quick_action_context requires --mock');
+  MOCK.reset();
+  const fixture = await openPage(MOCK.fixtureUrl, port);
+  const panel = await openAiPanel(port);
+  try {
+    await fixture.send('Page.bringToFront');
+    const fixtureReady = await fixture.evalJs(
+      `document.body.innerText.includes(${JSON.stringify(MOCK.pageMarker)})`);
+    if (!fixtureReady) throw new Error('fixture page did not render its context marker');
+
+    const clicked = await panel.evalJs(`(() => {
+      const button = Array.from(document.querySelectorAll('button'))
+        .find((candidate) => candidate.textContent.trim() === 'Summarize');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    if (!clicked) throw new Error('Summarize quick action was not visible');
+
+    const body = await waitForBodyText(panel, MOCK.marker, 40000);
+    if (!body) throw new Error(`no streamed quick-action reply (marker "${MOCK.marker}") within 40s`);
+    const request = MOCK.captured().find((candidate) =>
+      /\/chat\/completions$|\/messages$/.test(candidate.path));
+    if (!request) throw new Error('mock captured no quick-action LLM request');
+    if (!request.raw.includes('Summarize this page.')) {
+      throw new Error('quick-action intent was absent from the LLM request');
+    }
+    if (!request.raw.includes(MOCK.pageMarker)) {
+      throw new Error('active page context was absent from the LLM request');
+    }
+    return 'Summarize forwarded its intent and active-tab page context to the mock LLM';
+  } finally {
+    panel.close();
+    fixture.close();
+  }
+}
+
+async function scenario_ai_mock_server_error(port) {
+  if (!MOCK) throw new Error('ai_mock_server_error requires --mock');
+  MOCK.reset();
+  MOCK.failNext();
+  const page = await openAiPanel(port);
+  try {
+    // When: the mock returns HTTP 500 for the turn.
+    await submitPromptViaComposer(page, 'Trigger a server error please.');
+    const errText = await waitForBodyTextMatching(page, /Execution error|Something went wrong|Issue/i, 40000);
+    if (!errText) throw new Error('panel did not surface an error UI after a 500 response');
+    if (!MOCK.captured().length) throw new Error('mock never received the failing request');
+    return 'server error surfaced in panel error UI';
+  } finally { await page.close(); }
+}
+
+async function waitForBodyTextMatching(page, regex, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const text = await page.evalJs(`document.body.innerText`) || '';
+    if (regex.test(text)) return text;
+    await sleep(1000);
+  }
+  return null;
+}
+
+// Runs against a NO-KEY profile (--mock with MAHO_E2E_AI_API_KEY=""). With no
+// credential the agent must surface a credential error and send ZERO requests.
+async function scenario_ai_mock_key_cleared_no_request(port) {
+  if (!MOCK) throw new Error('ai_mock_key_cleared_no_request requires --mock');
+  MOCK.reset();
+  const page = await openAiPanel(port);
+  try {
+    // When: a message is submitted while no key is configured.
+    await submitPromptViaComposer(page, 'This must not reach the LLM endpoint.');
+    await sleep(6000);
+    // Then: the mock received no LLM chat request.
+    const chatReqs = MOCK.captured().filter(r => /\/chat\/completions$|\/messages$/.test(r.path));
+    if (chatReqs.length !== 0) throw new Error(`expected 0 LLM requests with no key, saw ${chatReqs.length}`);
+    return 'no LLM request sent when key is absent';
+  } finally { await page.close(); }
+}
+
 const SCENARIOS = {
   ai_panel_renders: scenario_ai_panel_renders,
   ai_real_turn: scenario_ai_real_turn,
+  ai_mock_general_turn: scenario_ai_mock_general_turn,
+  ai_mock_quick_action_context: scenario_ai_mock_quick_action_context,
+  ai_mock_server_error: scenario_ai_mock_server_error,
+  ai_mock_key_cleared_no_request: scenario_ai_mock_key_cleared_no_request,
 };
 
 // --- Instance lifecycle (reused by default/serve) ----------------------------
@@ -229,8 +381,8 @@ function rmProfile(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }); } catch (e) {}
 }
 
-function launchInstance({ bin, port, profileDir }) {
-  seedProfile(profileDir, resolveAiConfig());
+function launchInstance({ bin, port, profileDir, aiConfig }) {
+  seedProfile(profileDir, aiConfig || resolveAiConfig());
   const logPath = path.join(profileDir, 'launch.log');
   const logFd = fs.openSync(logPath, 'w');
   const child = spawn(bin, [
@@ -280,15 +432,28 @@ async function main() {
   const names = selected.length ? selected : Object.keys(SCENARIOS);
   const serve = hasFlag(args, '--serve');
   const attach = hasFlag(args, '--attach');
+  const mock = hasFlag(args, '--mock');
+
+  if (mock) {
+    MOCK = await mockLlm.start(0);
+    console.log(`MOCK_LLM base_url=${MOCK.url}`);
+  }
+  const closeMock = async () => { if (MOCK) { try { await MOCK.close(); } catch (e) {} MOCK = null; } };
 
   if (attach) {
     console.log(`ATTACH port=${PORT}`);
     const failures = await runScenarios(names, PORT);
+    await closeMock();
     return failures === 0 ? 0 : 1;
   }
 
-  const ai = resolveAiConfig();
-  const needsLlm = names.includes('ai_real_turn') && !serve;
+  const ai = mock ? {
+    provider: 'openai',
+    api_key: ('MAHO_E2E_AI_API_KEY' in process.env) ? process.env.MAHO_E2E_AI_API_KEY : 'test-key-mock',
+    base_url: MOCK.url,
+    model: process.env.MAHO_E2E_AI_MODEL || 'gpt-4o-mini',
+  } : resolveAiConfig();
+  const needsLlm = names.includes('ai_real_turn') && !serve && !mock;
   if (needsLlm && (!ai.provider || !ai.api_key || !ai.base_url)) {
     console.error('FATAL: ai_real_turn needs provider/api_key/base_url (from real profile or env).');
     return 2;
@@ -297,7 +462,7 @@ async function main() {
   console.log(`BIN=${BIN}`);
 
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'maho-ai-e2e-'));
-  const { child, cleanup } = launchInstance({ bin: BIN, port: PORT, profileDir });
+  const { child, cleanup } = launchInstance({ bin: BIN, port: PORT, profileDir, aiConfig: ai });
 
   if (serve) {
     if (!(await waitForCdp(45000, PORT))) {
@@ -329,6 +494,7 @@ async function main() {
   } finally {
     cleanup();
     rmProfile(profileDir);
+    await closeMock();
   }
   return failures === 0 ? 0 : 1;
 }

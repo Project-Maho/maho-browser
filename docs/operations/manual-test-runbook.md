@@ -285,6 +285,8 @@ open chromium/src/out/Default/Maho.app
 - Wait for next cron tick (e.g. set system clock close to the schedule, or use the test "tick now" affordance if added)
 - ✓ Scheduled run completes automatically
 
+> **Scope note (ADR 0015 automation-parity status).** Routine run results persist durably at the `maho-core` / `maho-ffi` / `maho-storage` layer (the run-result ledger), and manual/scheduled runs record their results there. Surfacing that run history / latest-result inside `chrome://maho-routines`, the `maho routine` CLI, and the `browser_routines_*` MCP tools is **deferred wiring** (needs C++ bridge + Mojo, not built this pass), so an older build may not render inline result history even though the run persisted. Likewise, the `on_notification` / `on_inbox_heartbeat` triggers are typed and tested but have **no runtime emitter**, so they do not fire on their own yet. Do not treat missing in-WebUI result history or non-firing event triggers as a launch regression; claim only "routines persist their results", not "results inbox in every surface". See `.omo/evidence/launch-ai-mcp-cli-readiness/task-15-routine-inbox.md` and `task-16-routine-triggers.md`.
+
 ### B5. AI panel via Maho-managed
 - Open AI panel from sidebar
 - Send "Hello, summarize this page"

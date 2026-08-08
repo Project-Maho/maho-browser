@@ -137,6 +137,76 @@ base::DictValue BuildMailThreadSchema() {
   return BuildObjectSchema(std::move(properties), std::move(required));
 }
 
+base::DictValue BuildStringArraySchema(std::string description) {
+  base::DictValue schema;
+  schema.Set("type", "array");
+  schema.Set("description", std::move(description));
+  schema.Set("items", BuildStringSchema("Email address."));
+  return schema;
+}
+
+base::DictValue BuildMailAttachmentsSchema() {
+  base::DictValue item_properties;
+  item_properties.Set("filename", BuildStringSchema("Attachment file name."));
+  item_properties.Set("mime_type",
+                      BuildStringSchema("Attachment MIME type, e.g. image/png."));
+  item_properties.Set("data_base64",
+                      BuildStringSchema("Attachment bytes, base64-encoded."));
+  base::ListValue item_required;
+  item_required.Append("filename");
+  item_required.Append("mime_type");
+  item_required.Append("data_base64");
+
+  base::DictValue schema;
+  schema.Set("type", "array");
+  schema.Set("description",
+             "Optional attachments. Size limits are enforced by the mail "
+             "provider; oversized attachments are rejected on send.");
+  schema.Set("items", BuildObjectSchema(std::move(item_properties),
+                                        std::move(item_required)));
+  return schema;
+}
+
+void AddComposeBodyProperties(base::DictValue& properties) {
+  properties.Set("cc", BuildStringArraySchema("CC recipients."));
+  properties.Set("bcc", BuildStringArraySchema("BCC recipients."));
+  properties.Set("body_text", BuildStringSchema("Plain-text body."));
+  properties.Set("body_html", BuildStringSchema("HTML body."));
+  properties.Set("in_reply_to",
+                 BuildStringSchema("RFC message id this replies to."));
+  properties.Set("references",
+                 BuildStringSchema("RFC references header value."));
+  properties.Set("attachments", BuildMailAttachmentsSchema());
+}
+
+base::DictValue BuildMailComposeSchema() {
+  base::DictValue properties;
+  properties.Set("account_id", BuildStringSchema("Sending Mail account id."));
+  properties.Set("to", BuildStringArraySchema("Primary recipients."));
+  properties.Set("subject", BuildStringSchema("Email subject."));
+  AddComposeBodyProperties(properties);
+  base::ListValue required;
+  required.Append("account_id");
+  required.Append("to");
+  required.Append("subject");
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
+base::DictValue BuildMailUpdateDraftSchema() {
+  base::DictValue properties;
+  properties.Set("draft_id", BuildStringSchema("Draft id to update."));
+  properties.Set("account_id", BuildStringSchema("Owning Mail account id."));
+  properties.Set("to", BuildStringArraySchema("Primary recipients."));
+  properties.Set("subject", BuildStringSchema("Email subject."));
+  AddComposeBodyProperties(properties);
+  base::ListValue required;
+  required.Append("draft_id");
+  required.Append("account_id");
+  required.Append("to");
+  required.Append("subject");
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
 void AddOptionalTabId(base::DictValue& properties) {
   properties.Set("tab_id", BuildIntegerSchema(
                                "Browser tab id. Omit or pass 0 for the active tab."));
@@ -325,6 +395,20 @@ std::vector<MahoBrowserToolRegistry::ToolSchema> BuildPhase1ToolSchemas() {
   tools.push_back(MakeToolSchema("mail_list_thread",
                                  "List all emails in a Mail thread.",
                                  BuildMailThreadSchema()));
+  tools.push_back(MakeToolSchema(
+      "mail_send",
+      "Send an email through Maho Mail. Requires explicit user approval; "
+      "sending honors the agent approval policy.",
+      BuildMailComposeSchema()));
+  tools.push_back(MakeToolSchema(
+      "mail_save_draft",
+      "Save a new email draft in Maho Mail. Requires explicit user approval.",
+      BuildMailComposeSchema()));
+  tools.push_back(MakeToolSchema(
+      "mail_update_draft",
+      "Update an existing Maho Mail draft by id. Requires explicit user "
+      "approval.",
+      BuildMailUpdateDraftSchema()));
   for (const maho::ai::BrowserActionContract& contract :
        maho::ai::kMahoBrowserActionContracts) {
     tools.push_back(MakeToolSchema(

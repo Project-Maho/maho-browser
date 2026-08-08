@@ -12,6 +12,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_credential_redaction.h"
 #include "maho/browser/ai/maho_ai_security_utils.h"
 
 namespace {
@@ -139,7 +140,7 @@ base::Value MahoAiPageContextExtractor::PageContextResult::ToValue() const {
   base::DictValue dict;
   dict.Set("extraction_status", GetExtractionStatusString());
   dict.Set("title", title);
-  dict.Set("url", url);
+  dict.Set("url", maho::ai_security::RedactUrlForAi(url));
   dict.Set("selected_text", selected_text);
   dict.Set("main_text", main_text);
   dict.Set("meta_description", meta_description);
@@ -152,7 +153,7 @@ base::Value MahoAiPageContextExtractor::PageContextResult::ToValue() const {
 
   base::ListValue links_value;
   for (const std::string& link : links) {
-    links_value.Append(link);
+    links_value.Append(maho::ai_security::RedactUrlForAi(link));
   }
   dict.Set("links", std::move(links_value));
 
@@ -162,7 +163,9 @@ base::Value MahoAiPageContextExtractor::PageContextResult::ToValue() const {
   }
   dict.Set("extraction_warnings", std::move(warnings_value));
 
-  return base::Value(std::move(dict));
+  base::Value serialized_value(std::move(dict));
+  maho::credential_redaction::RedactStructuredValue(serialized_value);
+  return serialized_value;
 }
 
 MahoAiPageContextExtractor::MahoAiPageContextExtractor(
@@ -230,14 +233,18 @@ MahoAiPageContextExtractor::BuildResultFromJsValue(const std::string& title,
     page_context.url = maho::ai_security::RedactUrlForAi(NormalizeText(*extracted_url));
   }
   if (const std::string* selected_text = dict->FindString("selected_text")) {
-    page_context.selected_text = NormalizeText(*selected_text);
+    page_context.selected_text =
+        maho::ai_security::RedactCredentialTokens(NormalizeText(*selected_text));
   }
   if (const std::string* main_text = dict->FindString("main_text")) {
-    page_context.main_text = NormalizeText(*main_text);
+    page_context.main_text =
+        maho::ai_security::RedactCredentialTokens(NormalizeText(*main_text));
   }
   if (const std::string* meta_description =
           dict->FindString("meta_description")) {
-    page_context.meta_description = NormalizeText(*meta_description);
+    page_context.meta_description =
+        maho::ai_security::RedactCredentialTokens(
+            NormalizeText(*meta_description));
   }
   if (const std::string* extraction_status =
           dict->FindString("extraction_status")) {
@@ -249,9 +256,18 @@ MahoAiPageContextExtractor::BuildResultFromJsValue(const std::string& title,
   }
 
   page_context.headings = ExtractStringList(dict->Find("headings"));
+  for (std::string& heading : page_context.headings) {
+    heading = maho::ai_security::RedactCredentialTokens(heading);
+  }
   page_context.links = ExtractStringList(dict->Find("links"));
+  for (std::string& link : page_context.links) {
+    link = maho::ai_security::RedactUrlForAi(link);
+  }
   page_context.extraction_warnings =
       ExtractStringList(dict->Find("extraction_warnings"));
+  for (std::string& warning : page_context.extraction_warnings) {
+    warning = maho::ai_security::RedactCredentialTokens(warning);
+  }
 
   if (page_context.headings.size() > kMaxHeadings) {
     page_context.headings.resize(kMaxHeadings);
@@ -343,7 +359,7 @@ content::WebContents* MahoAiPageContextExtractor::GetWebContentsForTabId(
 void MahoAiPageContextExtractor::GetPageContext(PageContextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     PageContextResult result;
     result.extraction_status = PageContextResult::Status::kCannotAccess;
     std::move(callback).Run(std::move(result));
@@ -408,7 +424,7 @@ void MahoAiPageContextExtractor::GetPageContextForTabId(
     PageContextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (ai_gate_ && !ai_gate_.Run()) {
+  if (!ai_gate_ || !ai_gate_.Run()) {
     PageContextResult result;
     result.extraction_status = PageContextResult::Status::kCannotAccess;
     std::move(callback).Run(std::move(result));

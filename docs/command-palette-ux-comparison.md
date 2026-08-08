@@ -9,7 +9,7 @@ The Chromium command palette is now materially aligned with the Swift flow in th
 - Current-tab prefill is verified, including long-URL visibility in the top field.
 - The shell is 720dp wide, 220dp tall on open, centered, and clamped within the work area.
 - Open, close, and resize motion all exist in the current implementation.
-- Cmd+L, Cmd+T, AI mode, site search, and recent-search fallback are distinct implemented modes/behaviors.
+- Cmd+L, Cmd+T, the persistent Search / Ask Maho selector, site search, and recent-search fallback are distinct implemented modes/behaviors.
 - Remaining differences are polish-level: exact spacing, motion feel, and some visual tuning.
 
 This doc intentionally avoids pixel-perfect claims. The verified current-tab flow has no material blocker.
@@ -27,7 +27,7 @@ This doc intentionally avoids pixel-perfect claims. The verified current-tab flo
 | Resize animation | Animated bounds change | Animated bounds change |
 | Cmd+L vs Cmd+T | Separate modes | Separate modes |
 | Cmd+L current-tab prefill | Prefill + select all | Verified, including long-URL leading slice in the top field |
-| AI mode | Supported | Supported |
+| Native AI entry | AI mode | Verified Search / Ask Maho selector (`PaletteAction::kAskMaho`) |
 | Site search | Supported | Supported |
 | Recent searches | Supported | Supported |
 | Empty-state recent search fallback | Supported | Supported |
@@ -45,7 +45,8 @@ This doc intentionally avoids pixel-perfect claims. The verified current-tab flo
 
 - The latest current-tab long-URL artifact is `.sisyphus/artifacts/command-palette-parity/after-fix/ui-pass-currenttab-longurl-20260508c_00_open.png`.
 - The latest current-tab and populated artifacts are `.sisyphus/artifacts/command-palette-parity/after-fix/ui-pass-currenttab-20260508a_00_open.png` and `.sisyphus/artifacts/command-palette-parity/after-fix/ui-pass-populated-20260508a.png`.
-- The 2026-05-07 after-fix captures remain the verification source for AI mode, site search, keyboard navigation, recent-search activation, pointer hover/click, and popup resize.
+- The verified native AI entry is the persistent Search / Ask Maho selector (`PaletteAction::kAskMaho`), not a transient palette AI mode. `MahoPrivateCapability::kAI` remains the privacy gate for the AI side panel/private capability.
+- The 2026-05-07 after-fix captures remain the verification source for the then-current transient AI-mode flow, site search, keyboard navigation, recent-search activation, pointer hover/click, and popup resize.
 - The remaining differences should be treated as polish-only, not blockers.
 
 ## 2026-05-16 UX cleanup
@@ -64,4 +65,4 @@ Five visible issues removed across two passes:
 - Exact animation feel equivalence.
 - Any unverified claim about match highlighting.
 
-*Report updated 2026-05-16. Sources: current Chromium command-palette implementation and the latest after-fix runtime captures.*
+*Report updated 2026-07-24. Sources: current Chromium command-palette implementation and the latest after-fix runtime captures.*

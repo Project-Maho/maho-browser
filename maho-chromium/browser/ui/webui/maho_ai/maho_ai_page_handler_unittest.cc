@@ -19,6 +19,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -231,7 +232,7 @@ class MahoAIPageHandlerTest : public BrowserWithTestWindowTest {
     mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver;
     return std::make_unique<MahoAIPageHandler>(
         std::move(receiver), page->BindAndGetRemote(), std::move(token),
-        target_browser, profile()->GetPrefs(), nullptr);
+        target_browser, web_contents, profile()->GetPrefs(), nullptr);
   }
 
   static maho_ai::mojom::AskMahoDispatchPtr MakeDispatch(
@@ -1561,6 +1562,218 @@ TEST_F(MahoAIPageHandlerTest,
   EXPECT_EQ("claude-sonnet-4-20250514", info->active_model_id);
   EXPECT_EQ(maho_ai::mojom::ReasoningEffort::kMedium,
             info->active_reasoning_effort);
+}
+
+TEST_F(MahoAIPageHandlerTest, ListArtifactsReturnsRegisteredArtifacts) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto* registry = maho::ai::MahoArtifactRegistry::GetForProfile(profile());
+  ASSERT_TRUE(registry);
+  auto id = registry->RegisterArtifact("artifact-session", "plan.html",
+                                       "text/html", 128, "plan.html", 1000);
+  ASSERT_TRUE(id.has_value());
+
+  std::vector<maho_ai::mojom::ArtifactInfoPtr> artifacts;
+  handler->ListArtifacts(
+      "artifact-session",
+      base::BindLambdaForTesting(
+          [&](std::vector<maho_ai::mojom::ArtifactInfoPtr> result) {
+            artifacts = std::move(result);
+          }));
+  ASSERT_EQ(1u, artifacts.size());
+  EXPECT_EQ(id.value(), artifacts[0]->artifact_id);
+  EXPECT_EQ("plan.html", artifacts[0]->display_name);
+  EXPECT_EQ("text/html", artifacts[0]->mime_type);
+  EXPECT_EQ(128u, artifacts[0]->size_bytes);
+}
+
+TEST_F(MahoAIPageHandlerTest, RenameArtifactUpdatesDisplayNameOnValidName) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto* registry = maho::ai::MahoArtifactRegistry::GetForProfile(profile());
+  ASSERT_TRUE(registry);
+  auto id = registry->RegisterArtifact("s", "old.html", "text/html", 10,
+                                       "old.html", 1);
+  ASSERT_TRUE(id.has_value());
+
+  bool success = false;
+  std::optional<std::string> error = "unset";
+  handler->RenameArtifact(
+      id.value(), "weekly-plan",
+      base::BindLambdaForTesting(
+          [&](bool ok, const std::optional<std::string>& err) {
+            success = ok;
+            error = err;
+          }));
+  EXPECT_TRUE(success);
+  EXPECT_FALSE(error.has_value());
+  auto artifact = registry->GetArtifact(id.value());
+  ASSERT_TRUE(artifact.has_value());
+  EXPECT_EQ("weekly-plan.html", artifact->display_name);
+}
+
+TEST_F(MahoAIPageHandlerTest, RenameArtifactRejectsUnsafeName) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto* registry = maho::ai::MahoArtifactRegistry::GetForProfile(profile());
+  ASSERT_TRUE(registry);
+  auto id = registry->RegisterArtifact("s", "old.html", "text/html", 10,
+                                       "old.html", 1);
+  ASSERT_TRUE(id.has_value());
+
+  bool success = true;
+  std::optional<std::string> error;
+  handler->RenameArtifact(
+      id.value(), "../evil",
+      base::BindLambdaForTesting(
+          [&](bool ok, const std::optional<std::string>& err) {
+            success = ok;
+            error = err;
+          }));
+  EXPECT_FALSE(success);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_FALSE(error->empty());
+  auto artifact = registry->GetArtifact(id.value());
+  ASSERT_TRUE(artifact.has_value());
+  EXPECT_EQ("old.html", artifact->display_name);
+}
+
+TEST_F(MahoAIPageHandlerTest, DeleteArtifactRemovesFromRegistry) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto* registry = maho::ai::MahoArtifactRegistry::GetForProfile(profile());
+  ASSERT_TRUE(registry);
+  auto id = registry->RegisterArtifact("s", "doomed.html", "text/html", 10,
+                                       "doomed.html", 1);
+  ASSERT_TRUE(id.has_value());
+
+  bool success = false;
+  handler->DeleteArtifact(
+      id.value(),
+      base::BindLambdaForTesting([&](bool ok) { success = ok; }));
+  EXPECT_TRUE(success);
+  EXPECT_FALSE(registry->GetArtifact(id.value()).has_value());
+}
+
+TEST_F(MahoAIPageHandlerTest, GetArtifactPreviewUrlIssuesCapabilityUrl) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto* registry = maho::ai::MahoArtifactRegistry::GetForProfile(profile());
+  ASSERT_TRUE(registry);
+  auto id = registry->RegisterArtifact("s", "plan.html", "text/html", 10,
+                                       "plan.html", 1);
+  ASSERT_TRUE(id.has_value());
+
+  std::optional<std::string> url = "unset";
+  handler->GetArtifactPreviewUrl(
+      id.value(),
+      base::BindLambdaForTesting(
+          [&](const std::optional<std::string>& result) { url = result; }));
+  ASSERT_TRUE(url.has_value());
+  EXPECT_TRUE(url->starts_with(
+      "chrome-untrusted://maho-ai-artifact-preview/?cap="));
+}
+
+TEST_F(MahoAIPageHandlerTest, GetArtifactExportUrlIssuesCapabilityUrl) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto* registry = maho::ai::MahoArtifactRegistry::GetForProfile(profile());
+  ASSERT_TRUE(registry);
+  auto id = registry->RegisterArtifact("s", "data.bin", "application/octet-stream",
+                                       10, "data.bin", 1);
+  ASSERT_TRUE(id.has_value());
+
+  std::optional<std::string> url;
+  handler->GetArtifactExportUrl(
+      id.value(),
+      base::BindLambdaForTesting(
+          [&](const std::optional<std::string>& result) { url = result; }));
+  ASSERT_TRUE(url.has_value());
+  EXPECT_TRUE(
+      url->starts_with("chrome-untrusted://maho-ai-artifact-export/?cap="));
+}
+
+TEST_F(MahoAIPageHandlerTest, GetArtifactPreviewUrlReturnsNullForUnknownId) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  ASSERT_TRUE(maho::ai::MahoArtifactRegistry::GetForProfile(profile()));
+
+  std::optional<std::string> url = "unset";
+  handler->GetArtifactPreviewUrl(
+      "no-such-artifact",
+      base::BindLambdaForTesting(
+          [&](const std::optional<std::string>& result) { url = result; }));
+  EXPECT_FALSE(url.has_value());
+}
+
+TEST_F(MahoAIPageHandlerTest, ArtifactCreatedEventReplaysWithArtifactPayload) {
+  std::string session_id;
+  {
+    MockPage first_page;
+    auto handler = CreateHandler(&first_page);
+    auto session = StartSession(handler.get());
+    ASSERT_TRUE(session);
+    session_id = session->session_id;
+    const std::string info_json =
+        "{\"artifact_id\":\"opaque-artifact-1\",\"session_id\":\"" +
+        session_id +
+        "\",\"display_name\":\"plan.html\",\"mime_type\":\"text/html\","
+        "\"size_bytes\":128,\"created_at\":12.5}";
+    MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+        handler.get(), session_id, std::nullopt,
+        MahoAiRuntimeEventType::kArtifactCreated, info_json);
+    MahoAIPageHandlerTestPeer::PersistEventLog(handler.get(), session_id);
+  }
+
+  // Reopen the panel over the same profile and confirm the persisted
+  // kArtifactCreated event replays with its ArtifactInfo payload reconstructed
+  // (paths never persisted; only the opaque id + metadata round-trip).
+  MockPage second_page;
+  auto reopened = CreateHandler(&second_page);
+  auto replay = GetSessionHistory(reopened.get(), session_id);
+  const auto* event = FindEventOfKind(
+      replay, maho_ai::mojom::RuntimeEventKind::kArtifactCreated);
+  ASSERT_TRUE(event);
+  ASSERT_TRUE(event->artifact);
+  EXPECT_EQ("opaque-artifact-1", event->artifact->artifact_id);
+  EXPECT_EQ(session_id, event->artifact->session_id);
+  EXPECT_EQ("plan.html", event->artifact->display_name);
+  EXPECT_EQ("text/html", event->artifact->mime_type);
+  EXPECT_EQ(128u, event->artifact->size_bytes);
+}
+
+TEST_F(MahoAIPageHandlerTest, ArtifactMutationsFailForUnknownIds) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  ASSERT_TRUE(maho::ai::MahoArtifactRegistry::GetForProfile(profile()));
+
+  bool rename_ok = true;
+  std::optional<std::string> rename_err;
+  handler->RenameArtifact(
+      "no-such-id", "whatever",
+      base::BindLambdaForTesting(
+          [&](bool ok, const std::optional<std::string>& err) {
+            rename_ok = ok;
+            rename_err = err;
+          }));
+  EXPECT_FALSE(rename_ok);
+  ASSERT_TRUE(rename_err.has_value());
+  EXPECT_FALSE(rename_err->empty());
+
+  bool delete_ok = true;
+  handler->DeleteArtifact(
+      "no-such-id",
+      base::BindLambdaForTesting([&](bool ok) { delete_ok = ok; }));
+  EXPECT_FALSE(delete_ok);
+
+  std::optional<std::string> export_url = "unset";
+  handler->GetArtifactExportUrl(
+      "no-such-id",
+      base::BindLambdaForTesting(
+          [&](const std::optional<std::string>& result) {
+            export_url = result;
+          }));
+  EXPECT_FALSE(export_url.has_value());
 }
 
 }  // namespace

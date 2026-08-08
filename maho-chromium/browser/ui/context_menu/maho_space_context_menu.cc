@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -25,13 +26,13 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/models/dialog_model.h"
 #include "maho/browser/ui/webui/maho_space_config/maho_space_config.mojom.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "url/gurl.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
-#include "ui/color/color_provider_manager.h"
 #include "ui/menus/simple_menu_model.h"
 
 namespace {
@@ -377,8 +378,17 @@ void MahoSpaceContextMenu::FileSelected(const ui::SelectedFileInfo& file,
                                                      *validated_json)) {
                  return;
                }
-               MahoSpaceThemeState::UpdateFromCore();
-               ui::ColorProviderManager::Get().ResetColorProviderCache();
+               MahoSpaceThemeState::ChangedSpaceIds changed_spaces =
+                   MahoSpaceThemeState::UpdateFromCore();
+               if (changed_spaces.empty()) {
+                 changed_spaces.push_back(space_id);
+               }
+               for (Browser* affected_browser :
+                    maho::MahoSpaceProfileBridge::GetInstance()
+                        ->GetBrowsersForSpaces(changed_spaces)) {
+                 maho::MahoSidebarView::RefreshSpaceThemeForBrowser(
+                     affected_browser);
+               }
             },
             space_id));
   }
@@ -426,8 +436,17 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
                                                       committed_theme_json)) {
                   return;
                 }
-                MahoSpaceThemeState::UpdateFromCore();
-                MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+                std::vector<std::string> changed_spaces =
+                    MahoSpaceThemeState::UpdateFromCore();
+                if (changed_spaces.empty()) {
+                  changed_spaces.push_back(space_id);
+                }
+                for (Browser* affected_browser :
+                     maho::MahoSpaceProfileBridge::GetInstance()
+                         ->GetBrowsersForSpaces(changed_spaces)) {
+                  maho::MahoSidebarView::RefreshSpaceThemeForBrowser(
+                      affected_browser);
+                }
               },
               space_id_));
       break;

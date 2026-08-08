@@ -24,11 +24,7 @@ pub fn session_token_path() -> std::path::PathBuf {
     } else {
         // Fallback: use directories crate
         directories::BaseDirs::new()
-            .map(|dirs| {
-                dirs.data_local_dir()
-                    .join("Maho")
-                    .join("mcp-session-token")
-            })
+            .map(|dirs| dirs.data_local_dir().join("Maho").join("mcp-session-token"))
             .unwrap_or_default()
     }
 }
@@ -43,10 +39,8 @@ pub fn load_session_token() -> Result<Vec<u8>> {
     use std::fs;
     use std::ptr;
 
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPT_INTEGER_BLOB,
-    };
     use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
 
     let path = session_token_path();
     let ciphertext = fs::read(&path).map_err(|e| McpBridgeError::TokenFileRead {
@@ -93,9 +87,8 @@ pub fn load_session_token() -> Result<Vec<u8>> {
     let plaintext = if output_blob.cbData > 0 && !output_blob.pbData.is_null() {
         // SAFETY: output_blob.pbData is allocated by CryptUnprotectData with
         // cbData valid bytes. We copy before freeing.
-        let slice = unsafe {
-            std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize)
-        };
+        let slice =
+            unsafe { std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize) };
         let vec = slice.to_vec();
         // SAFETY: output_blob.pbData was allocated by LocalAlloc internally.
         unsafe { LocalFree(output_blob.pbData as _) };

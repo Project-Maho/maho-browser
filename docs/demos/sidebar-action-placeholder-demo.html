@@ -1,0 +1,1296 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Maho sidebar synthetic processing bridge comparison demo">
+  <link rel="icon" href="data:,">
+  <title>Maho Sidebar Shared Placeholder</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Maho native sidebar contract. */
+      --shell: #111214;
+      --surface: #202124;
+      --surface-elevated: #2f3033;
+      --surface-hover: #303134;
+      --surface-pressed: #3c4043;
+      --text-primary: #ecedef;
+      --text-secondary: #a7abb1;
+      --border: #858a91;
+      --focus: #8ab4f8;
+
+      /* Shared synthetic processing bridge tokens. */
+      --veil: rgb(24 25 28 / 88%);
+      --synthetic-card: rgb(47 48 51 / 88%);
+      --synthetic-folder: rgb(32 33 36 / 92%);
+      --synthetic-edge: rgb(138 180 248 / 16%);
+      --synthetic-line: rgb(236 237 239 / 30%);
+      --synthetic-line-muted: rgb(167 171 177 / 22%);
+      --folder-fill: rgb(236 237 239 / 4%);
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+
+      --radius-button: 6px;
+      --radius-menu: 10px;
+      --radius-panel: 18px;
+      --radius-sidebar: 14px;
+      --radius-row: 6px;
+      --button-height: 36px;
+      --icon-size: 17px;
+      --favicon-size: 22px;
+      --row-height: 40px;
+      --folder-height: 32px;
+      --menu-width: 184px;
+      --control-gap: 6px;
+
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --text-button: 13px;
+      --text-body: 13px;
+      --text-caption: 12px;
+      --text-meta: 11px;
+      --text-kicker: 10px;
+
+      --ease-standard: cubic-bezier(.2, .75, .25, 1);
+      --duration-hover: 120ms;
+      --duration-cover: 160ms;
+      --duration-synthetic-choreography: 1880ms;
+      --duration-reveal: 300ms;
+      --duration-height: 320ms;
+      --duration-menu: 130ms;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: var(--space-5);
+      background:
+        radial-gradient(circle at 50% 12%, rgb(138 180 248 / 6%), transparent 34%),
+        linear-gradient(180deg, #17181b 0%, var(--shell) 78%);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .demo {
+      width: min(100%, 420px);
+    }
+
+    .page-heading {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: var(--space-3);
+      margin-bottom: var(--space-3);
+      padding-inline: var(--space-1);
+    }
+
+    .kicker {
+      margin: 0 0 var(--space-1);
+      color: var(--text-secondary);
+      font-size: var(--text-kicker);
+      font-weight: 650;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 620;
+      letter-spacing: -.02em;
+    }
+
+    .lede {
+      margin: var(--space-1) 0 0;
+      color: var(--text-secondary);
+      font-size: var(--text-caption);
+      line-height: 1.45;
+      text-wrap: pretty;
+    }
+
+    .reset-button {
+      min-height: 30px;
+      padding: 0 var(--space-2);
+      border: 1px solid rgb(133 138 145 / 23%);
+      border-radius: var(--radius-button);
+      background: rgb(47 48 51 / 45%);
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      white-space: nowrap;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .reset-button:hover {
+      background: var(--surface-hover);
+      color: var(--text-primary);
+    }
+
+    .sidebar-card {
+      position: relative;
+      padding: var(--space-3);
+      border: 1px solid rgb(133 138 145 / 17%);
+      border-radius: var(--radius-panel);
+      background:
+        linear-gradient(180deg, rgb(255 255 255 / 2.5%), transparent 28%),
+        var(--surface);
+      box-shadow:
+        0 22px 60px rgb(0 0 0 / 34%),
+        inset 0 1px rgb(255 255 255 / 3%);
+    }
+
+    .sidebar-heading {
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: 0 var(--space-2) var(--space-2);
+    }
+
+    .space-name {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-primary);
+      font-size: var(--text-caption);
+      font-weight: 590;
+    }
+
+    .space-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--focus);
+      box-shadow: 0 0 0 3px rgb(138 180 248 / 10%);
+    }
+
+    .tab-count {
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .action-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--control-gap);
+      margin-bottom: var(--space-2);
+    }
+
+    .action-wrap {
+      position: relative;
+      min-width: 0;
+    }
+
+    .action-button {
+      width: 100%;
+      min-width: 0;
+      height: var(--button-height);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--control-gap);
+      padding: 0 var(--space-3);
+      border: 0;
+      border-radius: var(--radius-button);
+      background: transparent;
+      color: var(--text-secondary);
+      font: 500 var(--text-button)/1 var(--font-ui);
+      cursor: pointer;
+      outline: none;
+      transition:
+        background-color var(--duration-hover) ease,
+        color var(--duration-hover) ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .action-button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      color: var(--text-primary);
+    }
+
+    .action-button:active:not(:disabled),
+    .action-button.is-engaged,
+    .action-button[aria-expanded="true"] {
+      background: var(--surface-pressed);
+      color: var(--text-primary);
+    }
+
+    .action-button:disabled {
+      cursor: default;
+    }
+
+    .action-button:disabled:not(.is-engaged) {
+      color: rgb(167 171 177 / 48%);
+    }
+
+    .action-button:focus-visible,
+    .reset-button:focus-visible,
+    .period-menu button:focus-visible,
+    .folder-button:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--focus);
+    }
+
+    .button-icon {
+      width: var(--icon-size);
+      height: var(--icon-size);
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.7;
+    }
+
+    .period-menu {
+      position: absolute;
+      z-index: 8;
+      top: calc(100% + var(--space-1));
+      right: 0;
+      width: var(--menu-width);
+      margin: 0;
+      padding: var(--space-1);
+      border: 1px solid rgb(133 138 145 / 28%);
+      border-radius: var(--radius-menu);
+      background: var(--surface-elevated);
+      box-shadow: 0 14px 34px rgb(0 0 0 / 42%);
+      list-style: none;
+      transform-origin: top right;
+    }
+
+    .period-menu[hidden] {
+      display: none;
+    }
+
+    .period-menu.is-opening {
+      animation: menuIn var(--duration-menu) var(--ease-standard) both;
+    }
+
+    .period-menu button {
+      width: 100%;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-2);
+      border: 0;
+      border-radius: var(--radius-button);
+      background: transparent;
+      color: var(--text-primary);
+      font: 500 var(--text-caption)/1 var(--font-ui);
+      text-align: left;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .period-menu button:hover,
+    .period-menu button:focus-visible {
+      background: var(--surface-hover);
+    }
+
+    .list-viewport {
+      position: relative;
+      min-height: 180px;
+      overflow: hidden;
+      border-radius: var(--radius-sidebar);
+      background: rgb(17 18 20 / 24%);
+      box-shadow: inset 0 0 0 1px rgb(133 138 145 / 9%);
+      transition: height var(--duration-height) var(--ease-standard);
+    }
+
+    .tree-stage {
+      position: relative;
+      margin: 0;
+      padding: var(--space-1);
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+      transition:
+        opacity var(--duration-reveal) var(--ease-standard),
+        transform var(--duration-reveal) var(--ease-standard);
+    }
+
+    .tree-stage.is-result-mounted {
+      opacity: 0;
+      transform: translate3d(0, 4px, 0);
+    }
+
+    .list-viewport[data-phase="covering"] .tree-stage,
+    .list-viewport[data-phase="processing"] .tree-stage {
+      opacity: .16;
+    }
+
+    .list-viewport[data-phase="covering"],
+    .list-viewport[data-phase="processing"],
+    .list-viewport[data-phase="result-mounted-behind-overlay"] {
+      pointer-events: none;
+    }
+
+    .folder {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .tab-row {
+      min-height: var(--row-height);
+      display: grid;
+      grid-template-columns: var(--favicon-size) minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-2);
+      border-radius: var(--radius-row);
+      background: transparent;
+    }
+
+    .folder + .folder,
+    .folder + .tab-row,
+    .tab-row + .folder {
+      margin-top: var(--space-1);
+    }
+
+    .folder-button {
+      width: 100%;
+      min-height: var(--folder-height);
+      display: grid;
+      grid-template-columns: 14px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-2);
+      border: 0;
+      border-radius: var(--radius-row);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      font-weight: 650;
+      letter-spacing: .015em;
+      text-align: left;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .folder-button:hover {
+      background: var(--surface-hover);
+      color: var(--text-primary);
+    }
+
+    .folder-chevron {
+      width: 12px;
+      height: 12px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+      transform: rotate(0deg);
+      transition: transform var(--duration-hover) ease;
+    }
+
+    .folder-button[aria-expanded="true"] .folder-chevron {
+      transform: rotate(90deg);
+    }
+
+    .folder-count {
+      color: rgb(167 171 177 / 68%);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .folder-children {
+      margin: 0;
+      padding: 0 0 0 var(--space-3);
+      border-radius: var(--radius-row);
+      background: var(--folder-fill);
+      list-style: none;
+    }
+
+    .tab-row:hover {
+      background: var(--surface-hover);
+    }
+
+    .favicon {
+      width: var(--favicon-size);
+      height: var(--favicon-size);
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--favicon-bg, var(--surface-elevated));
+      color: var(--favicon-fg, var(--text-primary));
+      font-size: 10px;
+      font-weight: 720;
+      letter-spacing: -.02em;
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 7%),
+        0 1px 2px rgb(0 0 0 / 18%);
+    }
+
+    .tab-copy {
+      min-width: 0;
+    }
+
+    .tab-title,
+    .tab-domain {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab-title {
+      color: var(--text-primary);
+      font-size: var(--text-caption);
+      font-weight: 520;
+      line-height: 1.25;
+    }
+
+    .tab-domain {
+      margin-top: 1px;
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      line-height: 1.2;
+    }
+
+    .tab-age {
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* One fixed synthetic scene and choreography path serves both actions. */
+    .processing-overlay {
+      position: absolute;
+      z-index: 5;
+      inset: 0;
+      overflow: hidden;
+      border-radius: inherit;
+      background: var(--veil);
+      opacity: 0;
+      transform: translate3d(0, 3px, 0);
+      pointer-events: none;
+      transition:
+        opacity var(--duration-cover) ease,
+        transform var(--duration-cover) var(--ease-standard);
+    }
+
+    .list-viewport[data-phase="covering"] .processing-overlay,
+    .list-viewport[data-phase="processing"] .processing-overlay,
+    .list-viewport[data-phase="result-mounted-behind-overlay"] .processing-overlay {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+
+    .synthetic-scene {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      opacity: 1;
+    }
+
+    .synthetic-folder {
+      position: absolute;
+      z-index: 1;
+      top: 49%;
+      width: 44%;
+      height: 47%;
+      padding: var(--space-1);
+      border: 1px solid rgb(133 138 145 / 15%);
+      border-radius: 9px;
+      background: var(--synthetic-folder);
+      opacity: .2;
+      transform: translate3d(0, 8px, 0) scale(.96);
+      transform-origin: center bottom;
+      will-change: transform, opacity, filter;
+    }
+
+    .synthetic-folder.folder-a {
+      left: 4%;
+    }
+
+    .synthetic-folder.folder-b {
+      right: 4%;
+    }
+
+    .synthetic-folder-header {
+      height: 26px;
+      display: grid;
+      grid-template-columns: 14px minmax(0, 1fr) 16px;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-1);
+      border-radius: 5px;
+      background: rgb(236 237 239 / 4%);
+    }
+
+    .synthetic-folder-glyph {
+      position: relative;
+      width: 13px;
+      height: 10px;
+      border-radius: 2px;
+      background: rgb(167 171 177 / 35%);
+    }
+
+    .synthetic-folder-glyph::before {
+      position: absolute;
+      top: -3px;
+      left: 1px;
+      width: 6px;
+      height: 4px;
+      border-radius: 2px 2px 0 0;
+      background: inherit;
+      content: "";
+    }
+
+    .synthetic-folder-line,
+    .synthetic-folder-count,
+    .synthetic-text-line {
+      display: block;
+      border-radius: 3px;
+      background: var(--synthetic-line-muted);
+    }
+
+    .synthetic-folder-line {
+      width: 58%;
+      height: 6px;
+    }
+
+    .synthetic-folder-count {
+      width: 12px;
+      height: 5px;
+      justify-self: end;
+    }
+
+    .synthetic-folder-slots {
+      display: grid;
+      gap: 4px;
+      padding: 5px 2px 2px;
+    }
+
+    .synthetic-slot {
+      height: 34px;
+      border: 1px solid rgb(133 138 145 / 8%);
+      border-radius: 5px;
+      background: rgb(236 237 239 / 2%);
+    }
+
+    .synthetic-card {
+      position: absolute;
+      z-index: 2;
+      top: var(--start-y);
+      left: var(--start-x);
+      width: 40%;
+      height: 38px;
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      padding: 0 8px;
+      border: 1px solid rgb(133 138 145 / 13%);
+      border-radius: var(--radius-row);
+      background: var(--synthetic-card);
+      box-shadow: 0 3px 10px rgb(0 0 0 / 15%);
+      transform: translate3d(0, 0, 0);
+      transform-origin: center left;
+      will-change: transform, opacity, filter;
+    }
+
+    .synthetic-favicon {
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      background: var(--glyph-color);
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%);
+    }
+
+    .synthetic-card-copy {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+
+    .synthetic-text-line {
+      width: var(--line-width, 72%);
+      height: 6px;
+      background: var(--synthetic-line);
+    }
+
+    .synthetic-text-line.is-secondary {
+      width: var(--subline-width, 48%);
+      height: 4px;
+      background: var(--synthetic-line-muted);
+    }
+
+    .synthetic-scene.is-choreographing .synthetic-card {
+      animation: assembleSyntheticCard var(--duration-synthetic-choreography) var(--ease-standard) both;
+      animation-delay: var(--card-delay);
+    }
+
+    .synthetic-scene.is-choreographing .synthetic-folder {
+      animation: assembleSyntheticFolder var(--duration-synthetic-choreography) var(--ease-standard) both;
+    }
+
+    .synthetic-scene.is-choreographing .synthetic-slot {
+      animation: receiveSyntheticCard var(--duration-synthetic-choreography) var(--ease-standard) both;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @keyframes assembleSyntheticCard {
+      0% {
+        opacity: 1;
+        filter: saturate(.95) brightness(1);
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      18% {
+        opacity: 1;
+        filter: saturate(1) brightness(1.08);
+        transform: translate3d(0, -6px, 0) scale(1.015);
+      }
+      60% {
+        opacity: .98;
+        filter: saturate(.92) brightness(1.02);
+        transform: translate3d(var(--target-x), var(--target-y), 0) scale(.91);
+      }
+      80% {
+        opacity: .94;
+        filter: saturate(.86) brightness(.98);
+        transform: translate3d(var(--target-x), var(--target-y), 0) scale(.895);
+      }
+      100% {
+        opacity: .76;
+        filter: saturate(.72) brightness(.93) blur(.2px);
+        transform: translate3d(var(--target-x), calc(var(--target-y) + 1px), 0) scale(.9);
+      }
+    }
+
+    @keyframes assembleSyntheticFolder {
+      0%, 18% {
+        opacity: .2;
+        filter: saturate(.8) brightness(.9);
+        transform: translate3d(0, 8px, 0) scale(.96);
+      }
+      55% {
+        opacity: .9;
+        filter: saturate(1) brightness(1.06);
+        transform: translate3d(0, 0, 0) scale(1.018);
+      }
+      80% {
+        opacity: 1;
+        filter: saturate(.92) brightness(1);
+        transform: translate3d(0, 0, 0) scale(.99);
+      }
+      100% {
+        opacity: .82;
+        filter: saturate(.75) brightness(.94) blur(.15px);
+        transform: translate3d(0, 1px, 0) scale(.995);
+      }
+    }
+
+    @keyframes receiveSyntheticCard {
+      0%, 40% { opacity: .45; transform: scaleX(.96); }
+      65%, 80% { opacity: 1; transform: scaleX(1); }
+      100% { opacity: .64; transform: scaleX(.99); }
+    }
+
+    @keyframes menuIn {
+      from { opacity: 0; transform: translateY(-4px) scale(.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (max-width: 390px) {
+      body {
+        padding: var(--space-3);
+      }
+
+      .page-heading {
+        padding-inline: 0;
+      }
+
+      .sidebar-card {
+        padding: var(--space-2);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      :root {
+        --duration-hover: 0ms;
+        --duration-cover: 0ms;
+        --duration-synthetic-choreography: 0ms;
+        --duration-reveal: 0ms;
+        --duration-height: 0ms;
+        --duration-menu: 0ms;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="demo">
+    <header class="page-heading">
+      <div>
+        <p class="kicker">Comparison prototype</p>
+        <h1>Synthetic folder assembly bridge</h1>
+        <p class="lede">One fixed miniature scene masks the tree rebuild for both actions.</p>
+      </div>
+      <button class="reset-button" id="reset-button" type="button">Reset prototype</button>
+    </header>
+
+    <section class="sidebar-card" aria-labelledby="sidebar-title">
+      <header class="sidebar-heading">
+        <div class="space-name" id="sidebar-title">
+          <span class="space-dot" aria-hidden="true"></span>
+          Product build
+        </div>
+        <span class="tab-count" id="tab-count">9 tabs</span>
+      </header>
+
+      <div class="action-row" aria-label="Tab actions">
+        <div class="action-wrap">
+          <button class="action-button" id="tidy-button" type="button" aria-describedby="live-status">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m15 4 5 5L9 20l-5 1 1-5Z"></path>
+              <path d="m14 5 5 5"></path>
+              <path d="M6 4v3"></path>
+              <path d="M4.5 5.5h3"></path>
+              <path d="M19 15v3"></path>
+              <path d="M17.5 16.5h3"></path>
+            </svg>
+            <span>Tidy</span>
+          </button>
+        </div>
+
+        <div class="action-wrap" id="clear-wrap">
+          <button class="action-button" id="clear-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="period-menu" aria-describedby="live-status">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="m7 10 5 5 5-5"></path>
+              <path d="M5 21h14"></path>
+            </svg>
+            <span>Clear</span>
+          </button>
+
+          <ul class="period-menu" id="period-menu" role="menu" aria-label="Clear tabs by period" hidden>
+            <li role="none"><button type="button" role="menuitem" data-period="Last hour">Last hour</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="Today">Today</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="This week">This week</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="This month">This month</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="Older than 30 days">Older than 30 days</button></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="list-viewport" id="list-viewport" data-phase="idle" aria-busy="false">
+        <div class="tree-stage" id="tree-stage" role="tree" aria-label="Sidebar tabs"></div>
+
+        <div class="processing-overlay" id="processing-overlay" aria-hidden="true">
+          <div class="synthetic-scene" id="synthetic-scene">
+            <div class="synthetic-folder folder-a">
+              <div class="synthetic-folder-header">
+                <span class="synthetic-folder-glyph"></span>
+                <span class="synthetic-folder-line"></span>
+                <span class="synthetic-folder-count"></span>
+              </div>
+              <div class="synthetic-folder-slots">
+                <span class="synthetic-slot"></span>
+                <span class="synthetic-slot"></span>
+                <span class="synthetic-slot"></span>
+              </div>
+            </div>
+
+            <div class="synthetic-folder folder-b">
+              <div class="synthetic-folder-header">
+                <span class="synthetic-folder-glyph"></span>
+                <span class="synthetic-folder-line"></span>
+                <span class="synthetic-folder-count"></span>
+              </div>
+              <div class="synthetic-folder-slots">
+                <span class="synthetic-slot"></span>
+                <span class="synthetic-slot"></span>
+                <span class="synthetic-slot"></span>
+              </div>
+            </div>
+
+            <div class="synthetic-card card-1" style="--start-x:4%;--start-y:10px;--target-x:8px;--target-y:174px;--card-delay:0ms;--glyph-color:#7189b7;--line-width:78%;--subline-width:48%">
+              <span class="synthetic-favicon"></span><span class="synthetic-card-copy"><span class="synthetic-text-line"></span><span class="synthetic-text-line is-secondary"></span></span>
+            </div>
+            <div class="synthetic-card card-2" style="--start-x:54%;--start-y:10px;--target-x:-8px;--target-y:174px;--card-delay:20ms;--glyph-color:#9a6e9d;--line-width:66%;--subline-width:56%">
+              <span class="synthetic-favicon"></span><span class="synthetic-card-copy"><span class="synthetic-text-line"></span><span class="synthetic-text-line is-secondary"></span></span>
+            </div>
+            <div class="synthetic-card card-3" style="--start-x:8%;--start-y:54px;--target-x:-4px;--target-y:166px;--card-delay:40ms;--glyph-color:#8b774f;--line-width:72%;--subline-width:42%">
+              <span class="synthetic-favicon"></span><span class="synthetic-card-copy"><span class="synthetic-text-line"></span><span class="synthetic-text-line is-secondary"></span></span>
+            </div>
+            <div class="synthetic-card card-4" style="--start-x:52%;--start-y:54px;--target-x:0px;--target-y:166px;--card-delay:60ms;--glyph-color:#5f7f78;--line-width:82%;--subline-width:50%">
+              <span class="synthetic-favicon"></span><span class="synthetic-card-copy"><span class="synthetic-text-line"></span><span class="synthetic-text-line is-secondary"></span></span>
+            </div>
+            <div class="synthetic-card card-5" style="--start-x:25%;--start-y:98px;--target-x:-68px;--target-y:158px;--card-delay:80ms;--glyph-color:#825f62;--line-width:62%;--subline-width:46%">
+              <span class="synthetic-favicon"></span><span class="synthetic-card-copy"><span class="synthetic-text-line"></span><span class="synthetic-text-line is-secondary"></span></span>
+            </div>
+            <div class="synthetic-card card-6" style="--start-x:58%;--start-y:98px;--target-x:-22px;--target-y:158px;--card-delay:100ms;--glyph-color:#6c67a1;--line-width:75%;--subline-width:54%">
+              <span class="synthetic-favicon"></span><span class="synthetic-card-copy"><span class="synthetic-text-line"></span><span class="synthetic-text-line is-secondary"></span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="sr-only" id="live-status" role="status" aria-live="polite">Prototype ready.</p>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const PROCESSING_DURATION_MS = 2000;
+      const RESULT_MOUNT_MS = 1680;
+      const REVEAL_SETTLE_MS = 340;
+      const CLEAR_THRESHOLDS = {
+        "Last hour": 1,
+        "Today": 24,
+        "This week": 168,
+        "This month": 720,
+        "Older than 30 days": 720
+      };
+      const VALID_TRANSITIONS = {
+        idle: ["covering"],
+        covering: ["processing", "idle"],
+        processing: ["result-mounted-behind-overlay", "idle"],
+        "result-mounted-behind-overlay": ["revealing", "idle"],
+        revealing: ["idle"]
+      };
+
+      const INITIAL_TREE = [
+        {
+          type: "folder",
+          id: "work",
+          title: "Work",
+          expanded: true,
+          children: [
+            tab("mail", "Inbox (14) - Product build", "mail.google.com", 0.4, "24m", "M", "#d95f59", "#fff4f2"),
+            tab("figma", "Sidebar processing review", "figma.com", 5, "5h", "F", "#a765a9", "#fff6ff"),
+            tab("linear", "Browser launch checklist", "linear.app", 28, "1d", "L", "#6c61c9", "#f7f5ff")
+          ]
+        },
+        {
+          type: "folder",
+          id: "reading",
+          title: "Reading / Research",
+          expanded: false,
+          children: [
+            tab("mdn", "Rendering rebuilt interface trees", "developer.mozilla.org", 10, "10h", "M", "#3d4148", "#f2f3f5"),
+            tab("readwise", "Motion design notes", "readwise.io", 290, "12d", "R", "#b47745", "#fff7f0"),
+            tab("recipe", "Weeknight tomato pasta", "cooking.nytimes.com", 842, "35d", "N", "#8b7650", "#fff9ef")
+          ]
+        },
+        tab("maho", "Maho browser architecture", "docs.maho.local", 2, "2h", "M", "#5f78b8", "#f3f6ff"),
+        tab("youtube", "Deep focus ambient mix", "youtube.com", 74, "3d", "Y", "#bf4545", "#fff5f5"),
+        tab("github", "Issue #842: sidebar rebuild", "github.com", 148, "6d", "G", "#4b5059", "#f4f5f6")
+      ];
+
+      const tidyButton = document.querySelector("#tidy-button");
+      const clearButton = document.querySelector("#clear-button");
+      const clearWrap = document.querySelector("#clear-wrap");
+      const periodMenu = document.querySelector("#period-menu");
+      const resetButton = document.querySelector("#reset-button");
+      const listViewport = document.querySelector("#list-viewport");
+      const treeStage = document.querySelector("#tree-stage");
+      const syntheticScene = document.querySelector("#synthetic-scene");
+      const tabCount = document.querySelector("#tab-count");
+      const liveStatus = document.querySelector("#live-status");
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+      let tree = copyTreeModel(INITIAL_TREE);
+      let phase = "idle";
+      let activeAction = null;
+      let activePayload = null;
+      let timerIds = [];
+      let pendingHeight = 0;
+
+      function tab(id, title, domain, ageHours, ageLabel, mark, bg, fg) {
+        return { type: "tab", id, title, domain, ageHours, ageLabel, mark, bg, fg };
+      }
+
+      function copyTreeModel(nodes) {
+        return nodes.map((node) => node.type === "folder"
+          ? { ...node, children: copyTreeModel(node.children) }
+          : { ...node });
+      }
+
+      function schedule(callback, delay) {
+        const id = window.setTimeout(() => {
+          timerIds = timerIds.filter((timerId) => timerId !== id);
+          callback();
+        }, delay);
+        timerIds.push(id);
+      }
+
+      function cancelTimers() {
+        timerIds.forEach((id) => {
+          window.clearTimeout(id);
+        });
+        timerIds = [];
+      }
+
+      function transitionTo(nextPhase, force = false) {
+        if (!force && !VALID_TRANSITIONS[phase].includes(nextPhase)) {
+          throw new Error(`Invalid action transition: ${phase} -> ${nextPhase}`);
+        }
+        phase = nextPhase;
+        listViewport.dataset.phase = nextPhase;
+      }
+
+      function countTabs(nodes) {
+        return nodes.reduce((count, node) => count + (node.type === "folder" ? countTabs(node.children) : 1), 0);
+      }
+
+      function findTabs(nodes) {
+        return nodes.flatMap((node) => node.type === "folder" ? findTabs(node.children) : [node]);
+      }
+
+      function tabMarkup(node) {
+        return `
+          <div class="tab-row" role="treeitem" data-node-id="${node.id}">
+            <span class="favicon" style="--favicon-bg:${node.bg};--favicon-fg:${node.fg}" aria-hidden="true">${node.mark}</span>
+            <span class="tab-copy">
+              <span class="tab-title">${node.title}</span>
+              <span class="tab-domain">${node.domain}</span>
+            </span>
+            <span class="tab-age">${node.ageLabel}</span>
+          </div>`;
+      }
+
+      function folderMarkup(node) {
+        const children = node.expanded
+          ? `<div class="folder-children" role="group">${node.children.map(nodeMarkup).join("")}</div>`
+          : "";
+        return `
+          <section class="folder" data-folder-id="${node.id}">
+            <button class="folder-button" type="button" role="treeitem" aria-expanded="${node.expanded}" data-toggle-folder="${node.id}">
+              <svg class="folder-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 3 5 5-5 5"></path></svg>
+              <span>${node.title}</span>
+              <span class="folder-count">${node.children.length}</span>
+            </button>
+            ${children}
+          </section>`;
+      }
+
+      function nodeMarkup(node) {
+        return node.type === "folder" ? folderMarkup(node) : tabMarkup(node);
+      }
+
+      function renderTree() {
+        treeStage.innerHTML = tree.map(nodeMarkup).join("");
+        const count = countTabs(tree);
+        tabCount.textContent = `${count} ${count === 1 ? "tab" : "tabs"}`;
+      }
+
+      function resetSyntheticScene() {
+        syntheticScene.classList.remove("is-choreographing");
+      }
+
+      function startSyntheticScene(animate) {
+        resetSyntheticScene();
+        if (animate) {
+          void syntheticScene.offsetWidth;
+          syntheticScene.classList.add("is-choreographing");
+        }
+      }
+
+      function setButtonsBusy(action) {
+        activeAction = action;
+        tidyButton.disabled = true;
+        clearButton.disabled = true;
+        tidyButton.classList.toggle("is-engaged", action === "tidy");
+        clearButton.classList.toggle("is-engaged", action === "clear");
+        tidyButton.toggleAttribute("aria-busy", action === "tidy");
+        clearButton.toggleAttribute("aria-busy", action === "clear");
+        listViewport.setAttribute("aria-busy", "true");
+      }
+
+      function releaseButtons() {
+        activeAction = null;
+        activePayload = null;
+        tidyButton.disabled = false;
+        clearButton.disabled = false;
+        tidyButton.classList.remove("is-engaged");
+        clearButton.classList.remove("is-engaged");
+        tidyButton.removeAttribute("aria-busy");
+        clearButton.removeAttribute("aria-busy");
+        listViewport.setAttribute("aria-busy", "false");
+      }
+
+      function makeTidyResult(nodes) {
+        const tabsById = new Map(findTabs(nodes).map((node) => [node.id, { ...node }]));
+        const foldersById = new Map(nodes
+          .filter((node) => node.type === "folder")
+          .map((node) => [node.id, node]));
+        const makeFolder = (id, title, expanded, tabIds) => {
+          const children = tabIds.map((tabId) => tabsById.get(tabId)).filter(Boolean);
+          if (children.length === 0) {
+            return null;
+          }
+          const existing = foldersById.get(id);
+          return {
+            type: "folder",
+            id,
+            title,
+            expanded: existing ? existing.expanded : expanded,
+            children
+          };
+        };
+        return [
+          makeFolder("work", "Work", true, ["mail", "figma", "linear"]),
+          makeFolder("build-notes", "Build notes", true, ["maho", "mdn", "github"]),
+          makeFolder("reading", "Reading / Research", false, ["readwise", "recipe"]),
+          tabsById.get("youtube")
+        ].filter(Boolean);
+      }
+
+      function clearTree(nodes, threshold) {
+        return nodes.flatMap((node) => {
+          if (node.type === "tab") {
+            return node.ageHours >= threshold ? [] : [{ ...node }];
+          }
+          const children = clearTree(node.children, threshold);
+          return children.length === 0 ? [] : [{ ...node, children }];
+        });
+      }
+
+      function buildResultTree() {
+        if (activeAction === "tidy") {
+          return makeTidyResult(tree);
+        }
+        return clearTree(tree, CLEAR_THRESHOLDS[activePayload.period]);
+      }
+
+      function mountResultBehindOverlay() {
+        transitionTo("result-mounted-behind-overlay");
+        tree = buildResultTree();
+        treeStage.classList.add("is-result-mounted");
+        renderTree();
+        pendingHeight = treeStage.scrollHeight;
+        liveStatus.textContent = `${activeAction === "tidy" ? "Tidy" : "Clear"} result is ready.`;
+      }
+
+      function revealResult() {
+        transitionTo("revealing");
+        listViewport.style.height = `${pendingHeight}px`;
+        treeStage.classList.remove("is-result-mounted");
+        liveStatus.textContent = `${activeAction === "tidy" ? "Tidy" : "Clear"} result revealed.`;
+
+        schedule(() => {
+          listViewport.style.height = "auto";
+          transitionTo("idle");
+          releaseButtons();
+          resetSyntheticScene();
+        }, REVEAL_SETTLE_MS);
+      }
+
+      function applyImmediately(action, payload) {
+        activeAction = action;
+        activePayload = payload;
+        transitionTo("covering");
+        transitionTo("processing");
+        transitionTo("result-mounted-behind-overlay");
+        tree = buildResultTree();
+        renderTree();
+        transitionTo("revealing");
+        transitionTo("idle");
+        releaseButtons();
+        resetSyntheticScene();
+        liveStatus.textContent = `${action === "tidy" ? "Tidy" : "Clear"} complete with reduced motion.`;
+      }
+
+      function startAction(action, payload = null) {
+        if (phase !== "idle") {
+          return;
+        }
+        closeMenu(false);
+        cancelTimers();
+        activePayload = payload;
+        startSyntheticScene(!reduceMotion.matches);
+        setButtonsBusy(action);
+        liveStatus.textContent = `${action === "tidy" ? "Tidy" : "Clear"} processing tabs.`;
+
+        if (reduceMotion.matches) {
+          applyImmediately(action, payload);
+          return;
+        }
+
+        const currentHeight = listViewport.getBoundingClientRect().height;
+        listViewport.style.height = `${currentHeight}px`;
+        transitionTo("covering");
+        schedule(() => transitionTo("processing"), 160);
+
+        // Production mapping: add one fixed MahoSidebarProcessingPlaceholderView
+        // above tab_rows_, allow RebuildRows() to run underneath it, then reveal
+        // the new rows when the model is ready. No View snapshot, cloning, or
+        // tab/folder diff is required. Tidy waits for both OnTidyFinished and the
+        // post-action model revision; Clear waits until targeted tab IDs disappear
+        // from the Update() model.
+        schedule(mountResultBehindOverlay, RESULT_MOUNT_MS);
+        schedule(revealResult, PROCESSING_DURATION_MS);
+      }
+
+      function menuItems() {
+        return Array.from(periodMenu.querySelectorAll('[role="menuitem"]'));
+      }
+
+      function openMenu() {
+        if (phase !== "idle") {
+          return;
+        }
+        periodMenu.hidden = false;
+        periodMenu.classList.remove("is-opening");
+        void periodMenu.offsetWidth;
+        periodMenu.classList.add("is-opening");
+        clearButton.setAttribute("aria-expanded", "true");
+        menuItems()[0].focus();
+      }
+
+      function closeMenu(restoreFocus = true) {
+        if (periodMenu.hidden) {
+          return;
+        }
+        periodMenu.hidden = true;
+        periodMenu.classList.remove("is-opening");
+        clearButton.setAttribute("aria-expanded", "false");
+        if (restoreFocus) {
+          clearButton.focus();
+        }
+      }
+
+      function toggleFolder(nodes, folderId) {
+        return nodes.map((node) => {
+          if (node.type !== "folder") {
+            return node;
+          }
+          if (node.id === folderId) {
+            return { ...node, expanded: !node.expanded };
+          }
+          return { ...node, children: toggleFolder(node.children, folderId) };
+        });
+      }
+
+      function resetPrototype() {
+        cancelTimers();
+        closeMenu(false);
+        tree = copyTreeModel(INITIAL_TREE);
+        treeStage.classList.remove("is-result-mounted");
+        resetSyntheticScene();
+        listViewport.style.height = "auto";
+        transitionTo("idle", true);
+        releaseButtons();
+        renderTree();
+        liveStatus.textContent = "Prototype reset to the initial tree.";
+        resetButton.focus();
+      }
+
+      tidyButton.addEventListener("click", () => startAction("tidy"));
+
+      clearButton.addEventListener("click", () => {
+        if (phase !== "idle") {
+          return;
+        }
+        if (periodMenu.hidden) {
+          openMenu();
+        } else {
+          closeMenu();
+        }
+      });
+
+      periodMenu.addEventListener("click", (event) => {
+        const item = event.target.closest('[role="menuitem"]');
+        if (item) {
+          startAction("clear", { period: item.dataset.period });
+        }
+      });
+
+      periodMenu.addEventListener("keydown", (event) => {
+        const items = menuItems();
+        const current = items.indexOf(document.activeElement);
+        let next = current;
+
+        if (event.key === "ArrowDown") {
+          next = (current + 1) % items.length;
+        } else if (event.key === "ArrowUp") {
+          next = (current - 1 + items.length) % items.length;
+        } else if (event.key === "Home") {
+          next = 0;
+        } else if (event.key === "End") {
+          next = items.length - 1;
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closeMenu();
+          return;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+        items[next].focus();
+      });
+
+      treeStage.addEventListener("click", (event) => {
+        if (phase !== "idle") {
+          return;
+        }
+        const folderButton = event.target.closest("[data-toggle-folder]");
+        if (folderButton) {
+          tree = toggleFolder(tree, folderButton.dataset.toggleFolder);
+          renderTree();
+        }
+      });
+
+      resetButton.addEventListener("click", resetPrototype);
+
+      document.addEventListener("pointerdown", (event) => {
+        if (!clearWrap.contains(event.target)) {
+          closeMenu(false);
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !periodMenu.hidden) {
+          closeMenu();
+        }
+      });
+
+      reduceMotion.addEventListener("change", resetPrototype);
+
+      renderTree();
+    })();
+  </script>
+</body>
+</html>

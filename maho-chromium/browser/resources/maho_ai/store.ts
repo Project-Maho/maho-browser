@@ -167,6 +167,9 @@ function cloneState(state: AppState): AppState {
     eventsBySessionId: Object.fromEntries(
         Object.entries(state.eventsBySessionId).map(([key, value]) => [key, [...value]])),
     historiesBySessionId: {...state.historiesBySessionId},
+    artifactsBySessionId: Object.fromEntries(
+        Object.entries(state.artifactsBySessionId).map(([key, value]) => [key, [...value]])),
+    artifactsLoadingBySessionId: {...state.artifactsLoadingBySessionId},
     toolCallsById: {...state.toolCallsById},
     toolResultsByCallId: {...state.toolResultsByCallId},
     approvalsById: {...state.approvalsById},
@@ -223,6 +226,15 @@ export class MahoAiStore {
   // tokens) collapse into a single React render, killing sub-frame flicker.
   private notifyScheduled = false;
   private rafHandle: number | null = null;
+
+  // Capability preview/export URLs cached per artifact with a 15-minute TTL
+  // (matches the registry capability lifetime); refreshed on artifact list load.
+  private readonly artifactUrlCache =
+      new Map<string, {url: string; expiresAt: number}>();
+  private readonly artifactUrlTtlMs = 15 * 60 * 1000;
+  private readonly artifactDeletionById = new Map<string, Promise<boolean>>();
+  private readonly artifactRevisionById = new Map<string, number>();
+  private readonly deletedArtifactIds = new Set<string>();
 
   constructor(
       private readonly pageHandler: PageHandlerRemote,
@@ -443,8 +455,9 @@ export class MahoAiStore {
       }
       this.updateContextSnapshot(state, sessionId, replayEvents);
       if (replayEvents.length) {
-        state.eventsBySessionId[sessionId] = replayEvents.filter(isRenderableTimelineEvent)
-                                          .map(event => ({sessionId, event}));
+        state.eventsBySessionId[sessionId] = replayEvents
+            .filter(event => this.isLiveTimelineEvent(event))
+            .map(event => ({sessionId, event}));
       }
     });
 
@@ -458,10 +471,12 @@ export class MahoAiStore {
     const {events, totalCount} = await this.pageHandler.getSessionHistory(sessionId, 0, pageSize);
     this.patch(state => {
       this.updateContextSnapshot(state, sessionId, events);
-      const entries = events.filter(isRenderableTimelineEvent).map(event => ({sessionId, event}));
+      const entries = events.filter(event => this.isLiveTimelineEvent(event))
+                            .map(event => ({sessionId, event}));
       state.eventsBySessionId[sessionId] = entries;
       state.historiesBySessionId[sessionId] = {loaded: true, totalCount, loadedCount: entries.length};
     });
+    void this.loadArtifacts(sessionId);
   }
 
   async loadEarlierHistory(sessionId: string, pageSize = 200): Promise<void> {
@@ -472,7 +487,8 @@ export class MahoAiStore {
 
     const {events} = await this.pageHandler.getSessionHistory(sessionId, hist.loadedCount, pageSize);
     this.patch(state => {
-      const incoming = events.filter(isRenderableTimelineEvent).map(event => ({sessionId, event}));
+      const incoming = events.filter(event => this.isLiveTimelineEvent(event))
+                             .map(event => ({sessionId, event}));
       const existing = state.eventsBySessionId[sessionId] || [];
       state.eventsBySessionId[sessionId] = [...incoming, ...existing];
       const current = state.historiesBySessionId[sessionId];
@@ -553,6 +569,182 @@ export class MahoAiStore {
     this.patch(state => {
       state.openTabs = {...DEFAULT_OPEN_TABS_STATE, items: []};
     });
+  }
+
+  async loadArtifacts(sessionId: string): Promise<void> {
+    if (!sessionId || this.state.artifactsLoadingBySessionId[sessionId]) {
+      return;
+    }
+    this.patch(state => {
+      state.artifactsLoadingBySessionId[sessionId] = true;
+    });
+    try {
+      const {artifacts} = await this.pageHandler.listArtifacts(sessionId);
+      const liveArtifacts = artifacts.filter(
+          artifact => !this.deletedArtifactIds.has(artifact.artifactId));
+      // Refresh cached capability URLs on list load.
+      for (const artifact of liveArtifacts) {
+        this.artifactUrlCache.delete(`preview:${artifact.artifactId}`);
+        this.artifactUrlCache.delete(`export:${artifact.artifactId}`);
+      }
+      this.patch(state => {
+        state.artifactsBySessionId[sessionId] = liveArtifacts;
+        state.artifactsLoadingBySessionId[sessionId] = false;
+      });
+    } catch {
+      this.patch(state => {
+        state.artifactsLoadingBySessionId[sessionId] = false;
+      });
+    }
+  }
+
+  // Returns null on success, or an error message string on failure.
+  async renameArtifact(sessionId: string, artifactId: string, displayName: string):
+      Promise<string|null> {
+    if (this.artifactDeletionById.has(artifactId)) {
+      return 'Artifact is being deleted';
+    }
+    if (!this.hasArtifact(sessionId, artifactId)) {
+      return 'Artifact no longer exists';
+    }
+    const revision = this.getArtifactRevision(artifactId);
+    try {
+      const {success, error} =
+          await this.pageHandler.renameArtifact(artifactId, displayName);
+      if (!success) {
+        return error || 'Rename failed';
+      }
+      if (revision !== this.getArtifactRevision(artifactId) ||
+          !this.hasArtifact(sessionId, artifactId)) {
+        return 'Artifact no longer exists';
+      }
+      this.patch(state => {
+        const list = state.artifactsBySessionId[sessionId];
+        if (list) {
+          state.artifactsBySessionId[sessionId] =
+              list.map(a => a.artifactId === artifactId ? {...a, displayName} : a);
+        }
+        const entries = state.eventsBySessionId[sessionId];
+        if (entries) {
+          state.eventsBySessionId[sessionId] = entries.map(entry =>
+            entry.event.artifact?.artifactId === artifactId ? {
+              ...entry,
+              event: {
+                ...entry.event,
+                artifact: {...entry.event.artifact, displayName},
+              },
+            } : entry);
+        }
+      });
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  deleteArtifact(sessionId: string, artifactId: string): Promise<boolean> {
+    const pending = this.artifactDeletionById.get(artifactId);
+    if (pending) {
+      return pending;
+    }
+    if (!this.hasArtifact(sessionId, artifactId)) {
+      return Promise.resolve(true);
+    }
+    const deletion = this.performArtifactDeletion(sessionId, artifactId);
+    this.artifactDeletionById.set(artifactId, deletion);
+    void deletion.finally(() => {
+      if (this.artifactDeletionById.get(artifactId) === deletion) {
+        this.artifactDeletionById.delete(artifactId);
+      }
+    });
+    return deletion;
+  }
+
+  private async performArtifactDeletion(sessionId: string, artifactId: string): Promise<boolean> {
+    try {
+      const {success} = await this.pageHandler.deleteArtifact(artifactId);
+      if (!success) {
+        return false;
+      }
+      this.artifactRevisionById.set(artifactId, this.getArtifactRevision(artifactId) + 1);
+      this.deletedArtifactIds.add(artifactId);
+      this.artifactUrlCache.delete(`preview:${artifactId}`);
+      this.artifactUrlCache.delete(`export:${artifactId}`);
+      this.patch(state => {
+        const list = state.artifactsBySessionId[sessionId];
+        if (list) {
+          state.artifactsBySessionId[sessionId] =
+              list.filter(a => a.artifactId !== artifactId);
+        }
+        const entries = state.eventsBySessionId[sessionId];
+        if (entries) {
+          state.eventsBySessionId[sessionId] = entries.filter(
+              entry => entry.event.artifact?.artifactId !== artifactId);
+        }
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  getArtifactPreviewUrl(artifactId: string): Promise<string|null> {
+    return this.resolveArtifactUrl('preview', artifactId);
+  }
+
+  getArtifactExportUrl(artifactId: string): Promise<string|null> {
+    return this.resolveArtifactUrl('export', artifactId);
+  }
+
+  private async resolveArtifactUrl(kind: 'preview'|'export', artifactId: string):
+      Promise<string|null> {
+    if (this.artifactDeletionById.has(artifactId) || !this.hasArtifactInAnySession(artifactId)) {
+      return null;
+    }
+    const revision = this.getArtifactRevision(artifactId);
+    const key = `${kind}:${artifactId}`;
+    const cached = this.artifactUrlCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.url;
+    }
+    try {
+      const {url} = kind === 'preview'
+          ? await this.pageHandler.getArtifactPreviewUrl(artifactId)
+          : await this.pageHandler.getArtifactExportUrl(artifactId);
+      if (revision !== this.getArtifactRevision(artifactId) ||
+          this.artifactDeletionById.has(artifactId) || !this.hasArtifactInAnySession(artifactId)) {
+        return null;
+      }
+      if (url) {
+        this.artifactUrlCache.set(
+            key, {url, expiresAt: Date.now() + this.artifactUrlTtlMs});
+        return url;
+      }
+      this.artifactUrlCache.delete(key);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isLiveTimelineEvent(event: RuntimeEvent): boolean {
+    return isRenderableTimelineEvent(event) &&
+        !(event.kind === RuntimeEventKind.kArtifactCreated && event.artifact &&
+          this.deletedArtifactIds.has(event.artifact.artifactId));
+  }
+
+  private hasArtifact(sessionId: string, artifactId: string): boolean {
+    return !!this.state.artifactsBySessionId[sessionId]
+        ?.some(artifact => artifact.artifactId === artifactId);
+  }
+
+  private hasArtifactInAnySession(artifactId: string): boolean {
+    return Object.values(this.state.artifactsBySessionId)
+        .some(artifacts => artifacts.some(artifact => artifact.artifactId === artifactId));
+  }
+
+  private getArtifactRevision(artifactId: string): number {
+    return this.artifactRevisionById.get(artifactId) || 0;
   }
 
   async searchHistory(query: string, maxResults = 20): Promise<void> {
@@ -1177,6 +1369,18 @@ export class MahoAiStore {
     if (event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
       const activeSpaceId = state.activeWorkspace?.spaceId ?? null;
       void this.loadAiExtensibility(activeSpaceId);
+    }
+    if (event.kind === RuntimeEventKind.kArtifactCreated && event.artifact) {
+      const artifact = event.artifact;
+      if (this.deletedArtifactIds.has(artifact.artifactId)) {
+        state.eventsBySessionId[sessionId] = (state.eventsBySessionId[sessionId] || [])
+            .filter(entry => entry.event.artifact?.artifactId !== artifact.artifactId);
+        return;
+      }
+      const existing = state.artifactsBySessionId[sessionId] || [];
+      // De-dupe by artifactId so history replay does not duplicate cards.
+      const filtered = existing.filter(a => a.artifactId !== artifact.artifactId);
+      state.artifactsBySessionId[sessionId] = [...filtered, artifact];
     }
   }
 

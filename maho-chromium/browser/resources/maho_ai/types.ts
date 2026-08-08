@@ -5,6 +5,7 @@ import {
   ApprovalResultInfo,
   ApprovalSensitivity,
   ApprovalState,
+  ArtifactInfo,
   BookmarkItem,
   BrowserContextPayload as BrowserContextPayloadRecord,
   BrowserContextStatus,
@@ -562,6 +563,8 @@ export interface AppState {
   sessionSearchQuery: string;
   currentSessionId: string|null;
   eventsBySessionId: Record<string, TimelineEntry[]>;
+  artifactsBySessionId: Record<string, ArtifactInfo[]>;
+  artifactsLoadingBySessionId: Record<string, boolean>;
   historiesBySessionId: Record<string, SessionHistoryState>;
   toolCallsById: Record<string, ToolCallRecord>;
   toolResultsByCallId: Record<string, ToolResultRecord>;
@@ -616,6 +619,8 @@ export function createInitialState(): AppState {
     sessionSearchQuery: '',
     currentSessionId: null,
     eventsBySessionId: {},
+    artifactsBySessionId: {},
+    artifactsLoadingBySessionId: {},
     historiesBySessionId: {},
     toolCallsById: {},
     toolResultsByCallId: {},
@@ -878,6 +883,7 @@ export function isRenderableTimelineEvent(event: RuntimeEventRecord): boolean {
     case RuntimeEventKind.kApprovalResult:
     case RuntimeEventKind.kError:
     case RuntimeEventKind.kConnectionStateChanged:
+    case RuntimeEventKind.kArtifactCreated:
       return true;
   }
 

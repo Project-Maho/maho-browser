@@ -83,6 +83,11 @@ def copy_browser_files(dest_dir, src_dir):
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(dest_dir, filename))
             
+    # Copy and rename chrome_sandbox to chrome-sandbox
+    sandbox_src = os.path.join(src_dir, 'chrome_sandbox')
+    if os.path.exists(sandbox_src):
+        shutil.copy2(sandbox_src, os.path.join(dest_dir, 'chrome-sandbox'))
+            
     # Copy directories if present
     for dirname in ['locales', 'swiftshader', 'MEIPreload']:
         src = os.path.join(src_dir, dirname)
@@ -141,6 +146,7 @@ def package_deb(version, dry_run):
     os.makedirs(os.path.join(build_dir, 'usr', 'lib', 'maho'))
     os.makedirs(os.path.join(build_dir, 'usr', 'share', 'applications'))
     os.makedirs(os.path.join(build_dir, 'usr', 'share', 'pixmaps'))
+    os.makedirs(os.path.join(build_dir, 'etc', 'apparmor.d'))
     
     # Copy browser binaries
     copy_browser_files(os.path.join(build_dir, 'usr', 'lib', 'maho'), src_dir)
@@ -158,13 +164,46 @@ def package_deb(version, dry_run):
     shutil.copy2(os.path.join(branding_dir, 'product_logo_256.png'),
                  os.path.join(build_dir, 'usr/share/pixmaps/maho.png'))
                  
+    # Create AppArmor profile
+    apparmor_content = """abi <abi/4.0>,
+include <tunables/global>
+
+profile maho /usr/lib/maho/chrome flags=(unconfined) {
+  userns,
+  # Site-specific additions and overrides.
+  include if exists <local/maho>
+}
+"""
+    with open(os.path.join(build_dir, 'etc', 'apparmor.d', 'maho'), 'w') as f:
+        f.write(apparmor_content)
+
+    # Create postinst script
+    postinst_content = """#!/bin/sh
+set -e
+
+# Set SUID permissions for the sandbox helper
+if [ -f "/usr/lib/maho/chrome-sandbox" ]; then
+  chown root:root "/usr/lib/maho/chrome-sandbox"
+  chmod 4755 "/usr/lib/maho/chrome-sandbox"
+fi
+
+# AppArmor profile load
+if [ -f "/etc/apparmor.d/maho" ] && command -v apparmor_parser >/dev/null 2>&1; then
+  apparmor_parser -r /etc/apparmor.d/maho || true
+fi
+"""
+    postinst_path = os.path.join(build_dir, 'DEBIAN', 'postinst')
+    with open(postinst_path, 'w') as f:
+        f.write(postinst_content)
+    os.chmod(postinst_path, 0o755)
+
     # Create control file
     control_content = f"""Package: maho
 Version: {version}
 Section: web
 Priority: optional
 Architecture: amd64
-Depends: libgtk-3-0, libdbus-1-3, libnss3, libatk1.0-0
+Depends: libnss3, libnspr4, libgtk-3-0t64 | libgtk-3-0, libgbm1, libasound2t64 | libasound2, libcups2t64 | libcups2, libxss1, libpci3, libdrm2, libxkbcommon0, libatk1.0-0t64 | libatk1.0-0, libatk-bridge2.0-0t64 | libatk-bridge2.0-0, libatspi2.0-0t64 | libatspi2.0-0, libcairo2, libpango-1.0-0, libx11-6, libxcb1, libxcomposite1, libxcursor1, libxdamage1, libxext6, libxfixes3, libxi6, libxrandr2, libxrender1, libxtst6, libexpat1, fonts-liberation
 Maintainer: Maho Browser Releases <releases@maho.app>
 Description: Maho Browser — AI-native web browser
 """
@@ -209,6 +248,19 @@ def package_rpm(version, dry_run):
     shutil.copy2(os.path.join(branding_dir, 'linux', 'maho.desktop'), os.path.join(src_tar_dir, 'maho.desktop'))
     shutil.copy2(os.path.join(branding_dir, 'product_logo_256.png'), os.path.join(src_tar_dir, 'maho.png'))
     
+    # Create AppArmor profile package source
+    apparmor_content = """abi <abi/4.0>,
+include <tunables/global>
+
+profile maho /usr/lib/maho/chrome flags=(unconfined) {
+  userns,
+  # Site-specific additions and overrides.
+  include if exists <local/maho>
+}
+"""
+    with open(os.path.join(src_tar_dir, 'maho-apparmor'), 'w') as f:
+        f.write(apparmor_content)
+
     # Create tarball in SOURCES
     subprocess.run(['tar', '-czf', os.path.join(rpmbuild_dir, 'SOURCES', f"maho-{version}.tar.gz"),
                     '-C', os.path.join(rpmbuild_dir, 'SOURCES'), f"maho-{version}"], check=True)
@@ -223,7 +275,7 @@ License:        Proprietary
 URL:            https://maho.app
 Source0:        %{{name}}-%{{version}}.tar.gz
 
-Requires:       gtk3, dbus-libs, nss
+Requires:       nss, nspr, gtk3, mesa-libgbm, alsa-lib, cups-libs, libXScrnSaver, pciutils-libs, libdrm, libxkbcommon, at-spi2-atk, at-spi2-core, cairo, pango, libX11, libxcb, libXcomposite, libXcursor, libXdamage, libXext, libXfixes, libXi, libXrandr, libXrender, libXtst, expat, liberation-fonts
 
 %description
 Maho Browser — AI-native web browser.
@@ -239,17 +291,29 @@ mkdir -p %{{buildroot}}/usr/lib/maho
 mkdir -p %{{buildroot}}/usr/bin
 mkdir -p %{{buildroot}}/usr/share/applications
 mkdir -p %{{buildroot}}/usr/share/pixmaps
+mkdir -p %{{buildroot}}/etc/apparmor.d
 
 cp -r * %{{buildroot}}/usr/lib/maho/
 mv %{{buildroot}}/usr/lib/maho/maho.sh %{{buildroot}}/usr/bin/maho
 mv %{{buildroot}}/usr/lib/maho/maho.desktop %{{buildroot}}/usr/share/applications/maho.desktop
 mv %{{buildroot}}/usr/lib/maho/maho.png %{{buildroot}}/usr/share/pixmaps/maho.png
+mv %{{buildroot}}/usr/lib/maho/maho-apparmor %{{buildroot}}/etc/apparmor.d/maho
+
+%post
+if [ -f "/usr/lib/maho/chrome-sandbox" ]; then
+  chown root:root "/usr/lib/maho/chrome-sandbox"
+  chmod 4755 "/usr/lib/maho/chrome-sandbox"
+fi
+if [ -f "/etc/apparmor.d/maho" ] && command -v apparmor_parser >/dev/null 2>&1; then
+  apparmor_parser -r /etc/apparmor.d/maho || true
+fi
 
 %files
 /usr/lib/maho/
 /usr/bin/maho
 /usr/share/applications/maho.desktop
 /usr/share/pixmaps/maho.png
+/etc/apparmor.d/maho
 """
     spec_file = os.path.join(rpmbuild_dir, 'SPECS', 'maho.spec')
     with open(spec_file, 'w') as f:

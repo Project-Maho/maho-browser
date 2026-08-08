@@ -6,15 +6,17 @@
 
 #![cfg(windows)]
 
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use serde_json::Value;
 use std::path::Path;
 use std::ptr;
-use serde_json::Value;
-use aes_gcm::{Aes256Gcm, Key, Nonce};
-use aes_gcm::aead::{Aead, KeyInit};
-use windows::core::{GUID, IUnknown, Interface};
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED};
-use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+use windows::core::{IUnknown, Interface, GUID};
 use windows::Win32::Foundation::{LocalFree, HLOCAL};
+use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED,
+};
 
 /// Decryptor for Windows Chrome / Edge / Brave cookies.
 pub struct WindowsAppBoundDecryptor {
@@ -29,17 +31,17 @@ impl WindowsAppBoundDecryptor {
     /// (for browsers that do not use App-Bound encryption).
     pub fn for_browser(browser_name: &str, local_state_path: &Path) -> Result<Self, String> {
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        
+
         let content = std::fs::read_to_string(local_state_path).map_err(|e| e.to_string())?;
         let json: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-        
+
         // 1. Try to load the app_bound_encrypted_key (v20 Chrome/Edge/Brave)
         if let Some(app_bound_b64) = json["os_crypt"]["app_bound_encrypted_key"].as_str() {
             use base64::Engine as _;
             let encrypted_key = base64::engine::general_purpose::STANDARD
                 .decode(app_bound_b64)
                 .map_err(|e| e.to_string())?;
-                
+
             if encrypted_key.starts_with(b"APPB") {
                 let payload = &encrypted_key[4..];
                 // Try COM decryption
@@ -51,14 +53,14 @@ impl WindowsAppBoundDecryptor {
                 }
             }
         }
-        
+
         // 2. Fall back to standard DPAPI (v10 / pre-Chrome-117 key format)
         if let Some(encrypted_key_b64) = json["os_crypt"]["encrypted_key"].as_str() {
             use base64::Engine as _;
             let encrypted_key = base64::engine::general_purpose::STANDARD
                 .decode(encrypted_key_b64)
                 .map_err(|e| e.to_string())?;
-                
+
             if encrypted_key.starts_with(b"DPAPI") {
                 let payload = &encrypted_key[5..];
                 let input_blob = CRYPT_INTEGER_BLOB {
@@ -69,22 +71,17 @@ impl WindowsAppBoundDecryptor {
                     cbData: 0,
                     pbData: ptr::null_mut(),
                 };
-                
+
                 let ok = unsafe {
-                    CryptUnprotectData(
-                        &input_blob,
-                        None,
-                        None,
-                        None,
-                        None,
-                        0,
-                        &mut output_blob,
-                    )
+                    CryptUnprotectData(&input_blob, None, None, None, None, 0, &mut output_blob)
                 };
-                
+
                 if ok.is_ok() {
                     let key = unsafe {
-                        let slice = std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize);
+                        let slice = std::slice::from_raw_parts(
+                            output_blob.pbData,
+                            output_blob.cbData as usize,
+                        );
                         let vec = slice.to_vec();
                         let _ = LocalFree(HLOCAL(output_blob.pbData as *mut std::ffi::c_void));
                         vec
@@ -93,8 +90,11 @@ impl WindowsAppBoundDecryptor {
                 }
             }
         }
-        
-        Err(format!("Could not extract decryption key for browser {}", browser_name))
+
+        Err(format!(
+            "Could not extract decryption key for browser {}",
+            browser_name
+        ))
     }
 
     /// Decrypts a cookie value using AES-256-GCM.
@@ -105,19 +105,20 @@ impl WindowsAppBoundDecryptor {
         if encrypted_value.len() < 12 + 16 {
             return Err("Encrypted cookie payload too short".into());
         }
-        
+
         let iv = &encrypted_value[..12];
         let payload = &encrypted_value[12..];
-        
+
         let key = Key::<Aes256Gcm>::from_slice(&self.aes_key);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(iv);
-        
+
         let decrypted = cipher
             .decrypt(nonce, payload)
             .map_err(|e| format!("AES-GCM decryption failed: {}", e))?;
-            
-        String::from_utf8(decrypted).map_err(|e| format!("Invalid UTF-8 in decrypted cookie: {}", e))
+
+        String::from_utf8(decrypted)
+            .map_err(|e| format!("Invalid UTF-8 in decrypted cookie: {}", e))
     }
 }
 
@@ -156,31 +157,34 @@ fn get_browser_config(browser_name: &str) -> Option<BrowserComConfig> {
 fn decrypt_via_com(browser_name: &str, encrypted_key: &[u8]) -> Result<Vec<u8>, String> {
     let config = get_browser_config(browser_name)
         .ok_or_else(|| format!("COM configuration missing for browser {}", browser_name))?;
-        
+
     unsafe {
         let clsid = GUID::from(config.clsid);
         let iid_v2 = GUID::from(config.iid_v2);
         let iid_v1 = GUID::from(config.iid_v1);
-        
+
         let unknown: IUnknown = CoCreateInstance(&clsid, None, CLSCTX_LOCAL_SERVER)
             .map_err(|e| format!("CoCreateInstance failed: {}", e))?;
-        
+
         // Query for the IElevator interface (v2 first, then v1 fallback).
         let mut elevator_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
         let mut hr = unknown.query(&iid_v2, &mut elevator_ptr);
         if hr.is_err() {
             hr = unknown.query(&iid_v1, &mut elevator_ptr);
         }
-        
+
         if hr.is_err() || elevator_ptr.is_null() {
-            return Err(format!("QueryInterface for IElevator failed with HRESULT 0x{:08X}", hr.0));
+            return Err(format!(
+                "QueryInterface for IElevator failed with HRESULT 0x{:08X}",
+                hr.0
+            ));
         }
-        
+
         let result = call_decrypt_data(elevator_ptr, config.vtable_slot, encrypted_key);
-        
+
         // Balance the reference added by QueryInterface; `unknown` releases on drop.
         let _ = IUnknown::from_raw(elevator_ptr);
-        
+
         result
     }
 }
@@ -192,7 +196,7 @@ unsafe fn call_decrypt_data(
 ) -> Result<Vec<u8>, String> {
     let vtable_ptr = *(unknown_ptr as *mut *mut *mut std::ffi::c_void);
     let func_ptr = *vtable_ptr.add(slot);
-    
+
     type DecryptDataFn = unsafe extern "system" fn(
         this: *mut std::ffi::c_void,
         input_buffer: *const u8,
@@ -201,13 +205,13 @@ unsafe fn call_decrypt_data(
         output_buffer_size: *mut u32,
         last_error: *mut i32,
     ) -> i32;
-    
+
     let decrypt_fn: DecryptDataFn = std::mem::transmute(func_ptr);
-    
+
     let mut output_ptr: *mut u8 = std::ptr::null_mut();
     let mut output_size: u32 = 0;
     let mut last_error: i32 = 0;
-    
+
     let hr = decrypt_fn(
         unknown_ptr,
         input.as_ptr(),
@@ -216,17 +220,20 @@ unsafe fn call_decrypt_data(
         &mut output_size,
         &mut last_error,
     );
-    
+
     if hr < 0 {
-        return Err(format!("COM DecryptData failed with HRESULT 0x{:08X}, last_error={}", hr, last_error));
+        return Err(format!(
+            "COM DecryptData failed with HRESULT 0x{:08X}, last_error={}",
+            hr, last_error
+        ));
     }
-    
+
     if output_ptr.is_null() || output_size == 0 {
         return Err("COM DecryptData returned null or empty output".into());
     }
-    
+
     let result = std::slice::from_raw_parts(output_ptr, output_size as usize).to_vec();
     let _ = LocalFree(HLOCAL(output_ptr as *mut std::ffi::c_void));
-    
+
     Ok(result)
 }

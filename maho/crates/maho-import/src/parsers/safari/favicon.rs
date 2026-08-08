@@ -285,8 +285,16 @@ mod tests {
         create_favicons_db(
             safari,
             &[
-                ("uuid-1", "https://example.com/favicon.ico", "https://example.com"),
-                ("uuid-1", "https://example.com/favicon.ico", "https://example.com/page"),
+                (
+                    "uuid-1",
+                    "https://example.com/favicon.ico",
+                    "https://example.com",
+                ),
+                (
+                    "uuid-1",
+                    "https://example.com/favicon.ico",
+                    "https://example.com/page",
+                ),
             ],
         );
         write_image(safari, "uuid-1", &minimal_png());
@@ -295,8 +303,12 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].favicon_url, "https://example.com/favicon.ico");
         assert_eq!(entries[0].page_urls.len(), 2);
-        assert!(entries[0].page_urls.contains(&"https://example.com".to_string()));
-        assert!(entries[0].page_urls.contains(&"https://example.com/page".to_string()));
+        assert!(entries[0]
+            .page_urls
+            .contains(&"https://example.com".to_string()));
+        assert!(entries[0]
+            .page_urls
+            .contains(&"https://example.com/page".to_string()));
         assert_eq!(entries[0].image_data, minimal_png());
     }
 

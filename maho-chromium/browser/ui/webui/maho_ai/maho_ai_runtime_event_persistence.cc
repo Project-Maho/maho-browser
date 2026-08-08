@@ -8,6 +8,33 @@
 #include "maho/browser/ai/maho_credential_redaction.h"
 
 namespace maho::ai {
+namespace {
+
+constexpr char kSafeCredentialFailureText[] =
+    "Your saved AI credential could not be used.";
+
+const char* CredentialErrorCodeToPersistedSymbol(
+    maho_ai::mojom::CredentialErrorCode code) {
+  switch (code) {
+    case maho_ai::mojom::CredentialErrorCode::kProviderNotConfigured:
+      return "provider_not_configured";
+    case maho_ai::mojom::CredentialErrorCode::kCredentialUnusable:
+      return "credential_unusable";
+    case maho_ai::mojom::CredentialErrorCode::kSecureStoreUnavailable:
+      return "secure_store_unavailable";
+    case maho_ai::mojom::CredentialErrorCode::kCredentialDecryptFailed:
+      return "credential_decrypt_failed";
+    case maho_ai::mojom::CredentialErrorCode::kManagedAuthUnavailable:
+      return "managed_auth_unavailable";
+    case maho_ai::mojom::CredentialErrorCode::kUnsupportedProvider:
+      return "unsupported_provider";
+    case maho_ai::mojom::CredentialErrorCode::kGeneric:
+      return "generic";
+  }
+  return "generic";
+}
+
+}  // namespace
 
 base::DictValue SerializeRuntimeEventForPersistence(
     const maho_ai::mojom::RuntimeEvent& event) {
@@ -19,7 +46,12 @@ base::DictValue SerializeRuntimeEventForPersistence(
   }
   dict.Set("sequence", static_cast<double>(event.sequence));
   dict.Set("timestamp", event.timestamp);
-  if (event.text.has_value()) {
+  if (event.credential_error_code.has_value()) {
+    dict.Set("credential_error_code",
+             CredentialErrorCodeToPersistedSymbol(
+                 *event.credential_error_code));
+    dict.Set("text", kSafeCredentialFailureText);
+  } else if (event.text.has_value()) {
     dict.Set("text", credential_redaction::RedactCredentialText(*event.text));
   }
   if (event.tool_call) {

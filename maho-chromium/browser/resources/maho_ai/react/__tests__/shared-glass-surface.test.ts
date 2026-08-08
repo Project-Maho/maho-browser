@@ -2,8 +2,8 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 
-describe('desktop embedded shared glass surface', () => {
-  it('keeps the document roots transparent without removing control fills', () => {
+describe('desktop embedded neutral glass surface', () => {
+  it('separates the AI page material from the sidebar palette', () => {
     const html = readFileSync(
         path.join(process.cwd(), 'maho_ai.html'), 'utf8');
     const compactShell = readFileSync(
@@ -22,19 +22,18 @@ describe('desktop embedded shared glass surface', () => {
 
     expect(html).toContain('html, body, #app');
     expect(html).toContain('background: transparent !important');
-    expect(app).toContain('flex h-screen min-h-0 flex-col bg-transparent text-foreground');
+    expect(app).toContain('maho-ai-page-surface');
+    expect(app).toContain('bg-background/90');
+    expect(app).toContain('border-border');
+    expect(app).toContain('backdrop-blur-2xl');
     expect(app).not.toContain('sticky bottom-0 z-10 bg-gradient-to-t from-background');
     expect(compactShell).not.toContain('gap-3 bg-background px-3');
     expect(composer).toMatch(/bg-(background|card|muted)/);
     expect(nativeHost).toContain('WebContentsSetBackgroundColor::CreateForWebContentsWithColor');
-    expect(nativeHost).toContain('maho-shared-glass-style');
-    expect(nativeHost).toContain('background:transparent!important');
-    expect(nativeHost).toContain('DidFinishLoad');
-    expect(nativeHost).not.toContain('content_surface_stops');
-    expect(nativeHost).toContain('sidebar_palette_.surface_stops');
-    expect(nativeHost).not.toContain('content_surface_stops');
-    expect(nativeHost).toContain('seed = 1337');
-    expect(nativeHost).toContain('mix-blend-mode:soft-light');
+    expect(nativeHost).not.toContain('MahoSidebarPalette');
+    expect(nativeHost).not.toContain('sidebar_palette_');
+    expect(nativeHost).not.toContain('maho-shared-glass-style');
+    expect(nativeHost).not.toContain('linear-gradient(135deg');
     expect(chromiumOverrides).toContain('ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm');
     expect(chromiumOverrides).toContain('root_ca_layer_.opaque = NO');
   });

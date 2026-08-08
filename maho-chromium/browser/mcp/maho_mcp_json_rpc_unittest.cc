@@ -137,6 +137,29 @@ TEST_F(MahoMcpJsonRpcTest, ValidRequestResponseRoundtrip) {
   EXPECT_TRUE(result_val->FindList("tools"));
 }
 
+TEST_F(MahoMcpJsonRpcTest, SuccessResponseRedactsNestedStructuredOutput) {
+  base::ListValue metadata;
+  base::DictValue cookie;
+  cookie.Set("name", "Cookie");
+  cookie.Set("value", "session=S3NTINEL-cookie");
+  metadata.Append(std::move(cookie));
+  base::DictValue artifact;
+  artifact.Set("url",
+               "https://example.test/capture?token=S3NTINEL-url&keep=1");
+  artifact.Set("metadata", std::move(metadata));
+  artifact.Set("description", "Authorization: Basic S3NTINEL-auth");
+  base::DictValue result;
+  result.Set("artifact", std::move(artifact));
+  result.Set("marker", "ordinary-marker");
+
+  const std::string response = framer_.BuildSuccessResponse(
+      base::Value(7), base::Value(std::move(result)));
+
+  EXPECT_EQ(response.find("S3NTINEL-"), std::string::npos);
+  EXPECT_NE(response.find("ordinary-marker"), std::string::npos);
+  EXPECT_NE(response.find("keep=1"), std::string::npos);
+}
+
 TEST_F(MahoMcpJsonRpcTest, NotificationProducesNoResponse) {
   // A notification has no "id" field — no response should be generated.
   std::string input =

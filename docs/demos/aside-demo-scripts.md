@@ -33,4 +33,4 @@ This document outlines the demo scripts for marketing and onboarding walkthrough
 
 1. **Scene 1 (0-15s)**: Start in the Settings → Billing panel. Show the user is currently on the Free Tier and has reached their monthly usage limit. The AI Panel shows a "Quota Exceeded" message.
 2. **Scene 2 (15-30s)**: The user clicks "Upgrade to Pro" in the settings card. It redirects to a secure LemonSqueezy checkout page. They complete a test payment.
-3. **Scene 3 (30-45s)**: The user returns to the browser. The Settings page immediately updates to `Pro Tier` (effective ceiling `$20.00`). They type a message in the AI Panel, and the stream immediately resumes processing.
+3. **Scene 3 (30-45s)**: The user returns to the browser. The Settings page immediately updates to `Pro Tier` (managed AI budget ≈ `$2.10`/mo, per ADR 0009 v2, reflecting the $5 Pro plan after markup). They type a message in the AI Panel, and the stream immediately resumes processing.

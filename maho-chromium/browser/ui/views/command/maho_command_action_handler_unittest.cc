@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
@@ -28,6 +29,7 @@ class MahoCommandActionHandlerTest : public BrowserWithTestWindowTest {
 
   void TearDown() override {
     MahoAiIngressCoordinator::RemoveFromBrowser(browser());
+    MahoNotificationOverlay::RemoveFromBrowser(browser());
     BrowserWithTestWindowTest::TearDown();
   }
 };
@@ -40,7 +42,7 @@ TEST_F(MahoCommandActionHandlerTest, ForgedActionIdsAreDenied) {
   for (const char* forged :
         {"new_tab", "new_incognito", "open_history", "open_bookmarks",
          "next_space", "select_tab_1", "add_split_view", "remove_split_view",
-         "ai_panel", "settings", "little_arc", "", "toggle_sidebarX",
+         "ai_panel", "settings", "maho_mini", "", "toggle_sidebarX",
          "CLOSE_TAB", "print", "action:close_tab"}) {
     EXPECT_FALSE(IsPrimaryIncognitoAllowedActionId(forged)) << forged;
   }
@@ -63,6 +65,16 @@ TEST_F(MahoCommandActionHandlerTest, RegularSplitAndSearchEnginePersist) {
       MahoPrivateContextClass::kRegular));
   EXPECT_TRUE(MahoCommandModel::ShouldReadSavedSourcesForContext(
       MahoPrivateContextClass::kRegular));
+}
+
+TEST_F(MahoCommandActionHandlerTest, CopyUrlCommandCreatesLinkCopiedToast) {
+  EXPECT_EQ(nullptr, MahoNotificationOverlay::FromBrowser(browser()));
+
+  ExecuteCommandAction(browser(), "copy_url");
+
+  EXPECT_NE(nullptr, MahoNotificationOverlay::FromBrowser(browser()))
+      << "Cmd+Shift+C must route its copy_url action through the link-copied "
+         "toast surface";
 }
 
 // A single dispatch from a regular window carries the full command-palette

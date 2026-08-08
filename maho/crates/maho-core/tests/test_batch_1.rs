@@ -204,8 +204,14 @@ fn new_tab_with_explicit_id_opens_at_top_of_normal_area() {
         .iter()
         .position(|i| i == &maho_types::space::RootItem::Tab(second.clone()))
         .expect("second tab in root_order");
-    assert_eq!(pos_second, 0, "newest tab must be at the top of the normal area");
-    assert!(pos_second < pos_first, "newest tab must sit above the older tab");
+    assert_eq!(
+        pos_second, 0,
+        "newest tab must be at the top of the normal area"
+    );
+    assert!(
+        pos_second < pos_first,
+        "newest tab must sit above the older tab"
+    );
 }
 
 #[test]
@@ -1373,7 +1379,14 @@ fn permission_query_unknown() {
 #[test]
 fn download_start_returns_id() {
     let mut core = MahoCore::new();
-    let id = core.start_download("file.zip", "https://example.com/file.zip", 1024, None, None, None);
+    let id = core.start_download(
+        "file.zip",
+        "https://example.com/file.zip",
+        1024,
+        None,
+        None,
+        None,
+    );
     assert!(!id.is_empty());
 }
 
@@ -1387,7 +1400,14 @@ fn download_view_models_not_empty() {
 #[test]
 fn download_pause_resume_no_panic() {
     let mut core = MahoCore::new();
-    let id = core.start_download("big.zip", "https://example.com/big.zip", 99999, None, None, None);
+    let id = core.start_download(
+        "big.zip",
+        "https://example.com/big.zip",
+        99999,
+        None,
+        None,
+        None,
+    );
     core.pause_download(&id);
     core.resume_download(&id);
 }
@@ -1409,7 +1429,14 @@ fn download_progress_update() {
 #[test]
 fn download_fail_no_panic() {
     let mut core = MahoCore::new();
-    let id = core.start_download("fail.zip", "https://example.com/fail.zip", 100, None, None, None);
+    let id = core.start_download(
+        "fail.zip",
+        "https://example.com/fail.zip",
+        100,
+        None,
+        None,
+        None,
+    );
     core.fail_download(&id, "network error");
 }
 

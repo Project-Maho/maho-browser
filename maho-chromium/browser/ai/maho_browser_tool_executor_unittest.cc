@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/json/json_reader.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
@@ -40,6 +41,7 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
   int scroll_count = 0;
   int hover_count = 0;
   int key_press_count = 0;
+  int mail_list_accounts_count = 0;
   int navigate_count = 0;
   std::string last_typed_text;
   std::string last_navigate_url;
@@ -226,6 +228,47 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
   }
 
   void CancelNetworkCapture(const std::string& capture_id) override {}
+
+  void MailListAccounts(MailReadCallback callback) override {
+    ++mail_list_accounts_count;
+    std::move(callback).Run(true, R"([{"id":"account-1"}])");
+  }
+
+  int mail_send_count = 0;
+  int mail_save_draft_count = 0;
+  int mail_update_draft_count = 0;
+  std::string last_write_request_json;
+  std::string last_update_draft_id;
+  bool last_write_already_authorized = false;
+
+  void MailSendEmail(const std::string& request_json,
+                     bool already_authorized,
+                     MailReadCallback callback) override {
+    ++mail_send_count;
+    last_write_request_json = request_json;
+    last_write_already_authorized = already_authorized;
+    std::move(callback).Run(true, R"({"queued":true})");
+  }
+
+  void MailSaveDraft(const std::string& request_json,
+                     bool already_authorized,
+                     MailReadCallback callback) override {
+    ++mail_save_draft_count;
+    last_write_request_json = request_json;
+    last_write_already_authorized = already_authorized;
+    std::move(callback).Run(true, R"({"draft_id":"d1"})");
+  }
+
+  void MailUpdateDraft(const std::string& draft_id,
+                       const std::string& request_json,
+                       bool already_authorized,
+                       MailReadCallback callback) override {
+    ++mail_update_draft_count;
+    last_update_draft_id = draft_id;
+    last_write_request_json = request_json;
+    last_write_already_authorized = already_authorized;
+    std::move(callback).Run(true, R"({"updated":true})");
+  }
 
   maho::MahoMcpFieldMetadata GetFieldMetadata(
       int tab_id,
@@ -574,6 +617,233 @@ TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {
   EXPECT_FALSE(result.FindBool("ok").value_or(true));
   EXPECT_NE(result.FindString("error")->find("Unknown browser tool"),
             std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailListAccountsUsesSharedMailBroker) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue result = Execute(executor, "mail_list_accounts");
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  const base::ListValue* accounts = result.FindList("result");
+  ASSERT_TRUE(accounts);
+  ASSERT_EQ(accounts->size(), 1u);
+  const std::string* account_id = (*accounts)[0].GetDict().FindString("id");
+  ASSERT_TRUE(account_id);
+  EXPECT_EQ(*account_id, "account-1");
+  EXPECT_EQ(delegate_.mail_list_accounts_count, 1);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSendRequiresApprovalAndDispatches) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Hello");
+  arguments.Set("body_text", "Body");
+  base::ListValue attachments;
+  base::DictValue attachment;
+  attachment.Set("filename", "a.txt");
+  attachment.Set("mime_type", "text/plain");
+  attachment.Set("data_base64", "QQ==");
+  attachments.Append(std::move(attachment));
+  arguments.Set("attachments", std::move(attachments));
+
+  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.mail_send_count, 1);
+  EXPECT_TRUE(delegate_.last_write_already_authorized);
+
+  std::optional<base::Value> parsed = base::JSONReader::Read(
+      delegate_.last_write_request_json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed && parsed->is_dict());
+  const base::DictValue& request = parsed->GetDict();
+  EXPECT_EQ(*request.FindString("account_id"), "account-1");
+  EXPECT_EQ(*request.FindString("subject"), "Hello");
+  const base::ListValue* to_list = request.FindList("to");
+  ASSERT_TRUE(to_list);
+  ASSERT_EQ(to_list->size(), 1u);
+  EXPECT_EQ((*to_list)[0].GetString(), "dest@example.com");
+  const base::ListValue* atts = request.FindList("attachments");
+  ASSERT_TRUE(atts);
+  ASSERT_EQ(atts->size(), 1u);
+  const base::DictValue& a0 = (*atts)[0].GetDict();
+  EXPECT_EQ(*a0.FindString("filename"), "a.txt");
+  EXPECT_EQ(*a0.FindString("mime_type"), "text/plain");
+  // maho-core ComposeAttachment carries base64 bytes under `data`.
+  EXPECT_EQ(*a0.FindString("data"), "QQ==");
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSendDeniedDoesNotDispatch) {
+  auto executor = MakeExecutor(base::BindRepeating([](const Authorization&) {
+    ApprovalDecision decision;
+    decision.approved = false;
+    decision.error = "denied by policy";
+    return decision;
+  }));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Hello");
+
+  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.mail_send_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSendWithoutApprovalCallbackFailsClosed) {
+  auto executor = MakeExecutor();  // No approval callback wired.
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Hello");
+
+  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.mail_send_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSendMissingRecipientsFails) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  arguments.Set("subject", "Hello");
+
+  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.mail_send_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailUpdateDraftRequiresDraftId) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Hello");
+
+  base::DictValue result =
+      Execute(executor, "mail_update_draft", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.mail_update_draft_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSaveDraftDispatchesWithAuthorization) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Draft subject");
+
+  base::DictValue result =
+      Execute(executor, "mail_save_draft", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.mail_save_draft_count, 1);
+  EXPECT_EQ(delegate_.mail_send_count, 0);
+  EXPECT_TRUE(delegate_.last_write_already_authorized);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailUpdateDraftDispatchesWithDraftId) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("draft_id", "draft-123");
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Updated subject");
+
+  base::DictValue result =
+      Execute(executor, "mail_update_draft", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.mail_update_draft_count, 1);
+  EXPECT_EQ(delegate_.last_update_draft_id, "draft-123");
+  EXPECT_TRUE(delegate_.last_write_already_authorized);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSendMapsCcBccAndReplyHeaders) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Hello");
+  base::ListValue cc;
+  cc.Append("cc@example.com");
+  arguments.Set("cc", std::move(cc));
+  base::ListValue bcc;
+  bcc.Append("bcc@example.com");
+  arguments.Set("bcc", std::move(bcc));
+  arguments.Set("in_reply_to", "<orig@example.com>");
+  arguments.Set("references", "<a@example.com> <b@example.com>");
+
+  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  ASSERT_EQ(delegate_.mail_send_count, 1);
+  std::optional<base::Value> parsed = base::JSONReader::Read(
+      delegate_.last_write_request_json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed && parsed->is_dict());
+  const base::DictValue& request = parsed->GetDict();
+  const base::ListValue* cc_list = request.FindList("cc");
+  ASSERT_TRUE(cc_list);
+  ASSERT_EQ(cc_list->size(), 1u);
+  EXPECT_EQ((*cc_list)[0].GetString(), "cc@example.com");
+  const base::ListValue* bcc_list = request.FindList("bcc");
+  ASSERT_TRUE(bcc_list);
+  ASSERT_EQ(bcc_list->size(), 1u);
+  EXPECT_EQ((*bcc_list)[0].GetString(), "bcc@example.com");
+  EXPECT_EQ(*request.FindString("in_reply_to"), "<orig@example.com>");
+  EXPECT_EQ(*request.FindString("references"),
+            "<a@example.com> <b@example.com>");
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailSendRejectsAttachmentMissingField) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("account_id", "account-1");
+  base::ListValue to;
+  to.Append("dest@example.com");
+  arguments.Set("to", std::move(to));
+  arguments.Set("subject", "Hello");
+  base::ListValue attachments;
+  base::DictValue attachment;
+  attachment.Set("filename", "a.txt");
+  attachment.Set("mime_type", "text/plain");
+  // Missing data_base64 -> must be rejected before dispatch.
+  attachments.Append(std::move(attachment));
+  arguments.Set("attachments", std::move(attachments));
+
+  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.mail_send_count, 0);
 }
 
 class MahoBrowserToolExecutorParityTest : public MahoBrowserToolExecutorTest {};

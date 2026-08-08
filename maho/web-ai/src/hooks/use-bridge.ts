@@ -63,6 +63,8 @@ function makeBridge(): MahoBridge {
     agentCancel: (handle) => call('agentCancel', { handle }),
     agentPollEvent: (handle) => call('agentPollEvent', { handle }),
     agentListTools: (handle) => call('agentListTools', { handle }),
+    agentListArtifacts: (handle) => call('agentListArtifacts', { handle }),
+    artifactShare: (handle, artifactId) => call('artifactShare', { handle, artifactId }),
 
     // --- Native-only actions ---
     capturePhoto: () => call('capturePhoto'),

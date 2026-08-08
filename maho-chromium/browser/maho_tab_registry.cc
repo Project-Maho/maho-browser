@@ -16,6 +16,7 @@
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -60,7 +61,7 @@ bool IsRegistryEligibleBrowser(BrowserWindowInterface* browser) {
   if (!profile) {
     return false;
   }
-  MahoPrivateContextClass cls = ClassifyProfileForTesting(profile);
+  MahoPrivateContextClass cls = MahoClassifyProfile(profile);
   return cls == MahoPrivateContextClass::kRegular;
 }
 
@@ -462,6 +463,11 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         if (auto* helper = MahoTabIdHelper::FromWebContents(removed.contents);
             helper && !helper->stable_tab_id().empty()) {
           const std::string& tab_id = helper->stable_tab_id();
+          if (registry_->ConsumeArchiveRemovalSuppression(tab_id)) {
+            DispatchShellEventLocal("archive_tab_by_id", {{"tab_id", tab_id}});
+            registry_->EraseDispatchCache(tab_id);
+            continue;
+          }
           // Close-protected tabs (pinned OR favorite) must not be deleted on
           // native close (Cmd+W / strip). Dispatch suspend_tab to move the core
           // record Active->Suspended in lockstep with the dying WebContents, then
@@ -517,6 +523,20 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
     }
     DVLOG(1) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged END "
              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+  }
+
+  void OnTabCloseCancelled(const tabs::TabInterface* tab) override {
+    if (!tab) {
+      return;
+    }
+    content::WebContents* contents = tab->GetContents();
+    if (!contents) {
+      return;
+    }
+    if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+        helper && !helper->stable_tab_id().empty()) {
+      registry_->EraseArchiveRemovalSuppression(helper->stable_tab_id());
+    }
   }
 
  private:
@@ -680,6 +700,65 @@ std::set<std::string> MahoTabRegistry::GetLiveTabIdsForProfile(Profile* profile)
     }
   }
   return live_tab_ids;
+}
+
+void MahoTabRegistry::ArchiveTabsAndRemoveFromStrip(
+    Browser* browser,
+    const std::vector<std::string>& tab_ids) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (tab_ids.empty() || !browser) {
+    return;
+  }
+
+  std::vector<std::string> unique_ids;
+  std::set<std::string> seen;
+  for (const auto& id : tab_ids) {
+    if (seen.insert(id).second) {
+      unique_ids.push_back(id);
+    }
+  }
+
+  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  std::vector<std::pair<int, std::string>> index_id_pairs;
+  for (int i = 0; i < tab_strip_model->count(); ++i) {
+    content::WebContents* contents = tab_strip_model->GetWebContentsAt(i);
+    if (!contents) {
+      continue;
+    }
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper) {
+      std::string tab_id = helper->stable_tab_id();
+      if (seen.count(tab_id)) {
+        index_id_pairs.push_back({i, tab_id});
+      }
+    }
+  }
+
+  std::sort(index_id_pairs.begin(), index_id_pairs.end(),
+            [](const auto& a, const auto& b) { return a.first > b.first; });
+
+  for (const auto& pair : index_id_pairs) {
+    const std::string& tab_id = pair.second;
+    int index = pair.first;
+
+    archive_removal_suppressions_.insert(tab_id);
+    tab_strip_model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
+  }
+}
+
+bool MahoTabRegistry::ConsumeArchiveRemovalSuppression(const std::string& tab_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto it = archive_removal_suppressions_.find(tab_id);
+  if (it != archive_removal_suppressions_.end()) {
+    archive_removal_suppressions_.erase(it);
+    return true;
+  }
+  return false;
+}
+
+void MahoTabRegistry::EraseArchiveRemovalSuppression(const std::string& tab_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  archive_removal_suppressions_.erase(tab_id);
 }
 
 void SetTabRegistryShellEventObserverForTesting(ShellEventObserver* observer) {

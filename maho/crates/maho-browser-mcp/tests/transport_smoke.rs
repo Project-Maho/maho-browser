@@ -16,8 +16,7 @@ use tokio::net::UnixStream;
 fn socket_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         let home = std::env::var("HOME").expect("HOME not set");
-        PathBuf::from(home)
-            .join("Library/Application Support/Maho/maho.sock")
+        PathBuf::from(home).join("Library/Application Support/Maho/maho.sock")
     } else {
         // Linux: prefer XDG_RUNTIME_DIR.
         if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {

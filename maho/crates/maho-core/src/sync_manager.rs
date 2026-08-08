@@ -10,11 +10,108 @@ use crate::sync_models::{
 };
 use std::collections::HashMap;
 
+/// Outbound sync operation whose keyless (no E2EE key) transport was denied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncTransportOp {
+    Push,
+    Pull,
+    SendTab,
+}
+
+impl std::fmt::Display for SyncTransportOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SyncTransportOp::Push => "push",
+            SyncTransportOp::Pull => "pull",
+            SyncTransportOp::SendTab => "send_tab",
+        })
+    }
+}
+
+/// Category of plaintext payload rejected because it arrived outside the
+/// authenticated E2EE envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncPayloadKind {
+    EntityPush,
+    EntityBatch,
+    SendTab,
+}
+
+impl std::fmt::Display for SyncPayloadKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SyncPayloadKind::EntityPush => "entity push",
+            SyncPayloadKind::EntityBatch => "entity batch",
+            SyncPayloadKind::SendTab => "tab transfer",
+        })
+    }
+}
+
+/// Typed, matchable transport-layer sync errors.
+///
+/// Fail-closed denials and envelope failures are reported as typed variants so
+/// callers (FFI, shell, tests) can branch on a stable variant or [`code`] rather
+/// than parsing the human-facing string. The `Display` rendering is the only
+/// user-facing text and is produced at the boundary from this same value.
+///
+/// [`code`]: SyncTransportError::code
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SyncTransportError {
+    #[error("keyless {operation} denied: E2EE key required")]
+    KeylessTransportDenied { operation: SyncTransportOp },
+
+    #[error("rejected plaintext {payload}: E2EE envelope required")]
+    PlaintextPayloadRejected { payload: SyncPayloadKind },
+
+    #[error("encrypted sync message received without key")]
+    MissingEncryptionKey,
+
+    #[error("decrypt error: {detail}")]
+    Decrypt { detail: String },
+
+    #[error("decrypt error: invalid nested message: {detail}")]
+    MalformedEnvelopeContents { detail: String },
+
+    #[error("rejected entity {entity_id} due to unsupported schema version {schema_version}")]
+    UnsupportedSchemaVersion {
+        entity_id: String,
+        schema_version: u8,
+    },
+
+    #[error("database read error in apply: {detail}")]
+    DatabaseRead { detail: String },
+
+    #[error("encrypt error: {detail}")]
+    Encrypt { detail: String },
+
+    #[error("serialize error: {detail}")]
+    Serialize { detail: String },
+}
+
+impl SyncTransportError {
+    /// Stable machine-readable code for callers that prefer matching a string
+    /// code over the enum (e.g. across the C FFI boundary).
+    pub fn code(&self) -> &'static str {
+        match self {
+            SyncTransportError::KeylessTransportDenied { .. } => "keyless_transport_denied",
+            SyncTransportError::PlaintextPayloadRejected { .. } => "plaintext_payload_rejected",
+            SyncTransportError::MissingEncryptionKey => "missing_encryption_key",
+            SyncTransportError::Decrypt { .. } => "decrypt_failed",
+            SyncTransportError::MalformedEnvelopeContents { .. } => "malformed_envelope_contents",
+            SyncTransportError::UnsupportedSchemaVersion { .. } => "unsupported_schema_version",
+            SyncTransportError::DatabaseRead { .. } => "database_read_error",
+            SyncTransportError::Encrypt { .. } => "encrypt_failed",
+            SyncTransportError::Serialize { .. } => "serialize_failed",
+        }
+    }
+}
+
 /// SyncManager manages LWW entity sync, device tracking, and message queuing.
 pub struct SyncManager {
     config: SyncConfig,
     status: SyncStatus,
     last_error: Option<String>,
+    last_transport_error: Option<SyncTransportError>,
     devices: HashMap<DeviceId, DeviceInfo>,
     received_tabs: Vec<ReceivedTab>,
     outgoing_messages: Vec<SyncMessage>,
@@ -35,6 +132,7 @@ impl SyncManager {
             config,
             status: SyncStatus::Idle,
             last_error: None,
+            last_transport_error: None,
             devices: HashMap::new(),
             received_tabs: Vec::new(),
             outgoing_messages: Vec::new(),
@@ -53,6 +151,25 @@ impl SyncManager {
 
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// Typed, matchable view of the most recent transport error. Callers should
+    /// branch on this (or its [`SyncTransportError::code`]) rather than parsing
+    /// [`last_error`](Self::last_error), which is the boundary string rendering.
+    pub fn last_transport_error(&self) -> Option<&SyncTransportError> {
+        self.last_transport_error.as_ref()
+    }
+
+    /// Record a typed transport error (fail-closed rejection, no silent
+    /// downgrade). The boundary string is derived from the typed value so the
+    /// two channels never drift.
+    pub fn set_last_transport_error(&mut self, error: SyncTransportError) {
+        self.record_transport_error(error);
+    }
+
+    fn record_transport_error(&mut self, error: SyncTransportError) {
+        self.last_error = Some(error.to_string());
+        self.last_transport_error = Some(error);
     }
 
     /// Set the E2E encryption key (derived from sync seed)
@@ -107,28 +224,28 @@ impl SyncManager {
             let row_id_opt = entity.queue_row_id;
             let message = SyncMessage::EntityPush { entity };
 
-            if let Some(key) = &self.encryption_key {
-                match serde_json::to_vec(&message) {
-                    Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
-                        Ok(data) => {
-                            self.outgoing_messages.push(SyncMessage::Encrypted { data });
-                            if let Some(row_id) = row_id_opt {
-                                self.sent_entities.push(row_id);
-                            }
-                        }
-                        Err(e) => {
-                            self.last_error = Some(format!("Encrypt error: {}", e));
-                        }
-                    },
-                    Err(e) => {
-                        self.last_error = Some(format!("Serialize error: {}", e));
+            let outcome: Result<Vec<u8>, SyncTransportError> = match &self.encryption_key {
+                Some(key) => serde_json::to_vec(&message)
+                    .map_err(|e| SyncTransportError::Serialize {
+                        detail: e.to_string(),
+                    })
+                    .and_then(|plaintext| {
+                        crate::sync_crypto::encrypt_update(&plaintext, key)
+                            .map_err(|detail| SyncTransportError::Encrypt { detail })
+                    }),
+                None => Err(SyncTransportError::KeylessTransportDenied {
+                    operation: SyncTransportOp::Push,
+                }),
+            };
+
+            match outcome {
+                Ok(data) => {
+                    self.outgoing_messages.push(SyncMessage::Encrypted { data });
+                    if let Some(row_id) = row_id_opt {
+                        self.sent_entities.push(row_id);
                     }
                 }
-            } else {
-                self.outgoing_messages.push(message);
-                if let Some(row_id) = row_id_opt {
-                    self.sent_entities.push(row_id);
-                }
+                Err(err) => self.record_transport_error(err),
             }
         } else {
             self.pending_pushes.push(entity);
@@ -146,22 +263,23 @@ impl SyncManager {
             since_version,
         };
 
-        if let Some(key) = &self.encryption_key {
-            match serde_json::to_vec(&message) {
-                Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
-                    Ok(data) => {
-                        self.outgoing_messages.push(SyncMessage::Encrypted { data });
-                    }
-                    Err(e) => {
-                        self.last_error = Some(format!("Encrypt error: {}", e));
-                    }
-                },
-                Err(e) => {
-                    self.last_error = Some(format!("Serialize error: {}", e));
-                }
-            }
-        } else {
-            self.outgoing_messages.push(message);
+        let outcome: Result<Vec<u8>, SyncTransportError> = match &self.encryption_key {
+            Some(key) => serde_json::to_vec(&message)
+                .map_err(|e| SyncTransportError::Serialize {
+                    detail: e.to_string(),
+                })
+                .and_then(|plaintext| {
+                    crate::sync_crypto::encrypt_update(&plaintext, key)
+                        .map_err(|detail| SyncTransportError::Encrypt { detail })
+                }),
+            None => Err(SyncTransportError::KeylessTransportDenied {
+                operation: SyncTransportOp::Pull,
+            }),
+        };
+
+        match outcome {
+            Ok(data) => self.outgoing_messages.push(SyncMessage::Encrypted { data }),
+            Err(err) => self.record_transport_error(err),
         }
     }
 
@@ -173,10 +291,10 @@ impl SyncManager {
         storage: &Option<maho_storage::sqlite::SqliteStorage>,
     ) -> bool {
         if entity.schema_version > 1 {
-            self.last_error = Some(format!(
-                "Rejected entity {} due to unsupported schema version {}",
-                entity.entity_id, entity.schema_version
-            ));
+            self.record_transport_error(SyncTransportError::UnsupportedSchemaVersion {
+                entity_id: entity.entity_id.clone(),
+                schema_version: entity.schema_version,
+            });
             return false;
         }
         let entity_type_str = entity.entity_type.as_str();
@@ -200,7 +318,9 @@ impl SyncManager {
                 }
                 Ok(None) => None,
                 Err(e) => {
-                    self.last_error = Some(format!("Database read error in apply: {}", e));
+                    self.record_transport_error(SyncTransportError::DatabaseRead {
+                        detail: e.to_string(),
+                    });
                     return false;
                 }
             }
@@ -402,31 +522,48 @@ impl SyncManager {
 
     // === Incoming Message Handling ===
 
-    /// Process an incoming sync message
+    /// Process an incoming sync message that arrived as raw transport (top-level,
+    /// unauthenticated). Entity payloads and tab transfers are rejected unless
+    /// they arrive inside the authenticated E2EE envelope.
     pub fn handle_incoming_message(&mut self, msg: SyncMessage) {
+        self.handle_incoming_message_impl(msg, false);
+    }
+
+    /// Process a message that was successfully decrypted from the E2EE envelope,
+    /// i.e. authenticated. Only this path may apply entity payloads / record tabs.
+    pub fn handle_authenticated_message(&mut self, msg: SyncMessage) {
+        self.handle_incoming_message_impl(msg, true);
+    }
+
+    fn handle_incoming_message_impl(&mut self, msg: SyncMessage, authenticated: bool) {
         match msg {
-            SyncMessage::Encrypted { data } => match &self.encryption_key {
-                Some(key) => match crate::sync_crypto::decrypt_update(&data, key) {
-                    Ok(decrypted) => match serde_json::from_slice::<SyncMessage>(&decrypted) {
-                        Ok(inner) => self.handle_incoming_message(inner),
-                        Err(e) => {
-                            self.status = SyncStatus::Error;
-                            self.last_error =
-                                Some(format!("Decrypt error: invalid nested message: {}", e));
-                        }
-                    },
-                    Err(e) => {
+            SyncMessage::Encrypted { data } => {
+                let outcome: Result<SyncMessage, SyncTransportError> =
+                    match &self.encryption_key {
+                        Some(key) => match crate::sync_crypto::decrypt_update(&data, key) {
+                            Ok(decrypted) => serde_json::from_slice::<SyncMessage>(&decrypted)
+                                .map_err(|e| SyncTransportError::MalformedEnvelopeContents {
+                                    detail: e.to_string(),
+                                }),
+                            Err(detail) => Err(SyncTransportError::Decrypt { detail }),
+                        },
+                        None => Err(SyncTransportError::MissingEncryptionKey),
+                    };
+                match outcome {
+                    Ok(inner) => self.handle_incoming_message_impl(inner, true),
+                    Err(err) => {
                         self.status = SyncStatus::Error;
-                        self.last_error = Some(format!("Decrypt error: {}", e));
+                        self.record_transport_error(err);
                     }
-                },
-                None => {
-                    self.status = SyncStatus::Error;
-                    self.last_error =
-                        Some("Encrypted sync message received without key".to_string());
                 }
-            },
-            SyncMessage::EntityPush { mut entity } => {
+            }
+            SyncMessage::EntityPush { entity } => {
+                if !authenticated {
+                    self.record_transport_error(SyncTransportError::PlaintextPayloadRejected {
+                        payload: SyncPayloadKind::EntityPush,
+                    });
+                    return;
+                }
                 #[cfg(not(test))]
                 {
                     let _ = entity;
@@ -438,10 +575,17 @@ impl SyncManager {
                 }
                 #[cfg(test)]
                 {
+                    let mut entity = entity;
                     self.apply_remote_entity(&mut entity, &None);
                 }
             }
             SyncMessage::EntityBatch { entities } => {
+                if !authenticated {
+                    self.record_transport_error(SyncTransportError::PlaintextPayloadRejected {
+                        payload: SyncPayloadKind::EntityBatch,
+                    });
+                    return;
+                }
                 #[cfg(not(test))]
                 {
                     let _ = entities;
@@ -475,6 +619,12 @@ impl SyncManager {
                 sender_device,
                 ..
             } => {
+                if !authenticated {
+                    self.record_transport_error(SyncTransportError::PlaintextPayloadRejected {
+                        payload: SyncPayloadKind::SendTab,
+                    });
+                    return;
+                }
                 let sender_name = self
                     .devices
                     .get(&sender_device)
@@ -517,22 +667,23 @@ impl SyncManager {
             target_device: target_device_id.to_string(),
         };
 
-        if let Some(key) = &self.encryption_key {
-            match serde_json::to_vec(&message) {
-                Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
-                    Ok(data) => {
-                        self.outgoing_messages.push(SyncMessage::Encrypted { data });
-                    }
-                    Err(e) => {
-                        self.last_error = Some(format!("Encrypt error: {}", e));
-                    }
-                },
-                Err(e) => {
-                    self.last_error = Some(format!("Serialize error: {}", e));
-                }
-            }
-        } else {
-            self.outgoing_messages.push(message);
+        let outcome: Result<Vec<u8>, SyncTransportError> = match &self.encryption_key {
+            Some(key) => serde_json::to_vec(&message)
+                .map_err(|e| SyncTransportError::Serialize {
+                    detail: e.to_string(),
+                })
+                .and_then(|plaintext| {
+                    crate::sync_crypto::encrypt_update(&plaintext, key)
+                        .map_err(|detail| SyncTransportError::Encrypt { detail })
+                }),
+            None => Err(SyncTransportError::KeylessTransportDenied {
+                operation: SyncTransportOp::SendTab,
+            }),
+        };
+
+        match outcome {
+            Ok(data) => self.outgoing_messages.push(SyncMessage::Encrypted { data }),
+            Err(err) => self.record_transport_error(err),
         }
     }
 
@@ -662,15 +813,22 @@ mod tests {
     fn test_push_entity_synced_state() {
         let mut mgr = SyncManager::new(default_config());
         mgr.set_status(SyncStatus::Synced);
+        mgr.set_encryption_key(test_encryption_key());
         let entity = make_entity("tab-1", 1);
         mgr.push_entity(entity);
         let msgs = mgr.drain_outgoing_messages();
         assert_eq!(msgs.len(), 1);
         match &msgs[0] {
-            SyncMessage::EntityPush { entity } => {
-                assert_eq!(entity.entity_id, "tab-1");
+            SyncMessage::Encrypted { data } => {
+                let plaintext =
+                    sync_crypto::decrypt_update(data, mgr.encryption_key.as_ref().unwrap())
+                        .unwrap();
+                match serde_json::from_slice::<SyncMessage>(&plaintext).unwrap() {
+                    SyncMessage::EntityPush { entity } => assert_eq!(entity.entity_id, "tab-1"),
+                    other => panic!("Expected inner EntityPush, got {:?}", other),
+                }
             }
-            other => panic!("Expected EntityPush, got {:?}", other),
+            other => panic!("Expected Encrypted, got {:?}", other),
         }
     }
 
@@ -709,18 +867,27 @@ mod tests {
     #[test]
     fn test_pull_entities() {
         let mut mgr = SyncManager::new(default_config());
+        mgr.set_encryption_key(test_encryption_key());
         mgr.pull_entities(Some(SyncEntityType::Tab));
         let msgs = mgr.drain_outgoing_messages();
         assert_eq!(msgs.len(), 1);
         match &msgs[0] {
-            SyncMessage::EntityPull {
-                entity_type,
-                since_version,
-            } => {
-                assert_eq!(entity_type, &Some(SyncEntityType::Tab));
-                assert_eq!(*since_version, 0);
+            SyncMessage::Encrypted { data } => {
+                let plaintext =
+                    sync_crypto::decrypt_update(data, mgr.encryption_key.as_ref().unwrap())
+                        .unwrap();
+                match serde_json::from_slice::<SyncMessage>(&plaintext).unwrap() {
+                    SyncMessage::EntityPull {
+                        entity_type,
+                        since_version,
+                    } => {
+                        assert_eq!(entity_type, Some(SyncEntityType::Tab));
+                        assert_eq!(since_version, 0);
+                    }
+                    other => panic!("Expected inner EntityPull, got {:?}", other),
+                }
             }
-            other => panic!("Expected EntityPull, got {:?}", other),
+            other => panic!("Expected Encrypted, got {:?}", other),
         }
     }
 
@@ -788,7 +955,7 @@ mod tests {
         let msg = SyncMessage::EntityPush {
             entity: make_entity("tab-8", 5),
         };
-        mgr.handle_incoming_message(msg);
+        mgr.handle_authenticated_message(msg);
         assert_eq!(
             mgr.entity_versions
                 .peek(&"tab:tab-8".to_string())
@@ -846,7 +1013,7 @@ mod tests {
         let device = make_device("sender-1", "MacBook Pro");
         mgr.devices.insert(device.id.clone(), device);
 
-        mgr.handle_incoming_message(SyncMessage::SendTab {
+        mgr.handle_authenticated_message(SyncMessage::SendTab {
             url: "https://example.com".to_string(),
             title: "Example".to_string(),
             sender_device: "sender-1".to_string(),
@@ -915,6 +1082,7 @@ mod tests {
 
         // Now go online and flush
         mgr.set_status(SyncStatus::Synced);
+        mgr.set_encryption_key(test_encryption_key());
         mgr.flush_offline_queue();
         assert!(mgr.get_pending_pushes().is_empty());
         let msgs = mgr.drain_outgoing_messages();
@@ -937,13 +1105,13 @@ mod tests {
     #[test]
     fn test_drain_received_tabs() {
         let mut mgr = SyncManager::new(default_config());
-        mgr.handle_incoming_message(SyncMessage::SendTab {
+        mgr.handle_authenticated_message(SyncMessage::SendTab {
             url: "https://a.com".to_string(),
             title: "A".to_string(),
             sender_device: "s1".to_string(),
             target_device: "test-device-1".to_string(),
         });
-        mgr.handle_incoming_message(SyncMessage::SendTab {
+        mgr.handle_authenticated_message(SyncMessage::SendTab {
             url: "https://b.com".to_string(),
             title: "B".to_string(),
             sender_device: "s2".to_string(),
@@ -953,6 +1121,215 @@ mod tests {
         assert_eq!(tabs.len(), 2);
         // After drain, received_tabs should be empty
         assert!(mgr.drain_received_tabs().is_empty());
+    }
+
+    // === Todo 3: fail-closed E2EE ===
+
+    #[test]
+    fn keyless_pull_emits_nothing_and_records_error() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        mgr.pull_entities(Some(SyncEntityType::Tab));
+        assert!(
+            mgr.drain_outgoing_messages().is_empty(),
+            "keyless pull must not emit"
+        );
+        assert!(
+            mgr.last_error().is_some(),
+            "keyless pull must record a typed error"
+        );
+    }
+
+    #[test]
+    fn keyless_send_tab_emits_nothing_and_records_error() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        mgr.send_tab("https://example.com", "Example", "target-dev");
+        assert!(
+            mgr.drain_outgoing_messages().is_empty(),
+            "keyless send_tab must not emit"
+        );
+        assert!(
+            mgr.last_error().is_some(),
+            "keyless send_tab must record a typed error"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_plaintext_send_tab_is_rejected() {
+        let mut mgr = SyncManager::new(default_config());
+        let device = make_device("sender-1", "MacBook Pro");
+        mgr.devices.insert(device.id.clone(), device);
+
+        mgr.handle_incoming_message(SyncMessage::SendTab {
+            url: "https://attacker.example.com".to_string(),
+            title: "Injected".to_string(),
+            sender_device: "sender-1".to_string(),
+            target_device: "test-device-1".to_string(),
+        });
+
+        assert!(
+            mgr.drain_received_tabs().is_empty(),
+            "unauthenticated plaintext SendTab must NOT be recorded"
+        );
+        assert!(
+            mgr.last_error().is_some(),
+            "rejection must record a typed error"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_plaintext_entity_push_is_rejected() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_incoming_message(SyncMessage::EntityPush {
+            entity: make_entity("tab-unauth", 5),
+        });
+        assert!(
+            mgr.entity_versions
+                .peek(&"tab:tab-unauth".to_string())
+                .is_none(),
+            "unauthenticated plaintext EntityPush must NOT be applied"
+        );
+        assert!(
+            mgr.last_error().is_some(),
+            "rejection must record a typed error"
+        );
+    }
+
+    #[test]
+    fn authenticated_send_tab_is_recorded() {
+        let mut mgr = SyncManager::new(default_config());
+        let device = make_device("sender-1", "MacBook Pro");
+        mgr.devices.insert(device.id.clone(), device);
+
+        mgr.handle_authenticated_message(SyncMessage::SendTab {
+            url: "https://trusted.example.com".to_string(),
+            title: "Trusted".to_string(),
+            sender_device: "sender-1".to_string(),
+            target_device: "test-device-1".to_string(),
+        });
+
+        let tabs = mgr.drain_received_tabs();
+        assert_eq!(tabs.len(), 1, "authenticated SendTab must be recorded");
+        assert_eq!(tabs[0].url, "https://trusted.example.com");
+    }
+
+    #[test]
+    fn authenticated_entity_push_is_applied() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_authenticated_message(SyncMessage::EntityPush {
+            entity: make_entity("tab-auth", 7),
+        });
+        assert_eq!(
+            mgr.entity_versions
+                .peek(&"tab:tab-auth".to_string())
+                .unwrap()
+                .0,
+            7,
+            "authenticated EntityPush must be applied"
+        );
+    }
+
+    #[test]
+    fn encrypted_envelope_inner_is_treated_as_authenticated() {
+        let key = test_encryption_key();
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_encryption_key(key);
+
+        let inner = SyncMessage::SendTab {
+            url: "https://enc.example.com".to_string(),
+            title: "Enc".to_string(),
+            sender_device: "peer".to_string(),
+            target_device: "test-device-1".to_string(),
+        };
+        let plaintext = serde_json::to_vec(&inner).unwrap();
+        let data =
+            sync_crypto::encrypt_update(&plaintext, mgr.encryption_key.as_ref().unwrap()).unwrap();
+
+        mgr.handle_incoming_message(SyncMessage::Encrypted { data });
+
+        let tabs = mgr.drain_received_tabs();
+        assert_eq!(tabs.len(), 1, "decrypted inner SendTab must be recorded");
+        assert_ne!(mgr.status(), &SyncStatus::Error);
+    }
+
+    // === Todo 3: typed transport-error contract ===
+
+    #[test]
+    fn keyless_push_records_typed_keyless_denied() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        mgr.push_entity(make_entity("tab-keyless", 1));
+        assert!(matches!(
+            mgr.last_transport_error(),
+            Some(SyncTransportError::KeylessTransportDenied {
+                operation: SyncTransportOp::Push
+            })
+        ));
+        assert_eq!(
+            mgr.last_transport_error().map(SyncTransportError::code),
+            Some("keyless_transport_denied")
+        );
+        // The boundary string rendering stays available and derives from Display.
+        assert_eq!(
+            mgr.last_error().map(str::to_string),
+            mgr.last_transport_error()
+                .map(SyncTransportError::to_string)
+        );
+    }
+
+    #[test]
+    fn keyless_pull_records_typed_keyless_denied() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        mgr.pull_entities(Some(SyncEntityType::Tab));
+        assert!(matches!(
+            mgr.last_transport_error(),
+            Some(SyncTransportError::KeylessTransportDenied {
+                operation: SyncTransportOp::Pull
+            })
+        ));
+    }
+
+    #[test]
+    fn keyless_send_tab_records_typed_keyless_denied() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        mgr.send_tab("https://example.com", "Example", "target-dev");
+        assert!(matches!(
+            mgr.last_transport_error(),
+            Some(SyncTransportError::KeylessTransportDenied {
+                operation: SyncTransportOp::SendTab
+            })
+        ));
+    }
+
+    #[test]
+    fn unauthenticated_plaintext_entity_push_records_typed_rejection() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_incoming_message(SyncMessage::EntityPush {
+            entity: make_entity("tab-unauth-typed", 5),
+        });
+        assert!(matches!(
+            mgr.last_transport_error(),
+            Some(SyncTransportError::PlaintextPayloadRejected { .. })
+        ));
+        assert_eq!(
+            mgr.last_transport_error().map(SyncTransportError::code),
+            Some("plaintext_payload_rejected")
+        );
+    }
+
+    #[test]
+    fn missing_key_for_encrypted_records_typed_error() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_incoming_message(SyncMessage::Encrypted {
+            data: vec![0u8; 64],
+        });
+        assert!(matches!(
+            mgr.last_transport_error(),
+            Some(SyncTransportError::MissingEncryptionKey)
+        ));
     }
 
     // H12: LRU eviction at cap
@@ -994,6 +1371,7 @@ mod tests {
         entity4.queue_row_id = Some(42);
 
         sm.set_status(SyncStatus::Synced);
+        sm.set_encryption_key(test_encryption_key());
         sm.push_entity(entity4);
 
         let sent_ids = sm.drain_sent_entities();

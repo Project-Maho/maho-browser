@@ -116,7 +116,11 @@ fn register_extension_emits_update() {
 #[test]
 fn test_extension_sync_push_and_callback() {
     let mut core = MahoCore::new();
-    core.start_sync("wss://sync.mahobrowser.com", "test-room");
+    core.start_sync("wss://localhost:8080", "test-room");
+    let seed = maho_core::sync_crypto::generate_sync_seed();
+    let phrase = maho_core::sync_crypto::encode_recovery_phrase(&seed).unwrap();
+    core.configure_sync_encryption_for_recovery_phrase("wss://localhost:8080", &phrase)
+        .expect("configure sync encryption");
     core.set_sync_status(maho_core::sync_models::SyncStatus::Synced);
 
     // Register sync callback to trace remote events
@@ -142,9 +146,22 @@ fn test_extension_sync_push_and_callback() {
     // Verify that the entity is pushed in outgoing queue
     let outgoing = core.drain_sync_outgoing();
     assert!(!outgoing.is_empty());
-    let local_version = match &outgoing[0] {
+    let key = maho_core::sync_crypto::derive_encryption_key(&seed).unwrap();
+    let message = match &outgoing[0] {
+        maho_core::sync_models::SyncMessage::Encrypted { data } => {
+            let decrypted = maho_core::sync_crypto::decrypt_update(data, &key).unwrap();
+            serde_json::from_slice::<maho_core::sync_models::SyncMessage>(&decrypted).unwrap()
+        }
+        maho_core::sync_models::SyncMessage::EntityPush { entity } => {
+            maho_core::sync_models::SyncMessage::EntityPush {
+                entity: entity.clone(),
+            }
+        }
+        _ => panic!("Expected EncryptedPayload or EntityPush"),
+    };
+    let local_version = match &message {
         maho_core::sync_models::SyncMessage::EntityPush { entity } => entity.version,
-        _ => panic!("Expected EntityPush"),
+        _ => panic!("Expected EntityPush inside payload"),
     };
 
     // Step 2: Receive remote sync entity toggling enabled state to false

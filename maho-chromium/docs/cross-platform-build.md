@@ -55,7 +55,7 @@ The build scripts in this overlay assume that `maho/` and `maho-chromium/` live 
 | Utility panel vibrancy | ✅ NSVisualEffectView | ⚪ no-op stub | ⚪ no-op stub |
 | Toast vibrancy | ✅ NSVisualEffectView | ⚪ no-op stub | ⚪ no-op stub |
 | Traffic light geometry (sidebar top bar) | ✅ | ⚪ returns `std::nullopt` | ⚪ returns `std::nullopt` |
-| Little Arc window (pip/popout) | ✅ full impl | ❌ empty BUILD.gn stub | ❌ empty BUILD.gn stub |
+| Maho Mini window (pip/popout) | ✅ full impl | ❌ empty BUILD.gn stub | ❌ empty BUILD.gn stub |
 | Native notification share | ✅ NSUserNotification | ❌ file absent | ❌ file absent |
 | os_crypt file-backed key provider | ✅ Keychain bypass | ⚪ Chromium DPAPI fallback | ⚪ Chromium kwallet fallback |
 | MCP IPC transport | ✅ Unix domain socket | ✅ Named pipe + DPAPI session token (C++ side) | ✅ Unix domain socket |
@@ -177,7 +177,7 @@ The script:
 - Windows-specific product code must be gated behind `is_win` / `BUILDFLAG(IS_WIN)`.
 - **Known gaps** (see completion plan):
   - MCP client Rust transport in `maho-browser-mcp` uses `tokio::net::UnixStream`; a named pipe transport must be wired for Windows to function.
-  - Little Arc feature is an empty stub block in `browser/BUILD.gn`.
+  - Maho Mini feature is an empty stub block in `browser/BUILD.gn`.
   - `.ico` branding asset is not generated.
   - `installer/README.md` (referenced by `maho_update_delegate_win.cc:119`) does not exist.
 - `.build.lock` mechanism uses `fcntl.flock` which is Unix-only; Windows compatibility has not been verified. If Windows build entrypoints fail at lock acquisition, the lock helper needs a Windows abstraction (msvcrt `_locking` or `LockFileEx`).
@@ -207,7 +207,7 @@ The script:
 - Put integration changes in `maho-chromium/` only.
 - Keep public Rust FFI headers platform-agnostic; platform selection should happen in the build system and bridge glue.
 - Do not add platform-suffixed Rust files (`_win.rs`, `_linux.rs`, etc.); use inline `#[cfg]` attributes instead. All existing Rust code follows this pattern.
-- When a Maho-specific native feature (e.g. vibrancy, notifications, Little Arc) does not have an implementation on a target platform, add a `_stub.cc` file that no-ops gracefully rather than blocking compilation. See `browser/ui/views/command/maho_command_overlay_vibrancy_stub.cc` as the reference pattern.
+- When a Maho-specific native feature (e.g. vibrancy, notifications, Maho Mini) does not have an implementation on a target platform, add a `_stub.cc` file that no-ops gracefully rather than blocking compilation. See `browser/ui/views/command/maho_command_overlay_vibrancy_stub.cc` as the reference pattern.
 
 ---
 

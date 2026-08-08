@@ -7,13 +7,17 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button.h"
@@ -67,6 +71,52 @@ class MahoCommandActionSelectorViewTest : public views::ViewsTestBase {
     selector->OnSegmentClicked(action);
   }
 
+  bool HasFlowBackground(MahoCommandActionSelectorView* selector,
+                         PaletteAction action) {
+    return selector->IsFlowBackgroundInstalledForTesting(action);
+  }
+
+  bool IsFlowAnimating(MahoCommandActionSelectorView* selector,
+                       PaletteAction action) {
+    return selector->IsFlowAnimatingForTesting(action);
+  }
+
+  SkColor FlowAccent(MahoCommandActionSelectorView* selector,
+                     PaletteAction action) {
+    return selector->FlowAccentForTesting(action);
+  }
+
+  SkColor SegmentTextColor(MahoCommandActionSelectorView* selector,
+                           PaletteAction action) {
+    return selector->SegmentTextColorForTesting(action);
+  }
+
+  bool SegmentUsesSubpixelRendering(
+      MahoCommandActionSelectorView* selector,
+      PaletteAction action) {
+    return selector->SegmentUsesSubpixelRenderingForTesting(action);
+  }
+
+  int RunningFlowCount() {
+    return MahoCommandActionSelectorView::
+        GetRunningFlowAnimationCountForTesting();
+  }
+
+  int SegmentCornerRadius() {
+    return MahoCommandActionSelectorView::
+        GetSegmentCornerRadiusForTesting();
+  }
+
+  void HideWidget() { host_widget_->Hide(); }
+  void ShowAndActivateWidget() {
+    host_widget_->Show();
+    host_widget_->Activate();
+  }
+  void NotifyWidgetDeactivated(MahoCommandActionSelectorView* selector) {
+    selector->OnWidgetActivationChanged(host_widget_.get(), false);
+  }
+  void DestroySelector() { host_widget_.reset(); }
+
   void ExpectVisibleNonOverlappingSegmentBounds(
       MahoCommandActionSelectorView* selector) {
     views::Button* search = search_button(selector);
@@ -84,6 +134,113 @@ class MahoCommandActionSelectorViewTest : public views::ViewsTestBase {
  private:
   std::unique_ptr<views::Widget> host_widget_;
 };
+
+TEST_F(MahoCommandActionSelectorViewTest,
+       SelectedSegmentOwnsOnlyFlowBackgroundAndExpectedAccent) {
+  auto* selector = CreateSelector();
+  const auto* colors = selector->GetColorProvider();
+  ASSERT_NE(nullptr, colors);
+
+  EXPECT_TRUE(HasFlowBackground(selector, PaletteAction::kSearch));
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_FALSE(HasFlowBackground(selector, PaletteAction::kAskMaho));
+  EXPECT_EQ(colors->GetColor(kMahoColorAccentBlue),
+            FlowAccent(selector, PaletteAction::kSearch));
+
+  selector->SetSelected(PaletteAction::kAskMaho);
+
+  EXPECT_FALSE(HasFlowBackground(selector, PaletteAction::kSearch));
+  EXPECT_TRUE(HasFlowBackground(selector, PaletteAction::kAskMaho));
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kAskMaho));
+  EXPECT_EQ(colors->GetColor(kMahoColorAccentBlueBright),
+            FlowAccent(selector, PaletteAction::kAskMaho));
+}
+
+TEST_F(MahoCommandActionSelectorViewTest,
+       FlowAnimationStopsOnDeselectDisableAndDestruction) {
+  ASSERT_EQ(0, RunningFlowCount());
+  auto* selector = CreateSelector();
+  EXPECT_EQ(1, RunningFlowCount());
+
+  selector->SetSelected(PaletteAction::kAskMaho);
+  EXPECT_FALSE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kAskMaho));
+  EXPECT_EQ(1, RunningFlowCount());
+
+  selector->SetEnabled(false);
+  EXPECT_FALSE(IsFlowAnimating(selector, PaletteAction::kAskMaho));
+  EXPECT_EQ(0, RunningFlowCount());
+
+  selector->SetEnabled(true);
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kAskMaho));
+  EXPECT_EQ(1, RunningFlowCount());
+
+  DestroySelector();
+  EXPECT_EQ(0, RunningFlowCount());
+}
+
+TEST_F(MahoCommandActionSelectorViewTest,
+       FlowTracksVisibilityAndIgnoresWidgetActivation) {
+  ASSERT_EQ(0, RunningFlowCount());
+  auto* selector = CreateSelector();
+  ASSERT_TRUE(IsFlowAnimating(selector, PaletteAction::kSearch));
+
+  selector->SetVisible(false);
+  EXPECT_FALSE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_EQ(0, RunningFlowCount());
+
+  selector->SetVisible(true);
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_EQ(1, RunningFlowCount());
+
+  HideWidget();
+  EXPECT_FALSE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_EQ(0, RunningFlowCount());
+
+  ShowAndActivateWidget();
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_EQ(1, RunningFlowCount());
+
+  NotifyWidgetDeactivated(selector);
+  EXPECT_TRUE(IsFlowAnimating(selector, PaletteAction::kSearch));
+  EXPECT_EQ(1, RunningFlowCount());
+}
+
+TEST_F(MahoCommandActionSelectorViewTest,
+       FlowKeepsSegmentGeometryTextColorsAndOuterChrome) {
+  auto* selector = CreateSelector();
+  auto* search = search_button(selector);
+  auto* ask = ask_maho_button(selector);
+  const auto* colors = selector->GetColorProvider();
+  ASSERT_NE(nullptr, colors);
+  auto* outer_background = selector->GetBackground();
+  auto* outer_border = selector->GetBorder();
+
+  EXPECT_EQ(gfx::Size(64, 26), search->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(64, 26), ask->GetPreferredSize());
+  ASSERT_NE(nullptr, search->GetBackground());
+  const std::optional<gfx::RoundedCornersF> radii =
+      search->GetBackground()->GetRoundedCornerRadii();
+  ASSERT_TRUE(radii.has_value());
+  EXPECT_EQ(gfx::RoundedCornersF(
+                static_cast<float>(SegmentCornerRadius())),
+            *radii);
+  EXPECT_EQ(colors->GetColor(kMahoColorPrimaryText),
+            SegmentTextColor(selector, PaletteAction::kSearch));
+  EXPECT_EQ(colors->GetColor(ui::kColorLabelForegroundSecondary),
+            SegmentTextColor(selector, PaletteAction::kAskMaho));
+
+  selector->SetSelected(PaletteAction::kAskMaho);
+
+  EXPECT_EQ(outer_background, selector->GetBackground());
+  EXPECT_EQ(outer_border, selector->GetBorder());
+  EXPECT_EQ(colors->GetColor(ui::kColorLabelForegroundSecondary),
+            SegmentTextColor(selector, PaletteAction::kSearch));
+  EXPECT_EQ(colors->GetColor(kMahoColorPrimaryText),
+            SegmentTextColor(selector, PaletteAction::kAskMaho));
+  EXPECT_EQ(gfx::Size(64, 26), search->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(64, 26), ask->GetPreferredSize());
+}
 
 TEST_F(MahoCommandActionSelectorViewTest, InitialSelectionIsSearch) {
   // Given a newly created action selector.
@@ -347,17 +504,10 @@ TEST_F(MahoCommandActionSelectorViewTest, InlineHintStaysHiddenAcrossWidths) {
 TEST_F(MahoCommandActionSelectorViewTest,
        TranslucentLabelsDisableSubpixelRendering) {
   auto* selector = CreateSelector();
-  views::Button* search = search_button(selector);
-  views::Button* ask_maho = ask_maho_button(selector);
-  ASSERT_FALSE(search->children().empty());
-  ASSERT_FALSE(ask_maho->children().empty());
-  auto* search_label =
-      static_cast<views::Label*>(search->children().front().get());
-  auto* ask_maho_label =
-      static_cast<views::Label*>(ask_maho->children().front().get());
-
-  EXPECT_FALSE(search_label->GetSubpixelRenderingEnabled());
-  EXPECT_FALSE(ask_maho_label->GetSubpixelRenderingEnabled());
+  EXPECT_FALSE(
+      SegmentUsesSubpixelRendering(selector, PaletteAction::kSearch));
+  EXPECT_FALSE(
+      SegmentUsesSubpixelRendering(selector, PaletteAction::kAskMaho));
   EXPECT_FALSE(hint_label(selector)->GetSubpixelRenderingEnabled());
 }
 

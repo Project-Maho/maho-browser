@@ -171,6 +171,166 @@ TEST(MahoMcpAccessibilityHandlerTest, BuildSnapshot_TruncatesAtMaxBytes) {
   EXPECT_NE(name->find("TRUNCATED"), std::string::npos);
 }
 
+TEST(MahoMcpAccessibilityHandlerTest,
+     BuildSnapshot_EmitsProtectedForPasswordField) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kTextField;
+  update.nodes[1].SetName("Password");
+  update.nodes[1].AddState(ax::mojom::State::kProtected);
+  update.nodes[1].SetValue("S3NTINEL-maho-vault-9F4C");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::RefTable refs;
+  base::Value snapshot =
+      MahoMcpAccessibilityHandler::BuildSnapshot(tree, refs);
+
+  const base::ListValue* children = snapshot.GetDict().FindList("children");
+  ASSERT_TRUE(children);
+  ASSERT_EQ(children->size(), 1u);
+  const base::DictValue& field = (*children)[0].GetDict();
+  ASSERT_TRUE(field.FindBool("protected").has_value());
+  EXPECT_TRUE(field.FindBool("protected").value());
+}
+
+TEST(MahoMcpAccessibilityHandlerTest,
+     BuildSnapshot_EmitsAutocompleteToken) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kTextField;
+  update.nodes[1].SetName("One-time code");
+  update.nodes[1].AddStringAttribute(
+      ax::mojom::StringAttribute::kAutoComplete, "one-time-code");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::RefTable refs;
+  base::Value snapshot =
+      MahoMcpAccessibilityHandler::BuildSnapshot(tree, refs);
+
+  const base::ListValue* children = snapshot.GetDict().FindList("children");
+  ASSERT_TRUE(children);
+  ASSERT_EQ(children->size(), 1u);
+  const base::DictValue& field = (*children)[0].GetDict();
+  const std::string* autocomplete = field.FindString("autocomplete");
+  ASSERT_TRUE(autocomplete);
+  EXPECT_EQ(*autocomplete, "one-time-code");
+}
+
+TEST(MahoMcpAccessibilityHandlerTest,
+     BuildSnapshot_EmitsInputTypeFromHtmlAttributes) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kTextField;
+  update.nodes[1].SetName("Password");
+  update.nodes[1].html_attributes.emplace_back("type", "password");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::RefTable refs;
+  base::Value snapshot =
+      MahoMcpAccessibilityHandler::BuildSnapshot(tree, refs);
+
+  const base::ListValue* children = snapshot.GetDict().FindList("children");
+  ASSERT_TRUE(children);
+  ASSERT_EQ(children->size(), 1u);
+  const base::DictValue& field = (*children)[0].GetDict();
+  const std::string* input_type = field.FindString("inputType");
+  ASSERT_TRUE(input_type);
+  EXPECT_EQ(*input_type, "password");
+}
+
+TEST(MahoMcpAccessibilityHandlerTest,
+     BuildSnapshot_OrdinaryTextboxHasNoCredentialMetadata) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kSearchBox;
+  update.nodes[1].SetName("Search");
+  update.nodes[1].SetValue("pizza recipes");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::RefTable refs;
+  base::Value snapshot =
+      MahoMcpAccessibilityHandler::BuildSnapshot(tree, refs);
+
+  const base::ListValue* children = snapshot.GetDict().FindList("children");
+  ASSERT_TRUE(children);
+  ASSERT_EQ(children->size(), 1u);
+  const base::DictValue& field = (*children)[0].GetDict();
+  EXPECT_FALSE(field.FindBool("protected").has_value());
+  EXPECT_FALSE(field.FindString("autocomplete"));
+  EXPECT_FALSE(field.FindString("inputType"));
+  EXPECT_EQ(*field.FindString("value"), "pizza recipes");
+}
+
+TEST(MahoMcpAccessibilityHandlerTest,
+     BuildSnapshot_EmitsCredentialSemanticHtmlAttributes) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kGenericContainer;
+  update.nodes[1].SetValue("S3NTINEL-recovery");
+  update.nodes[1].html_attributes.emplace_back("aria-label", "Recovery code");
+  update.nodes[1].html_attributes.emplace_back("name", "backup_code");
+  update.nodes[1].html_attributes.emplace_back("id", "recovery-entry");
+  update.nodes[1].html_attributes.emplace_back("placeholder", "Enter code");
+  update.nodes[1].html_attributes.emplace_back("data-maho-field",
+                                                "recovery-code");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::RefTable refs;
+  base::Value snapshot =
+      MahoMcpAccessibilityHandler::BuildSnapshot(tree, refs);
+
+  const base::DictValue& field =
+      (*snapshot.GetDict().FindList("children"))[0].GetDict();
+  const std::string* aria_label = field.FindString("ariaLabel");
+  const std::string* field_name = field.FindString("fieldName");
+  const std::string* element_id = field.FindString("elementId");
+  const std::string* placeholder = field.FindString("placeholder");
+  const std::string* data_field = field.FindString("dataField");
+  ASSERT_TRUE(aria_label);
+  ASSERT_TRUE(field_name);
+  ASSERT_TRUE(element_id);
+  ASSERT_TRUE(placeholder);
+  ASSERT_TRUE(data_field);
+  EXPECT_EQ(*aria_label, "Recovery code");
+  EXPECT_EQ(*field_name, "backup_code");
+  EXPECT_EQ(*element_id, "recovery-entry");
+  EXPECT_EQ(*placeholder, "Enter code");
+  EXPECT_EQ(*data_field, "recovery-code");
+}
+
 TEST(MahoMcpAccessibilityHandlerTest, RefTableRoundTrip) {
   ui::AXTreeUpdate update;
   update.root_id = 1;

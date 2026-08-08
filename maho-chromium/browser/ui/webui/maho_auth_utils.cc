@@ -12,8 +12,10 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/uuid.h"
 #include "base/logging.h"
 #include "base/time/time.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
@@ -116,6 +118,64 @@ const net::NetworkTrafficAnnotationTag kAuthLoginTrafficAnnotation =
       }
     )");
 
+const net::NetworkTrafficAnnotationTag kAuthGoogleLoginTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_auth_google_login", R"(
+      semantics {
+        sender: "Maho Auth Google Sign-In"
+        description:
+          "Exchanges a Google OpenID Connect id_token for a Maho relay "
+          "session. The id_token is obtained by an OAuth2 PKCE flow the user "
+          "completes on Google's own sign-in page."
+        trigger:
+          "User activates Sign in with Google in the Account settings pane or "
+          "welcome wizard and completes Google's consent screen."
+        data:
+          "Google id_token (contains the user's Google account id, email and "
+          "display name), the matching one-time nonce, and this device's "
+          "name/type/id."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by an explicit user action; not background."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. The user explicitly chooses "
+          "Sign in with Google and completes Google's consent screen before "
+          "this request is made. No ambient or background network activity."
+      }
+    )");
+
+// Fills the shared device identity fields every relay auth request carries.
+// The device id is generated once and persisted so a later sign-in reuses this
+// device's relay row and sync room instead of orphaning its snapshot.
+void SetDeviceFields(PrefService* prefs, base::DictValue& body) {
+  std::string device_id = prefs->GetString(maho::account_prefs::kRelayDeviceId);
+  if (device_id.empty()) {
+    device_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+    prefs->SetString(maho::account_prefs::kRelayDeviceId, device_id);
+  }
+  body.Set("device_id", device_id);
+#if BUILDFLAG(IS_MAC)
+  body.Set("device_name", "Maho macOS");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_WIN)
+  body.Set("device_name", "Maho Windows");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_LINUX)
+  body.Set("device_name", "Maho Linux");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_IOS)
+  body.Set("device_name", "Maho iOS");
+  body.Set("device_type", "mobile");
+#elif BUILDFLAG(IS_ANDROID)
+  body.Set("device_name", "Maho Android");
+  body.Set("device_type", "mobile");
+#else
+  body.Set("device_name", "Maho");
+  body.Set("device_type", "unknown");
+#endif
+}
+
 void OnLoginResponse(
     PrefService* prefs,
     const os_crypt_async::Encryptor& encryptor,
@@ -167,6 +227,8 @@ void OnLoginResponse(
   std::string user_id;
   std::string user_display_name;
   std::string user_tier;
+  std::string oauth_provider;
+  std::string oauth_provider_sub;
   if (account) {
     if (const std::string* v = account->FindString("email"))
       user_email = *v;
@@ -178,6 +240,10 @@ void OnLoginResponse(
       user_display_name = *v;
     if (const std::string* v = account->FindString("tier"))
       user_tier = *v;
+    if (const std::string* v = account->FindString("oauth_provider"))
+      oauth_provider = *v;
+    if (const std::string* v = account->FindString("oauth_provider_sub"))
+      oauth_provider_sub = *v;
   }
 
   StoreTokensParams params;
@@ -189,6 +255,8 @@ void OnLoginResponse(
   params.user_id = user_id;
   params.user_display_name = user_display_name;
   params.user_tier = user_tier;
+  params.oauth_provider = oauth_provider;
+  params.oauth_provider_sub = oauth_provider_sub;
 
   if (!StoreRelayTokens(prefs, encryptor, params)) {
     std::move(callback).Run(false, "Failed to store credentials.");
@@ -222,6 +290,21 @@ void OnLoginResponse(
   }
 
   std::move(callback).Run(true, "");
+}
+
+void OnGoogleLoginResponse(
+    base::RepeatingCallback<PrefService*()> prefs_provider,
+    const os_crypt_async::Encryptor& encryptor,
+    LoginResultCallback callback,
+    std::unique_ptr<network::SimpleURLLoader> loader,
+    std::optional<std::string> response_body) {
+  PrefService* prefs = prefs_provider.Run();
+  if (!prefs) {
+    std::move(callback).Run(false, "Profile closed before sign-in completed.");
+    return;
+  }
+  OnLoginResponse(prefs, encryptor, std::move(callback), std::move(loader),
+                  std::move(response_body));
 }
 
 }  // namespace
@@ -263,7 +346,31 @@ bool StoreRelayTokens(PrefService* prefs,
   prefs->SetString(maho::account_prefs::kRelayUserDisplayName,
                    params.user_display_name);
   prefs->SetString(maho::account_prefs::kRelayUserTier, params.user_tier);
+
+  std::string oauth_provider;
+  std::string oauth_provider_sub;
+  base::TrimWhitespaceASCII(params.oauth_provider, base::TRIM_ALL,
+                            &oauth_provider);
+  base::TrimWhitespaceASCII(params.oauth_provider_sub, base::TRIM_ALL,
+                            &oauth_provider_sub);
+  if (!oauth_provider.empty() && !oauth_provider_sub.empty()) {
+    prefs->SetString(maho::account_prefs::kRelayOAuthProvider,
+                     oauth_provider);
+    prefs->SetString(maho::account_prefs::kRelayOAuthProviderSub,
+                     oauth_provider_sub);
+  } else {
+    prefs->ClearPref(maho::account_prefs::kRelayOAuthProvider);
+    prefs->ClearPref(maho::account_prefs::kRelayOAuthProviderSub);
+  }
   return true;
+}
+
+void PreserveRelayIdentityMetadata(PrefService* prefs,
+                                   StoreTokensParams* params) {
+  params->oauth_provider =
+      prefs->GetString(maho::account_prefs::kRelayOAuthProvider);
+  params->oauth_provider_sub =
+      prefs->GetString(maho::account_prefs::kRelayOAuthProviderSub);
 }
 
 void ClearRelayTokens(PrefService* prefs) {
@@ -275,8 +382,35 @@ void ClearRelayTokens(PrefService* prefs) {
   prefs->ClearPref(maho::account_prefs::kRelayUserId);
   prefs->ClearPref(maho::account_prefs::kRelayUserDisplayName);
   prefs->ClearPref(maho::account_prefs::kRelayUserTier);
+  prefs->ClearPref(maho::account_prefs::kRelayOAuthProvider);
+  prefs->ClearPref(maho::account_prefs::kRelayOAuthProviderSub);
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionStatus);
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionExpiresAt);
+}
+
+std::string BuildMailOAuthStartOptionsJson(PrefService* prefs) {
+  std::string provider;
+  std::string provider_sub;
+  std::string email;
+  base::TrimWhitespaceASCII(
+      prefs->GetString(maho::account_prefs::kRelayOAuthProvider),
+      base::TRIM_ALL, &provider);
+  base::TrimWhitespaceASCII(
+      prefs->GetString(maho::account_prefs::kRelayOAuthProviderSub),
+      base::TRIM_ALL, &provider_sub);
+  base::TrimWhitespaceASCII(
+      prefs->GetString(maho::account_prefs::kRelayUserEmail), base::TRIM_ALL,
+      &email);
+  if (provider != "google" || provider_sub.empty() || email.empty()) {
+    return "{}";
+  }
+
+  base::DictValue options;
+  options.Set("login_hint", email);
+  options.Set("expected_google_sub", provider_sub);
+  std::string options_json;
+  base::JSONWriter::Write(options, &options_json);
+  return options_json;
 }
 
 bool HasValidRelaySession(PrefService* prefs) {
@@ -284,18 +418,18 @@ bool HasValidRelaySession(PrefService* prefs) {
   if (access_token_enc.empty()) {
     return false;
   }
-  
+
   const int64_t access_expires_at = prefs->GetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt);
   const int64_t now = base::Time::Now().ToTimeT();
   if (access_expires_at > now) {
     return true;
   }
-  
+
   const std::string refresh_token_enc = prefs->GetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
   if (refresh_token_enc.empty()) {
     return false;
   }
-  
+
   const int64_t refresh_expires_at = prefs->GetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt);
   return refresh_expires_at > now;
 }
@@ -306,6 +440,14 @@ std::string GetRelayBaseUrl() {
     return env;
   }
   return kDefaultRelayUrl;
+}
+
+std::string GetSyncRelayUrl() {
+  const char* env = std::getenv("MAHO_SYNC_RELAY_URL");
+  if (env && *env) {
+    return env;
+  }
+  return GetRelayBaseUrl();
 }
 
 void RefreshAccessToken(
@@ -397,6 +539,16 @@ void MahoRelayLogin(
   base::DictValue body;
   body.Set("email", email);
   body.Set("password", password);
+
+  // Stable per-profile device id: generate once and persist, so re-login reuses
+  // this device's relay row and sync room instead of orphaning the snapshot.
+  std::string device_id =
+      prefs->GetString(maho::account_prefs::kRelayDeviceId);
+  if (device_id.empty()) {
+    device_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+    prefs->SetString(maho::account_prefs::kRelayDeviceId, device_id);
+  }
+  body.Set("device_id", device_id);
 #if BUILDFLAG(IS_MAC)
   body.Set("device_name", "Maho macOS");
   body.Set("device_type", "desktop");
@@ -438,6 +590,9 @@ void MahoRelayLogin(
       std::move(resource_request), kAuthLoginTrafficAnnotation);
   url_loader->AttachStringForUpload(body_json, "application/json");
   url_loader->SetTimeoutDuration(base::Seconds(30));
+  // Deliver the response body for non-2xx (401/409/etc.) so OnLoginResponse
+  // can surface the relay's real error instead of a bare "Network error".
+  url_loader->SetAllowHttpErrorResults(true);
 
   auto* raw_loader = url_loader.get();
   raw_loader->DownloadToString(
@@ -464,6 +619,16 @@ void MahoRelaySignup(
   body.Set("email", email);
   body.Set("password", password);
   body.Set("display_name", display_name);
+
+  // Stable per-profile device id (see MahoRelayLogin): generate once, persist,
+  // so the account's first device reuses this row on later logins.
+  std::string device_id =
+      prefs->GetString(maho::account_prefs::kRelayDeviceId);
+  if (device_id.empty()) {
+    device_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+    prefs->SetString(maho::account_prefs::kRelayDeviceId, device_id);
+  }
+  body.Set("device_id", device_id);
 #if BUILDFLAG(IS_MAC)
   body.Set("device_name", "Maho macOS");
   body.Set("device_type", "desktop");
@@ -505,11 +670,71 @@ void MahoRelaySignup(
       std::move(resource_request), kAuthLoginTrafficAnnotation);
   url_loader->AttachStringForUpload(body_json, "application/json");
   url_loader->SetTimeoutDuration(base::Seconds(30));
+  // Deliver the response body for non-2xx (401/409/etc.) so OnLoginResponse
+  // can surface the relay's real error instead of a bare "Network error".
+  url_loader->SetAllowHttpErrorResults(true);
 
   auto* raw_loader = url_loader.get();
   raw_loader->DownloadToString(
       url_loader_factory.get(),
       base::BindOnce(&OnLoginResponse, prefs, std::cref(encryptor),
+                     std::move(callback), std::move(url_loader)),
+      /*max_body_size=*/64 * 1024);
+}
+
+
+void MahoRelayGoogleLogin(
+    base::RepeatingCallback<PrefService*()> prefs_provider,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor& encryptor,
+    const std::string& id_token,
+    const std::string& nonce,
+    LoginResultCallback callback) {
+  if (id_token.empty() || nonce.empty()) {
+    std::move(callback).Run(false, "Google sign-in did not complete.");
+    return;
+  }
+
+  PrefService* prefs = prefs_provider.Run();
+  if (!prefs) {
+    std::move(callback).Run(false, "Profile closed before sign-in completed.");
+    return;
+  }
+
+  base::DictValue body;
+  body.Set("id_token", id_token);
+  body.Set("nonce", nonce);
+  SetDeviceFields(prefs, body);
+
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  GURL request_url(GetRelayBaseUrl() + "/auth/oauth/google");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run(false, "Invalid relay URL.");
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "POST";
+  resource_request->headers.SetHeader("Content-Type", "application/json");
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kAuthGoogleLoginTrafficAnnotation);
+  url_loader->AttachStringForUpload(body_json, "application/json");
+  url_loader->SetTimeoutDuration(base::Seconds(30));
+  // Deliver the response body for non-2xx (401/409/etc.) so OnLoginResponse
+  // can surface the relay's real error instead of a bare "Network error".
+  url_loader->SetAllowHttpErrorResults(true);
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(&OnGoogleLoginResponse, std::move(prefs_provider),
+                     std::cref(encryptor),
                      std::move(callback), std::move(url_loader)),
       /*max_body_size=*/64 * 1024);
 }

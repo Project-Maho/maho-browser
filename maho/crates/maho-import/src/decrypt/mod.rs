@@ -8,11 +8,10 @@ pub mod chromium_keychain;
 pub mod firefox_nss;
 
 pub use chromium_keychain::{
-    ChromiumKey, DecryptError, KeychainError, KeychainProvider,
-    decrypt_v10, derive_aes_key,
+    decrypt_v10, derive_aes_key, ChromiumKey, DecryptError, KeychainError, KeychainProvider,
 };
 
-pub use firefox_nss::{NssError, NssMasterKey, decrypt_nss_value, unlock_nss_master_key};
+pub use firefox_nss::{decrypt_nss_value, unlock_nss_master_key, NssError, NssMasterKey};
 
 #[cfg(target_os = "macos")]
 pub use chromium_keychain::MacOsKeychain;

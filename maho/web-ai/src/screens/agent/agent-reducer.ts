@@ -1,4 +1,5 @@
 import type { AgentAction, AgentBlock, AgentMessage, AgentState } from './agent-types';
+import type { ArtifactInfo } from '../../bridge/types';
 
 export function initialAgentState(): AgentState {
   return {
@@ -41,6 +42,8 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
       return appendAssistantToolCall(state, action.id, action.name, action.args, action.messageId, action.createdAt);
     case 'AGENT_TOOL_RESULT':
       return updateAssistantToolResult(state, action.id, action.name, action.result, action.messageId, action.createdAt);
+    case 'AGENT_ARTIFACT':
+      return appendAssistantArtifact(state, action.artifact, action.messageId, action.createdAt);
     case 'AGENT_COMPLETE':
       return completeAssistantTurn(state, action.fullText, action.messageId, action.createdAt);
     case 'AGENT_ERROR':
@@ -160,6 +163,50 @@ function appendAssistantToolCall(
     status: 'running' as const,
     startedAt: createdAt.getTime(),
     durationMs: null,
+  };
+
+  if (state.activeAssistantId !== null) {
+    return {
+      ...state,
+      messages: state.messages.map((message) => {
+        if (message.id === state.activeAssistantId && message.role === 'assistant') {
+          const finalizedBlocks = finalizeLastThinkingBlock(message.blocks, createdAt);
+          return { ...message, blocks: [...finalizedBlocks, newBlock] };
+        }
+        return message;
+      }),
+      phase: 'streaming',
+      scrollRevision: state.scrollRevision + 1,
+    };
+  }
+
+  return {
+    ...state,
+    activeAssistantId: messageId,
+    messages: [
+      ...state.messages,
+      {
+        createdAt,
+        id: messageId,
+        role: 'assistant',
+        blocks: [newBlock],
+      },
+    ],
+    phase: 'streaming',
+    scrollRevision: state.scrollRevision + 1,
+  };
+}
+
+function appendAssistantArtifact(
+  state: AgentState,
+  artifact: ArtifactInfo,
+  messageId: string,
+  createdAt: Date,
+): AgentState {
+  const newBlock = {
+    kind: 'artifact' as const,
+    id: artifact.artifactId,
+    artifact,
   };
 
   if (state.activeAssistantId !== null) {

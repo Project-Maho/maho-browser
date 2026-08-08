@@ -385,8 +385,8 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         KeyCombo::new("n", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "little_arc",
-        "Little Arc",
+        "maho_mini",
+        "Maho Mini",
         window.clone(),
         KeyCombo::new("n", vec![primary_modifier(), KeyModifier::Alt]),
     ));

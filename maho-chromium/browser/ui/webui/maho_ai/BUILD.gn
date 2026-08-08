@@ -42,6 +42,10 @@ source_set("maho_ai") {
     "maho_ai_ui.h",
     "maho_ai_voice_session.cc",
     "maho_ai_voice_session.h",
+    "maho_artifact_export_untrusted_ui.cc",
+    "maho_artifact_export_untrusted_ui.h",
+    "maho_artifact_preview_untrusted_ui.cc",
+    "maho_artifact_preview_untrusted_ui.h",
   ]
 
   public_deps = [
@@ -62,6 +66,8 @@ source_set("maho_ai") {
     "//crypto",
     "//maho/browser:maho_ai_popup_lifetime_tracker",
     "//maho/browser:maho_ai_runtime_adapter",
+    "//maho/browser:maho_artifact_html_sanitizer",
+    "//maho/browser:maho_artifact_registry",
     "//maho/browser:maho_browser_ai_tools",
     "//maho/browser:maho_auth_utils",
     "//maho/browser:maho_core_holder",

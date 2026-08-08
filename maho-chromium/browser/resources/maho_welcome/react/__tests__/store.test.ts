@@ -45,6 +45,7 @@ const mockHandlerInstance = vi.hoisted(() => ({
   signupFromWelcome: vi.fn().mockResolvedValue({ok: true, errorMessage: ''}),
   getRelayAccountStatusFromWelcome:
       vi.fn().mockResolvedValue({signedIn: false, tier: '', subscriptionStatus: '', welcomeCompleted: false, hasStoredSession: false}),
+  getSubscriptionCheckoutUrl: vi.fn(),
   finishOnboarding: vi.fn(),
 }));
 
@@ -81,6 +82,20 @@ vi.mock('//resources/maho_common/react/store_utils.js', () => ({
       listener();
     }
   },
+}));
+
+const mockLemon = vi.hoisted(() => ({
+  overlay: vi.fn(async (_opts: {
+    checkoutUrl: string;
+    onSuccess?: (orderId: string) => void;
+    onClose?: () => void;
+    onError?: (error: Error) => void;
+  }) => {}),
+}));
+
+vi.mock('../../../maho_common/react/lemonsqueezy.js', () => ({
+  openCheckoutOverlay: mockLemon.overlay,
+  loadLemonJS: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe('MahoWelcomeStore', () => {
@@ -168,6 +183,7 @@ describe('MahoWelcomeStore', () => {
       WelcomePage.ImportProgress,
       WelcomePage.SearchEngine,
       WelcomePage.Essentials,
+      WelcomePage.AIProvider,
       WelcomePage.PasswordSetup,
     ];
 
@@ -183,6 +199,51 @@ describe('MahoWelcomeStore', () => {
       store.nextPage();
       expect(store.getSnapshot().currentPage).toBe(expected);
     }
+  });
+
+  it('returns Managed AI guests to plan selection after authentication', async () => {
+    const store = new MahoWelcomeStore();
+    (store as unknown as {patch: (mutator: (draft: Record<string, unknown>) => void) => void}).
+        patch(draft => {
+          draft.currentPage = WelcomePage.AIProvider;
+          draft.aiSetup = {
+            provider: 'maho-managed',
+            status: 'success',
+            errorMessage: '',
+            skipped: false,
+          };
+        });
+
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Auth);
+
+    store.setAuthEmail('guest@maho.dev');
+    store.setAuthPassword('securepwd');
+    mockHandlerInstance.loginFromWelcome.mockResolvedValueOnce({ok: true, errorMessage: ''});
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'free',
+      subscriptionStatus: '',
+      welcomeCompleted: false,
+      hasStoredSession: false,
+    });
+    await store.submitSignIn();
+    store.nextPage();
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PlanSelect);
+  });
+
+  it('continues from the Free plan without opening checkout', () => {
+    const store = new MahoWelcomeStore();
+    (store as unknown as {patch: (mutator: (draft: Record<string, unknown>) => void) => void}).
+        patch(draft => {
+          draft.currentPage = WelcomePage.PlanSelect;
+        });
+
+    store.continueWithFreePlan();
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    expect(mockHandlerInstance.getSubscriptionCheckoutUrl).not.toHaveBeenCalled();
   });
 
   it('goes backward without leaving Splash', async () => {
@@ -438,5 +499,64 @@ describe('MahoWelcomeStore', () => {
     store.skipPasswordSetup();
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
     expect(store.getSnapshot().passwordSetup.passwordManagerSkipped).toBe(true);
+  });
+
+  it('does not open checkout when the generated subscription URL is empty', async () => {
+    const store = new MahoWelcomeStore();
+    mockHandlerInstance.getSubscriptionCheckoutUrl.mockResolvedValue({checkoutUrl: ''});
+
+    const ok = await store.startSubscriptionCheckout('pro');
+
+    expect(ok).toBe(false);
+    expect(mockHandlerInstance.getSubscriptionCheckoutUrl).toHaveBeenCalledWith('pro');
+    expect(mockLemon.overlay).not.toHaveBeenCalled();
+    expect(store.getSnapshot().aiSetup.status).toBe('error');
+  });
+
+  it('refreshes relay account status and advances to PasswordSetup on checkout success', async () => {
+    const store = new MahoWelcomeStore();
+    mockHandlerInstance.getSubscriptionCheckoutUrl.mockResolvedValue({
+      checkoutUrl:
+          'https://maho.lemonsqueezy.com/buy/pro?checkout[custom][user_id]=u1',
+    });
+
+    await store.startSubscriptionCheckout('pro');
+
+    expect(mockLemon.overlay).toHaveBeenCalledTimes(1);
+    const opts = mockLemon.overlay.mock.calls[0]![0];
+    expect(typeof opts.onSuccess).toBe('function');
+
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockClear();
+    opts.onSuccess!('order_123');
+    // Let the fire-and-forget account-status refresh microtask settle.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockHandlerInstance.getRelayAccountStatusFromWelcome).toHaveBeenCalled();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+  });
+
+  it('prevPage returns managed users from PasswordSetup to PlanSelect', () => {
+    const store = new MahoWelcomeStore();
+    (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
+      draft.currentPage = WelcomePage.PasswordSetup;
+      (draft.aiSetup as {provider: string}).provider = 'maho-managed';
+    });
+
+    store.prevPage();
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PlanSelect);
+  });
+
+  it('prevPage returns non-managed users from PasswordSetup to AIProvider', () => {
+    const store = new MahoWelcomeStore();
+    (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
+      draft.currentPage = WelcomePage.PasswordSetup;
+      (draft.aiSetup as {provider: string}).provider = 'byok';
+    });
+
+    store.prevPage();
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
   });
 });

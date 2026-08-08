@@ -16,7 +16,13 @@ use tokio::process::Command;
 async fn test_headless_launches_browser_and_extracts_title() {
     // Spawn Maho.app in headless mode, wait for socket, extract page title
     let output = Command::new("maho")
-        .args(["headless", "--url", "https://example.com", "--extract", "title"])
+        .args([
+            "headless",
+            "--url",
+            "https://example.com",
+            "--extract",
+            "title",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -41,7 +47,13 @@ async fn test_headless_launches_browser_and_extracts_title() {
 async fn test_headless_no_zombie_processes() {
     // Run headless extraction
     let output = Command::new("maho")
-        .args(["headless", "--url", "https://example.com", "--extract", "title"])
+        .args([
+            "headless",
+            "--url",
+            "https://example.com",
+            "--extract",
+            "title",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -96,12 +108,11 @@ async fn test_keep_alive_flag_leaves_browser_running() {
 
     // Check that the browser process is still running
     let socket_path = common::socket_path();
-    let client_result =
-        maho_browser_mcp::client::BrowserClient::connect_with_timeout(
-            &socket_path,
-            Duration::from_secs(5),
-        )
-        .await;
+    let client_result = maho_browser_mcp::client::BrowserClient::connect_with_timeout(
+        &socket_path,
+        Duration::from_secs(5),
+    )
+    .await;
 
     assert!(
         client_result.is_ok(),

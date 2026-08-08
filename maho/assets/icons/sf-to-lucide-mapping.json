@@ -42,6 +42,7 @@
   { "sf_symbol": "clock.arrow.circlepath", "lucide_kebab": "history", "lucide_js": "History", "lucide_swift": "history", "avd_filename": "ic_history.xml", "cpp_symbol": "kHistoryIcon" },
   { "sf_symbol": "creditcard", "lucide_kebab": "credit-card", "lucide_js": "CreditCard", "lucide_swift": "creditCard", "avd_filename": "ic_credit_card.xml", "cpp_symbol": "kCreditCardIcon" },
   { "sf_symbol": "desktopcomputer", "lucide_kebab": "monitor", "lucide_js": "Monitor", "lucide_swift": "monitor", "avd_filename": "ic_monitor.xml", "cpp_symbol": "kMonitorIcon" },
+  { "sf_symbol": "doc", "lucide_kebab": "file", "lucide_js": "File", "lucide_swift": "file", "avd_filename": "ic_file.xml", "cpp_symbol": "kFileIcon" },
   { "sf_symbol": "doc.badge.plus", "lucide_kebab": "file-plus", "lucide_js": "FilePlus", "lucide_swift": "filePlus", "avd_filename": "ic_file_plus.xml", "cpp_symbol": "kFilePlusIcon" },
   { "sf_symbol": "doc.on.doc", "lucide_kebab": "copy", "lucide_js": "Copy", "lucide_swift": "copy", "avd_filename": "ic_copy.xml", "cpp_symbol": "kCopyIcon" },
   { "sf_symbol": "doc.text", "lucide_kebab": "file-text", "lucide_js": "FileText", "lucide_swift": "fileText", "avd_filename": "ic_file_text.xml", "cpp_symbol": "kFileTextIcon" },

@@ -32,10 +32,10 @@ class MahoWebStoreUAThrottle : public blink::URLLoaderThrottle {
                            network::mojom::URLResponseHead* response_head,
                            bool* defer) override;
 
- private:
   static bool NeedsChromeLikeUA(const GURL& url);
   static std::string StripMahoToken(const std::string& ua);
 
+ private:
   std::string cached_clean_ua_;
 };
 

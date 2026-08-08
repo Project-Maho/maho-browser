@@ -2,6 +2,10 @@
 
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
+
 #include <algorithm>
 #include <memory>
 #include <utility>
@@ -277,6 +281,11 @@ void MahoCommandOverlayController::OnWidgetBoundsChanged(
 void MahoCommandOverlayController::OnWidgetActivationChanged(
     views::Widget* widget,
     bool active) {
+  if (handling_activation_change_) {
+    return;
+  }
+  base::AutoReset<bool> activation_guard(&handling_activation_change_, true);
+
   if (widget == parent_widget_) {
     if (active && widget_ && widget_->IsVisible() && !is_hiding_) {
       widget_->Activate();
@@ -413,8 +422,23 @@ void MahoCommandOverlayController::Show(views::View* anchor,
     return;
 
   if (browser_ && !ShouldCreateForContext(
-                      ClassifyProfileForTesting(browser_->profile()))) {
+                      MahoClassifyProfile(browser_->profile()))) {
     return;
+  }
+
+  if (browser_) {
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+    auto* container =
+        browser_view
+            ? views::AsViewClass<MahoSidebarContainerView>(
+                  browser_view->maho_sidebar_container())
+            : nullptr;
+    if (container) {
+      if (auto* host = container->GetOrCreateOverlayHost()) {
+        host->DismissAllOverlaysExcept(
+            MahoBrowserFrameOverlayHost::OverlayKind::kCommand);
+      }
+    }
   }
 
   open_start_ticks_ = base::TimeTicks::Now();

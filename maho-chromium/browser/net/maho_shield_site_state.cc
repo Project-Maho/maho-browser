@@ -54,6 +54,18 @@ bool ContainsNormalizedSiteExceptionKey(const base::flat_set<std::string>& keys,
 
 }  // namespace
 
+MahoShieldSiteState::OverlayState::OverlayState() = default;
+MahoShieldSiteState::OverlayState::OverlayState(const OverlayState&) =
+    default;
+MahoShieldSiteState::OverlayState&
+MahoShieldSiteState::OverlayState::operator=(const OverlayState&) = default;
+MahoShieldSiteState::OverlayState::OverlayState(OverlayState&&) noexcept =
+    default;
+MahoShieldSiteState::OverlayState&
+MahoShieldSiteState::OverlayState::operator=(OverlayState&&) noexcept =
+    default;
+MahoShieldSiteState::OverlayState::~OverlayState() = default;
+
 MahoShieldSiteState::MahoShieldSiteState(Profile* profile)
     : profile_(profile) {
   if (profile_ && profile_->IsOffTheRecord()) {

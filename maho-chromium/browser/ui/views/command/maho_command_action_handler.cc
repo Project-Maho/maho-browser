@@ -46,6 +46,7 @@
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"  // nogncheck
+#include "maho/browser/ui/views/peek/maho_peek_controller.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -555,6 +556,20 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     }
     request.url = active_url;
     maho::LaunchMahoMini(browser ? browser->profile() : nullptr, request);
+  } else if (action_id == "peek") {
+    GURL active_url;
+    if (browser && browser->tab_strip_model() &&
+        browser->tab_strip_model()->GetActiveWebContents()) {
+      active_url = browser->tab_strip_model()
+                       ->GetActiveWebContents()
+                       ->GetLastCommittedURL();
+    }
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (browser_view && active_url.is_valid()) {
+      if (auto* controller = browser_view->GetOrCreateMahoPeekController()) {
+        controller->ShowUrl(nullptr, active_url);
+      }
+    }
   } else if (action_id == "next_space" || action_id == "prev_space") {
     auto* core = maho::GetCore();
     auto* bridge = MahoSpaceProfileBridge::GetInstance();

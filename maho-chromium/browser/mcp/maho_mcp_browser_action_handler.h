@@ -31,11 +31,26 @@ class MahoMcpBrowserActionHandler {
   using ScrollPositions = std::unordered_map<int, int>;
 
   struct Error {
+    Error();
+    Error(int code, std::string message);
+    Error(const Error&);
+    Error& operator=(const Error&);
+    Error(Error&&) noexcept;
+    Error& operator=(Error&&) noexcept;
+    ~Error();
+
     int code = 0;
     std::string message;
   };
 
   struct Result {
+    Result();
+    Result(const Result&) = delete;
+    Result& operator=(const Result&) = delete;
+    Result(Result&&) noexcept;
+    Result& operator=(Result&&) noexcept;
+    ~Result();
+
     std::optional<Error> error;
     base::DictValue value;
   };

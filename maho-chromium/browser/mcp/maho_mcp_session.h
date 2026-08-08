@@ -22,6 +22,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
+#include "maho/browser/mcp/maho_mcp_capability_registry.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
@@ -245,7 +246,7 @@ class MahoMcpSession {
   void HandleToolCall(const McpJsonRpcMessage& msg,
                       std::vector<std::string>& responses);
 
-  bool IsHostAllowed(std::string_view host) const;
+  bool IsHostBlocked(std::string_view host) const;
 
   bool HandleAcquireLease(const McpJsonRpcMessage& msg,
                           const base::DictValue* arguments,
@@ -267,7 +268,8 @@ class MahoMcpSession {
   std::string session_id_;
   MahoMcpJsonRpc framer_;
 
-  std::set<std::string> allowed_domains_;
+  std::unique_ptr<MahoMcpCapabilityRegistry> capability_registry_;
+  std::set<std::string> blocked_domains_;
 
   // Per-session ref table for accessibility interactions.
   RefTable ref_to_ax_id_;
@@ -340,6 +342,31 @@ class MahoMcpBrowserDelegate {
   virtual std::string GetElementText(int tab_id, const std::string& ref_id) = 0;
   virtual std::string GetElementAttribute(int tab_id, const std::string& ref_id, const std::string& attribute) = 0;
   virtual bool WaitForSelector(int tab_id, const std::string& selector, int timeout_ms) = 0;
+
+  struct SameOriginFetchResult {
+    SameOriginFetchResult();
+    SameOriginFetchResult(const SameOriginFetchResult&);
+    SameOriginFetchResult& operator=(const SameOriginFetchResult&);
+    SameOriginFetchResult(SameOriginFetchResult&&) noexcept;
+    SameOriginFetchResult& operator=(SameOriginFetchResult&&) noexcept;
+    ~SameOriginFetchResult();
+
+    bool success = false;
+    int status = 0;
+    std::string final_url;
+    std::string content_type;
+    std::string text;
+    bool truncated = false;
+    std::string error;
+  };
+  using SameOriginFetchCallback =
+      base::OnceCallback<void(SameOriginFetchResult)>;
+  virtual void SameOriginFetch(int tab_id,
+                               const GURL& url,
+                               const std::string& method,
+                               const std::string& body,
+                               const std::string& headers_json,
+                               SameOriginFetchCallback callback);
 
   virtual int CreateNewTab(const GURL& url) = 0;
   virtual bool CloseTab(int tab_id) = 0;
@@ -489,11 +516,14 @@ class MahoMcpBrowserDelegate {
                               int64_t max_age_seconds,
                               MailReadCallback callback);
   virtual void MailSendEmail(const std::string& request_json,
+                             bool already_authorized,
                              MailReadCallback callback);
   virtual void MailSaveDraft(const std::string& request_json,
+                             bool already_authorized,
                              MailReadCallback callback);
   virtual void MailUpdateDraft(const std::string& draft_id,
                                const std::string& request_json,
+                               bool already_authorized,
                                MailReadCallback callback);
   virtual void MailQueueEmail(const std::string& request_json,
                               MailReadCallback callback);

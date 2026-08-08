@@ -9,9 +9,11 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "url/gurl.h"
@@ -20,12 +22,14 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(MahoCosmeticFiltersHandler);
 
 namespace {
 
-constexpr int kIsolatedWorldIdForCosmeticFilters = 0x4D41484F;  // "MAHO"
+constexpr int kIsolatedWorldIdForCosmeticFilters =
+    content::ISOLATED_WORLD_ID_CONTENT_END + 3;
 
 std::string BuildCssInjectionScript(const std::string& selectors_css) {
   std::string escaped;
   base::ReplaceChars(selectors_css, "\\", "\\\\", &escaped);
   base::ReplaceChars(escaped, "`", "\\`", &escaped);
+  base::ReplaceSubstringsAfterOffset(&escaped, 0, "${", "\\${");
 
   return base::StrCat({
       "(function() {"
@@ -48,15 +52,6 @@ MahoCosmeticFiltersHandler::MahoCosmeticFiltersHandler(
 
 MahoCosmeticFiltersHandler::~MahoCosmeticFiltersHandler() = default;
 
-void MahoCosmeticFiltersHandler::ReadyToCommitNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->GetURL().SchemeIsHTTPOrHTTPS()) {
-    return;
-  }
-  InjectCosmeticFilters(navigation_handle->GetRenderFrameHost(),
-                        navigation_handle->GetURL().spec());
-}
-
 void MahoCosmeticFiltersHandler::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (!navigation_handle->HasCommitted() ||
@@ -76,6 +71,7 @@ void MahoCosmeticFiltersHandler::DidFinishNavigation(
 void MahoCosmeticFiltersHandler::InjectCosmeticFilters(
     content::RenderFrameHost* render_frame_host,
     const std::string& url) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   MahoCore* core = maho::GetCore();
   if (!core || !render_frame_host) {
     return;

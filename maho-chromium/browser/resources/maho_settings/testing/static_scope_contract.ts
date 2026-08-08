@@ -56,11 +56,15 @@ const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
   'atc.maho_mini_click_override_enabled': 'process',
   'atc.maho_mini_global_shortcut_enabled': 'process',
   'atc.open_external_links_in_maho_mini': 'process',
+  'atc.peek_enabled': 'profile',
+  'atc.peek_link_routing_enabled': 'profile',
+  'atc.peek_popup_routing_enabled': 'profile',
   'autofill.password_provider': 'core-global',
   'autofill.passwords_enabled': 'core-global',
   'general.homepage': 'profile',
   'general.prompt_for_download': 'profile',
   'general.restore_on_startup': 'profile',
+  'general.translate_target_language': 'profile',
   'mail.enabled': 'profile',
   'notifications.quiet_permission_ui': 'profile',
   'privacy.block_third_party_cookies': 'profile',
@@ -75,6 +79,7 @@ const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
 
 const selectedProfileSettingAllowlist = new Set([
   'general.prompt_for_download',
+  'general.translate_target_language',
   'search.suggestions',
   'tabs.archive_timeout',
 ]);

@@ -7,8 +7,11 @@
 #include <utility>
 
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -20,6 +23,10 @@ namespace maho {
 ::MahoCore* GetCore();
 
 void SetCore(::MahoCore* core);
+scoped_refptr<base::SequencedTaskRunner> GetCoreTaskRunner();
+base::Lock& GetCoreTaskAdmissionLock();
+bool IsCoreTaskWorkQuiesced();
+void QuiesceCoreTasksAndWait();
 
 maho::core::VaultBackendSession CreateVaultBackendSession();
 void QuiesceVaultBackendSessions();
@@ -27,26 +34,52 @@ bool IsVaultBackendSessionWorkQuiesced();
 
 inline void PostCoreClosure(const base::Location& from_here,
                             base::OnceClosure closure) {
-  base::ThreadPool::PostTask(
-      from_here, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      std::move(closure));
+  base::AutoLock admission(GetCoreTaskAdmissionLock());
+  if (IsCoreTaskWorkQuiesced()) {
+    return;
+  }
+  GetCoreTaskRunner()->PostTask(from_here, std::move(closure));
 }
 
 inline void PostCoreTaskAndReply(const base::Location& from_here,
                                  base::OnceClosure task,
                                  base::OnceClosure reply) {
-  base::ThreadPool::PostTaskAndReply(
-      from_here, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      std::move(task), std::move(reply));
+  bool posted = false;
+  {
+    base::AutoLock admission(GetCoreTaskAdmissionLock());
+    if (!IsCoreTaskWorkQuiesced()) {
+      auto split_reply = base::SplitOnceCallback(std::move(reply));
+      posted = GetCoreTaskRunner()->PostTaskAndReply(
+          from_here, std::move(task), std::move(split_reply.first));
+      if (!posted) {
+        reply = std::move(split_reply.second);
+      }
+    }
+  }
+  if (!posted) {
+    std::move(reply).Run();
+  }
 }
 
 template <typename R>
 void PostCoreTaskAndReplyWithResult(const base::Location& from_here,
                                     base::OnceCallback<R()> task,
                                     base::OnceCallback<void(R)> reply) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      from_here, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      std::move(task), std::move(reply));
+  bool posted = false;
+  {
+    base::AutoLock admission(GetCoreTaskAdmissionLock());
+    if (!IsCoreTaskWorkQuiesced()) {
+      auto split_reply = base::SplitOnceCallback(std::move(reply));
+      posted = GetCoreTaskRunner()->PostTaskAndReplyWithResult(
+          from_here, std::move(task), std::move(split_reply.first));
+      if (!posted) {
+        reply = std::move(split_reply.second);
+      }
+    }
+  }
+  if (!posted) {
+    std::move(reply).Run(R{});
+  }
 }
 
 template <typename R>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import shutil
 import sys
@@ -53,6 +54,7 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
+    "ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm": frozenset({"mac"}),
     "ui/base/cocoa/command_dispatcher.mm": frozenset({"mac"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": frozenset({"win"}),
@@ -98,6 +100,18 @@ _BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm": [
+        Replacement(
+            old="    root_ca_layer_.opaque = YES;\n",
+            new=(
+                "    // Maho: transparent embedded WebContents must preserve alpha so the\n"
+                "    // browser window's shared vibrancy and gradient remain visible.\n"
+                "    root_ca_layer_.opaque = NO;\n"
+            ),
+            description="Maho: preserve alpha in the macOS remote compositor root layer",
+            guard="root_ca_layer_.opaque = NO;",
+        ),
+    ],
     "chrome/common/chrome_content_client.cc": [
         Replacement(
             old="#include \"chrome/common/url_constants.h\"\n",
@@ -256,6 +270,444 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: register URL alias handlers in BrowserURLHandlerCreated",
             guard="handler->AddHandlerPair(&MahoRewriteNewTabToBlank,",
+        ),
+
+        Replacement(
+            old=(
+                '#include "chrome/browser/search/search.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/search/search.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+            ),
+            description=(
+                "Insert BrowserURLHandler include into "
+                "chrome_content_browser_client.cc"
+            ),
+            guard='#include "content/public/browser/browser_url_handler.h"',
+        ),
+        Replacement(
+            old=(
+                "bool g_disable_advanced_protection_caching_for_tests = false;\n"
+            ),
+            new=(
+                "bool g_disable_advanced_protection_caching_for_tests = false;\n"
+                "\n"
+                "// Rewrites stray chrome://newtab navigations (those that reach\n"
+                "// BrowserURLHandlerCreated after policy and extra_parts handlers have\n"
+                "// already had a chance to intercept) to about:blank so that Maho never\n"
+                "// commits a chrome://newtab WebUI frame.\n"
+                "bool MahoRewriteNewTabToBlank(GURL* url,\n"
+                "                              content::BrowserContext* /*context*/) {\n"
+                "  if (url->SchemeIs(\"chrome\") && url->host() == \"newtab\") {\n"
+                "    *url = GURL(\"about:blank\");\n"
+                "    return true;\n"
+                "  }\n"
+                "  return false;\n"
+                "}\n"
+                "\n"
+                "// Maps only approved public Maho aliases to their existing Chrome WebUI\n"
+                "// origins. Returning false leaves malformed, unlisted, and direct legacy\n"
+                "// chrome://maho-* URLs untouched.\n"
+                "bool MahoHandleUrlAlias(GURL* url,\n"
+                "                        content::BrowserContext* /*context*/) {\n"
+                "  return maho::MapMahoUrlAliasToActualUrl(*url, url);\n"
+                "}\n"
+                "\n"
+                "// BrowserURLHandler calls this only after MahoHandleUrlAlias matched the\n"
+                "// original public alias. Always claim that reverse rewrite: an approved\n"
+                "// final WebUI destination becomes its alias, while any external or\n"
+                "// unlisted final URL is intentionally retained to clear a stale alias.\n"
+                "bool MahoHandleUrlAliasReverse(GURL* url,\n"
+                "                               content::BrowserContext* /*context*/) {\n"
+                "  GURL alias;\n"
+                "  if (maho::ResolveActualUrlToMahoAlias(*url, &alias)) {\n"
+                "    *url = alias;\n"
+                "  }\n"
+                "  return true;\n"
+                "}\n"
+            ),
+            description=(
+                "Insert Maho new-tab and public URL alias helpers into the existing "
+                "anonymous namespace of chrome_content_browser_client.cc"
+            ),
+            guard="bool MahoHandleUrlAliasReverse(",
+        ),
+        Replacement(
+            old=(
+                "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
+                "                          BrowserURLHandler::null_handler());\n"
+            ),
+            new=(
+                "  // Maho: rewrite stray chrome://newtab to about:blank before the\n"
+                "  // upstream NTP rewriter runs, so Maho never commits a NTP WebUI frame.\n"
+                "  handler->AddHandlerPair(&MahoRewriteNewTabToBlank,\n"
+                "                          BrowserURLHandler::null_handler());\n"
+                "  // Preserve maho:// aliases as virtual URLs while committing only the\n"
+                "  // approved existing chrome://maho-* WebUI origins.\n"
+                "  handler->AddHandlerPair(&MahoHandleUrlAlias,\n"
+                "                          &MahoHandleUrlAliasReverse);\n"
+                "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
+                "                          BrowserURLHandler::null_handler());\n"
+            ),
+            description=(
+                "Register Maho new-tab then alias handler pairs before "
+                "HandleChromeAboutAndChromeSyncRewrite in BrowserURLHandlerCreated()"
+            ),
+            guard="&MahoHandleUrlAliasReverse);",
+        ),
+        Replacement(
+            old=(
+                '#include "content/public/browser/browser_url_handler.h"\n'
+            ),
+            new=(
+                '#include "content/public/browser/browser_url_handler.h"\n'
+                '#include "maho/browser/maho_url_scheme.h"\n'
+            ),
+            description=(
+                "Include Maho URL alias resolver in chrome_content_browser_client.cc"
+            ),
+            guard='#include "maho/browser/maho_url_scheme.h"',
+        ),
+        # ── Ad-block throttle includes ─────────────────────────────────────────
+        Replacement(
+            old=(
+                '#include "chrome/browser/search/search.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/search/search.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+                '#include "maho/browser/maho_core_holder.h"\n'
+                '#include "maho/browser/net/maho_ad_block_tab_helper.h"\n'
+                '#include "maho/browser/net/maho_ad_block_throttle.h"\n'
+                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
+            ),
+            description=(
+                "Insert Maho ad-block throttle and WebStore UA throttle includes "
+                "into chrome_content_browser_client.cc (after browser_url_handler.h)"
+            ),
+            guard='#include "maho/browser/net/maho_ad_block_throttle.h"',
+        ),
+        # ── Ad-block request util include (independent guard) ──────────────────
+        Replacement(
+            old='#include "maho/browser/net/maho_ad_block_tab_helper.h"\n',
+            new=(
+                '#include "maho/browser/net/maho_ad_block_tab_helper.h"\n'
+                '#include "maho/browser/net/maho_ad_block_request_util.h"\n'
+            ),
+            description=(
+                "Insert Maho ad-block request util include into "
+                "chrome_content_browser_client.cc for request-aware block counts"
+            ),
+            guard='#include "maho/browser/net/maho_ad_block_request_util.h"',
+        ),
+        # ── Subresource ad-block proxy include (independent guard) ─────────────
+        Replacement(
+            old='#include "maho/browser/net/maho_ad_block_throttle.h"\n',
+            new=(
+                '#include "maho/browser/net/maho_ad_block_throttle.h"\n'
+                '#include "maho/browser/net/maho_proxying_url_loader_factory.h"\n'
+            ),
+            description=(
+                "Insert Maho subresource proxying URLLoaderFactory include into "
+                "chrome_content_browser_client.cc (own guard so it applies even "
+                "when the throttle include is already present)"
+            ),
+            guard='#include "maho/browser/net/maho_proxying_url_loader_factory.h"',
+        ),
+        # ── Ad-block throttle registration in CreateURLLoaderThrottles() ───────
+        Replacement(
+            old="  return result;\n",
+            new=(
+                "  // Maho: register ad-block and WebStore UA throttles.\n"
+                "  // MahoAdBlockThrottle::WillStartRequest runs on the UI thread\n"
+                "  // (DCHECK_CURRENTLY_ON(BrowserThread::UI)); the on_blocked callback\n"
+                "  // therefore also fires on the UI thread. Using GetWeakPtr() rather\n"
+                "  // than base::Unretained() ensures the callback is a no-op if the\n"
+                "  // tab closes between throttle construction and the first network\n"
+                "  // request, closing the UAF window identified in audit finding H1.\n"
+                "  if (maho::GetCore()) {\n"
+                "    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;\n"
+                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
+                "    if (wc) {\n"
+                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
+                "      MahoAdBlockTabHelper* helper =\n"
+                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
+                "      if (helper) {\n"
+                "        content::GlobalRenderFrameHostId page_id;\n"
+                "        // If no primary main frame is available, page_id stays invalid\n"
+                "        // and RecordBlockedRequest ignores the callback conservatively.\n"
+                "        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {\n"
+                "          page_id = main_frame->GetGlobalId();\n"
+                "        }\n"
+                "        on_blocked = base::BindRepeating(\n"
+                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak,\n"
+                "               content::GlobalRenderFrameHostId page_id,\n"
+                "               const network::ResourceRequest& request) {\n"
+                "              if (weak) {\n"
+                "                MahoBlockedRequestInfo info;\n"
+                "                info.page_id = page_id;\n"
+                "                info.destination = request.destination;\n"
+                "                info.is_outermost_main_frame = request.is_outermost_main_frame;\n"
+                "                info.request_type = maho::MapRequestToFilterType(request);\n"
+                "                weak->RecordBlockedRequest(info);\n"
+                "              }\n"
+                "            },\n"
+                "            helper->GetWeakPtr(), page_id);\n"
+                "      }\n"
+                "    }\n"
+                "    result.push_back(\n"
+                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
+                "  }\n"
+                "  result.push_back(std::make_unique<MahoWebStoreUAThrottle>());\n"
+                "  return result;\n"
+            ),
+            description=(
+                "Register MahoAdBlockThrottle and MahoWebStoreUAThrottle in "
+                "CreateURLLoaderThrottles(); uses helper->GetWeakPtr() instead of "
+                "base::Unretained(helper) to eliminate UAF window (audit H1 fix)"
+            ),
+            guard="maho::GetCore()",
+        ),
+        # ── Update already-applied ad-block throttle callback ──────────────────
+        Replacement(
+            old=(
+                "  if (maho::GetCore()) {\n"
+                "    base::RepeatingClosure on_blocked;\n"
+                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
+                "    if (wc) {\n"
+                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
+                "      MahoAdBlockTabHelper* helper =\n"
+                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
+                "      if (helper) {\n"
+                "        on_blocked = base::BindRepeating(\n"
+                "            &MahoAdBlockTabHelper::IncrementBlockedCount,\n"
+                "            helper->GetWeakPtr());\n"
+                "      }\n"
+                "    }\n"
+                "    result.push_back(\n"
+                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (maho::GetCore()) {\n"
+                "    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;\n"
+                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
+                "    if (wc) {\n"
+                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
+                "      MahoAdBlockTabHelper* helper =\n"
+                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
+                "      if (helper) {\n"
+                "        content::GlobalRenderFrameHostId page_id;\n"
+                "        // If no primary main frame is available, page_id stays invalid\n"
+                "        // and RecordBlockedRequest ignores the callback conservatively.\n"
+                "        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {\n"
+                "          page_id = main_frame->GetGlobalId();\n"
+                "        }\n"
+                "        on_blocked = base::BindRepeating(\n"
+                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak,\n"
+                "               content::GlobalRenderFrameHostId page_id,\n"
+                "               const network::ResourceRequest& request) {\n"
+                "              if (weak) {\n"
+                "                MahoBlockedRequestInfo info;\n"
+                "                info.page_id = page_id;\n"
+                "                info.destination = request.destination;\n"
+                "                info.is_outermost_main_frame = request.is_outermost_main_frame;\n"
+                "                info.request_type = maho::MapRequestToFilterType(request);\n"
+                "                weak->RecordBlockedRequest(info);\n"
+                "              }\n"
+                "            },\n"
+                "            helper->GetWeakPtr(), page_id);\n"
+                "      }\n"
+                "    }\n"
+                "    result.push_back(\n"
+                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
+                "  }\n"
+            ),
+            description=(
+                "Update already-applied MahoAdBlockThrottle callback to pass "
+                "request context into page-scoped blocked-count recording"
+            ),
+            guard="weak->RecordBlockedRequest(info);",
+        ),
+        # ── Subresource ad-block proxy in WillCreateURLLoaderFactory() ─────────
+        Replacement(
+            old=(
+                "  // WARNING: This must be the last interceptor in the chain as the proxying\n"
+                "  // URLLoaderFactory installed by this needs to be the one actually sending\n"
+                "  // packets over the network (to effectively target `bound_network`).\n"
+                "  MaybeProxyNetworkBoundRequest(\n"
+            ),
+            new=(
+                "  // Maho: enforce native content-blocking on renderer-initiated\n"
+                "  // subresources (script/image/iframe/xhr/font/...) and worker requests,\n"
+                "  // which the navigation-only browser-side throttle never sees. Navigation\n"
+                "  // stays on the throttle in Phase 1. Installed after the extension\n"
+                "  // WebRequest/signin proxies (so extensions still observe) but before the\n"
+                "  // network-bound proxy, which must remain the last interceptor.\n"
+                "  if (type == URLLoaderFactoryType::kDocumentSubResource ||\n"
+                "      type == URLLoaderFactoryType::kWorkerMainResource ||\n"
+                "      type == URLLoaderFactoryType::kWorkerSubResource ||\n"
+                "      type == URLLoaderFactoryType::kServiceWorkerScript ||\n"
+                "      type == URLLoaderFactoryType::kServiceWorkerSubResource ||\n"
+                "      type == URLLoaderFactoryType::kPrefetch) {\n"
+                "    MahoProxyingURLLoaderFactory::MaybeProxyRequest(frame, factory_builder);\n"
+                "  }\n"
+                "\n"
+                "  // WARNING: This must be the last interceptor in the chain as the proxying\n"
+                "  // URLLoaderFactory installed by this needs to be the one actually sending\n"
+                "  // packets over the network (to effectively target `bound_network`).\n"
+                "  MaybeProxyNetworkBoundRequest(\n"
+            ),
+            description=(
+                "Install MahoProxyingURLLoaderFactory in WillCreateURLLoaderFactory "
+                "for document-subresource, worker/service-worker, and prefetch "
+                "factory types (subresource ad-block coverage), before the "
+                "network-bound proxy"
+            ),
+            guard="MahoProxyingURLLoaderFactory::MaybeProxyRequest",
+        ),
+        # ── Extend the subresource proxy to prefetch factories (own guard) ─────
+        Replacement(
+            old="      type == URLLoaderFactoryType::kServiceWorkerSubResource) {\n",
+            new=(
+                "      type == URLLoaderFactoryType::kServiceWorkerSubResource ||\n"
+                "      type == URLLoaderFactoryType::kPrefetch) {\n"
+            ),
+            description=(
+                "Extend the Maho subresource proxy to the kPrefetch factory type "
+                "so prefetched ad/tracker resources are also blocked (own guard so "
+                "it applies when the base install is already present)"
+            ),
+            guard="URLLoaderFactoryType::kPrefetch",
+        ),
+        # ── ATC space-routing NavigationThrottle ───────────────────────────────
+        Replacement(
+            old=(
+                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
+                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+            ),
+            description=(
+                "Insert Maho ATC/Peek navigation throttle dependencies into "
+                "chrome_content_browser_client.cc"
+            ),
+            guard='#include "maho/browser/net/maho_atc_navigation_throttle.h"',
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+            ),
+            description="Include Maho ATC state beside the navigation throttle after the throttle include is already present",
+            guard='#include "maho/browser/net/maho_atc_state.h"',
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/net/maho_atc_state.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+            ),
+            description=(
+                "Include Peek link-routing prefs beside Maho ATC state in "
+                "chrome_content_browser_client.cc"
+            ),
+            guard=(
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"'
+            ),
+        ),
+        Replacement(
+            old=(
+                "void ChromeContentBrowserClient::CreateThrottlesForNavigation(\n"
+                "    content::NavigationThrottleRegistry& registry) {\n"
+                "  CreateAndAddChromeThrottlesForNavigation(registry);\n"
+                "}\n"
+            ),
+            new=(
+                "void ChromeContentBrowserClient::CreateThrottlesForNavigation(\n"
+                "    content::NavigationThrottleRegistry& registry) {\n"
+                "  CreateAndAddChromeThrottlesForNavigation(registry);\n"
+                "\n"
+                "  // Maho ATC + Peek: keep one throttle decision path for top-level\n"
+                "  // navigations that bypass Browser::OpenURLFromTab. ATC keeps its\n"
+                "  // existing eligibility; Peek additionally handles eligible same-tab\n"
+                "  // renderer link clicks even when no ATC rules are enabled.\n"
+                "  content::WebContents* web_contents =\n"
+                "      registry.GetNavigationHandle().GetWebContents();\n"
+                "  Profile* profile =\n"
+                "      web_contents\n"
+                "          ? Profile::FromBrowserContext(\n"
+                "                web_contents->GetBrowserContext())\n"
+                "          : nullptr;\n"
+                "  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;\n"
+                "  const bool peek_link_routing_enabled =\n"
+                "      prefs && prefs->GetBoolean(\n"
+                "                   maho::sidebar_prefs::kPeekEnabled) &&\n"
+                "      prefs->GetBoolean(\n"
+                "          maho::sidebar_prefs::kPeekLinkRoutingEnabled);\n"
+                "  if (maho::MahoAtcState::HasEnabledRules() ||\n"
+                "      peek_link_routing_enabled) {\n"
+                "    registry.AddThrottle(\n"
+                "        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));\n"
+                "  }\n"
+                "}\n"
+            ),
+            description=(
+                "Register the shared Maho ATC/Peek navigation throttle on all "
+                "desktop platforms when ATC rules or Peek link routing may apply"
+            ),
+            guard="maho::MahoAtcNavigationThrottle",
+        ),
+        Replacement(
+            old=(
+                '  } else {\n'
+                '    // WebUI and regular pages follow the browser theme color mode, provided by\n'
+                '    // the color provider.\n'
+                '    preferred_color_scheme =\n'
+                '        web_contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kLight\n'
+                '            ? blink::mojom::PreferredColorScheme::kLight\n'
+                '            : blink::mojom::PreferredColorScheme::kDark;\n'
+                '  }\n'
+                '  // Update the preferred root scrollbar color based on the lightness level of\n'
+                '  // the toolbar\'s color.\n'
+                '  preferred_root_scrollbar_color_scheme =\n'
+                '      color_utils::IsDark(\n'
+                '          web_contents->GetColorProvider().GetColor(kColorToolbar))\n'
+                '          ? blink::mojom::PreferredColorScheme::kDark\n'
+                '          : blink::mojom::PreferredColorScheme::kLight;'
+            ),
+            new=(
+                '  } else {\n'
+                '    // Maho: web page rendering follows Browser theme, not Space theme.\n'
+                '    Profile* maho_profile = Profile::FromBrowserContext(web_contents->GetBrowserContext());\n'
+                '    auto* theme_service = ThemeServiceFactory::GetForProfile(maho_profile);\n'
+                '    const auto scheme = theme_service ? theme_service->GetBrowserColorScheme()\n'
+                '                                      : ThemeService::BrowserColorScheme::kSystem;\n'
+                '    bool prefers_dark = false;\n'
+                '    if (scheme == ThemeService::BrowserColorScheme::kSystem) {\n'
+                '      prefers_dark = ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==\n'
+                '                     ui::NativeTheme::PreferredColorScheme::kDark;\n'
+                '    } else {\n'
+                '      prefers_dark = (scheme == ThemeService::BrowserColorScheme::kDark);\n'
+                '    }\n'
+                '    preferred_color_scheme = prefers_dark ? blink::mojom::PreferredColorScheme::kDark\n'
+                '                                          : blink::mojom::PreferredColorScheme::kLight;\n'
+                '  }\n'
+                '  // Maho: scrollbar matches the page color scheme.\n'
+                '  preferred_root_scrollbar_color_scheme = preferred_color_scheme;'
+            ),
+            description="Maho: derive preferred_color_scheme and preferred_root_scrollbar_color_scheme from Browser theme instead of web_contents->GetColorMode()",
+            guard="Maho: web page rendering follows Browser theme",
         ),
     ],
     "ui/base/cocoa/command_dispatcher.mm": [
@@ -2087,6 +2539,21 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard='"//maho/browser/extensions/api/maho_side_panel_api.cc"',
         ),
+        Replacement(
+            old='    "//chrome/common/read_anything:mojo_bindings",\n',
+            new=(
+                '    "//chrome/common/read_anything:mojo_bindings",\n'
+                '    "//maho/browser/ui/webui/maho_ai:mojo_bindings",\n'
+            ),
+            description=(
+                "Add the maho_ai mojom C++ bindings to the side_panel target's "
+                "public_deps so the generated maho_ai.mojom.h (and its header "
+                "family) is ordered before the injected maho_ai side-panel "
+                "sources compile. Without this, a clean build races and fails "
+                "with 'maho_ai.mojom.h file not found'."
+            ),
+            guard='"//maho/browser/ui/webui/maho_ai:mojo_bindings"',
+        ),
         # Self-healing deduplication: collapse any previously double-injected
         # source_set("interactive_tests") blocks down to one.  Two passes are
         # needed because apply_replacements uses replace(..., 1): the first
@@ -2312,6 +2779,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/browser/ui/BUILD.gn": [
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/peek:maho_peek",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/peek:maho_peek",\n'
+                '      "//maho/browser/ui/views/peek:maho_peek_route",\n'
+            ),
+            description=(
+                "Link the Peek routing decision helper into chrome/browser/ui:ui "
+                "for Browser::AddNewContents"
+            ),
+            guard='"//maho/browser/ui/views/peek:maho_peek_route"',
+        ),
         Replacement(
             old='    "//maho/browser:maho_link_preview",\n',
             new="",
@@ -2557,11 +3038,27 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="class MahoCtrlTabSwitcherController;",
         ),
         Replacement(
+            old="class MahoMruTabTracker;\n",
+            new=(
+                "class MahoMruTabTracker;\n"
+                "class MahoPeekController;\n"
+            ),
+            description=(
+                "Forward-declare the host-owned Peek controller for the "
+                "BrowserView forwarding accessor"
+            ),
+            guard="class MahoPeekController;",
+        ),
+        Replacement(
             old=(
                 "  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);\n"
             ),
             new=(
                 "  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);\n"
+                "\n"
+                "  // Returns the overlay-host-owned Peek controller for eligible\n"
+                "  // normal BrowserViews, attaching the host synchronously if needed.\n"
+                "  maho::MahoPeekController* GetOrCreateMahoPeekController();\n"
                 "\n"
                 "  // Routes Ctrl+Tab / Ctrl+Shift+Tab through the Maho MRU tab\n"
                 "  // switcher when the pref is enabled and at least two tabs\n"
@@ -2574,7 +3071,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Declare BrowserView::MaybeHandleMruTabSwitch for the Ctrl+Tab "
                 "MRU tab switcher hook"
             ),
-            guard="bool MaybeHandleMruTabSwitch(bool forward);",
+            guard="maho::MahoPeekController* GetOrCreateMahoPeekController();",
         ),
         Replacement(
             old="  bool MaybeHandleMruTabSwitch(bool forward);\n",
@@ -2651,6 +3148,107 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "commits tab activation on Ctrl release)"
             ),
             guard="maho_ctrl_tab_switcher_controller_",
+        ),
+
+        Replacement(
+            old="class MahoCommandOverlayController;\n",
+            new=(
+                "class MahoCommandOverlayController;\n"
+                "class MahoPeekController;\n"
+            ),
+            description="Forward-declare the host-owned Peek controller",
+            guard="class MahoPeekController;",
+        ),
+        Replacement(
+            old=(
+                "  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);\n"
+            ),
+            new=(
+                "  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);\n"
+                "\n"
+                "  // Returns the overlay-host-owned Peek controller for eligible\n"
+                "  // normal BrowserViews, attaching the host synchronously if needed.\n"
+                "  maho::MahoPeekController* GetOrCreateMahoPeekController();\n"
+            ),
+            description="Declare the BrowserView Peek controller forwarding accessor",
+            guard="maho::MahoPeekController* GetOrCreateMahoPeekController();",
+        ),
+        Replacement(
+            old="class MahoCommandOverlayController;\n",
+            new=(
+                "class MahoCommandOverlayController;\n"
+                "class MahoContentGradientView;\n"
+            ),
+            description=(
+                "Forward-declare MahoContentGradientView for BrowserView's "
+                "zero-tab content background"
+            ),
+            guard="class MahoContentGradientView;",
+        ),
+        Replacement(
+            old=(
+                "  // Maho: left sidebar host container.\n"
+                "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
+            ),
+            new=(
+                "  // Maho: left sidebar host container.\n"
+                "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
+                "\n"
+                "  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n"
+            ),
+            description="Maho: Add maho_mini_top_bar_ to BrowserView",
+            guard="maho_mini_top_bar_",
+        ),
+        Replacement(
+            old="  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n",
+            new=(
+                "  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n"
+                "\n"
+                "  raw_ptr<maho::MahoContentGradientView>\n"
+                "      maho_content_gradient_view_ = nullptr;\n"
+            ),
+            description=(
+                "Store the lowest-z Maho content gradient child on BrowserView"
+            ),
+            guard="maho_content_gradient_view_ = nullptr;",
+        ),
+        Replacement(
+            old="namespace maho {\nclass MahoCommandOverlayController;\n",
+            new=(
+                "struct MahoSidebarPalette;\n"
+                "\n"
+                "namespace maho {\nclass MahoCommandOverlayController;\n"
+            ),
+            description=(
+                "Forward-declare (global-scope) MahoSidebarPalette for "
+                "BrowserView's content surface palette projection"
+            ),
+            guard="struct MahoSidebarPalette;",
+        ),
+        Replacement(
+            old=(
+                "  raw_ptr<maho::MahoContentGradientView>\n"
+                "      maho_content_gradient_view_ = nullptr;\n"
+            ),
+            new=(
+                "  raw_ptr<maho::MahoContentGradientView>\n"
+                "      maho_content_gradient_view_ = nullptr;\n"
+                "\n"
+                "  // Maho: mirror the active Space's sidebar palette onto the content\n"
+                "  // gradient + WebContents background so both panes read as one\n"
+                "  // themed surface (light/dark, opacity and stops all follow the\n"
+                "  // sidebar's browser-local resolution).\n"
+                "  void ApplyMahoSidebarPaletteToContentSurfaces(\n"
+                "      const MahoSidebarPalette& palette);\n"
+                "  void MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+                "  bool maho_sidebar_palette_subscribed_ = false;\n"
+                "  base::CallbackListSubscription maho_sidebar_palette_subscription_;\n"
+            ),
+            description=(
+                "Maho: declare BrowserView content-surface palette projection "
+                "(method + subscription) alongside the gradient view pointer"
+            ),
+            guard="maho_sidebar_palette_subscription_;",
         ),
     ],
     # ── browser_view.cc ───────────────────────────────────────────────────────
@@ -2905,6 +3503,50 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "to the browser window"
             ),
             guard="maho_ctrl_tab_switcher_controller_ =",
+        ),
+        Replacement(
+            old=(
+                "#include \"maho/browser/ui/views/sidebar/maho_sidebar_container_view.h\"\n"
+            ),
+            new=(
+                "#include \"maho/browser/ui/views/peek/maho_peek_controller.h\"\n"
+                "#include \"maho/browser/ui/views/sidebar/maho_sidebar_container_view.h\"\n"
+                "#include \"maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h\"\n"
+            ),
+            description=(
+                "Include Peek and overlay-host seams used by the BrowserView "
+                "forwarding accessor"
+            ),
+            guard="maho/browser/ui/views/peek/maho_peek_controller.h",
+        ),
+        Replacement(
+            old=(
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            new=(
+                "maho::MahoPeekController*\n"
+                "BrowserView::GetOrCreateMahoPeekController() {\n"
+                "  if (!maho::IsPeekEligible(browser_.get())) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "      maho_sidebar_container());\n"
+                "  if (!container) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  auto* host = container->GetOrCreateOverlayHost();\n"
+                "  return host ? host->peek_controller() : nullptr;\n"
+                "}\n"
+                "\n"
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            description=(
+                "Implement BrowserView::GetOrCreateMahoPeekController as an "
+                "eligibility-gated forwarder to the sidebar overlay host"
+            ),
+            guard="BrowserView::GetOrCreateMahoPeekController()",
         ),
         Replacement(
             old=(
@@ -3486,7 +4128,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "holds focus (fixes shortcuts being dead when the WebContents is "
                 "not the first responder, e.g. fresh window, omnibox focus)"
             ),
-            guard="Maho: Register Ctrl+1..9 as FocusManager accelerators",
+            guard="Maho: Register all enabled Maho shortcuts as FocusManager accelerators",
         ),
         Replacement(
             old=(
@@ -3532,6 +4174,553 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Call maho_core_window_closed in BrowserView destructor",
             guard="maho_core_window_closed(core",
+        ),
+
+        Replacement(
+            old=(
+                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
+                '#include "maho/browser/ui/views/peek/maho_peek_controller.h"\n'
+                '#include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"\n'
+            ),
+            description="Include Peek and overlay-host seams used by BrowserView",
+            guard="maho/browser/ui/views/peek/maho_peek_controller.h",
+        ),
+        Replacement(
+            old=(
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            new=(
+                "maho::MahoPeekController*\n"
+                "BrowserView::GetOrCreateMahoPeekController() {\n"
+                "  if (!maho::IsPeekEligible(browser_.get())) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "      maho_sidebar_container());\n"
+                "  if (!container) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  auto* host = container->GetOrCreateOverlayHost();\n"
+                "  return host ? host->peek_controller() : nullptr;\n"
+                "}\n"
+                "\n"
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            description=(
+                "Implement BrowserView::GetOrCreateMahoPeekController as an "
+                "eligibility-gated forwarder to the sidebar overlay host"
+            ),
+            guard="BrowserView::GetOrCreateMahoPeekController()",
+        ),
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n'
+            ),
+            description="Maho: Include maho_mini_top_bar_view.h in browser_view.cc",
+            guard="maho_mini_top_bar_view.h",
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n'
+                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
+            ),
+            description="Maho: Include maho_content_gradient_view.h in browser_view.cc",
+            guard="maho_content_gradient_view.h",
+        ),
+        Replacement(
+            old=(
+                "  auto contents_container = std::make_unique<views::View>();\n"
+                "\n"
+                "  views::View* contents_view;\n"
+            ),
+            new=(
+                "  auto contents_container = std::make_unique<views::View>();\n"
+                "\n"
+                "  if (GetIsNormalType()) {\n"
+                "    maho_content_gradient_view_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoContentGradientView>());\n"
+                "    maho_content_gradient_view_->SetVisible(false);\n"
+                "  }\n"
+                "\n"
+                "  views::View* contents_view;\n"
+            ),
+            description=(
+                "Create MahoContentGradientView as the first content-container "
+                "child and initialize it from the live tab count"
+            ),
+            guard="maho_content_gradient_view_ = AddChildView(",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  if (GetIsNormalType()) {\n"
+                "    maho_content_gradient_view_ = contents_container->AddChildView(\n"
+                "        std::make_unique<maho::MahoContentGradientView>());\n"
+                "    maho_content_gradient_view_->SetVisible(\n"
+                "        browser_->tab_strip_model()->count() == 0);\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (GetIsNormalType()) {\n"
+                "    maho_content_gradient_view_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoContentGradientView>());\n"
+                "    maho_content_gradient_view_->SetVisible(false);\n"
+                "  }\n"
+            ),
+            description=(
+                "Migrate the already-applied nested Maho content gradient to "
+                "BrowserView ownership for shared content and AI-panel glass"
+            ),
+            guard="maho_content_gradient_view_ = AddChildView(",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "\n"
+                "  // Maho: raise the zero-tab content gradient above the opaque\n"
+                "  // MultiContentsView so the empty (cold-start) content area shows the\n"
+                "  // theme gradient instead of the gray empty-web-contents background.\n"
+                "  // The gradient is only SetVisible(true) while the tab strip is empty,\n"
+                "  // so once a real tab exists it is hidden and never occludes web content.\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    contents_container->ReorderChildView(\n"
+                "        maho_content_gradient_view_, contents_container->children().size());\n"
+                "  }\n"
+            ),
+            new="\n",
+            description=(
+                "Remove the obsolete nested-gradient reorder after moving the "
+                "shared glass view to BrowserView ownership"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  contents_container_ = AddChildView(std::move(contents_container));\n"
+                "  set_contents_view(contents_container_);\n"
+            ),
+            new=(
+                "  contents_container_ = AddChildView(std::move(contents_container));\n"
+                "  set_contents_view(contents_container_);\n"
+                "\n"
+                "  if (browser_->is_maho_mini()) {\n"
+                "    maho_mini_top_bar_ = AddChildView(\n"
+                "        std::make_unique<maho::MahoMiniTopBarView>(browser_.get(), this));\n"
+                "  }\n"
+            ),
+            description="Maho: Initialize maho_mini_top_bar_ in BrowserView::InitViews",
+            guard="maho_mini_top_bar_ = AddChildView",
+        ),
+
+        Replacement(
+            old=(
+                "BrowserView::~BrowserView() {\n"
+                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
+                "  // other cleanups that destroy views referenced in the layout manager.\n"
+                "  SetLayoutManager(nullptr);\n"
+            ),
+            new=(
+                "BrowserView::~BrowserView() {\n"
+                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
+                "\n"
+                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
+                "  // other cleanups that destroy views referenced in the layout manager.\n"
+                "  SetLayoutManager(nullptr);\n"
+            ),
+            description=(
+                "Remove BrowserView's TabStripModel observation before gradient "
+                "and content children are destroyed"
+            ),
+            guard="browser_->tab_strip_model()->RemoveObserver(this);",
+        ),
+        Replacement(
+            old=(
+                "  window_scrim_view_ = nullptr;\n"
+                "  contents_container_ = nullptr;\n"
+            ),
+            new=(
+                "  window_scrim_view_ = nullptr;\n"
+                "  maho_content_gradient_view_ = nullptr;\n"
+                "  contents_container_ = nullptr;\n"
+            ),
+            description=(
+                "Clear BrowserView's raw Maho content gradient pointer before "
+                "removing the child hierarchy"
+            ),
+            guard="  maho_content_gradient_view_ = nullptr;\n  contents_container_ = nullptr;",
+        ),
+        Replacement(
+            old=(
+                "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
+                "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            new=(
+                "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
+                "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
+                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            description="Maho: Populate maho_mini_top_bar in layout_views",
+            guard="layout_views.maho_mini_top_bar =",
+        ),
+        Replacement(
+            old=(
+                "  gfx::Point point_in_browser_view_coords(point);\n"
+                "  views::View::ConvertPointToTarget(parent(), this,\n"
+                "                                    &point_in_browser_view_coords);\n"
+            ),
+            new=(
+                "  gfx::Point point_in_browser_view_coords(point);\n"
+                "  views::View::ConvertPointToTarget(parent(), this,\n"
+                "                                    &point_in_browser_view_coords);\n"
+                "\n"
+                "  // Maho: the Maho Mini top bar sits inside the macOS full-size\n"
+                "  // titlebar drag region. Consult its caption hit-test so the address\n"
+                "  // field and action buttons register as client area instead of being\n"
+                "  // swallowed as window-drag caption.\n"
+                "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
+                "    gfx::Point test_point(point);\n"
+                "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
+                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
+                "              maho_mini_top_bar_)\n"
+                "              ->IsPositionInWindowCaption(test_point)) {\n"
+                "        return HTCAPTION;\n"
+                "      }\n"
+                "      return HTCLIENT;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description="Maho: Consult Maho Mini top bar caption hit-test in NonClientHitTest",
+            guard="static_cast<maho::MahoMiniTopBarView*>(",
+        ),
+        Replacement(
+            old=(
+                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            new=(
+                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
+                "  layout_views.maho_content_gradient_view = maho_content_gradient_view_;\n"
+                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
+            ),
+            description="Maho: Populate maho_content_gradient_view in layout_views",
+            guard="layout_views.maho_content_gradient_view =",
+        ),
+
+        Replacement(
+            old='#include "maho/browser/ui/views/maho_content_gradient_view.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
+                '#include "chrome/common/webui_url_constants.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"\n'
+                '#include "maho/browser/ui/theme/maho_theme_helper.h"\n'
+            ),
+            description=(
+                "Maho: include sidebar container/view + theme helper in "
+                "browser_view.cc for content-surface palette projection"
+            ),
+            guard='#include "maho/browser/ui/theme/maho_theme_helper.h"',
+        ),
+        Replacement(
+            old=(
+                "std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {\n"
+            ),
+            new=(
+                "bool MahoShouldRevealSharedGlass(content::WebContents* contents) {\n"
+                "  if (!contents) {\n"
+                "    return true;\n"
+                "  }\n"
+                "  const GURL& url = contents->GetVisibleURL();\n"
+                "  return url.is_empty() ||\n"
+                "         (url.SchemeIs(\"about\") && url.path() == \"blank\") ||\n"
+                "         (url.SchemeIs(\"chrome\") &&\n"
+                "          url.host() == chrome::kChromeUINewTabHost);\n"
+                "}\n"
+                "\n"
+                "void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(\n"
+                "    const MahoSidebarPalette& palette) {\n"
+                "  // Regular windows only; Incognito keeps its fixed private surface.\n"
+                "  if (browser_->profile()->IsOffTheRecord()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Empty (zero-tab) content shows the translucent themed gradient; the\n"
+                "  // content web layer is made transparent so the window glass (desktop\n"
+                "  // blur) shows through, matching the sidebar. Loaded tabs use an opaque\n"
+                "  // themed base (web content must be opaque).\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetPalette(palette);\n"
+                "  }\n"
+                "  content::WebContents* active_contents = GetActiveWebContents();\n"
+                "  const bool reveal_shared_glass =\n"
+                "      MahoShouldRevealSharedGlass(active_contents);\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(reveal_shared_glass);\n"
+                "  }\n"
+                "  if (reveal_shared_glass) {\n"
+                "    for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
+                "      if (!view) {\n"
+                "        continue;\n"
+                "      }\n"
+                "      view->SetMahoBackgroundOverride(std::nullopt);\n"
+                "      view->SetBackgroundVisible(false);\n"
+                "    }\n"
+                "    if (active_contents) {\n"
+                "      active_contents->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);\n"
+                "    }\n"
+                "    return;\n"
+                "  }\n"
+                "  const bool maho_has_stops = !palette.content_surface_stops.empty();\n"
+                "  const SkColor solid = maho_has_stops\n"
+                "                            ? palette.content_surface_stops.front()\n"
+                "                            : SK_ColorTRANSPARENT;\n"
+                "  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
+                "    if (!view) {\n"
+                "      continue;\n"
+                "    }\n"
+                "    view->SetBackgroundVisible(true);\n"
+                "    if (maho_has_stops) {\n"
+                "      view->SetMahoBackgroundOverride(solid);\n"
+                "    }\n"
+                "  }\n"
+                "  if (!maho_has_stops) {\n"
+                "    return;\n"
+                "  }\n"
+                "  TabStripModel* maho_tsm = browser_->tab_strip_model();\n"
+                "  for (int i = 0; i < maho_tsm->count(); ++i) {\n"
+                "    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {\n"
+                "      wc->SetPageBaseBackgroundColor(solid);\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+                "\n"
+                "void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar() {\n"
+                "  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "      maho_sidebar_container_);\n"
+                "  if (!container) {\n"
+                "    return;\n"
+                "  }\n"
+                "  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(\n"
+                "      container->sidebar_view());\n"
+                "  if (!sidebar) {\n"
+                "    return;\n"
+                "  }\n"
+                "  const bool shared_glass_active =\n"
+                "      MahoShouldRevealSharedGlass(GetActiveWebContents());\n"
+                "  if (shared_glass_active) {\n"
+                "    sidebar->SetSharedBrowserGlassActive(true);\n"
+                "  } else {\n"
+                "    sidebar->SetSharedBrowserGlassActive(false);\n"
+                "  }\n"
+                "  if (!maho_sidebar_palette_subscribed_) {\n"
+                "    maho_sidebar_palette_subscription_ =\n"
+                "        sidebar->AddSidebarPaletteChangedCallback(base::BindRepeating(\n"
+                "            &BrowserView::ApplyMahoSidebarPaletteToContentSurfaces,\n"
+                "            base::Unretained(this)));\n"
+                "    maho_sidebar_palette_subscribed_ = true;\n"
+                "  }\n"
+                "  ApplyMahoSidebarPaletteToContentSurfaces(sidebar->sidebar_palette());\n"
+                "}\n"
+                "\n"
+                "std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {\n"
+            ),
+            description=(
+                "Maho: define BrowserView content-surface palette projection "
+                "(gradient stops + per-instance WebContents background) from the "
+                "sidebar's browser-local palette"
+            ),
+            guard="void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar()",
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(\n"
+                "    const MahoSidebarPalette& palette) {\n"
+            ),
+            new=(
+                "bool MahoShouldRevealSharedGlass(content::WebContents* contents) {\n"
+                "  if (!contents) {\n"
+                "    return true;\n"
+                "  }\n"
+                "  const GURL& url = contents->GetVisibleURL();\n"
+                "  return url.is_empty() ||\n"
+                "         (url.SchemeIs(\"about\") && url.path() == \"blank\") ||\n"
+                "         (url.SchemeIs(\"chrome\") &&\n"
+                "          url.host() == chrome::kChromeUINewTabHost);\n"
+                "}\n"
+                "\n"
+                "void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(\n"
+                "    const MahoSidebarPalette& palette) {\n"
+            ),
+            description=(
+                "Migrate the already-applied content palette projection to add "
+                "the blank and New Tab shared-glass predicate"
+            ),
+            guard="bool MahoShouldRevealSharedGlass(",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  return (url.SchemeIs(\"about\") && url.path_piece() == \"blank\") ||\n"
+                "         (url.SchemeIs(\"chrome\") &&\n"
+                "          url.host_piece() == chrome::kChromeUINewTabHost);\n"
+            ),
+            new=(
+                "  return (url.SchemeIs(\"about\") && url.path() == \"blank\") ||\n"
+                "         (url.SchemeIs(\"chrome\") &&\n"
+                "          url.host() == chrome::kChromeUINewTabHost);\n"
+            ),
+            description=(
+                "Migrate the generated shared-glass URL predicate to the "
+                "current GURL path and host APIs"
+            ),
+            guard="url.path() == \"blank\"",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  return (url.SchemeIs(\"about\") && url.path() == \"blank\") ||\n"
+                "         (url.SchemeIs(\"chrome\") &&\n"
+                "          url.host() == chrome::kChromeUINewTabHost);\n"
+            ),
+            new=(
+                "  return url.is_empty() ||\n"
+                "         (url.SchemeIs(\"about\") && url.path() == \"blank\") ||\n"
+                "         (url.SchemeIs(\"chrome\") &&\n"
+                "          url.host() == chrome::kChromeUINewTabHost);\n"
+            ),
+            description=(
+                "Treat an empty startup URL as a shared-glass blank surface"
+            ),
+            guard="return url.is_empty() ||",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetGradientStops(palette.surface_stops);\n"
+                "    maho_content_gradient_view_->SetGrain(palette.grain);\n"
+                "  }\n"
+                "  if (browser_->tab_strip_model()->count() == 0) {\n"
+                "    if (ContentsWebView* view = contents_web_view()) {\n"
+                "      view->SetBackgroundVisible(false);\n"
+                "    }\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetPalette(palette);\n"
+                "  }\n"
+                "  content::WebContents* active_contents = GetActiveWebContents();\n"
+                "  const bool reveal_shared_glass =\n"
+                "      MahoShouldRevealSharedGlass(active_contents);\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(reveal_shared_glass);\n"
+                "  }\n"
+                "  if (reveal_shared_glass) {\n"
+                "    for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
+                "      if (!view) {\n"
+                "        continue;\n"
+                "      }\n"
+                "      view->SetMahoBackgroundOverride(std::nullopt);\n"
+                "      view->SetBackgroundVisible(false);\n"
+                "    }\n"
+                "    if (active_contents) {\n"
+                "      active_contents->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);\n"
+                "    }\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            description=(
+                "Migrate the already-applied tab-count content projection to "
+                "blank and New Tab URL state with transparent page backing"
+            ),
+            guard="const bool reveal_shared_glass =",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  if (!sidebar) {\n"
+                "    return;\n"
+                "  }\n"
+                "  if (!maho_sidebar_palette_subscribed_) {\n"
+            ),
+            new=(
+                "  if (!sidebar) {\n"
+                "    return;\n"
+                "  }\n"
+                "  const bool shared_glass_active =\n"
+                "      MahoShouldRevealSharedGlass(GetActiveWebContents());\n"
+                "  sidebar->SetSharedBrowserGlassActive(shared_glass_active);\n"
+                "  if (!maho_sidebar_palette_subscribed_) {\n"
+            ),
+            description=(
+                "Migrate the applied sidebar palette subscription to share the "
+                "BrowserView glass coordinate space on blank and New Tab pages"
+            ),
+            guard="sidebar->SetSharedBrowserGlassActive(",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::OnTabStripModelChanged(\n"
+                "    TabStripModel* tab_strip_model,\n"
+                "    const TabStripModelChange& change,\n"
+                "    const TabStripSelectionChange& selection) {\n"
+            ),
+            new=(
+                "void BrowserView::OnTabStripModelChanged(\n"
+                "    TabStripModel* tab_strip_model,\n"
+                "    const TabStripModelChange& change,\n"
+                "    const TabStripSelectionChange& selection) {\n"
+                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+                "\n"
+            ),
+            description=(
+                "Maho: re-project the Space palette onto content surfaces whenever "
+                "BrowserView observes a tab-model change"
+            ),
+            guard="Maho: re-project the Space palette onto content surfaces whenever",
+        ),
+        Replacement(
+            old='  TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");\n',
+            new=(
+                '  TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");\n'
+                "  // Maho: refresh content surfaces for the newly active tab/split.\n"
+                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+            ),
+            description=(
+                "Maho: re-project the Space palette onto content surfaces when the "
+                "active tab (or split pane) changes"
+            ),
+            guard="refresh content surfaces for the newly active tab/split",
+        ),
+        Replacement(
+            old=(
+                "BrowserView::~BrowserView() {\n"
+                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
+            ),
+            new=(
+                "BrowserView::~BrowserView() {\n"
+                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
+                "  maho_sidebar_palette_subscription_ = {};\n"
+            ),
+            description=(
+                "Maho: drop the sidebar palette subscription before child views "
+                "(gradient/content) are torn down"
+            ),
+            guard="maho_sidebar_palette_subscription_ = {};",
         ),
     ],
     # ── browser.cc ───────────────────────────────────────────────────────────
@@ -3673,40 +4862,56 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      return OpenURLFromTab(source, demoted_params, std::move(navigation_handle_callback));\n"
                 "    }\n"
                 "  }\n"
+                "#endif\n"
                 "\n"
                 "  struct AtcBypassState {\n"
-                "    static bool ShouldBypass(Browser* browser) {\n"
+                "    static std::set<Browser*>& BypassedBrowsers() {\n"
                 "      static std::set<Browser*>* bypassed_browsers = new std::set<Browser*>();\n"
-                "      return bypassed_browsers->count(browser) > 0;\n"
+                "      return *bypassed_browsers;\n"
+                "    }\n"
+                "    static bool ShouldBypass(Browser* browser) {\n"
+                "      return BypassedBrowsers().count(browser) > 0;\n"
                 "    }\n"
                 "    static void SetBypass(Browser* browser, bool bypass) {\n"
-                "      static std::set<Browser*>* bypassed_browsers = new std::set<Browser*>();\n"
                 "      if (bypass) {\n"
-                "        bypassed_browsers->insert(browser);\n"
+                "        BypassedBrowsers().insert(browser);\n"
                 "      } else {\n"
-                "        bypassed_browsers->erase(browser);\n"
+                "        BypassedBrowsers().erase(browser);\n"
                 "      }\n"
                 "    }\n"
                 "  };\n"
                 "\n"
-                "  if (!AtcBypassState::ShouldBypass(this) && maho::MahoAtcState::HasEnabledRules()) {\n"
-                "    bool is_top_level = ui::PageTransitionIsMainFrame(params.transition) &&\n"
-                "                        !ui::PageTransitionIsRedirect(params.transition);\n"
-                "    bool is_user_initiated = !params.is_renderer_initiated || params.user_gesture;\n"
-                "    bool is_maho_mini_gesture = (params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&\n"
-                "                                  !params.started_from_context_menu &&\n"
-                "                                  ui::PageTransitionCoreTypeIs(params.transition, ui::PAGE_TRANSITION_LINK));\n"
-                "    if (is_top_level && is_user_initiated && !is_maho_mini_gesture) {\n"
+                "  if (!AtcBypassState::ShouldBypass(this)) {\n"
+                "    const bool is_top_level =\n"
+                "        ui::PageTransitionIsMainFrame(params.transition) &&\n"
+                "        !ui::PageTransitionIsRedirect(params.transition);\n"
+                "    const bool is_user_initiated =\n"
+                "        !params.is_renderer_initiated || params.user_gesture;\n"
+                "    bool is_maho_mini_gesture = false;\n"
+                "#if BUILDFLAG(IS_MAC)\n"
+                "    is_maho_mini_gesture =\n"
+                "        params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&\n"
+                "        !params.started_from_context_menu &&\n"
+                "        ui::PageTransitionCoreTypeIs(params.transition,\n"
+                "                                         ui::PAGE_TRANSITION_LINK);\n"
+                "#endif\n"
+                "#if BUILDFLAG(IS_MAC)\n"
+                "    if (is_top_level && is_user_initiated &&\n"
+                "        !is_maho_mini_gesture &&\n"
+                "        maho::MahoAtcState::HasEnabledRules()) {\n"
                 "      std::string current_space_id;\n"
-                "      maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
+                "      maho::MahoSpaceProfileBridge* bridge =\n"
+                "          maho::MahoSpaceProfileBridge::GetInstance();\n"
                 "      if (bridge) {\n"
                 "        current_space_id = bridge->GetActiveSpaceId(this);\n"
                 "      }\n"
                 "      base::WeakPtr<Browser> weak_browser = AsWeakPtr();\n"
                 "      Profile* prof = profile();\n"
-                "      base::WeakPtr<Profile> weak_profile = prof ? prof->GetWeakPtr() : nullptr;\n"
-                "      base::WeakPtr<content::WebContents> weak_source = source ? source->GetWeakPtr() : nullptr;\n"
-                "      \n"
+                "      base::WeakPtr<Profile> weak_profile =\n"
+                "          prof ? prof->GetWeakPtr() : nullptr;\n"
+                "      base::WeakPtr<content::WebContents> weak_source =\n"
+                "          source ? source->GetWeakPtr() : nullptr;\n"
+                "\n"
                 "      maho::DecideLinkDestination(\n"
                 "          params.url, /*is_external=*/false,\n"
                 "          base::BindOnce(\n"
@@ -3715,34 +4920,203 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "                 base::WeakPtr<content::WebContents> source,\n"
                 "                 std::string current_space_id,\n"
                 "                 content::OpenURLParams params,\n"
-                "                 base::OnceCallback<void(content::NavigationHandle&)> navigation_handle_callback,\n"
+                "                 base::OnceCallback<void(content::NavigationHandle&)>\n"
+                "                     navigation_handle_callback,\n"
                 "                 maho::LinkDestinationResult result) {\n"
-                "                if (!browser || !profile) return;\n"
-                "                \n"
-                "                if (result.type == maho::LinkDestinationType::kSpace &&\n"
+                "                if (!browser || !profile) {\n"
+                "                  return;\n"
+                "                }\n"
+                "\n"
+                "                if (result.type ==\n"
+                "                        maho::LinkDestinationType::kSpace &&\n"
                 "                    !result.space_id.empty() &&\n"
                 "                    result.space_id != current_space_id) {\n"
-                "                  maho::MahoSpaceProfileBridge* bridge = maho::MahoSpaceProfileBridge::GetInstance();\n"
-                "                  if (bridge && bridge->SwitchToSpace(browser.get(), result.space_id)) {\n"
-                "                    // R-9: AddSelectedTabWithURL creates a new tab in the target space.\n"
-                "                    // The callback is intentionally not propagated across space boundaries as a new tab is created.\n"
-                "                    chrome::AddSelectedTabWithURL(browser.get(), params.url, params.transition);\n"
+                "                  maho::MahoSpaceProfileBridge* bridge =\n"
+                "                      maho::MahoSpaceProfileBridge::GetInstance();\n"
+                "                  if (bridge && bridge->SwitchToSpace(\n"
+                "                                    browser.get(), result.space_id)) {\n"
+                "                    chrome::AddSelectedTabWithURL(\n"
+                "                        browser.get(), params.url, params.transition);\n"
+                "                    return;\n"
                 "                  }\n"
-                "                } else {\n"
-                "                  AtcBypassState::SetBypass(browser.get(), true);\n"
-                "                  browser->OpenURL(params, std::move(navigation_handle_callback));\n"
-                "                  AtcBypassState::SetBypass(browser.get(), false);\n"
                 "                }\n"
+                "\n"
+                "                BrowserView* browser_view =\n"
+                "                    BrowserView::GetBrowserViewForBrowser(browser.get());\n"
+                "                maho::MahoPeekController* peek_controller =\n"
+                "                    browser_view\n"
+                "                        ? browser_view->GetOrCreateMahoPeekController()\n"
+                "                        : nullptr;\n"
+                "                const maho::PeekRoute route = maho::DecidePeekRoute({\n"
+                "                    .master_enabled = profile->GetPrefs()->GetBoolean(\n"
+                "                        maho::sidebar_prefs::kPeekEnabled),\n"
+                "                    .popup_routing_enabled = false,\n"
+                "                    .link_routing_enabled =\n"
+                "                        profile->GetPrefs()->GetBoolean(\n"
+                "                            maho::sidebar_prefs::kPeekLinkRoutingEnabled),\n"
+                "                    .seam = maho::PeekSeam::kOpenUrlFromTab,\n"
+                "                    .disposition = params.disposition,\n"
+                "                    .source_role =\n"
+                "                        maho::MahoSidebarContainerView::GetPeekSourceRole(\n"
+                "                            browser.get(), source.get()),\n"
+                "                    .is_user_initiated = true,\n"
+                "                    .force_tab = params.is_renderer_initiated &&\n"
+                "                        params.disposition ==\n"
+                "                            WindowOpenDisposition::NEW_BACKGROUND_TAB,\n"
+                "                    .force_peek = params.is_renderer_initiated &&\n"
+                "                        params.disposition ==\n"
+                "                            WindowOpenDisposition::NEW_WINDOW,\n"
+                "                    .is_maho_mini_gesture = false,\n"
+                "                    .atc_has_cross_space_target = false,\n"
+                "                    .peek_slot_state =\n"
+                "                        peek_controller && peek_controller->SlotBusy()\n"
+                "                            ? maho::PeekSlotState::kBusy\n"
+                "                            : maho::PeekSlotState::kClosed,\n"
+                "                });\n"
+                "                if (route == maho::PeekRoute::kOpenInPeek &&\n"
+                "                    peek_controller &&\n"
+                "                    peek_controller->ShowUrl(source.get(), params.url)) {\n"
+                "                  return;\n"
+                "                }\n"
+                "                if (route ==\n"
+                "                    maho::PeekRoute::kOpenInForegroundTab) {\n"
+                "                  params.disposition =\n"
+                "                      WindowOpenDisposition::NEW_FOREGROUND_TAB;\n"
+                "                }\n"
+                "                AtcBypassState::SetBypass(browser.get(), true);\n"
+                "                browser->OpenURL(\n"
+                "                    params, std::move(navigation_handle_callback));\n"
+                "                AtcBypassState::SetBypass(browser.get(), false);\n"
                 "              },\n"
-                "              weak_browser, weak_profile, weak_source, current_space_id, params,\n"
-                "              std::move(navigation_handle_callback)));\n"
+                "              weak_browser, weak_profile, weak_source, current_space_id,\n"
+                "              params, std::move(navigation_handle_callback)));\n"
                 "      return nullptr;\n"
                 "    }\n"
-                "  }\n"
                 "#endif\n"
+                "\n"
+                "    if (is_top_level && is_user_initiated &&\n"
+                "        !is_maho_mini_gesture &&\n"
+                "        !maho::MahoAtcState::HasEnabledRules()) {\n"
+                "      BrowserView* browser_view =\n"
+                "          BrowserView::GetBrowserViewForBrowser(this);\n"
+                "      maho::MahoPeekController* peek_controller =\n"
+                "          browser_view\n"
+                "              ? browser_view->GetOrCreateMahoPeekController()\n"
+                "              : nullptr;\n"
+                "      const maho::PeekRoute route = maho::DecidePeekRoute({\n"
+                "          .master_enabled = profile()->GetPrefs()->GetBoolean(\n"
+                "              maho::sidebar_prefs::kPeekEnabled),\n"
+                "          .popup_routing_enabled = false,\n"
+                "          .link_routing_enabled = profile()->GetPrefs()->GetBoolean(\n"
+                "              maho::sidebar_prefs::kPeekLinkRoutingEnabled),\n"
+                "          .seam = maho::PeekSeam::kOpenUrlFromTab,\n"
+                "          .disposition = params.disposition,\n"
+                "          .source_role =\n"
+                "              maho::MahoSidebarContainerView::GetPeekSourceRole(\n"
+                "                  this, source),\n"
+                "          .is_user_initiated = true,\n"
+                "          .force_tab = params.is_renderer_initiated &&\n"
+                "              params.disposition ==\n"
+                "                  WindowOpenDisposition::NEW_BACKGROUND_TAB,\n"
+                "          .force_peek = params.is_renderer_initiated &&\n"
+                "              params.disposition ==\n"
+                "                  WindowOpenDisposition::NEW_WINDOW,\n"
+                "          .is_maho_mini_gesture = false,\n"
+                "          .atc_has_cross_space_target = false,\n"
+                "          .peek_slot_state =\n"
+                "              peek_controller && peek_controller->SlotBusy()\n"
+                "                  ? maho::PeekSlotState::kBusy\n"
+                "                  : maho::PeekSlotState::kClosed,\n"
+                "      });\n"
+                "      if (route == maho::PeekRoute::kOpenInPeek &&\n"
+                "          peek_controller &&\n"
+                "          peek_controller->ShowUrl(source, params.url)) {\n"
+                "        return nullptr;\n"
+                "      }\n"
+                "      if (route == maho::PeekRoute::kOpenInForegroundTab) {\n"
+                "        content::OpenURLParams foreground_params = params;\n"
+                "        foreground_params.disposition =\n"
+                "            WindowOpenDisposition::NEW_FOREGROUND_TAB;\n"
+                "        AtcBypassState::SetBypass(this, true);\n"
+                "        content::WebContents* result = OpenURLFromTab(\n"
+                "            source, foreground_params,\n"
+                "            std::move(navigation_handle_callback));\n"
+                "        AtcBypassState::SetBypass(this, false);\n"
+                "        return result;\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
             ),
-            description="Intercept in-browser top-level user-initiated navigations and route to space if ATC matches",
+            description=(
+                "Route new-tab/new-window link dispositions from pinned or Favorite "
+                "tabs into Peek after Maho Mini and any cross-space ATC decision"
+            ),
             guard="AtcBypassState::ShouldBypass",
+        ),
+        Replacement(
+            old=(
+                "  // At this point the |new_contents| is beyond the popup blocker, but we use\n"
+                "  // the same logic for determining if the popup tracker needs to be attached.\n"
+                "  if (source && blocked_content::ConsiderForPopupBlocking(disposition)) {\n"
+                "    blocked_content::PopupTracker::CreateForWebContents(new_contents.get(),\n"
+                "                                                        source, disposition);\n"
+                "  }\n"
+                "\n"
+                "  // Postpone activating popups opened by content-fullscreen tabs. This permits\n"
+            ),
+            new=(
+                "  // At this point the |new_contents| is beyond the popup blocker, but we use\n"
+                "  // the same logic for determining if the popup tracker needs to be attached.\n"
+                "  if (source && blocked_content::ConsiderForPopupBlocking(disposition)) {\n"
+                "    blocked_content::PopupTracker::CreateForWebContents(new_contents.get(),\n"
+                "                                                        source, disposition);\n"
+                "  }\n"
+                "\n"
+                "  if (maho::IsPeekEligible(this) &&\n"
+                "      profile()->GetPrefs()->GetBoolean(\n"
+                "          maho::sidebar_prefs::kPeekEnabled) &&\n"
+                "      profile()->GetPrefs()->GetBoolean(\n"
+                "          maho::sidebar_prefs::kPeekPopupRoutingEnabled) &&\n"
+                "      disposition == WindowOpenDisposition::NEW_POPUP) {\n"
+                "    const maho::PeekRoute route = maho::DecidePeekRoute({\n"
+                "        .master_enabled = true,\n"
+                "        .popup_routing_enabled = true,\n"
+                "        .link_routing_enabled = false,\n"
+                "        .seam = maho::PeekSeam::kAddNewContents,\n"
+                "        .disposition = disposition,\n"
+                "        .source_role = maho::PeekSourceRole::kNormal,\n"
+                "        .is_user_initiated = user_gesture,\n"
+                "        .force_tab = false,\n"
+                "        .force_peek = false,\n"
+                "        .is_maho_mini_gesture = false,\n"
+                "        .atc_has_cross_space_target = false,\n"
+                "        .peek_slot_state = maho::PeekSlotState::kClosed,\n"
+                "    });\n"
+                "    if (route == maho::PeekRoute::kOpenInPeek) {\n"
+                "      content::WebContents* adopted_contents = new_contents.get();\n"
+                "      BrowserView* browser_view =\n"
+                "          BrowserView::GetBrowserViewForBrowser(this);\n"
+                "      maho::MahoPeekController* peek_controller =\n"
+                "          browser_view\n"
+                "              ? browser_view->GetOrCreateMahoPeekController()\n"
+                "              : nullptr;\n"
+                "      if (peek_controller &&\n"
+                "          peek_controller->TryAdoptContents(source, &new_contents)) {\n"
+                "        return adopted_contents;\n"
+                "      }\n"
+                "      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;\n"
+                "    } else if (route == maho::PeekRoute::kOpenInForegroundTab) {\n"
+                "      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  // Postpone activating popups opened by content-fullscreen tabs. This permits\n"
+            ),
+            description=(
+                "Adopt allowed NEW_POPUP WebContents into the source window's "
+                "Peek controller, coercing failed or busy adoption to a foreground tab"
+            ),
+            guard="peek_controller->TryAdoptContents(source, &new_contents)",
         ),
         Replacement(
             old=(
@@ -3793,6 +5167,135 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "removed unless an explicit close flow is already in progress "
                 "(is_attempting_to_close_browser_ == true)"
             ),
+            guard="// Maho: normal browser windows support zero-tab state.",
+        ),
+
+        Replacement(
+            old=(
+                '#include "maho/browser/ui/views/peek/maho_peek_route.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/ui/views/peek/maho_peek_route.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+            ),
+            description="Include the shared Peek source-role seam in browser.cc",
+            guard=(
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"'
+            ),
+        ),
+        Replacement(
+            old=(
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n'
+                '#include "maho/browser/ui/views/peek/maho_peek_controller.h"\n'
+                '#include "maho/browser/ui/views/peek/maho_peek_route.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+            ),
+            description="Include Peek adoption seams in browser.cc",
+            guard='#include "maho/browser/ui/views/peek/maho_peek_controller.h"',
+        ),
+        Replacement(
+            old=(
+                "  // At this point the |new_contents| is beyond the popup blocker, but we use\n"
+                "  // the same logic for determining if the popup tracker needs to be attached.\n"
+                "  if (source && blocked_content::ConsiderForPopupBlocking(disposition)) {\n"
+                "    blocked_content::PopupTracker::CreateForWebContents(new_contents.get(),\n"
+                "                                                        source, disposition);\n"
+                "  }\n"
+                "\n"
+                "  // Postpone activating popups opened by content-fullscreen tabs. This permits\n"
+            ),
+            new=(
+                "  // At this point the |new_contents| is beyond the popup blocker, but we use\n"
+                "  // the same logic for determining if the popup tracker needs to be attached.\n"
+                "  if (source && blocked_content::ConsiderForPopupBlocking(disposition)) {\n"
+                "    blocked_content::PopupTracker::CreateForWebContents(new_contents.get(),\n"
+                "                                                        source, disposition);\n"
+                "  }\n"
+                "\n"
+                "  if (maho::IsPeekEligible(this) &&\n"
+                "      profile()->GetPrefs()->GetBoolean(\n"
+                "          maho::sidebar_prefs::kPeekEnabled) &&\n"
+                "      profile()->GetPrefs()->GetBoolean(\n"
+                "          maho::sidebar_prefs::kPeekPopupRoutingEnabled) &&\n"
+                "      disposition == WindowOpenDisposition::NEW_POPUP) {\n"
+                "    const maho::PeekRoute route = maho::DecidePeekRoute({\n"
+                "        .master_enabled = true,\n"
+                "        .popup_routing_enabled = true,\n"
+                "        .link_routing_enabled = false,\n"
+                "        .seam = maho::PeekSeam::kAddNewContents,\n"
+                "        .disposition = disposition,\n"
+                "        .source_role = maho::PeekSourceRole::kNormal,\n"
+                "        .is_user_initiated = user_gesture,\n"
+                "        .force_tab = false,\n"
+                "        .force_peek = false,\n"
+                "        .is_maho_mini_gesture = false,\n"
+                "        .atc_has_cross_space_target = false,\n"
+                "        .peek_slot_state = maho::PeekSlotState::kClosed,\n"
+                "    });\n"
+                "    if (route == maho::PeekRoute::kOpenInPeek) {\n"
+                "      content::WebContents* adopted_contents = new_contents.get();\n"
+                "      BrowserView* browser_view =\n"
+                "          BrowserView::GetBrowserViewForBrowser(this);\n"
+                "      maho::MahoPeekController* peek_controller =\n"
+                "          browser_view\n"
+                "              ? browser_view->GetOrCreateMahoPeekController()\n"
+                "              : nullptr;\n"
+                "      if (peek_controller &&\n"
+                "          peek_controller->TryAdoptContents(source, &new_contents)) {\n"
+                "        return adopted_contents;\n"
+                "      }\n"
+                "      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;\n"
+                "    } else if (route == maho::PeekRoute::kOpenInForegroundTab) {\n"
+                "      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  // Postpone activating popups opened by content-fullscreen tabs. This permits\n"
+            ),
+            description=(
+                "Adopt allowed NEW_POPUP WebContents into the source window's "
+                "Peek controller, coercing failed or busy adoption to a foreground tab"
+            ),
+            guard="peek_controller->TryAdoptContents(source, &new_contents)",
+        ),
+        Replacement(
+            old=(
+                "Browser::Browser(const CreateParams& params)\n"
+                "    : create_params_(params),\n"
+                "      type_(params.type),\n"
+                "      profile_(params.profile),\n"
+            ),
+            new=(
+                "Browser::Browser(const CreateParams& params)\n"
+                "    : create_params_(params),\n"
+                "      type_(params.type),\n"
+                "      is_maho_mini_(params.is_maho_mini),\n"
+                "      profile_(params.profile),\n"
+            ),
+            description="Maho: Initialize is_maho_mini_ in Browser constructor",
+            guard="is_maho_mini_(params.is_maho_mini)",
+        ),
+        Replacement(
+            old=(
+                "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
+                "                                        bool check_can_support) const {\n"
+                "  switch (type_) {\n"
+            ),
+            new=(
+                "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
+                "                                        bool check_can_support) const {\n"
+                "  if (is_maho_mini()) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  switch (type_) {\n"
+            ),
+            description="Maho: Disable window features for Maho Mini windows",
+            guard="if (is_maho_mini()) {",
         ),
     ],
     # ── unload_controller.cc ─────────────────────────────────────────────────
@@ -4415,417 +5918,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     # ── chrome_content_browser_client.cc ─────────────────────────────────────
-    "chrome/browser/chrome_content_browser_client.cc": [
-        Replacement(
-            old=(
-                '#include "chrome/browser/search/search.h"\n'
-            ),
-            new=(
-                '#include "chrome/browser/search/search.h"\n'
-                '#include "content/public/browser/browser_url_handler.h"\n'
-            ),
-            description=(
-                "Insert BrowserURLHandler include into "
-                "chrome_content_browser_client.cc"
-            ),
-            guard='#include "content/public/browser/browser_url_handler.h"',
-        ),
-        Replacement(
-            old=(
-                "bool g_disable_advanced_protection_caching_for_tests = false;\n"
-            ),
-            new=(
-                "bool g_disable_advanced_protection_caching_for_tests = false;\n"
-                "\n"
-                "// Rewrites stray chrome://newtab navigations (those that reach\n"
-                "// BrowserURLHandlerCreated after policy and extra_parts handlers have\n"
-                "// already had a chance to intercept) to about:blank so that Maho never\n"
-                "// commits a chrome://newtab WebUI frame.\n"
-                "bool MahoRewriteNewTabToBlank(GURL* url,\n"
-                "                              content::BrowserContext* /*context*/) {\n"
-                "  if (url->SchemeIs(\"chrome\") && url->host() == \"newtab\") {\n"
-                "    *url = GURL(\"about:blank\");\n"
-                "    return true;\n"
-                "  }\n"
-                "  return false;\n"
-                "}\n"
-                "\n"
-                "// Maps only approved public Maho aliases to their existing Chrome WebUI\n"
-                "// origins. Returning false leaves malformed, unlisted, and direct legacy\n"
-                "// chrome://maho-* URLs untouched.\n"
-                "bool MahoHandleUrlAlias(GURL* url,\n"
-                "                        content::BrowserContext* /*context*/) {\n"
-                "  return maho::MapMahoUrlAliasToActualUrl(*url, url);\n"
-                "}\n"
-                "\n"
-                "// BrowserURLHandler calls this only after MahoHandleUrlAlias matched the\n"
-                "// original public alias. Always claim that reverse rewrite: an approved\n"
-                "// final WebUI destination becomes its alias, while any external or\n"
-                "// unlisted final URL is intentionally retained to clear a stale alias.\n"
-                "bool MahoHandleUrlAliasReverse(GURL* url,\n"
-                "                               content::BrowserContext* /*context*/) {\n"
-                "  GURL alias;\n"
-                "  if (maho::ResolveActualUrlToMahoAlias(*url, &alias)) {\n"
-                "    *url = alias;\n"
-                "  }\n"
-                "  return true;\n"
-                "}\n"
-            ),
-            description=(
-                "Insert Maho new-tab and public URL alias helpers into the existing "
-                "anonymous namespace of chrome_content_browser_client.cc"
-            ),
-            guard="bool MahoHandleUrlAliasReverse(",
-        ),
-        Replacement(
-            old=(
-                "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
-                "                          BrowserURLHandler::null_handler());\n"
-            ),
-            new=(
-                "  // Maho: rewrite stray chrome://newtab to about:blank before the\n"
-                "  // upstream NTP rewriter runs, so Maho never commits a NTP WebUI frame.\n"
-                "  handler->AddHandlerPair(&MahoRewriteNewTabToBlank,\n"
-                "                          BrowserURLHandler::null_handler());\n"
-                "  // Preserve maho:// aliases as virtual URLs while committing only the\n"
-                "  // approved existing chrome://maho-* WebUI origins.\n"
-                "  handler->AddHandlerPair(&MahoHandleUrlAlias,\n"
-                "                          &MahoHandleUrlAliasReverse);\n"
-                "  handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,\n"
-                "                          BrowserURLHandler::null_handler());\n"
-            ),
-            description=(
-                "Register Maho new-tab then alias handler pairs before "
-                "HandleChromeAboutAndChromeSyncRewrite in BrowserURLHandlerCreated()"
-            ),
-            guard="&MahoHandleUrlAliasReverse);",
-        ),
-        Replacement(
-            old=(
-                '#include "content/public/browser/browser_url_handler.h"\n'
-            ),
-            new=(
-                '#include "content/public/browser/browser_url_handler.h"\n'
-                '#include "maho/browser/maho_url_scheme.h"\n'
-            ),
-            description=(
-                "Include Maho URL alias resolver in chrome_content_browser_client.cc"
-            ),
-            guard='#include "maho/browser/maho_url_scheme.h"',
-        ),
-        # ── Ad-block throttle includes ─────────────────────────────────────────
-        Replacement(
-            old=(
-                '#include "chrome/browser/search/search.h"\n'
-                '#include "content/public/browser/browser_url_handler.h"\n'
-            ),
-            new=(
-                '#include "chrome/browser/search/search.h"\n'
-                '#include "content/public/browser/browser_url_handler.h"\n'
-                '#include "maho/browser/maho_core_holder.h"\n'
-                '#include "maho/browser/net/maho_ad_block_tab_helper.h"\n'
-                '#include "maho/browser/net/maho_ad_block_throttle.h"\n'
-                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
-            ),
-            description=(
-                "Insert Maho ad-block throttle and WebStore UA throttle includes "
-                "into chrome_content_browser_client.cc (after browser_url_handler.h)"
-            ),
-            guard='#include "maho/browser/net/maho_ad_block_throttle.h"',
-        ),
-        # ── Ad-block request util include (independent guard) ──────────────────
-        Replacement(
-            old='#include "maho/browser/net/maho_ad_block_tab_helper.h"\n',
-            new=(
-                '#include "maho/browser/net/maho_ad_block_tab_helper.h"\n'
-                '#include "maho/browser/net/maho_ad_block_request_util.h"\n'
-            ),
-            description=(
-                "Insert Maho ad-block request util include into "
-                "chrome_content_browser_client.cc for request-aware block counts"
-            ),
-            guard='#include "maho/browser/net/maho_ad_block_request_util.h"',
-        ),
-        # ── Subresource ad-block proxy include (independent guard) ─────────────
-        Replacement(
-            old='#include "maho/browser/net/maho_ad_block_throttle.h"\n',
-            new=(
-                '#include "maho/browser/net/maho_ad_block_throttle.h"\n'
-                '#include "maho/browser/net/maho_proxying_url_loader_factory.h"\n'
-            ),
-            description=(
-                "Insert Maho subresource proxying URLLoaderFactory include into "
-                "chrome_content_browser_client.cc (own guard so it applies even "
-                "when the throttle include is already present)"
-            ),
-            guard='#include "maho/browser/net/maho_proxying_url_loader_factory.h"',
-        ),
-        # ── Ad-block throttle registration in CreateURLLoaderThrottles() ───────
-        Replacement(
-            old="  return result;\n",
-            new=(
-                "  // Maho: register ad-block and WebStore UA throttles.\n"
-                "  // MahoAdBlockThrottle::WillStartRequest runs on the UI thread\n"
-                "  // (DCHECK_CURRENTLY_ON(BrowserThread::UI)); the on_blocked callback\n"
-                "  // therefore also fires on the UI thread. Using GetWeakPtr() rather\n"
-                "  // than base::Unretained() ensures the callback is a no-op if the\n"
-                "  // tab closes between throttle construction and the first network\n"
-                "  // request, closing the UAF window identified in audit finding H1.\n"
-                "  if (maho::GetCore()) {\n"
-                "    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;\n"
-                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
-                "    if (wc) {\n"
-                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
-                "      MahoAdBlockTabHelper* helper =\n"
-                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
-                "      if (helper) {\n"
-                "        content::GlobalRenderFrameHostId page_id;\n"
-                "        // If no primary main frame is available, page_id stays invalid\n"
-                "        // and RecordBlockedRequest ignores the callback conservatively.\n"
-                "        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {\n"
-                "          page_id = main_frame->GetGlobalId();\n"
-                "        }\n"
-                "        on_blocked = base::BindRepeating(\n"
-                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak,\n"
-                "               content::GlobalRenderFrameHostId page_id,\n"
-                "               const network::ResourceRequest& request) {\n"
-                "              if (weak) {\n"
-                "                MahoBlockedRequestInfo info;\n"
-                "                info.page_id = page_id;\n"
-                "                info.destination = request.destination;\n"
-                "                info.is_outermost_main_frame = request.is_outermost_main_frame;\n"
-                "                info.request_type = maho::MapRequestToFilterType(request);\n"
-                "                weak->RecordBlockedRequest(info);\n"
-                "              }\n"
-                "            },\n"
-                "            helper->GetWeakPtr(), page_id);\n"
-                "      }\n"
-                "    }\n"
-                "    result.push_back(\n"
-                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
-                "  }\n"
-                "  result.push_back(std::make_unique<MahoWebStoreUAThrottle>());\n"
-                "  return result;\n"
-            ),
-            description=(
-                "Register MahoAdBlockThrottle and MahoWebStoreUAThrottle in "
-                "CreateURLLoaderThrottles(); uses helper->GetWeakPtr() instead of "
-                "base::Unretained(helper) to eliminate UAF window (audit H1 fix)"
-            ),
-            guard="maho::GetCore()",
-        ),
-        # ── Update already-applied ad-block throttle callback ──────────────────
-        Replacement(
-            old=(
-                "  if (maho::GetCore()) {\n"
-                "    base::RepeatingClosure on_blocked;\n"
-                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
-                "    if (wc) {\n"
-                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
-                "      MahoAdBlockTabHelper* helper =\n"
-                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
-                "      if (helper) {\n"
-                "        on_blocked = base::BindRepeating(\n"
-                "            &MahoAdBlockTabHelper::IncrementBlockedCount,\n"
-                "            helper->GetWeakPtr());\n"
-                "      }\n"
-                "    }\n"
-                "    result.push_back(\n"
-                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
-                "  }\n"
-            ),
-            new=(
-                "  if (maho::GetCore()) {\n"
-                "    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;\n"
-                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
-                "    if (wc) {\n"
-                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
-                "      MahoAdBlockTabHelper* helper =\n"
-                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
-                "      if (helper) {\n"
-                "        content::GlobalRenderFrameHostId page_id;\n"
-                "        // If no primary main frame is available, page_id stays invalid\n"
-                "        // and RecordBlockedRequest ignores the callback conservatively.\n"
-                "        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {\n"
-                "          page_id = main_frame->GetGlobalId();\n"
-                "        }\n"
-                "        on_blocked = base::BindRepeating(\n"
-                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak,\n"
-                "               content::GlobalRenderFrameHostId page_id,\n"
-                "               const network::ResourceRequest& request) {\n"
-                "              if (weak) {\n"
-                "                MahoBlockedRequestInfo info;\n"
-                "                info.page_id = page_id;\n"
-                "                info.destination = request.destination;\n"
-                "                info.is_outermost_main_frame = request.is_outermost_main_frame;\n"
-                "                info.request_type = maho::MapRequestToFilterType(request);\n"
-                "                weak->RecordBlockedRequest(info);\n"
-                "              }\n"
-                "            },\n"
-                "            helper->GetWeakPtr(), page_id);\n"
-                "      }\n"
-                "    }\n"
-                "    result.push_back(\n"
-                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
-                "  }\n"
-            ),
-            description=(
-                "Update already-applied MahoAdBlockThrottle callback to pass "
-                "request context into page-scoped blocked-count recording"
-            ),
-            guard="weak->RecordBlockedRequest(info);",
-        ),
-        # ── Subresource ad-block proxy in WillCreateURLLoaderFactory() ─────────
-        Replacement(
-            old=(
-                "  // WARNING: This must be the last interceptor in the chain as the proxying\n"
-                "  // URLLoaderFactory installed by this needs to be the one actually sending\n"
-                "  // packets over the network (to effectively target `bound_network`).\n"
-                "  MaybeProxyNetworkBoundRequest(\n"
-            ),
-            new=(
-                "  // Maho: enforce native content-blocking on renderer-initiated\n"
-                "  // subresources (script/image/iframe/xhr/font/...) and worker requests,\n"
-                "  // which the navigation-only browser-side throttle never sees. Navigation\n"
-                "  // stays on the throttle in Phase 1. Installed after the extension\n"
-                "  // WebRequest/signin proxies (so extensions still observe) but before the\n"
-                "  // network-bound proxy, which must remain the last interceptor.\n"
-                "  if (type == URLLoaderFactoryType::kDocumentSubResource ||\n"
-                "      type == URLLoaderFactoryType::kWorkerMainResource ||\n"
-                "      type == URLLoaderFactoryType::kWorkerSubResource ||\n"
-                "      type == URLLoaderFactoryType::kServiceWorkerScript ||\n"
-                "      type == URLLoaderFactoryType::kServiceWorkerSubResource ||\n"
-                "      type == URLLoaderFactoryType::kPrefetch) {\n"
-                "    MahoProxyingURLLoaderFactory::MaybeProxyRequest(frame, factory_builder);\n"
-                "  }\n"
-                "\n"
-                "  // WARNING: This must be the last interceptor in the chain as the proxying\n"
-                "  // URLLoaderFactory installed by this needs to be the one actually sending\n"
-                "  // packets over the network (to effectively target `bound_network`).\n"
-                "  MaybeProxyNetworkBoundRequest(\n"
-            ),
-            description=(
-                "Install MahoProxyingURLLoaderFactory in WillCreateURLLoaderFactory "
-                "for document-subresource, worker/service-worker, and prefetch "
-                "factory types (subresource ad-block coverage), before the "
-                "network-bound proxy"
-            ),
-            guard="MahoProxyingURLLoaderFactory::MaybeProxyRequest",
-        ),
-        # ── Extend the subresource proxy to prefetch factories (own guard) ─────
-        Replacement(
-            old="      type == URLLoaderFactoryType::kServiceWorkerSubResource) {\n",
-            new=(
-                "      type == URLLoaderFactoryType::kServiceWorkerSubResource ||\n"
-                "      type == URLLoaderFactoryType::kPrefetch) {\n"
-            ),
-            description=(
-                "Extend the Maho subresource proxy to the kPrefetch factory type "
-                "so prefetched ad/tracker resources are also blocked (own guard so "
-                "it applies when the base install is already present)"
-            ),
-            guard="URLLoaderFactoryType::kPrefetch",
-        ),
-        # ── ATC space-routing NavigationThrottle ───────────────────────────────
-        Replacement(
-            old=(
-                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
-            ),
-            new=(
-                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
-                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
-                '#include "maho/browser/net/maho_atc_state.h"\n'
-            ),
-            description=(
-                "Insert MahoAtcNavigationThrottle and MahoAtcState includes into "
-                "chrome_content_browser_client.cc"
-            ),
-            guard='#include "maho/browser/net/maho_atc_navigation_throttle.h"',
-        ),
-        Replacement(
-            old=(
-                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
-            ),
-            new=(
-                '#include "maho/browser/net/maho_atc_navigation_throttle.h"\n'
-                '#include "maho/browser/net/maho_atc_state.h"\n'
-            ),
-            description="Include Maho ATC state beside the navigation throttle after the throttle include is already present",
-            guard='#include "maho/browser/net/maho_atc_state.h"',
-        ),
-        Replacement(
-            old=(
-                "void ChromeContentBrowserClient::CreateThrottlesForNavigation(\n"
-                "    content::NavigationThrottleRegistry& registry) {\n"
-                "  CreateAndAddChromeThrottlesForNavigation(registry);\n"
-                "}\n"
-            ),
-            new=(
-                "void ChromeContentBrowserClient::CreateThrottlesForNavigation(\n"
-                "    content::NavigationThrottleRegistry& registry) {\n"
-                "  CreateAndAddChromeThrottlesForNavigation(registry);\n"
-                "\n"
-                "#if BUILDFLAG(IS_MAC)\n"
-                "  // Maho ATC: route top-level user-initiated navigations that bypass\n"
-                "  // Browser::OpenURLFromTab (omnibox typed navigations and plain same-tab\n"
-                "  // link clicks) into their target space. Gated on HasEnabledRules() so\n"
-                "  // there is zero overhead (no throttle created) when no rules exist.\n"
-                "  if (maho::MahoAtcState::HasEnabledRules()) {\n"
-                "    registry.AddThrottle(\n"
-                "        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));\n"
-                "  }\n"
-                "#endif\n"
-                "}\n"
-            ),
-            description=(
-                "Register MahoAtcNavigationThrottle in CreateThrottlesForNavigation "
-                "(mac-only, gated on MahoAtcState::HasEnabledRules)"
-            ),
-            guard="maho::MahoAtcNavigationThrottle",
-        ),
-        Replacement(
-            old=(
-                '  } else {\n'
-                '    // WebUI and regular pages follow the browser theme color mode, provided by\n'
-                '    // the color provider.\n'
-                '    preferred_color_scheme =\n'
-                '        web_contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kLight\n'
-                '            ? blink::mojom::PreferredColorScheme::kLight\n'
-                '            : blink::mojom::PreferredColorScheme::kDark;\n'
-                '  }\n'
-                '  // Update the preferred root scrollbar color based on the lightness level of\n'
-                '  // the toolbar\'s color.\n'
-                '  preferred_root_scrollbar_color_scheme =\n'
-                '      color_utils::IsDark(\n'
-                '          web_contents->GetColorProvider().GetColor(kColorToolbar))\n'
-                '          ? blink::mojom::PreferredColorScheme::kDark\n'
-                '          : blink::mojom::PreferredColorScheme::kLight;'
-            ),
-            new=(
-                '  } else {\n'
-                '    // Maho: web page rendering follows Browser theme, not Space theme.\n'
-                '    Profile* maho_profile = Profile::FromBrowserContext(web_contents->GetBrowserContext());\n'
-                '    auto* theme_service = ThemeServiceFactory::GetForProfile(maho_profile);\n'
-                '    const auto scheme = theme_service ? theme_service->GetBrowserColorScheme()\n'
-                '                                      : ThemeService::BrowserColorScheme::kSystem;\n'
-                '    bool prefers_dark = false;\n'
-                '    if (scheme == ThemeService::BrowserColorScheme::kSystem) {\n'
-                '      prefers_dark = ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==\n'
-                '                     ui::NativeTheme::PreferredColorScheme::kDark;\n'
-                '    } else {\n'
-                '      prefers_dark = (scheme == ThemeService::BrowserColorScheme::kDark);\n'
-                '    }\n'
-                '    preferred_color_scheme = prefers_dark ? blink::mojom::PreferredColorScheme::kDark\n'
-                '                                          : blink::mojom::PreferredColorScheme::kLight;\n'
-                '  }\n'
-                '  // Maho: scrollbar matches the page color scheme.\n'
-                '  preferred_root_scrollbar_color_scheme = preferred_color_scheme;'
-            ),
-            description="Maho: derive preferred_color_scheme and preferred_root_scrollbar_color_scheme from Browser theme instead of web_contents->GetColorMode()",
-            guard="Maho: web page rendering follows Browser theme",
-        ),
-    ],
-    "chrome/browser/BUILD.gn": [
+        "chrome/browser/BUILD.gn": [
         Replacement(
             old='      "//maho/browser:maho_context_menus",\n',
             new=(
@@ -4848,9 +5941,21 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 '      "//maho/browser/ui/views/spaces_overlay:interactive_tests",\n'
+                '      "//maho/browser/ui/views/peek:interactive_tests",\n'
+            ),
+            description="Include Maho Peek interactive tests in Chromium interactive_ui_tests deps",
+            guard='"//maho/browser/ui/views/peek:interactive_tests"',
+        ),
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/peek:interactive_tests",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/peek:interactive_tests",\n'
                 '      "//chrome/browser/ui/views/side_panel:interactive_tests",\n'
             ),
             description="Include Maho AI side-panel interactive tests in Chromium interactive_ui_tests deps",
+            guard='"//chrome/browser/ui/views/side_panel:interactive_tests"',
         ),
         Replacement(
             old=(
@@ -4898,6 +6003,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='"//maho/browser/ui/tabs:unit_tests"',
         ),
         Replacement(
+            old='      "//maho/browser/ui/tabs:unit_tests",\n',
+            new=(
+                '      "//maho/browser/ui/tabs:unit_tests",\n'
+                '      "//maho/browser/ui/views/peek:unit_tests",\n'
+            ),
+            description="Include Maho Peek route unit tests in Chromium unit_tests",
+            guard='"//maho/browser/ui/views/peek:unit_tests"',
+        ),
+        Replacement(
             old='      "//maho/browser:maho_location_bar_views_unittests",\n',
             new=(
                 '      "//maho/browser:maho_location_bar_views_unittests",\n'
@@ -4943,6 +6057,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Include Maho MCP incognito browser tests in Chromium browser_tests"
             ),
             guard='"//maho/browser/mcp:browser_tests"',
+        ),
+        Replacement(
+            old='      "//maho/browser/mcp:browser_tests",\n',
+            new=(
+                '      "//maho/browser:maho_google_sign_in_browser_tests",\n'
+                '      "//maho/browser/mcp:browser_tests",\n'
+            ),
+            description=(
+                "Include deferred native Google sign-in-in-Peek browser cases"
+            ),
+            guard='"//maho/browser:maho_google_sign_in_browser_tests"',
         ),
     ],
     "chrome/browser/ui/views/page_action/page_action_properties_provider.cc": [
@@ -5188,6 +6313,21 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Suppress upstream MediaToolbarButtonView addition",
         ),
+        Replacement(
+            old=(
+                "      if (browser_->is_type_normal() && "
+                "!overflow_button_->GetVisible()) {\n"
+            ),
+            new=(
+                "      if (browser_->is_type_normal() && overflow_button_ &&\n"
+                "          !overflow_button_->GetVisible()) {\n"
+            ),
+            description=(
+                "Allow macOS titlebar sizing before the toolbar overflow "
+                "button is initialized"
+            ),
+            guard="overflow_button_ &&\n          !overflow_button_->GetVisible()",
+        ),
     ],
     "ui/compositor/layer.cc": [
         Replacement(
@@ -5235,6 +6375,85 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "HUDWindow for a much more see-through desktop blur"
             ),
             guard="NSVisualEffectMaterialHUDWindow",
+        ),
+
+        Replacement(
+            old=(
+                "  } else if (browser_view_->GetIsNormalType() ||\n"
+                "             browser_view_->GetIsWebAppType()) {\n"
+                "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
+                "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
+                "\n"
+                "    // Ensure tabstrip/profile button are visible.\n"
+                "    params->titlebar_appears_transparent = true;\n"
+                "\n"
+                "    // Hosted apps draw their own window title.\n"
+                "    if (browser_view_->GetIsWebAppType()) {\n"
+                "      params->window_title_hidden = true;\n"
+                "    }\n"
+                "  } else {\n"
+            ),
+            new=(
+                "  } else if (browser_view_->GetIsNormalType() ||\n"
+                "             browser_view_->GetIsWebAppType() ||\n"
+                "             browser_view_->browser()->is_maho_mini()) {\n"
+                "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
+                "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
+                "\n"
+                "    // Ensure tabstrip/profile button are visible.\n"
+                "    params->titlebar_appears_transparent = true;\n"
+                "\n"
+                "    if (browser_view_->browser()->is_maho_mini()) {\n"
+                "      params->window_title_hidden = true;\n"
+                "    } else if (browser_view_->GetIsWebAppType()) {\n"
+                "      params->window_title_hidden = true;\n"
+                "    }\n"
+                "  } else {\n"
+            ),
+            description="Maho: Style Maho Mini window with transparent titlebar and full size content",
+            guard="browser_view_->browser()->is_maho_mini()",
+        ),
+        Replacement(
+            old=(
+                "    // height reported here; report the 38dip Maho Mini top bar\n"
+                "    // height so they center on its midline, not near the top edge.\n"
+                "    *override_titlebar_height = true;\n"
+                "    *titlebar_height = 38;\n"
+            ),
+            new=(
+                "    // height reported here; report the 46dip Maho Mini top bar\n"
+                "    // height so they center on its midline, not near the top edge.\n"
+                "    *override_titlebar_height = true;\n"
+                "    *titlebar_height = 46;\n"
+            ),
+            description="Maho: Raise an existing Maho Mini titlebar override to 46dip",
+            idempotent=True,
+            guard="*titlebar_height = 46;",
+        ),
+        Replacement(
+            old=(
+                "void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(\n"
+                "    bool* override_titlebar_height,\n"
+                "    float* titlebar_height) {\n"
+                "  if (browser_view_ && browser_view_->browser_widget() &&\n"
+            ),
+            new=(
+                "void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(\n"
+                "    bool* override_titlebar_height,\n"
+                "    float* titlebar_height) {\n"
+                "  if (browser_view_ && browser_view_->browser() &&\n"
+                "      browser_view_->browser()->is_maho_mini()) {\n"
+                "    // Maho: macOS centers the traffic lights within the titlebar\n"
+                "    // height reported here; report the 46dip Maho Mini top bar\n"
+                "    // height so they center on its midline, not near the top edge.\n"
+                "    *override_titlebar_height = true;\n"
+                "    *titlebar_height = 46;\n"
+                "    return;\n"
+                "  }\n"
+                "  if (browser_view_ && browser_view_->browser_widget() &&\n"
+            ),
+            description="Maho: Center traffic lights in Maho Mini 46dip top bar",
+            guard="*titlebar_height = 46;",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_frame_view_mac.mm": [
@@ -5307,6 +6526,27 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "theme in both glass and non-glass modes, replacing the gray wash"
             ),
             guard="kGlassFrameTintAlpha",
+        ),
+
+        Replacement(
+            old=(
+                "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
+                "  // of the client area.\n"
+                "  if (GetBrowserView()->browser()->is_type_popup() ||\n"
+                "      GetBrowserView()->browser()->is_type_devtools()) {\n"
+                "    return result;\n"
+                "  }\n"
+            ),
+            new=(
+                "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
+                "  // of the client area.\n"
+                "  if ((GetBrowserView()->browser()->is_type_popup() && !GetBrowserView()->browser()->is_maho_mini()) ||\n"
+                "      GetBrowserView()->browser()->is_type_devtools()) {\n"
+                "    return result;\n"
+                "  }\n"
+            ),
+            description="Maho: Allow caption button bounds for Maho Mini popups",
+            guard="!GetBrowserView()->browser()->is_maho_mini()",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": [
@@ -5994,6 +7234,28 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/contents_container_view.cc": [
         Replacement(
+            old=(
+                "void ContentsContainerView::ClearBorderRoundedCorners() {\n"
+            ),
+            new=(
+                "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {\n"
+                "  if (maho_ai_panel_adjacent_ == adjacent) {\n"
+                "    return;\n"
+                "  }\n"
+                "  maho_ai_panel_adjacent_ = adjacent;\n"
+                "  if (adjacent) {\n"
+                "    ClearBorderRoundedCorners();\n"
+                "  } else if (!is_in_split_) {\n"
+                "    UpdateBorderRoundedCorners();\n"
+                "  }\n"
+                "}\n"
+                "\n"
+                "void ContentsContainerView::ClearBorderRoundedCorners() {\n"
+            ),
+            description="Maho: expose complete content-corner reset beside AI",
+            guard="void ContentsContainerView::SetMahoAiPanelAdjacent",
+        ),
+        Replacement(
             old="    container_outline_->UpdateState(is_active, is_highlighted);\n",
             new="    container_outline_->SetVisible(false);\n",
             description=(
@@ -6027,6 +7289,33 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
     ],
+    "chrome/browser/ui/views/frame/contents_container_view.h": [
+        Replacement(
+            old=(
+                "  void UpdateBorderAndOverlay(bool is_in_split,\n"
+                "                              bool is_active,\n"
+                "                              bool is_highlighted);\n"
+            ),
+            new=(
+                "  void UpdateBorderAndOverlay(bool is_in_split,\n"
+                "                              bool is_active,\n"
+                "                              bool is_highlighted);\n"
+                "\n"
+                "  void SetMahoAiPanelAdjacent(bool adjacent);\n"
+            ),
+            description="Maho: declare content-corner reset beside AI",
+            guard="void SetMahoAiPanelAdjacent(bool adjacent);",
+        ),
+        Replacement(
+            old="  bool is_in_split_ = false;\n",
+            new=(
+                "  bool is_in_split_ = false;\n"
+                "  bool maho_ai_panel_adjacent_ = false;\n"
+            ),
+            description="Maho: track content adjacency to AI panel",
+            guard="bool maho_ai_panel_adjacent_ = false;",
+        ),
+    ],
     "chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc": [
         Replacement(
             old='#include "chrome/browser/webdata_services/web_data_service_factory.h"\n',
@@ -6042,6 +7331,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='#include "maho/browser/net/maho_shield_site_state_factory.h"\n',
         ),
         Replacement(
+            old='#include "maho/browser/mail_helper/maho_mail_service_factory.h"\n',
+            new=(
+                '#include "maho/browser/mail_helper/maho_mail_service_factory.h"\n'
+                '#include "maho/browser/extensions/maho_extension_state_bridge.h"\n'
+            ),
+            description="Include Maho extension state bridge factory registration",
+            guard='#include "maho/browser/extensions/maho_extension_state_bridge.h"\n',
+        ),
+        Replacement(
             old='  WebDataServiceFactory::GetInstance();\n',
             new=(
                 '  WebDataServiceFactory::GetInstance();\n'
@@ -6053,6 +7351,101 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Initialize Maho service factories in profiles.cc",
             guard='  maho::MahoShieldSiteStateFactory::GetInstance();\n',
+        ),
+        Replacement(
+            old='  maho::MahoMailServiceFactory::GetInstance();\n',
+            new=(
+                '  maho::MahoMailServiceFactory::GetInstance();\n'
+                '  maho::EnsureMahoExtensionStateBridgeFactoryBuilt();\n'
+            ),
+            description="Register Maho extension state bridge factory at startup",
+            guard='  maho::EnsureMahoExtensionStateBridgeFactoryBuilt();\n',
+        ),
+        Replacement(
+            old='#include "maho/browser/extensions/maho_extension_state_bridge.h"\n',
+            new=(
+                '#include "maho/browser/extensions/maho_extension_state_bridge.h"\n'
+                '#include "maho/browser/ai/maho_artifact_registry.h"\n'
+            ),
+            description="Include Maho artifact registry factory registration",
+            guard='#include "maho/browser/ai/maho_artifact_registry.h"\n',
+        ),
+        Replacement(
+            old='  maho::EnsureMahoExtensionStateBridgeFactoryBuilt();\n',
+            new=(
+                '  maho::EnsureMahoExtensionStateBridgeFactoryBuilt();\n'
+                '  maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();\n'
+            ),
+            description="Register Maho artifact registry factory at startup",
+            guard='  maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();\n',
+        ),
+        Replacement(
+            old='#include "maho/browser/net/maho_shield_site_state_factory.h"\n',
+            new=(
+                '#include "maho/browser/net/maho_shield_site_state_factory.h"\n'
+                '#include "maho/browser/mail_helper/maho_mail_service.h"\n'
+                '#include "chrome/browser/notifications/notification_display_service.h"\n'
+                '#include "chrome/browser/notifications/notification_display_service_factory.h"\n'
+                '#include "chrome/browser/notifications/notification_handler.h"\n'
+                '#include "base/strings/utf_string_conversions.h"\n'
+                '#include "base/functional/bind.h"\n'
+                '#include "ui/base/models/image_model.h"\n'
+                '#include "ui/message_center/public/cpp/notification.h"\n'
+                '#include "ui/message_center/public/cpp/notifier_id.h"\n'
+                '#include "url/gurl.h"\n'
+            ),
+            description="Include Maho mail-notification display headers in profiles.cc",
+            guard='#include "maho/browser/mail_helper/maho_mail_service.h"\n',
+        ),
+        Replacement(
+            old=(
+                '// static\n'
+                'void ChromeBrowserMainExtraPartsProfiles::\n'
+                '    EnsureBrowserContextKeyedServiceFactoriesBuilt() {\n'
+            ),
+            new=(
+                'namespace {\n'
+                '\n'
+                '// Maho: surfaces an OS notification for newly arrived mail. Installed as\n'
+                '// the MahoMailService notification hook so the mail service target need\n'
+                '// not depend on //chrome/browser/notifications (a GN dependency cycle).\n'
+                'void MahoShowNewMailNotification(Profile* profile,\n'
+                '                                 const std::string& title,\n'
+                '                                 const std::string& body,\n'
+                '                                 const std::string& notification_id) {\n'
+                '  if (!profile) {\n'
+                '    return;\n'
+                '  }\n'
+                '  message_center::Notification notification(\n'
+                '      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,\n'
+                '      base::UTF8ToUTF16(title), base::UTF8ToUTF16(body), ui::ImageModel(),\n'
+                '      u"Maho Mail", GURL("chrome://maho-mail"),\n'
+                '      message_center::NotifierId(\n'
+                '          message_center::NotifierType::SYSTEM_COMPONENT, "maho.mail"),\n'
+                '      message_center::RichNotificationData(), /*delegate=*/nullptr);\n'
+                '  NotificationDisplayServiceFactory::GetForProfile(profile)->Display(\n'
+                '      NotificationHandler::Type::TRANSIENT, notification,\n'
+                '      /*metadata=*/nullptr);\n'
+                '}\n'
+                '\n'
+                '}  // namespace\n'
+                '\n'
+                '// static\n'
+                'void ChromeBrowserMainExtraPartsProfiles::\n'
+                '    EnsureBrowserContextKeyedServiceFactoriesBuilt() {\n'
+            ),
+            description="Define Maho new-mail OS notification helper in profiles.cc",
+            guard='void MahoShowNewMailNotification(',
+        ),
+        Replacement(
+            old='  maho::MahoShieldSiteStateFactory::GetInstance();\n',
+            new=(
+                '  maho::MahoShieldSiteStateFactory::GetInstance();\n'
+                '  maho::SetMahoMailNotificationCallback(\n'
+                '      base::BindRepeating(&MahoShowNewMailNotification));\n'
+            ),
+            description="Install Maho new-mail OS notification hook at startup",
+            guard='maho::SetMahoMailNotificationCallback',
         ),
     ],
     "chrome/browser/ui/views/frame/contents_container_outline.h": [
@@ -6114,6 +7507,126 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='maho::LaunchMahoMini(browser_context_',
             idempotent=True,
         ),
+        Replacement(
+            old=(
+                '      IDC_CONTENT_CONTEXT_TRANSLATE,\n'
+                '      l10n_util::GetStringFUTF16(\n'
+                '          IDS_CONTENT_CONTEXT_TRANSLATE,\n'
+                '          GetTargetLanguageDisplayName(/*is_full_page_translation=*/true)),\n'
+            ),
+            new=(
+                '      // Maho: fixed, discoverable page-translate label surfaced in the\n'
+                '      // page context menu (English-only build). Command id and the\n'
+                '      // ExecTranslate() -> BrowserView::ShowTranslateBubble path are\n'
+                '      // unchanged, so this reuses the existing working translate bubble.\n'
+                '      IDC_CONTENT_CONTEXT_TRANSLATE, u"Translate this page",\n'
+            ),
+            description=(
+                "Maho: relabel the page-translate context menu item to "
+                "'Translate this page'"
+            ),
+            guard='u"Translate this page"',
+            idempotent=True,
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n'
+                '#include "maho/browser/net/maho_translate_injection_handler.h"\n'
+            ),
+            description="Maho: include on-device page-translate injection handler",
+            guard='maho/browser/net/maho_translate_injection_handler.h',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '  if (CanTranslate(/*menu_logging=*/true)) {\n'
+                '    AppendTranslateItem();\n'
+                '  }'
+            ),
+            new=(
+                '  if (maho::CanOnDeviceTranslate(embedder_web_contents_)) {\n'
+                '    AppendTranslateItem();\n'
+                '  }'
+            ),
+            description=(
+                "Maho: show the page-translate context item based on on-device "
+                "translate availability instead of the cloud CanTranslate gate "
+                "that requires a Google API key"
+            ),
+            guard='if (maho::CanOnDeviceTranslate(embedder_web_contents_)) {',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '    case IDC_CONTENT_CONTEXT_TRANSLATE:\n'
+                '      return navigation_allowed && IsTranslateEnabled();'
+            ),
+            new=(
+                '    case IDC_CONTENT_CONTEXT_TRANSLATE:\n'
+                '      return navigation_allowed &&\n'
+                '             maho::CanOnDeviceTranslate(embedder_web_contents_);'
+            ),
+            description=(
+                "Maho: enable the page-translate context item via on-device "
+                "availability rather than the cloud IsTranslateEnabled gate"
+            ),
+            guard='maho::CanOnDeviceTranslate(embedder_web_contents_);',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                'void RenderViewContextMenu::ExecTranslate() {\n'
+                '  ChromeTranslateClient* chrome_translate_client =\n'
+                '      ChromeTranslateClient::FromWebContents(embedder_web_contents_);\n'
+                '  if (!chrome_translate_client) {\n'
+                '    return;\n'
+                '  }\n'
+                '\n'
+                '  translate::TranslateManager* manager =\n'
+                '      chrome_translate_client->GetTranslateManager();\n'
+                '  DCHECK(manager);\n'
+                '  manager->ShowTranslateUI(/*auto_translate=*/true,\n'
+                '                           /*triggered_from_menu=*/true);\n'
+                '}'
+            ),
+            new=(
+                'void RenderViewContextMenu::ExecTranslate() {\n'
+                '  maho::TranslatePageViaOnDevice(embedder_web_contents_);\n'
+                '}'
+            ),
+            description=(
+                "Maho: route the page-translate context item to the on-device "
+                "content-script injector instead of the cloud ShowTranslateUI"
+            ),
+            guard='maho::TranslatePageViaOnDevice(embedder_web_contents_);',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                'void RenderViewContextMenu::RecordUsedItem(int id) {\n'
+                '  // Log general ID.\n'
+            ),
+            new=(
+                'void RenderViewContextMenu::RecordUsedItem(int id) {\n'
+                '  // Maho: the custom link context-menu commands (e.g. "Open in\n'
+                '  // Maho Mini") use command ids outside the upstream UMA enum map,\n'
+                '  // so RecordUsedItem() must skip them; otherwise\n'
+                '  // FindUMAEnumValueForCommand() returns -1 and the NOTREACHED()\n'
+                '  // below aborts the browser. See maho_context_menu_ids.h.\n'
+                '  if (id == IDC_MAHO_LINK_OPEN_MAHO_MINI) {\n'
+                '    return;\n'
+                '  }\n'
+                '\n'
+                '  // Log general ID.\n'
+            ),
+            description=(
+                "Maho: skip UMA recording for the Maho Mini link context-menu "
+                "command so RecordUsedItem() does not hit NOTREACHED()"
+            ),
+            guard='if (id == IDC_MAHO_LINK_OPEN_MAHO_MINI) {',
+            idempotent=True,
+        ),
     ],
     "chrome/browser/ui/browser.h": [
         Replacement(
@@ -6157,577 +7670,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="const bool is_maho_mini_;",
         ),
     ],
-    "chrome/browser/ui/browser.cc": [
-        Replacement(
-            old=(
-                "Browser::Browser(const CreateParams& params)\n"
-                "    : create_params_(params),\n"
-                "      type_(params.type),\n"
-                "      profile_(params.profile),\n"
-            ),
-            new=(
-                "Browser::Browser(const CreateParams& params)\n"
-                "    : create_params_(params),\n"
-                "      type_(params.type),\n"
-                "      is_maho_mini_(params.is_maho_mini),\n"
-                "      profile_(params.profile),\n"
-            ),
-            description="Maho: Initialize is_maho_mini_ in Browser constructor",
-            guard="is_maho_mini_(params.is_maho_mini)",
-        ),
-        Replacement(
-            old=(
-                "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
-                "                                        bool check_can_support) const {\n"
-                "  switch (type_) {\n"
-            ),
-            new=(
-                "bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,\n"
-                "                                        bool check_can_support) const {\n"
-                "  if (is_maho_mini()) {\n"
-                "    return false;\n"
-                "  }\n"
-                "  switch (type_) {\n"
-            ),
-            description="Maho: Disable window features for Maho Mini windows",
-            guard="if (is_maho_mini()) {",
-        ),
-    ],
-    "chrome/browser/ui/views/frame/browser_native_widget_mac.mm": [
-        Replacement(
-            old=(
-                "  } else if (browser_view_->GetIsNormalType() ||\n"
-                "             browser_view_->GetIsWebAppType()) {\n"
-                "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
-                "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
-                "\n"
-                "    // Ensure tabstrip/profile button are visible.\n"
-                "    params->titlebar_appears_transparent = true;\n"
-                "\n"
-                "    // Hosted apps draw their own window title.\n"
-                "    if (browser_view_->GetIsWebAppType()) {\n"
-                "      params->window_title_hidden = true;\n"
-                "    }\n"
-                "  } else {\n"
-            ),
-            new=(
-                "  } else if (browser_view_->GetIsNormalType() ||\n"
-                "             browser_view_->GetIsWebAppType() ||\n"
-                "             browser_view_->browser()->is_maho_mini()) {\n"
-                "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
-                "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
-                "\n"
-                "    // Ensure tabstrip/profile button are visible.\n"
-                "    params->titlebar_appears_transparent = true;\n"
-                "\n"
-                "    if (browser_view_->browser()->is_maho_mini()) {\n"
-                "      params->window_title_hidden = true;\n"
-                "    } else if (browser_view_->GetIsWebAppType()) {\n"
-                "      params->window_title_hidden = true;\n"
-                "    }\n"
-                "  } else {\n"
-            ),
-            description="Maho: Style Maho Mini window with transparent titlebar and full size content",
-            guard="browser_view_->browser()->is_maho_mini()",
-        ),
-        Replacement(
-            old=(
-                "    // height reported here; report the 38dip Maho Mini top bar\n"
-                "    // height so they center on its midline, not near the top edge.\n"
-                "    *override_titlebar_height = true;\n"
-                "    *titlebar_height = 38;\n"
-            ),
-            new=(
-                "    // height reported here; report the 46dip Maho Mini top bar\n"
-                "    // height so they center on its midline, not near the top edge.\n"
-                "    *override_titlebar_height = true;\n"
-                "    *titlebar_height = 46;\n"
-            ),
-            description="Maho: Raise an existing Maho Mini titlebar override to 46dip",
-            idempotent=True,
-            guard="*titlebar_height = 46;",
-        ),
-        Replacement(
-            old=(
-                "void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(\n"
-                "    bool* override_titlebar_height,\n"
-                "    float* titlebar_height) {\n"
-                "  if (browser_view_ && browser_view_->browser_widget() &&\n"
-            ),
-            new=(
-                "void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(\n"
-                "    bool* override_titlebar_height,\n"
-                "    float* titlebar_height) {\n"
-                "  if (browser_view_ && browser_view_->browser() &&\n"
-                "      browser_view_->browser()->is_maho_mini()) {\n"
-                "    // Maho: macOS centers the traffic lights within the titlebar\n"
-                "    // height reported here; report the 46dip Maho Mini top bar\n"
-                "    // height so they center on its midline, not near the top edge.\n"
-                "    *override_titlebar_height = true;\n"
-                "    *titlebar_height = 46;\n"
-                "    return;\n"
-                "  }\n"
-                "  if (browser_view_ && browser_view_->browser_widget() &&\n"
-            ),
-            description="Maho: Center traffic lights in Maho Mini 46dip top bar",
-            guard="*titlebar_height = 46;",
-        ),
-    ],
-    "chrome/browser/ui/views/frame/browser_frame_view_mac.mm": [
-        Replacement(
-            old=(
-                "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
-                "  // of the client area.\n"
-                "  if (GetBrowserView()->browser()->is_type_popup() ||\n"
-                "      GetBrowserView()->browser()->is_type_devtools()) {\n"
-                "    return result;\n"
-                "  }\n"
-            ),
-            new=(
-                "  // In popups, the titlebar is system-drawn and the caption buttons aren't part\n"
-                "  // of the client area.\n"
-                "  if ((GetBrowserView()->browser()->is_type_popup() && !GetBrowserView()->browser()->is_maho_mini()) ||\n"
-                "      GetBrowserView()->browser()->is_type_devtools()) {\n"
-                "    return result;\n"
-                "  }\n"
-            ),
-            description="Maho: Allow caption button bounds for Maho Mini popups",
-            guard="!GetBrowserView()->browser()->is_maho_mini()",
-        ),
-    ],
-    "chrome/browser/ui/views/frame/browser_view.h": [
-        Replacement(
-            old="class MahoCommandOverlayController;\n",
-            new=(
-                "class MahoCommandOverlayController;\n"
-                "class MahoContentGradientView;\n"
-            ),
-            description=(
-                "Forward-declare MahoContentGradientView for BrowserView's "
-                "zero-tab content background"
-            ),
-            guard="class MahoContentGradientView;",
-        ),
-        Replacement(
-            old=(
-                "  // Maho: left sidebar host container.\n"
-                "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
-            ),
-            new=(
-                "  // Maho: left sidebar host container.\n"
-                "  raw_ptr<views::View> maho_sidebar_container_ = nullptr;\n"
-                "\n"
-                "  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n"
-            ),
-            description="Maho: Add maho_mini_top_bar_ to BrowserView",
-            guard="maho_mini_top_bar_",
-        ),
-        Replacement(
-            old="  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n",
-            new=(
-                "  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;\n"
-                "\n"
-                "  raw_ptr<maho::MahoContentGradientView>\n"
-                "      maho_content_gradient_view_ = nullptr;\n"
-            ),
-            description=(
-                "Store the lowest-z Maho content gradient child on BrowserView"
-            ),
-            guard="maho_content_gradient_view_ = nullptr;",
-        ),
-        Replacement(
-            old="namespace maho {\nclass MahoCommandOverlayController;\n",
-            new=(
-                "struct MahoSidebarPalette;\n"
-                "\n"
-                "namespace maho {\nclass MahoCommandOverlayController;\n"
-            ),
-            description=(
-                "Forward-declare (global-scope) MahoSidebarPalette for "
-                "BrowserView's content surface palette projection"
-            ),
-            guard="struct MahoSidebarPalette;",
-        ),
-        Replacement(
-            old=(
-                "  raw_ptr<maho::MahoContentGradientView>\n"
-                "      maho_content_gradient_view_ = nullptr;\n"
-            ),
-            new=(
-                "  raw_ptr<maho::MahoContentGradientView>\n"
-                "      maho_content_gradient_view_ = nullptr;\n"
-                "\n"
-                "  // Maho: mirror the active Space's sidebar palette onto the content\n"
-                "  // gradient + WebContents background so both panes read as one\n"
-                "  // themed surface (light/dark, opacity and stops all follow the\n"
-                "  // sidebar's browser-local resolution).\n"
-                "  void ApplyMahoSidebarPaletteToContentSurfaces(\n"
-                "      const MahoSidebarPalette& palette);\n"
-                "  void MaybeRefreshMahoContentSurfacesFromSidebar();\n"
-                "  bool maho_sidebar_palette_subscribed_ = false;\n"
-                "  base::CallbackListSubscription maho_sidebar_palette_subscription_;\n"
-            ),
-            description=(
-                "Maho: declare BrowserView content-surface palette projection "
-                "(method + subscription) alongside the gradient view pointer"
-            ),
-            guard="maho_sidebar_palette_subscription_;",
-        ),
-    ],
-    "chrome/browser/ui/views/frame/browser_view.cc": [
-        Replacement(
-            old=(
-                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-            ),
-            new=(
-                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
-                '#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n'
-            ),
-            description="Maho: Include maho_mini_top_bar_view.h in browser_view.cc",
-            guard="maho_mini_top_bar_view.h",
-        ),
-        Replacement(
-            old='#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n',
-            new=(
-                '#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"\n'
-                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
-            ),
-            description="Maho: Include maho_content_gradient_view.h in browser_view.cc",
-            guard="maho_content_gradient_view.h",
-        ),
-        Replacement(
-            old=(
-                "  auto contents_container = std::make_unique<views::View>();\n"
-                "\n"
-                "  views::View* contents_view;\n"
-            ),
-            new=(
-                "  auto contents_container = std::make_unique<views::View>();\n"
-                "\n"
-                "  if (GetIsNormalType()) {\n"
-                "    maho_content_gradient_view_ = contents_container->AddChildView(\n"
-                "        std::make_unique<maho::MahoContentGradientView>());\n"
-                "    maho_content_gradient_view_->SetVisible(\n"
-                "        browser_->tab_strip_model()->count() == 0);\n"
-                "  }\n"
-                "\n"
-                "  views::View* contents_view;\n"
-            ),
-            description=(
-                "Create MahoContentGradientView as the first content-container "
-                "child and initialize it from the live tab count"
-            ),
-            guard="maho_content_gradient_view_ = contents_container->AddChildView(",
-        ),
-        Replacement(
-            old=(
-                "  contents_container_ = AddChildView(std::move(contents_container));\n"
-                "  set_contents_view(contents_container_);\n"
-            ),
-            new=(
-                "  contents_container_ = AddChildView(std::move(contents_container));\n"
-                "  set_contents_view(contents_container_);\n"
-                "\n"
-                "  if (browser_->is_maho_mini()) {\n"
-                "    maho_mini_top_bar_ = AddChildView(\n"
-                "        std::make_unique<maho::MahoMiniTopBarView>(browser_.get(), this));\n"
-                "  }\n"
-            ),
-            description="Maho: Initialize maho_mini_top_bar_ in BrowserView::InitViews",
-            guard="maho_mini_top_bar_ = AddChildView",
-        ),
-        Replacement(
-            old=(
-                "void BrowserView::OnTabStripModelChanged(\n"
-                "    TabStripModel* tab_strip_model,\n"
-                "    const TabStripModelChange& change,\n"
-                "    const TabStripSelectionChange& selection) {\n"
-            ),
-            new=(
-                "void BrowserView::OnTabStripModelChanged(\n"
-                "    TabStripModel* tab_strip_model,\n"
-                "    const TabStripModelChange& change,\n"
-                "    const TabStripSelectionChange& selection) {\n"
-                "  if (maho_content_gradient_view_) {\n"
-                "    maho_content_gradient_view_->SetVisible(\n"
-                "        tab_strip_model->count() == 0);\n"
-                "  }\n"
-                "\n"
-            ),
-            description=(
-                "Toggle the Maho content gradient whenever BrowserView observes "
-                "a live-tab count change"
-            ),
-            guard="tab_strip_model->count() == 0",
-        ),
-        Replacement(
-            old=(
-                "BrowserView::~BrowserView() {\n"
-                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
-                "  // other cleanups that destroy views referenced in the layout manager.\n"
-                "  SetLayoutManager(nullptr);\n"
-            ),
-            new=(
-                "BrowserView::~BrowserView() {\n"
-                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
-                "\n"
-                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
-                "  // other cleanups that destroy views referenced in the layout manager.\n"
-                "  SetLayoutManager(nullptr);\n"
-            ),
-            description=(
-                "Remove BrowserView's TabStripModel observation before gradient "
-                "and content children are destroyed"
-            ),
-            guard="browser_->tab_strip_model()->RemoveObserver(this);",
-        ),
-        Replacement(
-            old=(
-                "  window_scrim_view_ = nullptr;\n"
-                "  contents_container_ = nullptr;\n"
-            ),
-            new=(
-                "  window_scrim_view_ = nullptr;\n"
-                "  maho_content_gradient_view_ = nullptr;\n"
-                "  contents_container_ = nullptr;\n"
-            ),
-            description=(
-                "Clear BrowserView's raw Maho content gradient pointer before "
-                "removing the child hierarchy"
-            ),
-            guard="  maho_content_gradient_view_ = nullptr;\n  contents_container_ = nullptr;",
-        ),
-        Replacement(
-            old=(
-                "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
-                "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
-                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
-            ),
-            new=(
-                "  layout_views.maho_sidebar_container = maho_sidebar_container_;\n"
-                "  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;\n"
-                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
-                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
-            ),
-            description="Maho: Populate maho_mini_top_bar in layout_views",
-            guard="layout_views.maho_mini_top_bar =",
-        ),
-        Replacement(
-            old=(
-                "  gfx::Point point_in_browser_view_coords(point);\n"
-                "  views::View::ConvertPointToTarget(parent(), this,\n"
-                "                                    &point_in_browser_view_coords);\n"
-            ),
-            new=(
-                "  gfx::Point point_in_browser_view_coords(point);\n"
-                "  views::View::ConvertPointToTarget(parent(), this,\n"
-                "                                    &point_in_browser_view_coords);\n"
-                "\n"
-                "  // Maho: the Maho Mini top bar sits inside the macOS full-size\n"
-                "  // titlebar drag region. Consult its caption hit-test so the address\n"
-                "  // field and action buttons register as client area instead of being\n"
-                "  // swallowed as window-drag caption.\n"
-                "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
-                "    gfx::Point test_point(point);\n"
-                "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
-                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
-                "              maho_mini_top_bar_)\n"
-                "              ->IsPositionInWindowCaption(test_point)) {\n"
-                "        return HTCAPTION;\n"
-                "      }\n"
-                "      return HTCLIENT;\n"
-                "    }\n"
-                "  }\n"
-            ),
-            description="Maho: Consult Maho Mini top bar caption hit-test in NonClientHitTest",
-            guard="static_cast<maho::MahoMiniTopBarView*>(",
-        ),
-        Replacement(
-            old=(
-                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
-                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
-            ),
-            new=(
-                "  layout_views.maho_mini_top_bar = maho_mini_top_bar_;\n"
-                "  layout_views.maho_content_gradient_view = maho_content_gradient_view_;\n"
-                "  // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)\n"
-            ),
-            description="Maho: Populate maho_content_gradient_view in layout_views",
-            guard="layout_views.maho_content_gradient_view =",
-        ),
-        Replacement(
-            old=(
-                "  multi_contents_view_ =\n"
-                "      contents_container->AddChildView(std::move(multi_contents_view));\n"
-                "  contents_view = multi_contents_view_;\n"
-            ),
-            new=(
-                "  multi_contents_view_ =\n"
-                "      contents_container->AddChildView(std::move(multi_contents_view));\n"
-                "  contents_view = multi_contents_view_;\n"
-                "\n"
-                "  // Maho: raise the zero-tab content gradient above the opaque\n"
-                "  // MultiContentsView so the empty (cold-start) content area shows the\n"
-                "  // theme gradient instead of the gray empty-web-contents background.\n"
-                "  // The gradient is only SetVisible(true) while the tab strip is empty,\n"
-                "  // so once a real tab exists it is hidden and never occludes web content.\n"
-                "  if (maho_content_gradient_view_) {\n"
-                "    contents_container->ReorderChildView(\n"
-                "        maho_content_gradient_view_, contents_container->children().size());\n"
-                "  }\n"
-            ),
-            description=(
-                "Maho: reorder the zero-tab content gradient above the opaque "
-                "MultiContentsView so the empty content area paints the theme "
-                "gradient instead of Chromium's gray empty-web-contents background"
-            ),
-            guard="Maho: raise the zero-tab content gradient above the opaque",
-        ),
-        Replacement(
-            old='#include "maho/browser/ui/views/maho_content_gradient_view.h"\n',
-            new=(
-                '#include "maho/browser/ui/views/maho_content_gradient_view.h"\n'
-                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
-                '#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"\n'
-                '#include "maho/browser/ui/theme/maho_theme_helper.h"\n'
-            ),
-            description=(
-                "Maho: include sidebar container/view + theme helper in "
-                "browser_view.cc for content-surface palette projection"
-            ),
-            guard='#include "maho/browser/ui/theme/maho_theme_helper.h"',
-        ),
-        Replacement(
-            old=(
-                "std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {\n"
-            ),
-            new=(
-                "void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(\n"
-                "    const MahoSidebarPalette& palette) {\n"
-                "  // Regular windows only; Incognito keeps its fixed private surface.\n"
-                "  if (browser_->profile()->IsOffTheRecord()) {\n"
-                "    return;\n"
-                "  }\n"
-                "  // Empty (zero-tab) content shows the translucent themed gradient; the\n"
-                "  // content web layer is made transparent so the window glass (desktop\n"
-                "  // blur) shows through, matching the sidebar. Loaded tabs use an opaque\n"
-                "  // themed base (web content must be opaque).\n"
-                "  if (maho_content_gradient_view_) {\n"
-                "    maho_content_gradient_view_->SetGradientStops(palette.surface_stops);\n"
-                "    maho_content_gradient_view_->SetGrain(palette.grain);\n"
-                "  }\n"
-                "  if (browser_->tab_strip_model()->count() == 0) {\n"
-                "    if (ContentsWebView* view = contents_web_view()) {\n"
-                "      view->SetBackgroundVisible(false);\n"
-                "    }\n"
-                "    return;\n"
-                "  }\n"
-                "  const bool maho_has_stops = !palette.content_surface_stops.empty();\n"
-                "  const SkColor solid = maho_has_stops\n"
-                "                            ? palette.content_surface_stops.front()\n"
-                "                            : SK_ColorTRANSPARENT;\n"
-                "  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
-                "    if (!view) {\n"
-                "      continue;\n"
-                "    }\n"
-                "    view->SetBackgroundVisible(true);\n"
-                "    if (maho_has_stops) {\n"
-                "      view->SetMahoBackgroundOverride(solid);\n"
-                "    }\n"
-                "  }\n"
-                "  if (!maho_has_stops) {\n"
-                "    return;\n"
-                "  }\n"
-                "  TabStripModel* maho_tsm = browser_->tab_strip_model();\n"
-                "  for (int i = 0; i < maho_tsm->count(); ++i) {\n"
-                "    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {\n"
-                "      wc->SetPageBaseBackgroundColor(solid);\n"
-                "    }\n"
-                "  }\n"
-                "}\n"
-                "\n"
-                "void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar() {\n"
-                "  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(\n"
-                "      maho_sidebar_container_);\n"
-                "  if (!container) {\n"
-                "    return;\n"
-                "  }\n"
-                "  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(\n"
-                "      container->sidebar_view());\n"
-                "  if (!sidebar) {\n"
-                "    return;\n"
-                "  }\n"
-                "  if (!maho_sidebar_palette_subscribed_) {\n"
-                "    maho_sidebar_palette_subscription_ =\n"
-                "        sidebar->AddSidebarPaletteChangedCallback(base::BindRepeating(\n"
-                "            &BrowserView::ApplyMahoSidebarPaletteToContentSurfaces,\n"
-                "            base::Unretained(this)));\n"
-                "    maho_sidebar_palette_subscribed_ = true;\n"
-                "  }\n"
-                "  ApplyMahoSidebarPaletteToContentSurfaces(sidebar->sidebar_palette());\n"
-                "}\n"
-                "\n"
-                "std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {\n"
-            ),
-            description=(
-                "Maho: define BrowserView content-surface palette projection "
-                "(gradient stops + per-instance WebContents background) from the "
-                "sidebar's browser-local palette"
-            ),
-            guard="void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar()",
-        ),
-        Replacement(
-            old=(
-                "  if (maho_content_gradient_view_) {\n"
-                "    maho_content_gradient_view_->SetVisible(\n"
-                "        tab_strip_model->count() == 0);\n"
-                "  }\n"
-            ),
-            new=(
-                "  if (maho_content_gradient_view_) {\n"
-                "    maho_content_gradient_view_->SetVisible(\n"
-                "        tab_strip_model->count() == 0);\n"
-                "  }\n"
-                "  // Maho: mirror the active Space palette onto content when live tabs change.\n"
-                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
-            ),
-            description=(
-                "Maho: re-project the Space palette onto content surfaces whenever "
-                "BrowserView observes a live-tab count change"
-            ),
-            guard="mirror the active Space palette onto content when live tabs change",
-        ),
-        Replacement(
-            old='  TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");\n',
-            new=(
-                '  TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");\n'
-                "  // Maho: refresh content surfaces for the newly active tab/split.\n"
-                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
-            ),
-            description=(
-                "Maho: re-project the Space palette onto content surfaces when the "
-                "active tab (or split pane) changes"
-            ),
-            guard="refresh content surfaces for the newly active tab/split",
-        ),
-        Replacement(
-            old=(
-                "BrowserView::~BrowserView() {\n"
-                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
-            ),
-            new=(
-                "BrowserView::~BrowserView() {\n"
-                "  browser_->tab_strip_model()->RemoveObserver(this);\n"
-                "  maho_sidebar_palette_subscription_ = {};\n"
-            ),
-            description=(
-                "Maho: drop the sidebar palette subscription before child views "
-                "(gradient/content) are torn down"
-            ),
-            guard="maho_sidebar_palette_subscription_ = {};",
-        ),
-    ],
-    "chrome/browser/ui/views/frame/layout/browser_view_layout.h": [
+                        "chrome/browser/ui/views/frame/layout/browser_view_layout.h": [
         Replacement(
             old=(
                 "  // Maho: BrowserView-owned sidebar host container.\n"
@@ -6760,6 +7703,185 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc": [
         Replacement(
             old=(
+                "#include \"chrome/browser/ui/views/frame/browser_view.h\"\n"
+            ),
+            new=(
+                "#include \"chrome/browser/ui/views/frame/browser_view.h\"\n"
+                "#include \"chrome/browser/ui/views/frame/contents_container_view.h\"\n"
+                "#include \"chrome/browser/ui/views/frame/contents_web_view.h\"\n"
+            ),
+            description="Maho: include content views for AI seam corner control",
+            guard="contents_container_view.h",
+        ),
+        Replacement(
+            old=(
+                "void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(\n"
+                "    const BrowserLayoutParams& params) {\n"
+            ),
+            new=(
+                "void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(\n"
+                "    const BrowserLayoutParams& params) {\n"
+                "  const bool maho_ai_panel_showing =\n"
+                "      views().toolbar_height_side_panel &&\n"
+                "      views().toolbar_height_side_panel->IsMahoAiPanelShowing();\n"
+            ),
+            description="Maho: expose AI-panel visibility throughout visual adjustments",
+            guard=(
+                "  const bool maho_ai_panel_showing =\n"
+                "      views().toolbar_height_side_panel &&\n"
+                "      views().toolbar_height_side_panel->IsMahoAiPanelShowing();\n"
+            ),
+        ),
+        Replacement(
+            old=(
+                "      contents->layer()->SetRoundedCornerRadius(\n"
+                "          gfx::RoundedCornersF(0.0f, 12.0f, 12.0f, 0.0f));\n"
+            ),
+            new=(
+                "      contents->layer()->SetRoundedCornerRadius(\n"
+                "          maho_ai_panel_showing\n"
+                "              ? gfx::RoundedCornersF(0.0f)\n"
+                "              : gfx::RoundedCornersF(0.0f, 12.0f, 12.0f, 0.0f));\n"
+                "      contents->layer()->SetMasksToBounds(true);\n"
+                "      if (maho_ai_panel_showing && views().multi_contents_view) {\n"
+                "        for (ContentsContainerView* container :\n"
+                "             views().multi_contents_view->contents_container_views()) {\n"
+                "          container->contents_view()->SetBackgroundRadii(\n"
+                "              gfx::RoundedCornersF(0.0f));\n"
+                "          container->contents_view()->holder()->SetCornerRadii(\n"
+                "              gfx::RoundedCornersF(0.0f));\n"
+                "        }\n"
+                "      }\n"
+            ),
+            description="Maho: square the content seam while the AI panel is open",
+            guard="maho_ai_panel_showing\n",
+        ),
+        Replacement(
+            old=(
+                "      toolbar_corners.upper_trailing.type =\n"
+                "          CustomCornersBackground::CornerType::kRoundedWithBackground;\n"
+            ),
+            new=(
+                "      if (!maho_ai_panel_showing) {\n"
+                "        toolbar_corners.upper_trailing.type =\n"
+                "            CustomCornersBackground::CornerType::kRoundedWithBackground;\n"
+                "      }\n"
+            ),
+            description="Maho: square the toolbar-to-AI seam",
+            guard="toolbar_corners.upper_trailing.type =",
+        ),
+        Replacement(
+            old=(
+                "        main_background_corners.upper_trailing.type =\n"
+                "            CustomCornersBackground::CornerType::kRoundedWithBackground;\n"
+            ),
+            new=(
+                "        if (!maho_ai_panel_showing) {\n"
+                "          main_background_corners.upper_trailing.type =\n"
+                "              CustomCornersBackground::CornerType::kRoundedWithBackground;\n"
+                "        }\n"
+            ),
+            description="Maho: square the upper content-to-AI seam",
+            guard="main_background_corners.upper_trailing.type =",
+        ),
+        Replacement(
+            old=(
+                "      main_background_corners.lower_trailing =\n"
+                "          background->GetWindowCorner(/*upper=*/false);\n"
+            ),
+            new=(
+                "      if (!maho_ai_panel_showing) {\n"
+                "        main_background_corners.lower_trailing =\n"
+                "            background->GetWindowCorner(/*upper=*/false);\n"
+                "      }\n"
+            ),
+            description="Maho: square the lower content-to-AI seam",
+            guard="if (!maho_ai_panel_showing) {",
+        ),
+        Replacement(
+            old=(
+                "  return views().toolbar_height_side_panel->GetVisible();\n"
+                "}\n"
+                "\n"
+                "BrowserViewTabbedLayoutImpl::VerticalTabStripCollapsedState\n"
+            ),
+            new=(
+                "  return views().toolbar_height_side_panel->GetVisible() &&\n"
+                "         !views().toolbar_height_side_panel->IsMahoAiPanelShowing();\n"
+                "}\n"
+                "\n"
+                "BrowserViewTabbedLayoutImpl::VerticalTabStripCollapsedState\n"
+            ),
+            description="Maho: suppress toolbar shadow gap for the AI panel",
+            guard="!views().toolbar_height_side_panel->IsMahoAiPanelShowing()",
+        ),
+        Replacement(
+            old=(
+                "    layout.side_panel_padding =\n"
+                "        GetLayoutConstant(LayoutConstant::kToolbarHeightSidePanelInset);\n"
+            ),
+            new=(
+                "    layout.side_panel_padding = panel->IsMahoAiPanelShowing()\n"
+                "                                    ? 0\n"
+                "                                    : GetLayoutConstant(\n"
+                "                                          LayoutConstant::kToolbarHeightSidePanelInset);\n"
+            ),
+            description="Maho: remove toolbar side-panel inset for the AI panel",
+            guard="layout.side_panel_padding = panel->IsMahoAiPanelShowing()",
+        ),
+        Replacement(
+            old=(
+                "      const gfx::Rect panel_bounds = layout.GetBoundsFor(\n"
+                "          views().contents_height_side_panel, views().browser_view);\n"
+                "      shared_glass_bounds.Union(panel_bounds);\n"
+            ),
+            new=(
+                "      const auto panel_bounds = layout.GetBoundsFor(\n"
+                "          views().contents_height_side_panel, views().browser_view);\n"
+                "      if (panel_bounds) {\n"
+                "        shared_glass_bounds.Union(*panel_bounds);\n"
+                "      }\n"
+            ),
+            description=(
+                "Migrate generated shared-glass panel bounds to the optional "
+                "ProposedLayout lookup API"
+            ),
+            guard="shared_glass_bounds.Union(*panel_bounds)",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  if (views().maho_content_gradient_view) {\n"
+                "    views().maho_content_gradient_view->SetBoundsRect(\n"
+                "        gfx::Rect(contents_bounds.size()));\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (views().maho_content_gradient_view) {\n"
+                "    gfx::Rect shared_glass_bounds = contents_bounds;\n"
+                "    if (views().contents_height_side_panel &&\n"
+                "        views().contents_height_side_panel->GetVisible()) {\n"
+                "      const auto panel_bounds = layout.GetBoundsFor(\n"
+                "          views().contents_height_side_panel, views().browser_view);\n"
+                "      if (panel_bounds) {\n"
+                "        shared_glass_bounds.Union(*panel_bounds);\n"
+                "      }\n"
+                "    }\n"
+                "    shared_glass_bounds.Union(contents_bounds);\n"
+                "    layout.AddChild(views().maho_content_gradient_view,\n"
+                "                    shared_glass_bounds,\n"
+                "                    views().maho_content_gradient_view->GetVisible());\n"
+                "  }\n"
+            ),
+            description=(
+                "Migrate the already-applied content-only gradient bounds to "
+                "the shared content and side-panel BrowserView bounds"
+            ),
+            guard="shared_glass_bounds.Union(*panel_bounds)",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
                 "  layout.AddChild(views().contents_container, contents_bounds);\n"
                 "\n"
                 "  if (views().maho_create_space_blank_view &&\n"
@@ -6768,8 +7890,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  layout.AddChild(views().contents_container, contents_bounds);\n"
                 "\n"
                 "  if (views().maho_content_gradient_view) {\n"
-                "    views().maho_content_gradient_view->SetBoundsRect(\n"
-                "        gfx::Rect(contents_bounds.size()));\n"
+                "    gfx::Rect shared_glass_bounds = contents_bounds;\n"
+                "    if (views().contents_height_side_panel &&\n"
+                "        views().contents_height_side_panel->GetVisible()) {\n"
+                "      const auto panel_bounds = layout.GetBoundsFor(\n"
+                "          views().contents_height_side_panel, views().browser_view);\n"
+                "      if (panel_bounds) {\n"
+                "        shared_glass_bounds.Union(*panel_bounds);\n"
+                "      }\n"
+                "    }\n"
+                "    shared_glass_bounds.Union(contents_bounds);\n"
+                "    layout.AddChild(views().maho_content_gradient_view,\n"
+                "                    shared_glass_bounds,\n"
+                "                    views().maho_content_gradient_view->GetVisible());\n"
                 "  }\n"
                 "\n"
                 "  if (views().maho_create_space_blank_view &&\n"
@@ -6778,7 +7911,271 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Size the nested Maho content gradient to the Arc content rect "
                 "during BrowserView layout"
             ),
-            guard="views().maho_content_gradient_view->SetBoundsRect(",
+            guard="shared_glass_bounds.Union(*panel_bounds)",
+            idempotent=True,
+        ),
+    ],
+    "chrome/browser/ui/views/side_panel/side_panel.cc": [
+        Replacement(
+            old=(
+                "void SidePanel::RemoveHeaderView() {\n"
+                "  SetBorder(views::CreateEmptyBorder(GetBorderInsets().set_top(0)));\n"
+            ),
+            new=(
+                "void SidePanel::RemoveHeaderView() {\n"
+                "  SetBorder(IsMahoAiPanelShowing() || !border_view_\n"
+                "                ? nullptr\n"
+                "                : views::CreateEmptyBorder(\n"
+                "                      GetBorderInsets().set_top(0)));\n"
+            ),
+            description=(
+                "Maho: keep the headerless AI panel flush without Chromium's "
+                "default empty-border frame"
+            ),
+            guard="SetBorder(IsMahoAiPanelShowing() || !border_view_",
+        ),
+        Replacement(
+            old=(
+                "bool SidePanel::ShouldRestrictMaxWidth() const {\n"
+            ),
+            new=(
+                "bool SidePanel::IsMahoAiPanelShowing() const {\n"
+                "  const SidePanelUI* side_panel_ui =\n"
+                "      browser_view_->browser()->GetFeatures().side_panel_ui();\n"
+                "  if (side_panel_ui &&\n"
+                "      side_panel_ui->GetCurrentEntryId(type_) ==\n"
+                "          SidePanelEntryId::kMahoAiPanel) {\n"
+                "    return true;\n"
+                "  }\n"
+                "  return content_parent_view_ &&\n"
+                "         !content_parent_view_->children().empty() &&\n"
+                "         content_parent_view_->children().front()->GetClassName() ==\n"
+                "             std::string_view(\"MahoAiSidePanelWebView\");\n"
+                "}\n"
+                "\n"
+                "bool SidePanel::ShouldRestrictMaxWidth() const {\n"
+            ),
+            description="Maho: expose active AI side-panel identity for borderless layout",
+            guard="bool SidePanel::IsMahoAiPanelShowing() const",
+        ),
+        Replacement(
+            old=(
+                "  void AddedToWidget() override {\n"
+                "    SetBackground(std::make_unique<ContentParentBackground>(\n"
+                "        browser_view_, type_,\n"
+                "        base::BindRepeating(\n"
+                "            [](base::WeakPtr<ContentParentView> view) {\n"
+                "              return view ? view->GetRoundedCorners() : gfx::RoundedCornersF();\n"
+                "            },\n"
+                "            weak_ptr_factory_.GetWeakPtr())));\n"
+                "  }\n"
+            ),
+            new=(
+                "  void AddedToWidget() override {\n"
+                "    const bool hosts_maho_ai =\n"
+                "        !children().empty() && children().front()->GetClassName() ==\n"
+                "                                   std::string_view(\"MahoAiSidePanelWebView\");\n"
+                "    SetBackground(hosts_maho_ai\n"
+                "                      ? nullptr\n"
+                "                      : std::make_unique<ContentParentBackground>(\n"
+                "                            browser_view_, type_,\n"
+                "                            base::BindRepeating(\n"
+                "                                [](base::WeakPtr<ContentParentView> view) {\n"
+                "                                  return view ? view->GetRoundedCorners()\n"
+                "                                              : gfx::RoundedCornersF();\n"
+                "                                },\n"
+                "                                weak_ptr_factory_.GetWeakPtr())));\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: preserve AI content-parent transparency when AddedToWidget "
+                "runs after the child is attached"
+            ),
+            guard="const bool hosts_maho_ai =",
+        ),
+        Replacement(
+            old=(
+                "  void OnChildViewAdded(views::View* observed_view,\n"
+                "                        views::View* child) override {\n"
+            ),
+            new=(
+                "  void OnChildViewAdded(views::View* observed_view,\n"
+                "                        views::View* child) override {\n"
+                "    if (child && child->GetClassName() ==\n"
+                "                     std::string_view(\"MahoAiSidePanelWebView\")) {\n"
+                "      SetBackground(nullptr);\n"
+                "      if (views::IsViewClass<views::WebView>(child)) {\n"
+                "        views::AsViewClass<views::WebView>(child)\n"
+                "            ->holder()\n"
+                "            ->SetCornerRadii(gfx::RoundedCornersF());\n"
+                "      }\n"
+                "      if (child->layer()) {\n"
+                "        child->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF());\n"
+                "      }\n"
+                "      browser_view_->InvalidateLayout();\n"
+                "      return;\n"
+                "    }\n"
+            ),
+            description=(
+                "Maho: keep the MahoAiSidePanelWebView content parent transparent "
+                "so the shared BrowserView glass remains visible"
+            ),
+            guard="MahoAiSidePanelWebView",
+        ),
+        Replacement(
+            old=(
+                "  void OnWebContentsAttached(views::WebView* web_view) {\n"
+                "    CHECK(web_view);\n"
+                "    CHECK(web_view->holder());\n"
+                "\n"
+                "    // Native View Host doesn't always get reused, so ensure a nested Native\n"
+                "    // View's corners are always rounded.\n"
+                "    web_view->holder()->SetCornerRadii(GetRoundedCorners());\n"
+            ),
+            new=(
+                "  void OnWebContentsAttached(views::WebView* web_view) {\n"
+                "    CHECK(web_view);\n"
+                "    CHECK(web_view->holder());\n"
+                "\n"
+                "    // Native View Host doesn't always get reused. Maho AI is the\n"
+                "    // borderless toolbar panel, so keep its native holder square.\n"
+                "    web_view->holder()->SetCornerRadii(\n"
+                "        web_view->GetClassName() ==\n"
+                "                std::string_view(\"MahoAiSidePanelWebView\")\n"
+                "            ? gfx::RoundedCornersF()\n"
+                "            : GetRoundedCorners());\n"
+            ),
+            description="Maho: prevent delayed native corner clipping on the AI panel",
+            guard="borderless toolbar panel, so keep its native holder square",
+        ),
+        Replacement(
+            old=(
+                "  bool side_panel_open_or_closing = GetVisible() || should_be_open;\n"
+                "  if (border_view_ &&\n"
+                "      side_panel_open_or_closing != border_view_->GetVisible()) {\n"
+                "    border_view_->SetVisible(side_panel_open_or_closing);\n"
+            ),
+            new=(
+                "  bool side_panel_open_or_closing = GetVisible() || should_be_open;\n"
+                "  const bool border_should_be_visible =\n"
+                "      side_panel_open_or_closing && !IsMahoAiPanelShowing();\n"
+                "  if (border_view_ &&\n"
+                "      border_should_be_visible != border_view_->GetVisible()) {\n"
+                "    border_view_->SetVisible(border_should_be_visible);\n"
+            ),
+            description="Maho: suppress the native side-panel border painter for AI",
+            guard="const bool border_should_be_visible =",
+        ),
+    ],
+    "chrome/browser/ui/views/side_panel/side_panel_resize_area.cc": [
+        Replacement(
+            old=(
+                '#include "ui/views/background.h"\n'
+            ),
+            new=(
+                '#include "ui/views/background.h"\n'
+                '#include "ui/views/border.h"\n'
+            ),
+            description="Maho: include border support for the AI resize seam",
+            guard='#include "ui/views/border.h"',
+        ),
+        Replacement(
+            old=(
+                "  layer()->SetFillsBoundsOpaquely(false);\n"
+            ),
+            new=(
+                "  layer()->SetFillsBoundsOpaquely(false);\n"
+                "  SetBorder(CreateSolidSidedBorder(\n"
+                "      gfx::Insets::TLBR(0, 1, 0, 0),\n"
+                "      kColorSidePanelContentAreaSeparator));\n"
+            ),
+            description="Maho: draw a thin draggable side-panel resize seam",
+            guard="SetBorder(CreateSolidSidedBorder(",
+        ),
+        Replacement(
+            old=(
+                "  gfx::Rect resize_bounds;\n"
+            ),
+            new=(
+                "  gfx::Rect resize_bounds;\n"
+                "  const int maho_ai_resize_width =\n"
+                "      side_panel_->IsMahoAiPanelShowing() ? 5 : 0;\n"
+            ),
+            description="Maho: reserve a draggable hit width for the borderless AI seam",
+            guard="const int maho_ai_resize_width =",
+        ),
+        Replacement(
+            old=(
+                "    resize_bounds = gfx::Rect(local_bounds.x(), local_bounds.y(),\n"
+                "                              contents_bounds.x(), local_bounds.height());\n"
+            ),
+            new=(
+                "    resize_bounds = gfx::Rect(\n"
+                "        local_bounds.x(), local_bounds.y(),\n"
+                "        std::max(contents_bounds.x(), maho_ai_resize_width),\n"
+                "        local_bounds.height());\n"
+            ),
+            description="Maho: keep the left AI resize seam draggable without panel padding",
+            guard=(
+                "std::max(contents_bounds.x(),\n"
+                "                                       maho_ai_resize_width)"
+            ),
+        ),
+        Replacement(
+            old=(
+                "    resize_bounds = gfx::Rect(contents_bounds.right(), local_bounds.y(),\n"
+                "                              local_bounds.right() - contents_bounds.right(),\n"
+                "                              local_bounds.height());\n"
+            ),
+            new=(
+                "    resize_bounds = gfx::Rect(\n"
+                "        contents_bounds.right(), local_bounds.y(),\n"
+                "        std::max(local_bounds.right() - contents_bounds.right(),\n"
+                "                 maho_ai_resize_width),\n"
+                "        local_bounds.height());\n"
+            ),
+            description="Maho: keep the right AI resize seam draggable without panel padding",
+            guard=(
+                "std::max(local_bounds.right() -\n"
+                "                                           contents_bounds.right(),\n"
+                "                                       maho_ai_resize_width)"
+            ),
+        ),
+    ],
+    "chrome/browser/ui/views/side_panel/side_panel.h": [
+        Replacement(
+            old="  bool ShouldRestrictMaxWidth() const;\n",
+            new=(
+                "  bool IsMahoAiPanelShowing() const;\n"
+                "  bool ShouldRestrictMaxWidth() const;\n"
+            ),
+            description="Maho: declare AI side-panel identity predicate",
+            guard="bool IsMahoAiPanelShowing() const;",
+        ),
+    ],
+    "chrome/browser/ui/views/side_panel/side_panel_coordinator.cc": [
+        Replacement(
+            old=(
+                "  auto* content = content_wrapper->AddChildView(\n"
+                "      content_view.has_value() ? std::move(content_view.value())\n"
+                "                               : entry->GetContent());\n"
+                "  content->SetVisible(true);\n"
+            ),
+            new=(
+                "  auto* content = content_wrapper->AddChildView(\n"
+                "      content_view.has_value() ? std::move(content_view.value())\n"
+                "                               : entry->GetContent());\n"
+                "  content->SetVisible(true);\n"
+                "  // Reapply after insertion so borderless entries can identify their content.\n"
+                "  if (!entry->should_show_header()) {\n"
+                "    side_panel->RemoveHeaderView();\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: reapply headerless border state after side-panel content "
+                "identity becomes available"
+            ),
+            guard="Reapply after insertion so borderless entries can identify their content",
         ),
     ],
     # ── contents_layout_manager.cc: robustly size the zero-tab content gradient ──
@@ -7073,6 +8470,34 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
 }
 
 
+def _guard_replacement_literal_keys() -> None:
+    """Reject duplicate literal paths before Python can silently discard them."""
+    module = ast.parse(Path(__file__).read_text())
+    for node in module.body:
+        if not (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "REPLACEMENTS"
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        seen: dict[str, int] = {}
+        for key in node.value.keys:
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                continue
+            if key.value in seen:
+                raise RuntimeError(
+                    "Duplicate literal REPLACEMENTS path "
+                    f"{key.value!r} at lines {seen[key.value]} and {key.lineno}"
+                )
+            seen[key.value] = key.lineno
+        return
+    raise RuntimeError("Unable to locate literal REPLACEMENTS mapping")
+
+
+_guard_replacement_literal_keys()
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -7184,6 +8609,228 @@ def normalize_gn_stale_deps(text: str, relative_path: str = "") -> tuple[str, in
     return "".join(kept_lines), removed_count
 
 
+def normalize_peek_open_url_routing(text: str) -> tuple[str, int]:
+    """Migrates the already-applied ATC-only OpenURLFromTab block to Peek."""
+    original_text = text
+    struct_start = text.find("  struct AtcBypassState {\n")
+    if struct_start < 0:
+        return text, 0
+    end = text.find("\n\n  // If the source is already split", struct_start)
+    if end < 0:
+        return text, 0
+    mac_guard_already_closed = text[:struct_start].rstrip().endswith("#endif")
+    atc_bypass_state = """  struct AtcBypassState {
+    static std::set<Browser*>& BypassedBrowsers() {
+      static std::set<Browser*>* bypassed_browsers = new std::set<Browser*>();
+      return *bypassed_browsers;
+    }
+    static bool ShouldBypass(Browser* browser) {
+      return BypassedBrowsers().count(browser) > 0;
+    }
+    static void SetBypass(Browser* browser, bool bypass) {
+      if (bypass) {
+        BypassedBrowsers().insert(browser);
+      } else {
+        BypassedBrowsers().erase(browser);
+      }
+    }
+  };
+
+"""
+    replacement = """  if (!AtcBypassState::ShouldBypass(this)) {
+    const bool is_top_level =
+        ui::PageTransitionIsMainFrame(params.transition) &&
+        !ui::PageTransitionIsRedirect(params.transition);
+    const bool is_user_initiated =
+        !params.is_renderer_initiated || params.user_gesture;
+    bool is_maho_mini_gesture = false;
+#if BUILDFLAG(IS_MAC)
+    is_maho_mini_gesture =
+        params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
+        !params.started_from_context_menu &&
+        ui::PageTransitionCoreTypeIs(params.transition,
+                                     ui::PAGE_TRANSITION_LINK);
+#endif
+    const bool is_peek_disposition =
+        params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+        params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
+        params.disposition == WindowOpenDisposition::NEW_WINDOW;
+    if (!is_top_level || !is_user_initiated || is_maho_mini_gesture ||
+        (!maho::MahoAtcState::HasEnabledRules() && !is_peek_disposition)) {
+      // Preserve the original path when neither ATC nor Peek can apply.
+    } else {
+    auto route_after_atc = base::BindOnce(
+        [](base::WeakPtr<Browser> browser,
+           base::WeakPtr<Profile> profile,
+           base::WeakPtr<content::WebContents> source,
+           content::OpenURLParams params,
+           base::OnceCallback<void(content::NavigationHandle&)>
+               navigation_handle_callback) {
+          if (!browser || !profile) {
+            return;
+          }
+          BrowserView* browser_view =
+              BrowserView::GetBrowserViewForBrowser(browser.get());
+          maho::MahoPeekController* peek_controller =
+              browser_view
+                  ? browser_view->GetOrCreateMahoPeekController()
+                  : nullptr;
+          const maho::PeekRoute route = maho::DecidePeekRoute({
+              .master_enabled = profile->GetPrefs()->GetBoolean(
+                  maho::sidebar_prefs::kPeekEnabled),
+              .popup_routing_enabled = false,
+              .link_routing_enabled = profile->GetPrefs()->GetBoolean(
+                  maho::sidebar_prefs::kPeekLinkRoutingEnabled),
+              .seam = maho::PeekSeam::kOpenUrlFromTab,
+              .disposition = params.disposition,
+              .source_role =
+                  maho::MahoSidebarContainerView::GetPeekSourceRole(
+                      browser.get(), source.get()),
+              .is_user_initiated = true,
+              .force_tab = params.is_renderer_initiated &&
+                  params.disposition ==
+                      WindowOpenDisposition::NEW_BACKGROUND_TAB,
+              .force_peek = params.is_renderer_initiated &&
+                  params.disposition ==
+                      WindowOpenDisposition::NEW_WINDOW,
+              .is_maho_mini_gesture = false,
+              .atc_has_cross_space_target = false,
+              .peek_slot_state =
+                  peek_controller && peek_controller->SlotBusy()
+                      ? maho::PeekSlotState::kBusy
+                      : maho::PeekSlotState::kClosed,
+          });
+          if (route == maho::PeekRoute::kOpenInPeek && peek_controller &&
+              peek_controller->ShowUrl(source.get(), params.url)) {
+            return;
+          }
+          if (route == maho::PeekRoute::kOpenInForegroundTab) {
+            params.disposition =
+                WindowOpenDisposition::NEW_FOREGROUND_TAB;
+          }
+          AtcBypassState::SetBypass(browser.get(), true);
+          browser->OpenURL(params, std::move(navigation_handle_callback));
+          AtcBypassState::SetBypass(browser.get(), false);
+        },
+        AsWeakPtr(), profile()->GetWeakPtr(),
+        source ? source->GetWeakPtr() : nullptr, params,
+        std::move(navigation_handle_callback));
+
+#if BUILDFLAG(IS_MAC)
+    if (is_top_level && is_user_initiated && !is_maho_mini_gesture &&
+        maho::MahoAtcState::HasEnabledRules()) {
+      std::string current_space_id;
+      maho::MahoSpaceProfileBridge* bridge =
+          maho::MahoSpaceProfileBridge::GetInstance();
+      if (bridge) {
+        current_space_id = bridge->GetActiveSpaceId(this);
+      }
+      maho::DecideLinkDestination(
+          params.url, /*is_external=*/false,
+          base::BindOnce(
+              [](base::WeakPtr<Browser> browser,
+                 std::string current_space_id,
+                 content::OpenURLParams params,
+                 base::OnceClosure no_cross_space,
+                 maho::LinkDestinationResult result) {
+                if (!browser) {
+                  return;
+                }
+                if (result.type == maho::LinkDestinationType::kSpace &&
+                    !result.space_id.empty() &&
+                    result.space_id != current_space_id) {
+                  maho::MahoSpaceProfileBridge* bridge =
+                      maho::MahoSpaceProfileBridge::GetInstance();
+                  if (bridge && bridge->SwitchToSpace(browser.get(),
+                                                      result.space_id)) {
+                    chrome::AddSelectedTabWithURL(
+                        browser.get(), params.url, params.transition);
+                    return;
+                  }
+                }
+                std::move(no_cross_space).Run();
+              },
+              AsWeakPtr(), current_space_id, params,
+              std::move(route_after_atc)));
+      return nullptr;
+    }
+#endif
+
+    std::move(route_after_atc).Run();
+    return nullptr;
+    }
+  }
+"""
+    guard_close = "" if mac_guard_already_closed else "#endif\n\n"
+    canonical = guard_close + atc_bypass_state + replacement
+    text = text[:struct_start] + canonical + text[end:]
+    return text, int(text != original_text)
+
+
+def normalize_atc_peek_throttle_registration(text: str) -> tuple[str, int]:
+    """Widens an already-applied ATC-only throttle registration for Peek."""
+    old = """#if BUILDFLAG(IS_MAC)
+  // Maho ATC: route top-level user-initiated navigations that bypass
+  // Browser::OpenURLFromTab (omnibox typed navigations and plain same-tab
+  // link clicks) into their target space. Gated on HasEnabledRules() so
+  // there is zero overhead (no throttle created) when no rules exist.
+  if (maho::MahoAtcState::HasEnabledRules()) {
+    registry.AddThrottle(
+        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));
+  }
+#endif
+"""
+    wrapped = """#if BUILDFLAG(IS_MAC)
+  // Maho ATC + Peek: keep one throttle decision path for top-level
+  // navigations that bypass Browser::OpenURLFromTab. ATC keeps its existing
+  // eligibility; Peek additionally handles eligible same-tab renderer link
+  // clicks even when no ATC rules are enabled.
+  content::WebContents* web_contents =
+      registry.GetNavigationHandle().GetWebContents();
+  Profile* profile =
+      web_contents
+          ? Profile::FromBrowserContext(web_contents->GetBrowserContext())
+          : nullptr;
+  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
+  const bool peek_link_routing_enabled =
+      prefs && prefs->GetBoolean(maho::sidebar_prefs::kPeekEnabled) &&
+      prefs->GetBoolean(maho::sidebar_prefs::kPeekLinkRoutingEnabled);
+  if (maho::MahoAtcState::HasEnabledRules() ||
+      peek_link_routing_enabled) {
+    registry.AddThrottle(
+        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));
+  }
+#endif
+"""
+    new = """  // Maho ATC + Peek: keep one throttle decision path for top-level
+  // navigations that bypass Browser::OpenURLFromTab. ATC keeps its existing
+  // eligibility; Peek additionally handles eligible same-tab renderer link
+  // clicks even when no ATC rules are enabled.
+  content::WebContents* web_contents =
+      registry.GetNavigationHandle().GetWebContents();
+  Profile* profile =
+      web_contents
+          ? Profile::FromBrowserContext(web_contents->GetBrowserContext())
+          : nullptr;
+  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
+  const bool peek_link_routing_enabled =
+      prefs && prefs->GetBoolean(maho::sidebar_prefs::kPeekEnabled) &&
+      prefs->GetBoolean(maho::sidebar_prefs::kPeekLinkRoutingEnabled);
+  if (maho::MahoAtcState::HasEnabledRules() ||
+      peek_link_routing_enabled) {
+    registry.AddThrottle(
+        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));
+  }
+"""
+    if wrapped in text:
+        return text.replace(wrapped, new, 1), 1
+    if new in text:
+        return text, 0
+    if old not in text:
+        return text, 0
+    return text.replace(old, new, 1), 1
+
+
 def normalize_maho_url_alias_handlers(text: str) -> tuple[str, int]:
     normalized_count = 0
     helper_marker = "bool MahoRewriteNewTabToBlank(GURL* url,"
@@ -7262,6 +8909,14 @@ def apply_replacements(
             changed = True
             applied.append("patched: Make Maho browser-view paths unconditional")
 
+    if target_file.name == "browser.cc":
+        text, normalized_count = normalize_peek_open_url_routing(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Migrate ATC-only OpenURLFromTab routing to ATC + Peek"
+            )
+
     if target_file.name == "browser_widget.cc":
         text, normalized_count = normalize_browser_widget_theme_override(text)
         if normalized_count:
@@ -7271,6 +8926,12 @@ def apply_replacements(
             )
 
     if target_file.name == "chrome_content_browser_client.cc":
+        text, normalized_count = normalize_atc_peek_throttle_registration(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Widen ATC throttle registration for Peek link routing"
+            )
         text, normalized_count = normalize_maho_url_alias_handlers(text)
         if normalized_count:
             changed = True
@@ -7312,6 +8973,17 @@ def apply_replacements(
         text = text.replace(replacement.old, replacement.new, 1)
         changed = True
         applied.append(f"patched: {replacement.description}")
+
+    # A pristine browser.cc receives the OpenURLFromTab hook in the replacement
+    # loop above, so normalize once more after replacements to produce the same
+    # current routing shape in a single override-apply invocation.
+    if target_file.name == "browser.cc":
+        text, normalized_count = normalize_peek_open_url_routing(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Migrate newly inserted OpenURLFromTab routing to ATC + Peek"
+            )
 
     if changed and not dry_run:
         target_file.write_text(text)

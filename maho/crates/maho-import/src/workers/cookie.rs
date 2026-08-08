@@ -102,10 +102,16 @@ impl ImportWorker for CookieWorker {
                 let entries = parsers::chromium::cookies::parse_chromium_cookies(profile_dir)?;
 
                 #[cfg(target_os = "macos")]
-                let decryption_key: Option<ChromiumKey> = keychain_service_account(browser.browser_type)
-                    .and_then(|(service, account)| {
-                        fetch_keychain_key_with_timeout(service, account, std::time::Duration::from_secs(5))
-                    });
+                let decryption_key: Option<ChromiumKey> = keychain_service_account(
+                    browser.browser_type,
+                )
+                .and_then(|(service, account)| {
+                    fetch_keychain_key_with_timeout(
+                        service,
+                        account,
+                        std::time::Duration::from_secs(5),
+                    )
+                });
 
                 #[cfg(target_os = "linux")]
                 let decryption_key: Option<ChromiumKey> = {
@@ -121,8 +127,8 @@ impl ImportWorker for CookieWorker {
                 };
 
                 #[cfg(target_os = "windows")]
-                let windows_decryptor = find_local_state(profile_dir)
-                    .and_then(|local_state_path| {
+                let windows_decryptor =
+                    find_local_state(profile_dir).and_then(|local_state_path| {
                         let browser_name = match browser.browser_type {
                             BrowserType::Chrome => "Chrome",
                             BrowserType::Brave => "Brave",
@@ -131,7 +137,11 @@ impl ImportWorker for CookieWorker {
                             BrowserType::Opera => "Opera",
                             _ => "Chromium",
                         };
-                        crate::decrypt::win_app_bound::WindowsAppBoundDecryptor::for_browser(browser_name, &local_state_path).ok()
+                        crate::decrypt::win_app_bound::WindowsAppBoundDecryptor::for_browser(
+                            browser_name,
+                            &local_state_path,
+                        )
+                        .ok()
                     });
 
                 for entry in &entries {
@@ -150,17 +160,21 @@ impl ImportWorker for CookieWorker {
                             EncryptionVersion::V10 => {
                                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                                 {
-                                    decryption_key
-                                        .as_ref()
-                                        .and_then(|key| decrypt_cookie_v10(&entry.encrypted_value, key).ok())
+                                    decryption_key.as_ref().and_then(|key| {
+                                        decrypt_cookie_v10(&entry.encrypted_value, key).ok()
+                                    })
                                 }
                                 #[cfg(target_os = "windows")]
                                 {
-                                    windows_decryptor
-                                        .as_ref()
-                                        .and_then(|dec| dec.decrypt_cookie(&entry.encrypted_value[3..]).ok())
+                                    windows_decryptor.as_ref().and_then(|dec| {
+                                        dec.decrypt_cookie(&entry.encrypted_value[3..]).ok()
+                                    })
                                 }
-                                #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                                #[cfg(not(any(
+                                    target_os = "macos",
+                                    target_os = "linux",
+                                    target_os = "windows"
+                                )))]
                                 {
                                     None
                                 }
@@ -168,9 +182,9 @@ impl ImportWorker for CookieWorker {
                             EncryptionVersion::V20 => {
                                 #[cfg(target_os = "windows")]
                                 {
-                                    windows_decryptor
-                                        .as_ref()
-                                        .and_then(|dec| dec.decrypt_cookie(&entry.encrypted_value[3..]).ok())
+                                    windows_decryptor.as_ref().and_then(|dec| {
+                                        dec.decrypt_cookie(&entry.encrypted_value[3..]).ok()
+                                    })
                                 }
                                 #[cfg(not(target_os = "windows"))]
                                 {
@@ -183,7 +197,9 @@ impl ImportWorker for CookieWorker {
                         None
                     };
 
-                    let Some(value) = decrypted_value else { continue };
+                    let Some(value) = decrypted_value else {
+                        continue;
+                    };
                     destination.add_cookie(
                         &c.host,
                         &c.name,
@@ -251,7 +267,16 @@ mod tests {
         let dest = Arc::new(MockDestination::new());
 
         dest.add_cookie(".example.com", "session", "abc123", "/", 0, true, true, 1);
-        dest.add_cookie(".test.org", "pref", "dark", "/settings", 1700000000, false, false, 0);
+        dest.add_cookie(
+            ".test.org",
+            "pref",
+            "dark",
+            "/settings",
+            1700000000,
+            false,
+            false,
+            0,
+        );
 
         let cookies = dest.cookies.lock().unwrap();
         assert_eq!(cookies.len(), 2);

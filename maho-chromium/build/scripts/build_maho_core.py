@@ -24,6 +24,10 @@ def mail_oauth_build_env():
         'MAHO_GOOGLE_CLIENT_ID', _DEFAULT_GOOGLE_CLIENT_ID)
     cargo_env.setdefault('MAHO_GOOGLE_CLIENT_ID', google_client_id)
     cargo_env.setdefault('GMAIL_CLIENT_ID', google_client_id)
+    google_client_secret = cargo_env.get(
+        'MAHO_GOOGLE_CLIENT_SECRET', cargo_env.get('GMAIL_CLIENT_SECRET'))
+    if google_client_secret:
+        cargo_env['GMAIL_CLIENT_SECRET'] = google_client_secret
     return cargo_env
 
 
@@ -326,14 +330,17 @@ def build_rust_prebuilt(target=None, incremental=False):
             'bin', 'clang')
         sysroot = os.path.join(
             chromium_src, 'build', 'linux', linux_sysroots[rust_target])
-        target_env = rust_target.replace('-', '_')
-        cargo_env[f'CC_{target_env}'] = clang
-        existing_cflags = cargo_env.get(f'CFLAGS_{target_env}', '')
-        cargo_env[f'CFLAGS_{target_env}'] = ' '.join(filter(None, (
-            existing_cflags,
-            f'--target={rust_target}',
-            f'--sysroot={sysroot}',
-        )))
+        if os.path.isfile(clang) and os.path.isdir(sysroot):
+            target_env = rust_target.replace('-', '_')
+            cargo_env[f'CC_{target_env}'] = clang
+            existing_cflags = cargo_env.get(f'CFLAGS_{target_env}', '')
+            cargo_env[f'CFLAGS_{target_env}'] = ' '.join(filter(None, (
+                existing_cflags,
+                f'--target={rust_target}',
+                f'--sysroot={sysroot}',
+            )))
+        else:
+            print('Chromium Linux toolchain unavailable; using host C toolchain.')
     if incremental:
         # Local dev only. maho/.cargo/config.toml disables cargo's incremental
         # compilation so the sccache rustc-wrapper can cache units, but that

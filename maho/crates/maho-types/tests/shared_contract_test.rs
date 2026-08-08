@@ -76,6 +76,61 @@ fn folder_struct_is_valid() {
 }
 
 #[test]
+fn profile_delete_outcome_has_stable_wire_values_and_codes() {
+    let cases = [
+        (ProfileDeleteOutcome::Deleted, "\"deleted\"", None),
+        (
+            ProfileDeleteOutcome::Protected,
+            "\"protected\"",
+            Some("PROFILE_PROTECTED"),
+        ),
+        (
+            ProfileDeleteOutcome::NotFound,
+            "\"not_found\"",
+            Some("PROFILE_NOT_FOUND"),
+        ),
+        (
+            ProfileDeleteOutcome::InUse,
+            "\"in_use\"",
+            Some("PROFILE_IN_USE"),
+        ),
+        (
+            ProfileDeleteOutcome::FinalProfile,
+            "\"final_profile\"",
+            Some("PROFILE_FINAL"),
+        ),
+        (
+            ProfileDeleteOutcome::PersistenceFailed,
+            "\"persistence_failed\"",
+            Some("PROFILE_PERSISTENCE_FAILED"),
+        ),
+    ];
+
+    for (outcome, expected_json, expected_code) in cases {
+        assert_eq!(serde_json::to_string(&outcome).unwrap(), expected_json);
+        assert_eq!(outcome.error_code(), expected_code);
+        assert_eq!(outcome.is_deleted(), expected_code.is_none());
+    }
+}
+
+#[test]
+fn profile_metadata_validation_contract_is_closed_and_normalized() {
+    assert_eq!(
+        normalize_profile_avatar_color(" #4a90d9 "),
+        Some("#4A90D9".to_string())
+    );
+    assert_eq!(normalize_profile_avatar_color("blue"), None);
+    assert_eq!(normalize_profile_avatar_color("#12345G"), None);
+
+    assert!(is_allowed_profile_archive_timeout(None));
+    for hours in ALLOWED_PROFILE_ARCHIVE_TIMEOUT_HOURS {
+        assert!(is_allowed_profile_archive_timeout(Some(*hours)));
+    }
+    assert!(!is_allowed_profile_archive_timeout(Some(0.0)));
+    assert!(!is_allowed_profile_archive_timeout(Some(48.0)));
+}
+
+#[test]
 fn profile_contains_all_entity_arrays() {
     let profile = Profile {
         id: ProfileId::new("p1"),
@@ -88,6 +143,7 @@ fn profile_contains_all_entity_arrays() {
         search_engines: vec![],
         extensions: vec![],
         settings: Settings {
+            settings_schema_version: 2,
             appearance: AppearanceSettings {
                 theme: Theme::System,
                 density: Density::Comfortable,
@@ -115,6 +171,7 @@ fn profile_contains_all_entity_arrays() {
             privacy: PrivacySettings {
                 do_not_track: true,
                 block_third_party_cookies: false,
+                content_blocking_mode: maho_types::content_blocking::ContentBlockingMode::Native,
                 content_blocker_enabled: true,
                 popup_blocker_enabled: true,
                 search_suggestions_enabled: false,
@@ -567,4 +624,261 @@ fn suggestion_type_ai_answer_serializes_camelcase_for_swift_contract() {
 
     let deserialized: SuggestionType = serde_json::from_str("\"aiAnswer\"").unwrap();
     assert!(matches!(deserialized, SuggestionType::AiAnswer));
+}
+
+// === Content Blocking Mode Contract and Migration ===
+
+#[test]
+fn content_blocking_mode_legacy_boolean_true_deserializes_to_native() {
+    let json = r#"{
+        "doNotTrack": true,
+        "blockThirdPartyCookies": false,
+        "contentBlockerEnabled": true,
+        "popupBlockerEnabled": true
+    }"#;
+    let privacy: PrivacySettings = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        privacy.content_blocking_mode,
+        maho_types::content_blocking::ContentBlockingMode::Native
+    );
+    assert_eq!(privacy.content_blocker_enabled, true);
+}
+
+#[test]
+fn content_blocking_mode_legacy_boolean_false_deserializes_to_disabled() {
+    let json = r#"{
+        "doNotTrack": true,
+        "blockThirdPartyCookies": false,
+        "contentBlockerEnabled": false,
+        "popupBlockerEnabled": true
+    }"#;
+    let privacy: PrivacySettings = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        privacy.content_blocking_mode,
+        maho_types::content_blocking::ContentBlockingMode::Disabled
+    );
+    assert_eq!(privacy.content_blocker_enabled, false);
+}
+
+#[test]
+fn content_blocking_mode_explicit_extension_wins_over_legacy_bool() {
+    let json = r#"{
+        "doNotTrack": true,
+        "blockThirdPartyCookies": false,
+        "contentBlockingMode": "extension",
+        "contentBlockerEnabled": true,
+        "popupBlockerEnabled": true
+    }"#;
+    let privacy: PrivacySettings = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        privacy.content_blocking_mode,
+        maho_types::content_blocking::ContentBlockingMode::Extension
+    );
+    assert_eq!(privacy.content_blocker_enabled, false);
+}
+
+#[test]
+fn content_blocking_mode_serialization_writes_both_fields() {
+    let privacy = PrivacySettings {
+        do_not_track: true,
+        block_third_party_cookies: false,
+        content_blocking_mode: maho_types::content_blocking::ContentBlockingMode::Native,
+        content_blocker_enabled: true,
+        popup_blocker_enabled: true,
+        search_suggestions_enabled: false,
+        secure_dns_enabled: false,
+        secure_dns_provider: String::new(),
+        secure_dns_custom_url: None,
+        clear_data_on_exit: false,
+        safe_browsing_enabled: true,
+    };
+    let json = serde_json::to_string(&privacy).unwrap();
+    assert!(json.contains(r#""contentBlockingMode":"native""#));
+    assert!(json.contains(r#""contentBlockerEnabled":true"#));
+}
+
+// === Typed Content-Blocking Errors (L1 repair) ===
+
+#[test]
+fn content_blocking_error_variants_round_trip() {
+    use maho_types::content_blocking::ContentBlockingError;
+    let cases = vec![
+        ContentBlockingError::DuplicateFilterListId {
+            id: "easylist".to_string(),
+        },
+        ContentBlockingError::InsecureFilterListUrl {
+            url: "http://lists.example/ads.txt".to_string(),
+        },
+        ContentBlockingError::TooManyFilterLists {
+            max: 64,
+            actual: 65,
+        },
+        ContentBlockingError::FilterBodyTooLarge {
+            max_bytes: 16 * 1024 * 1024,
+            actual_bytes: 20 * 1024 * 1024,
+        },
+        ContentBlockingError::InvalidSiteException {
+            input: "not a host".to_string(),
+        },
+        ContentBlockingError::UnknownMode {
+            raw: "turbo".to_string(),
+        },
+    ];
+    for err in cases {
+        let json = serde_json::to_string(&err).unwrap();
+        let back: ContentBlockingError = serde_json::from_str(&json).unwrap();
+        assert_eq!(err, back, "round trip failed for {json}");
+    }
+}
+
+#[test]
+fn content_blocking_error_is_tagged_by_kind() {
+    use maho_types::content_blocking::ContentBlockingError;
+    let json = serde_json::to_string(&ContentBlockingError::TooManyFilterLists {
+        max: 64,
+        actual: 65,
+    })
+    .unwrap();
+    assert!(
+        json.contains(r#""kind":"too_many_filter_lists""#),
+        "got {json}"
+    );
+    assert!(json.contains(r#""max":64"#), "got {json}");
+    assert!(json.contains(r#""actual":65"#), "got {json}");
+    assert_eq!(
+        ContentBlockingError::TooManyFilterLists {
+            max: 64,
+            actual: 65
+        }
+        .code(),
+        "too_many_filter_lists"
+    );
+}
+
+// === Forward-Compatible Unknown Mode Safe Contract (L1 repair) ===
+
+#[test]
+fn content_blocking_mode_unknown_string_maps_to_safe_non_native() {
+    use maho_types::content_blocking::ContentBlockingMode;
+    let mode: ContentBlockingMode = serde_json::from_str("\"turbo\"").unwrap();
+    assert_eq!(mode, ContentBlockingMode::Unknown);
+    assert!(!mode.is_native(), "unknown mode must never be native");
+    assert!(
+        !mode.to_legacy_bool(),
+        "unknown mode must never enable legacy blocking"
+    );
+
+    let json = serde_json::to_string(&ContentBlockingMode::Unknown).unwrap();
+    let back: ContentBlockingMode = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ContentBlockingMode::Unknown);
+
+    assert_eq!(
+        serde_json::from_str::<ContentBlockingMode>("\"native\"").unwrap(),
+        ContentBlockingMode::Native
+    );
+    assert_eq!(
+        serde_json::from_str::<ContentBlockingMode>("\"extension\"").unwrap(),
+        ContentBlockingMode::Extension
+    );
+    assert_eq!(
+        serde_json::from_str::<ContentBlockingMode>("\"disabled\"").unwrap(),
+        ContentBlockingMode::Disabled
+    );
+}
+
+// === Authoritative ContentBlockerStateChanged Payload (L1 repair) ===
+
+#[test]
+fn content_blocker_state_changed_carries_authoritative_mode_and_derives_legacy_enabled() {
+    use maho_types::content_blocking::{ContentBlockerStateChange, ContentBlockingMode};
+    let update = CoreUpdate::ContentBlockerStateChanged(ContentBlockerStateChange {
+        mode: ContentBlockingMode::Extension,
+        popup_blocking: true,
+        last_error: None,
+    });
+    let json = serde_json::to_string(&update).unwrap();
+    assert!(
+        json.contains(r#""kind":"content_blocker_state_changed""#),
+        "got {json}"
+    );
+    assert!(json.contains(r#""mode":"extension""#), "got {json}");
+    assert!(
+        json.contains(r#""enabled":false"#),
+        "legacy enabled must derive from mode: {json}"
+    );
+    assert!(json.contains(r#""popup_blocking":true"#), "got {json}");
+
+    let back: CoreUpdate = serde_json::from_str(&json).unwrap();
+    match back {
+        CoreUpdate::ContentBlockerStateChanged(state) => {
+            assert_eq!(state.mode, ContentBlockingMode::Extension);
+            assert!(state.popup_blocking);
+            assert_eq!(state.last_error, None);
+            assert!(!state.legacy_enabled());
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
+fn content_blocker_state_changed_mode_wins_over_conflicting_legacy_bool() {
+    use maho_types::content_blocking::ContentBlockingMode;
+    let json = r#"{"kind":"content_blocker_state_changed","mode":"extension","enabled":true,"popup_blocking":false}"#;
+    let back: CoreUpdate = serde_json::from_str(json).unwrap();
+    match back {
+        CoreUpdate::ContentBlockerStateChanged(state) => {
+            assert_eq!(state.mode, ContentBlockingMode::Extension);
+            assert!(!state.legacy_enabled(), "derived, not the stale true");
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
+fn content_blocker_state_changed_legacy_bool_only_migrates_to_mode() {
+    use maho_types::content_blocking::ContentBlockingMode;
+    let json = r#"{"kind":"content_blocker_state_changed","enabled":true,"popup_blocking":true}"#;
+    let back: CoreUpdate = serde_json::from_str(json).unwrap();
+    match back {
+        CoreUpdate::ContentBlockerStateChanged(state) => {
+            assert_eq!(state.mode, ContentBlockingMode::Native)
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+    let json = r#"{"kind":"content_blocker_state_changed","enabled":false,"popup_blocking":true}"#;
+    let back: CoreUpdate = serde_json::from_str(json).unwrap();
+    match back {
+        CoreUpdate::ContentBlockerStateChanged(state) => {
+            assert_eq!(state.mode, ContentBlockingMode::Disabled)
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
+fn content_blocker_state_changed_carries_typed_last_error() {
+    use maho_types::content_blocking::{
+        ContentBlockerStateChange, ContentBlockingError, ContentBlockingMode,
+    };
+    let update = CoreUpdate::ContentBlockerStateChanged(ContentBlockerStateChange {
+        mode: ContentBlockingMode::Native,
+        popup_blocking: false,
+        last_error: Some(ContentBlockingError::InsecureFilterListUrl {
+            url: "http://lists.example/ads.txt".to_string(),
+        }),
+    });
+    let json = serde_json::to_string(&update).unwrap();
+    assert!(json.contains(r#""last_error""#), "got {json}");
+    let back: CoreUpdate = serde_json::from_str(&json).unwrap();
+    match back {
+        CoreUpdate::ContentBlockerStateChanged(state) => {
+            assert_eq!(
+                state.last_error,
+                Some(ContentBlockingError::InsecureFilterListUrl {
+                    url: "http://lists.example/ads.txt".to_string(),
+                })
+            );
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
 }

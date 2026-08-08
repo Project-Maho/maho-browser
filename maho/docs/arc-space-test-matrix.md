@@ -23,8 +23,8 @@ Each scenario below should be tracked with these fields during execution:
 | F-01 | Switch to a different Space from the main shell | Confirmed | Multiple Spaces exist | Select Space B | Active Space becomes B, visible tabs update, core state reflects the switch |  |
 | F-02 | Rename a Space | Confirmed | A Space exists with a visible name | Trigger rename, enter new label, confirm | Name updates everywhere it is shown and persists |  |
 | F-03 | Reorder Spaces | Confirmed | Two or more Spaces exist | Move Space C before Space A | Order changes, identities stay the same, active Space remains correct |  |
-| F-04 | Open a tab into a selected Space from Little Arc | Confirmed | Little Arc is open and multiple Spaces exist | Use the `⌘⌥O` flow and pick a Space | The tab opens in the selected Space |  |
-| F-05 | Open in current Space from Little Arc | Confirmed | Little Arc is open | Use the current Space open flow | Tab opens in the current global active Space |  |
+| F-04 | Open a tab into a selected Space from Maho Mini | Confirmed | Maho Mini is open and multiple Spaces exist | Use the `⌘⌥O` flow and pick a Space | The tab opens in the selected Space |  |
+| F-05 | Open in current Space from Maho Mini | Confirmed | Maho Mini is open | Use the current Space open flow | Tab opens in the current global active Space |  |
 | F-06 | Active Space persists after relaunch | Inferred | App state has at least one switched Space | Quit and relaunch | The same active Space is restored |  |
 
 ## Edge cases
@@ -35,7 +35,7 @@ Each scenario below should be tracked with these fields during execution:
 | E-02 | Rename to a duplicate name | Confirmed | Two Spaces with distinct names | Rename one Space to match the other | Rename is rejected with a duplicate-name validation error and both Space names remain unchanged |  |
 | E-03 | Reorder while a Space is active | Confirmed | A Space is active | Move another Space around it | Active Space does not unexpectedly change unless explicitly selected |  |
 | E-04 | Switch Space while a rename prompt is open | Inferred | Rename UI is open | Trigger a Space change elsewhere | Prompt state must not corrupt core state or lose the rename operation unexpectedly |  |
-| E-05 | Use Little Arc when only one Space exists | Inferred | Single Space profile | Open the Space picker flow | Picker should still behave consistently, even if the target set is trivial |  |
+| E-05 | Use Maho Mini when only one Space exists | Inferred | Single Space profile | Open the Space picker flow | Picker should still behave consistently, even if the target set is trivial |  |
 
 ## Regression cases
 
@@ -50,19 +50,19 @@ Each scenario below should be tracked with these fields during execution:
 
 | ID | Scenario | Label | Setup | Steps | Expected outcome | Status |
 |---|---|---|---|---|---|---|
-| K-01 | `⌘⌥O` opens the Space picker in Little Arc | Confirmed | Little Arc window is open | Press `⌘⌥O` | The Space selection menu appears |  |
-| K-02 | `⌘O` opens in the current Space | Confirmed | Little Arc window is open | Press `⌘O` | Content opens in the current active Space |  |
+| K-01 | `⌘⌥O` opens the Space picker in Maho Mini | Confirmed | Maho Mini window is open | Press `⌘⌥O` | The Space selection menu appears |  |
+| K-02 | `⌘O` opens in the current Space | Confirmed | Maho Mini window is open | Press `⌘O` | Content opens in the current active Space |  |
 | K-03 | Keyboard selection chooses the right Space | Inferred | Space picker is visible | Use keyboard navigation to select a Space | Selected target Space receives the action |  |
 | K-04 | Keyboard actions respect the global active-space model | Confirmed | Multiple normal windows are open | Change Space in one window, observe the other | Both windows remain aligned to the same active Space model |  |
 
-## Little Arc cases
+## Maho Mini cases
 
 | ID | Scenario | Label | Setup | Steps | Expected outcome | Status |
 |---|---|---|---|---|---|---|
-| L-01 | Little Arc shows available Spaces | Confirmed | Multiple Spaces exist | Open the `⌘⌥O` flow | Picker lists the available Spaces |  |
-| L-02 | Little Arc targets the chosen Space, not the previous one | Confirmed | A different Space is currently active | Open picker and choose another Space | Content opens in the chosen Space |  |
-| L-03 | Little Arc follows reordered Space order | Inferred | Spaces have been reordered | Open the picker | Picker order matches the canonical order |  |
-| L-04 | Little Arc respects renamed Space labels | Confirmed | A Space has been renamed | Open the picker | The new label is shown consistently |  |
+| L-01 | Maho Mini shows available Spaces | Confirmed | Multiple Spaces exist | Open the `⌘⌥O` flow | Picker lists the available Spaces |  |
+| L-02 | Maho Mini targets the chosen Space, not the previous one | Confirmed | A different Space is currently active | Open picker and choose another Space | Content opens in the chosen Space |  |
+| L-03 | Maho Mini follows reordered Space order | Inferred | Spaces have been reordered | Open the picker | Picker order matches the canonical order |  |
+| L-04 | Maho Mini respects renamed Space labels | Confirmed | A Space has been renamed | Open the picker | The new label is shown consistently |  |
 
 ## Persistence and restore cases
 

@@ -25,8 +25,11 @@ impl SettingsManager {
         }
     }
 
+    pub fn update_privacy(&mut self, _update: PrivacySettingsUpdate) {}
+
     fn default_settings() -> Settings {
         Settings {
+            settings_schema_version: 2,
             general: GeneralSettings {
                 default_search_engine: SearchEngine {
                     name: "Google".to_string(),
@@ -87,6 +90,7 @@ impl SettingsManager {
             privacy: PrivacySettings {
                 do_not_track: true,
                 block_third_party_cookies: false,
+                content_blocking_mode: maho_types::content_blocking::ContentBlockingMode::Native,
                 content_blocker_enabled: true,
                 popup_blocker_enabled: true,
                 search_suggestions_enabled: true,
@@ -187,7 +191,20 @@ impl SettingsManager {
             if let Some(block_third_party_cookies) = privacy.block_third_party_cookies {
                 self.settings.privacy.block_third_party_cookies = block_third_party_cookies;
             }
+            if let Some(content_blocking_mode) = privacy.content_blocking_mode {
+                self.settings.privacy.content_blocking_mode = content_blocking_mode;
+                self.settings.privacy.content_blocker_enabled =
+                    content_blocking_mode.to_legacy_bool();
+            }
             if let Some(content_blocker_enabled) = privacy.content_blocker_enabled {
+                if privacy.content_blocking_mode.is_none() {
+                    let mode = if content_blocker_enabled {
+                        maho_types::content_blocking::ContentBlockingMode::Native
+                    } else {
+                        maho_types::content_blocking::ContentBlockingMode::Disabled
+                    };
+                    self.settings.privacy.content_blocking_mode = mode;
+                }
                 self.settings.privacy.content_blocker_enabled = content_blocker_enabled;
             }
             if let Some(popup_blocker_enabled) = privacy.popup_blocker_enabled {

@@ -62,7 +62,7 @@ class TidyRun {
         ai_gate_(std::move(ai_gate)) {}
 
   void Start() {
-    if (ai_gate_ && !ai_gate_.Run()) {
+    if (!ai_gate_ || !ai_gate_.Run()) {
       Finish(0, "AI is not available in this context");
       return;
     }
@@ -130,7 +130,8 @@ class TidyRun {
         browser_->profile()->GetPrefs(),
         url_loader_factory.get(),
         nullptr,
-        /*provider_adapter_v2_enabled=*/false);
+        /*provider_adapter_v2_enabled=*/false,
+        ai_gate_);
 
     MahoAiLlmClient::CompletionRequest request;
     request.prompt_messages = base::ListValue(std::move(*prompt_messages));

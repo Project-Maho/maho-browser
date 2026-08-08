@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use maho_core::maho_core::MahoCore;
-use maho_types::events::shell_event::ShellEvent;
 use maho_types::common::Url;
+use maho_types::events::shell_event::ShellEvent;
 use tempfile::tempdir;
 
 fn bench_persistence(c: &mut Criterion) {
@@ -16,11 +16,11 @@ fn bench_persistence(c: &mut Criterion) {
         let _updates = core.handle_event(ShellEvent::CreateTab {
             space_id: space_id.clone(),
             url: Some(Url::new(format!("https://example{}.com", i))),
-        parent_id: None,
-        tab_id: None,
-        window_id: None,
-        is_private: false,
-    });
+            parent_id: None,
+            tab_id: None,
+            window_id: None,
+            is_private: false,
+        });
         if let Some(tab) = core.get_tab_view_models().last() {
             tab_ids.push(tab.id.clone());
         }
@@ -61,11 +61,11 @@ fn bench_persistence(c: &mut Criterion) {
                 core.handle_event(ShellEvent::CreateTab {
                     space_id: space_id.clone(),
                     url: Some(Url::new(format!("https://burst-{}.com", i))),
-        parent_id: None,
-        tab_id: None,
-        window_id: None,
-        is_private: false,
-    });
+                    parent_id: None,
+                    tab_id: None,
+                    window_id: None,
+                    is_private: false,
+                });
             }
         });
     });

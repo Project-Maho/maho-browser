@@ -126,8 +126,8 @@ pub struct Boost {
     pub color: ColorBoost,
     pub typography: TypographyBoost,
     pub zap_selectors: Vec<String>,
-    // TRUST BOUNDARY: Raw custom CSS stylesheet injected into target web pages.
-    // It must contain only sanitized, non-executable stylesheet rules.
+    // TRUST BOUNDARY: Values may remain raw at rest; boost_css_sanitizer.rs enforces
+    // the final compose_css injection boundary, while import_boost filters secondarily.
     pub custom_css: String,
     pub change_was_made: bool,
     pub created_at: DateTime,
@@ -287,8 +287,8 @@ pub struct BoostUpdate {
     pub typography: Option<TypographyBoostUpdate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zap_selectors: Option<Vec<String>>,
-    // TRUST BOUNDARY: Raw custom CSS stylesheet injected into target web pages.
-    // It must contain only sanitized, non-executable stylesheet rules.
+    // TRUST BOUNDARY: Values may remain raw at rest; boost_css_sanitizer.rs enforces
+    // the final compose_css injection boundary, while import_boost filters secondarily.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_css: Option<String>,
 }

@@ -80,6 +80,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/ai/maho_ai_settings_migration.h"
+#include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -444,6 +445,10 @@ struct BrowserVaultCredentialLease {
 }  // namespace
 
 void MahoBrowserMainExtraParts::PostEarlyInitialization() {
+  // Keyed-service factories must be registered before Chromium's
+  // ChromeBrowserMainExtraPartsProfiles::PreProfileInit() seals the topology.
+  maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();
+
   base::FilePath user_data_dir;
   if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
     storage_path_ = user_data_dir.AppendASCII("MahoCore");
@@ -1002,8 +1007,10 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
 
   void MailSendEmail(
       const std::string& request_json,
+      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Send Email",
+    if (!already_authorized &&
+        !ConfirmMailWriteAction("Send Email",
                                 "Request JSON: " + request_json)) {
       std::move(callback).Run(false, "Permission denied by user");
       return;
@@ -1018,8 +1025,10 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
 
   void MailSaveDraft(
       const std::string& request_json,
+      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Save Mail Draft",
+    if (!already_authorized &&
+        !ConfirmMailWriteAction("Save Mail Draft",
                                 "Request JSON: " + request_json)) {
       std::move(callback).Run(false, "Permission denied by user");
       return;
@@ -1035,8 +1044,10 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
   void MailUpdateDraft(
       const std::string& draft_id,
       const std::string& request_json,
+      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction(
+    if (!already_authorized &&
+        !ConfirmMailWriteAction(
             "Update Mail Draft",
             "Draft ID: " + draft_id + "\nRequest JSON: " + request_json)) {
       std::move(callback).Run(false, "Permission denied by user");
@@ -2904,6 +2915,10 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
   }
   if (profile && is_regular) {
     maho::MahoMcpSession::SetBrowserDelegate(GetMcpBrowserDelegate());
+    if (auto* artifact_registry =
+            maho::ai::MahoArtifactRegistry::GetForProfile(profile)) {
+      artifact_registry->PrepareArtifactRoot();
+    }
   }
   if (is_initial_profile && profile && is_regular && !core_ &&
       !regular_services_initializing_) {

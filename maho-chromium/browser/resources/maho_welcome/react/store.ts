@@ -15,8 +15,10 @@ import type {
   PasswordProviderKind,
   VaultOperationResult,
 } from '../../maho_settings/maho_settings.mojom-webui.js';
+import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {notifyListeners} from '../../maho_common/react/store_utils.js';
 import type {Listener} from '../../maho_common/react/store_utils.js';
+import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
 import {
   createInitialState,
   VAULT_LOCK_STATE,
@@ -65,6 +67,7 @@ export class MahoWelcomeStore {
   private readonly listeners = new Set<Listener>();
   private readonly pageHandler = new PageHandlerRemote();
   private state: WelcomeState = createInitialState();
+  private authReturnPage: WelcomePage | null = null;
 
   constructor() {
     const factory = PageHandlerFactory.getRemote();
@@ -180,7 +183,9 @@ export class MahoWelcomeStore {
       if (this.state.auth.status !== 'success') {
         return;
       }
-      this.patch(d => { d.currentPage = WelcomePage.Splash; d.direction = 'forward'; });
+      const nextPage = this.authReturnPage ?? WelcomePage.Splash;
+      this.authReturnPage = null;
+      this.patch(d => { d.currentPage = nextPage; d.direction = 'forward'; });
       return;
     }
 
@@ -189,6 +194,9 @@ export class MahoWelcomeStore {
         if (d.aiSetup.provider === 'maho-managed' && d.auth.status !== 'success') {
           d.currentPage = WelcomePage.Auth;
           d.auth = { ...d.auth, mode: 'signin', isReauthMode: false };
+          this.authReturnPage = WelcomePage.PlanSelect;
+        } else if (d.aiSetup.provider === 'maho-managed') {
+          d.currentPage = WelcomePage.PlanSelect;
         } else {
           d.currentPage = WelcomePage.PasswordSetup;
         }
@@ -223,6 +231,20 @@ export class MahoWelcomeStore {
 
   prevPage(): void {
     this.patch(draft => {
+      if (draft.currentPage === WelcomePage.PlanSelect) {
+        draft.currentPage = WelcomePage.AIProvider;
+        draft.direction = 'backward';
+        return;
+      }
+      if (draft.currentPage === WelcomePage.PasswordSetup &&
+          draft.aiSetup.provider === 'maho-managed') {
+        // Managed users reach PasswordSetup via PlanSelect (enum 11, appended
+        // after PasswordSetup=8), so the numeric `- 1` fallback would wrongly
+        // skip back to AIProvider. Return to PlanSelect explicitly (plan §4d).
+        draft.currentPage = WelcomePage.PlanSelect;
+        draft.direction = 'backward';
+        return;
+      }
       if (draft.currentPage > WelcomePage.Splash) {
         draft.direction = 'backward';
         if (draft.currentPage === WelcomePage.SourceSelect &&
@@ -307,7 +329,60 @@ export class MahoWelcomeStore {
     }
   }
 
+  continueWithFreePlan(): void {
+    this.continueAfterPlanSelection();
+  }
+
+  async startSubscriptionCheckout(
+      tier: Exclude<PlanTier, 'free'>): Promise<boolean> {
+    this.patch(draft => {
+      draft.aiSetup = {
+        ...draft.aiSetup,
+        status: 'submitting',
+        errorMessage: '',
+      };
+    });
+
+    try {
+      const {checkoutUrl} =
+          await this.pageHandler.getSubscriptionCheckoutUrl(tier);
+      if (!checkoutUrl) {
+        throw new Error('Checkout is unavailable. Please try again later.');
+      }
+      await openCheckoutOverlay({
+        checkoutUrl,
+        onSuccess: () => {
+          // The overlay success event is only a UI hint; the subscription tier
+          // is confirmed by the LS webhook -> relay -> pref pipeline. Refresh
+          // relay account status rather than trusting local state, then advance.
+          void this.refreshRelayAccountStatus();
+          this.continueAfterPlanSelection();
+        },
+      });
+      this.patch(draft => {
+        draft.aiSetup = {
+          ...draft.aiSetup,
+          status: 'success',
+          errorMessage: '',
+        };
+      });
+      return true;
+    } catch (error) {
+      this.patch(draft => {
+        draft.aiSetup = {
+          ...draft.aiSetup,
+          status: 'error',
+          errorMessage: error instanceof Error
+            ? error.message
+            : 'Checkout is unavailable. Please try again later.',
+        };
+      });
+      return false;
+    }
+  }
+
   goToAuth(): void {
+    this.authReturnPage = null;
     this.patch(draft => {
       draft.currentPage = WelcomePage.Auth;
       draft.auth = { ...draft.auth, mode: 'signin', isReauthMode: false };
@@ -316,9 +391,17 @@ export class MahoWelcomeStore {
   }
 
   goToAuthSignup(): void {
+    this.authReturnPage = null;
     this.patch(draft => {
       draft.currentPage = WelcomePage.Auth;
       draft.auth = { ...draft.auth, mode: 'signup', isReauthMode: false };
+      draft.direction = 'forward';
+    });
+  }
+
+  private continueAfterPlanSelection(): void {
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.PasswordSetup;
       draft.direction = 'forward';
     });
   }

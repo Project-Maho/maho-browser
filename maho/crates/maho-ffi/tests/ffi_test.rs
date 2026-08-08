@@ -15,6 +15,197 @@ fn free_null_is_safe() {
     unsafe { maho_ffi::maho_core_free(std::ptr::null_mut()) };
 }
 
+fn take_json(ptr: *mut c_char) -> Value {
+    assert!(!ptr.is_null());
+    let value = serde_json::from_str(unsafe { CStr::from_ptr(ptr) }.to_str().unwrap()).unwrap();
+    unsafe { maho_ffi::maho_string_free(ptr) };
+    value
+}
+
+#[test]
+fn profile_update_ffi_persists_target_metadata_and_archive_without_switching_active() {
+    let key =
+        CString::new("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789").unwrap();
+    assert!(unsafe { maho_ffi::maho_storage_set_sqlcipher_key(key.as_ptr()) });
+    let dir = std::env::temp_dir().join(format!(
+        "maho-ffi-profile-update-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = CString::new(dir.join("profile.sqlite").to_string_lossy().as_bytes()).unwrap();
+
+    let ptr = unsafe { maho_ffi::maho_core_new_with_storage(db_path.as_ptr()) };
+    assert!(!ptr.is_null());
+    let active_name = CString::new("Profile A").unwrap();
+    let active =
+        take_json(unsafe { maho_ffi::maho_core_create_profile(ptr, active_name.as_ptr()) });
+    let active_id = CString::new(active["id"].as_str().unwrap()).unwrap();
+    assert!(unsafe { maho_ffi::maho_core_switch_profile(ptr, active_id.as_ptr()) });
+    let target_name = CString::new("Profile B").unwrap();
+    let target =
+        take_json(unsafe { maho_ffi::maho_core_create_profile(ptr, target_name.as_ptr()) });
+    let target_id = CString::new(target["id"].as_str().unwrap()).unwrap();
+
+    let updated_name = CString::new("  Profile B Updated  ").unwrap();
+    let updated_color = CString::new("#af52de").unwrap();
+    let updated = take_json(unsafe {
+        maho_ffi::maho_core_update_profile(
+            ptr,
+            target_id.as_ptr(),
+            updated_name.as_ptr(),
+            updated_color.as_ptr(),
+        )
+    });
+    assert_eq!(updated["ok"], true);
+    assert_eq!(updated["profile"]["name"], "Profile B Updated");
+    assert_eq!(updated["profile"]["avatarColor"], "#AF52DE");
+
+    let archive = take_json(unsafe {
+        maho_ffi::maho_core_set_profile_archive_timeout(ptr, target_id.as_ptr(), 0)
+    });
+    assert_eq!(archive["ok"], true);
+    let archive = take_json(unsafe {
+        maho_ffi::maho_core_get_profile_archive_timeout(ptr, target_id.as_ptr())
+    });
+    assert_eq!(archive["ok"], true);
+    assert_eq!(archive["timeout_hours"], 0.0);
+
+    let profiles = take_json(unsafe { maho_ffi::maho_core_list_profiles(ptr) });
+    let active_before_reopen = take_json(unsafe { maho_ffi::maho_core_get_active_profile_id(ptr) });
+    assert_eq!(active_before_reopen, active["id"]);
+    assert_eq!(
+        profiles
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == active["id"])
+            .unwrap()["name"],
+        "Profile A"
+    );
+    unsafe { maho_ffi::maho_core_free(ptr) };
+
+    let reopened = unsafe { maho_ffi::maho_core_new_with_storage(db_path.as_ptr()) };
+    assert!(!reopened.is_null());
+    assert_eq!(unsafe { maho_ffi::maho_core_load_state(reopened) }, 1);
+    let profiles = take_json(unsafe { maho_ffi::maho_core_list_profiles(reopened) });
+    let restored = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["id"] == target["id"])
+        .unwrap();
+    assert_eq!(restored["name"], "Profile B Updated");
+    assert_eq!(restored["avatarColor"], "#AF52DE");
+    assert!(restored["archiveTimeoutHours"].is_null());
+    assert_eq!(
+        take_json(unsafe { maho_ffi::maho_core_get_active_profile_id(reopened) }),
+        active["id"]
+    );
+    unsafe { maho_ffi::maho_core_free(reopened) };
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn profile_update_ffi_returns_structured_validation_and_lookup_errors() {
+    let ptr = maho_ffi::maho_core_new();
+    let first_name = CString::new("Work").unwrap();
+    let first = take_json(unsafe { maho_ffi::maho_core_create_profile(ptr, first_name.as_ptr()) });
+    let second_name = CString::new("Personal").unwrap();
+    let second =
+        take_json(unsafe { maho_ffi::maho_core_create_profile(ptr, second_name.as_ptr()) });
+    let second_id = CString::new(second["id"].as_str().unwrap()).unwrap();
+    let duplicate = CString::new("  wOrK  ").unwrap();
+    let color = CString::new("#007AFF").unwrap();
+    let duplicate_result = take_json(unsafe {
+        maho_ffi::maho_core_update_profile(
+            ptr,
+            second_id.as_ptr(),
+            duplicate.as_ptr(),
+            color.as_ptr(),
+        )
+    });
+    assert_eq!(duplicate_result["ok"], false);
+    assert_eq!(duplicate_result["error"]["code"], "PROFILE_NAME_DUPLICATE");
+
+    let missing_id = CString::new("missing-profile").unwrap();
+    let missing = take_json(unsafe {
+        maho_ffi::maho_core_update_profile(
+            ptr,
+            missing_id.as_ptr(),
+            first_name.as_ptr(),
+            color.as_ptr(),
+        )
+    });
+    assert_eq!(missing["ok"], false);
+    assert_eq!(missing["error"]["code"], "PROFILE_NOT_FOUND");
+    let missing_archive = take_json(unsafe {
+        maho_ffi::maho_core_get_profile_archive_timeout(ptr, missing_id.as_ptr())
+    });
+    assert_eq!(missing_archive["error"]["code"], "PROFILE_NOT_FOUND");
+    let invalid_archive = take_json(unsafe {
+        maho_ffi::maho_core_set_profile_archive_timeout(ptr, second_id.as_ptr(), 13)
+    });
+    assert_eq!(
+        invalid_archive["error"]["code"],
+        "PROFILE_ARCHIVE_TIMEOUT_INVALID"
+    );
+
+    let profiles = take_json(unsafe { maho_ffi::maho_core_list_profiles(ptr) });
+    assert_eq!(
+        profiles
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == second["id"])
+            .unwrap()["name"],
+        "Personal"
+    );
+    assert!(profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|profile| profile["id"] == first["id"]));
+    unsafe { maho_ffi::maho_core_free(ptr) };
+}
+
+#[test]
+fn profile_delete_ffi_preserves_success_shape_and_adds_structured_outcome() {
+    let ptr = maho_ffi::maho_core_new();
+    let profiles = take_json(unsafe { maho_ffi::maho_core_list_profiles(ptr) });
+    let default_id = profiles[0]["id"].as_str().unwrap();
+    let default_id = CString::new(default_id).unwrap();
+
+    let protected =
+        take_json(unsafe { maho_ffi::maho_core_delete_profile(ptr, default_id.as_ptr()) });
+    assert_eq!(protected["success"], false);
+    assert!(protected["profile_id"].is_null());
+    assert_eq!(protected["outcome"], "protected");
+    assert_eq!(protected["error_code"], "PROFILE_PROTECTED");
+
+    let missing_id = CString::new("malformed/not-a-real-profile").unwrap();
+    let missing =
+        take_json(unsafe { maho_ffi::maho_core_delete_profile(ptr, missing_id.as_ptr()) });
+    assert_eq!(missing["success"], false);
+    assert_eq!(missing["outcome"], "not_found");
+    assert_eq!(missing["error_code"], "PROFILE_NOT_FOUND");
+
+    let name = CString::new("Disposable").unwrap();
+    let created = take_json(unsafe { maho_ffi::maho_core_create_profile(ptr, name.as_ptr()) });
+    let created_id = CString::new(created["id"].as_str().unwrap()).unwrap();
+    let deleted =
+        take_json(unsafe { maho_ffi::maho_core_delete_profile(ptr, created_id.as_ptr()) });
+    assert_eq!(deleted["success"], true);
+    assert_eq!(deleted["profile_id"], created["id"]);
+    assert_eq!(deleted["outcome"], "deleted");
+    assert!(deleted["error_code"].is_null());
+
+    unsafe { maho_ffi::maho_core_free(ptr) };
+}
+
 // Regression for G-DL6: C++ BuildStartJson writes total_bytes as a double, so
 // base::JSONWriter emits "5000.0". serde_json parses that as f64, and as_u64()
 // returns None -> total_bytes was stored as 0. The FFI now falls back to as_f64().

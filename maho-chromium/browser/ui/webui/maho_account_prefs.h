@@ -25,6 +25,17 @@ inline constexpr char kRelayUserId[] = "maho.auth.relay.user.id";
 inline constexpr char kRelayUserDisplayName[] =
     "maho.auth.relay.user.display_name";
 inline constexpr char kRelayUserTier[] = "maho.auth.relay.user.tier";
+// Optional canonical identity link returned by the relay. Both values are
+// stored only when the response supplies a non-empty pair.
+inline constexpr char kRelayOAuthProvider[] =
+    "maho.auth.relay.user.oauth_provider";
+inline constexpr char kRelayOAuthProviderSub[] =
+    "maho.auth.relay.user.oauth_provider_sub";
+
+// Stable per-profile device identifier (client-generated UUID). Sent on
+// login/signup so the relay reuses this device's row and sync room instead of
+// minting a new one each time.
+inline constexpr char kRelayDeviceId[] = "maho.auth.relay.device_id";
 
 inline constexpr char kRelaySubscriptionStatus[] =
     "maho.auth.relay.subscription_status";

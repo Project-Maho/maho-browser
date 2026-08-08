@@ -34,7 +34,9 @@ impl ImportWorker for HistoryWorker {
             | BrowserType::Brave
             | BrowserType::Edge
             | BrowserType::Vivaldi
-            | BrowserType::Opera => parsers::chromium::history::parse_chromium_history(profile_dir)?,
+            | BrowserType::Opera => {
+                parsers::chromium::history::parse_chromium_history(profile_dir)?
+            }
             BrowserType::Firefox | BrowserType::Zen => {
                 parsers::firefox::history::parse_firefox_history(profile_dir)?
             }
@@ -51,16 +53,16 @@ impl ImportWorker for HistoryWorker {
                 break;
             }
 
-            destination.add_history(&entry.url, &entry.title, entry.visit_time, entry.visit_count);
+            destination.add_history(
+                &entry.url,
+                &entry.title,
+                entry.visit_time,
+                entry.visit_count,
+            );
             count += 1;
 
             if count % 1000 == 0 {
-                send_update(
-                    progress,
-                    ImportType::History,
-                    count,
-                    "Importing history...",
-                );
+                send_update(progress, ImportType::History, count, "Importing history...");
             }
         }
 

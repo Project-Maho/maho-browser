@@ -1,15 +1,15 @@
 // Model Context Protocol Client
-use rmcp::service::RunningService;
-use rmcp::{RoleClient, Peer};
-use rmcp::model::{CallToolRequestParams, ClientInfo, ProtocolVersion};
-use rmcp::transport::IntoTransport;
-use maho_types::ai::{AiMcpServer, McpTransport};
-use maho_types::tool::{ToolDescriptor, ToolProvenance, ToolPermission};
-use std::time::Duration;
-use std::sync::{Arc, OnceLock};
-use std::ops::Deref;
-use serde_json::Value;
 use anyhow::Result;
+use maho_types::ai::{AiMcpServer, McpTransport};
+use maho_types::tool::{ToolDescriptor, ToolPermission, ToolProvenance};
+use rmcp::model::{CallToolRequestParams, ClientInfo, ProtocolVersion};
+use rmcp::service::RunningService;
+use rmcp::transport::IntoTransport;
+use rmcp::{Peer, RoleClient};
+use serde_json::Value;
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tokio::runtime::Runtime;
 
 fn get_mcp_runtime() -> &'static Runtime {
@@ -46,7 +46,10 @@ fn get_mcp_runtime() -> &'static Runtime {
 /// READ-ONLY dogfood tools may auto-run without a permission prompt. Sensitive
 /// browser *actions* (clicks, typing, navigation, tab creation, etc.) must still
 /// be gated by the permission callback — see [`is_readonly_dogfood_tool`].
-pub fn resolve_uds_permission(transport: McpTransport, socket_path: Option<&str>) -> ToolPermission {
+pub fn resolve_uds_permission(
+    transport: McpTransport,
+    socket_path: Option<&str>,
+) -> ToolPermission {
     let is_browser_dogfood = transport == McpTransport::Uds
         && socket_path.is_some_and(|p| {
             std::path::Path::new(p) == maho_browser_mcp::paths::default_socket_path()
@@ -95,7 +98,7 @@ pub fn is_readonly_dogfood_tool(raw_name: &str) -> bool {
             | "browser_accessibility_snapshot"
             | "browser_console_messages"
             | "browser_network_get_har"
-            | "browser_get_allowed_domains"
+            | "browser_get_blocked_domains"
             | "browser_routines_list"
             | "mail_list_accounts"
             | "mail_list_folders"
@@ -185,9 +188,8 @@ fn peer_exe_path(pid: i32) -> Option<String> {
     // proc_pidpath fills an absolute path; PROC_PIDPATHINFO_MAXSIZE == 4 * MAXPATHLEN.
     const BUF_LEN: usize = 4 * 1024;
     let mut buf = vec![0u8; BUF_LEN];
-    let n = unsafe {
-        libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, BUF_LEN as u32)
-    };
+    let n =
+        unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, BUF_LEN as u32) };
     if n <= 0 {
         return None;
     }
@@ -262,11 +264,10 @@ fn apply_output_cap(mut val: Value, output_cap: usize) -> Result<Value> {
 impl McpClient {
     pub async fn connect(config: &AiMcpServer, auth_token: Option<String>) -> Result<Self> {
         let config_clone = config.clone();
-        
-        let handle = get_mcp_runtime().spawn(async move {
-            Self::connect_internal(&config_clone, auth_token).await
-        });
-        
+
+        let handle = get_mcp_runtime()
+            .spawn(async move { Self::connect_internal(&config_clone, auth_token).await });
+
         match handle.await? {
             Ok(client) => {
                 maho_types::events::core_update::emit_core_update(
@@ -274,7 +275,7 @@ impl McpClient {
                         workspace_id: config.workspace_id.clone(),
                         server_name: config.name.clone(),
                         available: true,
-                    }
+                    },
                 );
                 Ok(client)
             }
@@ -284,7 +285,7 @@ impl McpClient {
                         workspace_id: config.workspace_id.clone(),
                         server_name: config.name.clone(),
                         available: false,
-                    }
+                    },
                 );
                 Err(e)
             }
@@ -298,15 +299,19 @@ impl McpClient {
 
         match config.transport {
             McpTransport::Stdio => {
-                let command_str = config.command.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("Command is required for stdio transport")
-                })?;
+                let command_str = config
+                    .command
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Command is required for stdio transport"))?;
 
                 let mut parts: Vec<String> = if command_str.trim().starts_with('[') {
                     serde_json::from_str(command_str)
                         .unwrap_or_else(|_| vec![command_str.to_string()])
                 } else {
-                    command_str.split_whitespace().map(|s| s.to_string()).collect()
+                    command_str
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect()
                 };
 
                 if parts.is_empty() {
@@ -329,8 +334,10 @@ impl McpClient {
 
                 tokio_cmd.current_dir(std::env::temp_dir());
 
-                let child_transport = rmcp::transport::TokioChildProcess::new(tokio_cmd)
-                    .map_err(|e| anyhow::anyhow!("Failed to build child process transport: {:?}", e))?;
+                let child_transport =
+                    rmcp::transport::TokioChildProcess::new(tokio_cmd).map_err(|e| {
+                        anyhow::anyhow!("Failed to build child process transport: {:?}", e)
+                    })?;
 
                 let client = rmcp::service::serve_client(ClientInfo::default(), child_transport)
                     .await
@@ -350,16 +357,18 @@ impl McpClient {
                 })
             }
             McpTransport::Http => {
-                let url_str = config.url.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("URL is required for HTTP transport")
-                })?;
+                let url_str = config
+                    .url
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("URL is required for HTTP transport"))?;
 
                 let mut transport_config = rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(url_str.as_str());
                 if let Some(token) = auth_token {
                     transport_config = transport_config.auth_header(token);
                 }
 
-                let http_transport = rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
+                let http_transport =
+                    rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
                 let client = rmcp::service::serve_client(ClientInfo::default(), http_transport)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to start MCP HTTP client: {:?}", e))?;
@@ -387,81 +396,83 @@ impl McpClient {
                 }
                 #[cfg(unix)]
                 {
-                let socket_path = config.socket_path.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("Socket path is required for UDS transport")
-                })?;
-                tracing::debug!(
-                    target: "maho_agent::mcp_client",
-                    server = %server_name,
-                    socket_path = %socket_path,
-                    "McpClient::connect UDS starting"
-                );
-                let stream = tokio::net::UnixStream::connect(socket_path)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to connect to UDS: {:?}", e))?;
+                    let socket_path = config.socket_path.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("Socket path is required for UDS transport")
+                    })?;
+                    tracing::debug!(
+                        target: "maho_agent::mcp_client",
+                        server = %server_name,
+                        socket_path = %socket_path,
+                        "McpClient::connect UDS starting"
+                    );
+                    let stream = tokio::net::UnixStream::connect(socket_path)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to connect to UDS: {:?}", e))?;
 
-                // FIX-9b (#4): trust the peer, not just the path. If the socket
-                // path matches the dogfood default (candidate AutoApprove), verify
-                // the connected peer is a same-user Maho browser process; on
-                // failure fail-closed to AlwaysAsk so an env-redirected or
-                // path-squatting socket cannot inherit auto-approval.
-                let candidate_permission =
-                    resolve_uds_permission(config.transport, config.socket_path.as_deref());
-                let resolved_permission = if candidate_permission
-                    == ToolPermission::AutoApprove
-                {
-                    match verify_uds_peer(&stream) {
-                        Ok(()) => ToolPermission::AutoApprove,
-                        Err(reason) => {
-                            tracing::warn!(
-                                target: "maho_agent::mcp_client",
-                                server = %server_name,
-                                socket_path = %socket_path,
-                                %reason,
-                                "UDS peer verification failed; downgrading AutoApprove -> AlwaysAsk (fail-closed)"
-                            );
-                            ToolPermission::AlwaysAsk
+                    // FIX-9b (#4): trust the peer, not just the path. If the socket
+                    // path matches the dogfood default (candidate AutoApprove), verify
+                    // the connected peer is a same-user Maho browser process; on
+                    // failure fail-closed to AlwaysAsk so an env-redirected or
+                    // path-squatting socket cannot inherit auto-approval.
+                    let candidate_permission =
+                        resolve_uds_permission(config.transport, config.socket_path.as_deref());
+                    let resolved_permission = if candidate_permission == ToolPermission::AutoApprove
+                    {
+                        match verify_uds_peer(&stream) {
+                            Ok(()) => ToolPermission::AutoApprove,
+                            Err(reason) => {
+                                tracing::warn!(
+                                    target: "maho_agent::mcp_client",
+                                    server = %server_name,
+                                    socket_path = %socket_path,
+                                    %reason,
+                                    "UDS peer verification failed; downgrading AutoApprove -> AlwaysAsk (fail-closed)"
+                                );
+                                ToolPermission::AlwaysAsk
+                            }
                         }
-                    }
-                } else {
-                    candidate_permission
-                };
+                    } else {
+                        candidate_permission
+                    };
 
-                let client_info =
-                    ClientInfo::default().with_protocol_version(ProtocolVersion::V_2025_03_26);
-                let client = rmcp::service::serve_client(client_info, IntoTransport::into_transport(stream))
+                    let client_info =
+                        ClientInfo::default().with_protocol_version(ProtocolVersion::V_2025_03_26);
+                    let client = rmcp::service::serve_client(
+                        client_info,
+                        IntoTransport::into_transport(stream),
+                    )
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to start MCP UDS client: {:?}", e))?;
 
-                let peer = client.deref().clone();
-                tracing::debug!(
-                    target: "maho_agent::mcp_client",
-                    server = %server_name,
-                    socket_path = %socket_path,
-                    permission = ?resolved_permission,
-                    "McpClient::connect UDS succeeded"
-                );
-                let browser_client = if resolved_permission == ToolPermission::AutoApprove {
-                    Some(Arc::new(
-                        maho_browser_mcp::client::BrowserClient::connect(std::path::Path::new(
-                            socket_path,
+                    let peer = client.deref().clone();
+                    tracing::debug!(
+                        target: "maho_agent::mcp_client",
+                        server = %server_name,
+                        socket_path = %socket_path,
+                        permission = ?resolved_permission,
+                        "McpClient::connect UDS succeeded"
+                    );
+                    let browser_client = if resolved_permission == ToolPermission::AutoApprove {
+                        Some(Arc::new(
+                            maho_browser_mcp::client::BrowserClient::connect(std::path::Path::new(
+                                socket_path,
+                            ))
+                            .await?,
                         ))
-                        .await?,
-                    ))
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
-                Ok(Self {
-                    workspace_id: config.workspace_id.clone(),
-                    server_name,
-                    peer,
-                    client: Some(client),
-                    browser_client,
-                    timeout,
-                    output_cap,
-                    resolved_permission,
-                })
+                    Ok(Self {
+                        workspace_id: config.workspace_id.clone(),
+                        server_name,
+                        peer,
+                        client: Some(client),
+                        browser_client,
+                        timeout,
+                        output_cap,
+                        resolved_permission,
+                    })
                 }
             }
         }
@@ -510,10 +521,9 @@ impl McpClient {
                             .and_then(|description| description.as_str())
                             .unwrap_or_default()
                             .to_string();
-                        let parameters_schema = tool
-                            .get("inputSchema")
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
+                        let parameters_schema = tool.get("inputSchema").cloned().unwrap_or_else(
+                            || serde_json::json!({ "type": "object", "properties": {} }),
+                        );
 
                         Ok(ToolDescriptor {
                             name: format!("mcp:{}/{}", server_name, raw_name),
@@ -564,7 +574,11 @@ impl McpClient {
                 .into_iter()
                 .map(|t| {
                     let namespaced_name = format!("mcp:{}/{}", server_name, t.name);
-                    let description = t.description.as_ref().map(|d| d.to_string()).unwrap_or_default();
+                    let description = t
+                        .description
+                        .as_ref()
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
                     let parameters_schema = t.schema_as_json_value();
 
                     ToolDescriptor {
@@ -645,7 +659,7 @@ impl McpClient {
                 workspace_id: self.workspace_id.clone(),
                 server_name: self.server_name.clone(),
                 available: false,
-            }
+            },
         );
     }
 
@@ -654,13 +668,13 @@ impl McpClient {
         self.browser_client.take();
         let ws_id = self.workspace_id.clone();
         let s_name = self.server_name.clone();
-        
+
         let handle = get_mcp_runtime().spawn(async move {
             if let Some(client) = client_opt.take() {
                 drop(client);
             }
         });
-        
+
         let _ = handle.await;
 
         maho_types::events::core_update::emit_core_update(
@@ -668,7 +682,7 @@ impl McpClient {
                 workspace_id: ws_id,
                 server_name: s_name,
                 available: false,
-            }
+            },
         );
     }
 }
@@ -694,7 +708,7 @@ mod tests {
             "browser_accessibility_snapshot",
             "browser_console_messages",
             "browser_network_get_har",
-            "browser_get_allowed_domains",
+            "browser_get_blocked_domains",
             "browser_routines_list",
             "mail_list_accounts",
             "mail_list_folders",
@@ -726,7 +740,7 @@ mod tests {
             "browser_wait_for_navigation",
             "browser_network_start_capture",
             "browser_network_stop_capture",
-            "browser_set_allowed_domains",
+            "browser_set_blocked_domains",
             "browser_acquire_lease",
             "browser_heartbeat_lease",
             "browser_release_lease",

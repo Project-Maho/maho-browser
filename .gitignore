@@ -82,3 +82,21 @@ visual-qa-output/
 
 # Local signing keys (never commit) — migrate to 1Password when team grows
 .secrets/
+
+# Cargo build output. Each workspace has its own target/, and cargo check runs
+# with --target-dir target_check so a check never invalidates a build.
+target/
+target_check/
+
+# SwiftPM resolves package checkouts into the shell's .swiftpm; they are clones
+# of upstream repos, not our source.
+/maho/ios-shell/.swiftpm/
+
+# Web-research scratch captures (site snapshots, extracted chunks, network logs).
+# Ad-hoc analysis output, not project source.
+/aside-*
+/zen-*
+/hero-*-snapshot.md
+/roadmap-snapshot.md
+/normal-playwright-accessibility.md
+/.build-lock-out_*

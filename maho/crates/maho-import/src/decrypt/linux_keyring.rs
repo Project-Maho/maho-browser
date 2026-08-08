@@ -4,9 +4,9 @@
 
 //! Linux cookie/password decryption key retriever using Secret Service (libsecret/kwallet).
 
-use crate::decrypt::chromium_keychain::ChromiumKey;
 #[cfg(target_os = "linux")]
 use crate::decrypt::chromium_keychain::derive_aes_key;
+use crate::decrypt::chromium_keychain::ChromiumKey;
 
 /// Retrieves the Chromium encryption key from the system keyring on Linux.
 #[cfg(target_os = "linux")]
@@ -31,13 +31,14 @@ pub fn fetch_linux_keyring_key(browser_name: &str) -> Option<ChromiumKey> {
     };
 
     // Try to get password from Freedesktop Secret Service API via `secret-service` crate
-    if let Ok(ss) = secret_service::blocking::SecretService::connect(secret_service::EncryptionType::Dh) {
+    if let Ok(ss) =
+        secret_service::blocking::SecretService::connect(secret_service::EncryptionType::Dh)
+    {
         if let Ok(collection) = ss.get_default_collection() {
-            let search_attributes = [
-                ("application", service_name),
-            ];
+            let search_attributes = [("application", service_name)];
             // Secret Service search might match by application attribute
-            if let Ok(items) = collection.search_items(search_attributes.iter().cloned().collect()) {
+            if let Ok(items) = collection.search_items(search_attributes.iter().cloned().collect())
+            {
                 for item in items {
                     if let Ok(secret) = item.get_secret() {
                         if !secret.is_empty() {

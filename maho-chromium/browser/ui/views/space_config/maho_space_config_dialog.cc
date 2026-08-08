@@ -6,12 +6,10 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
-#include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom.h"
-#include "ui/color/color_provider_manager.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/webview/webview.h"
@@ -73,12 +71,6 @@ class MahoSpaceConfigDialogDelegate : public views::DialogDelegate {
   void WindowClosing() override {
     g_space_config_dialog_widget = nullptr;
     g_active_mode = MahoSpaceConfigDialog::ActiveMode::kNone;
-
-    if (MahoSpaceThemeState::HasPreviewOverride()) {
-      MahoSpaceThemeState::ClearPreviewOverride();
-      MahoSpaceThemeState::UpdateFromCore();
-      ui::ColorProviderManager::Get().ResetColorProviderCache();
-    }
 
     if (web_view_) {
       web_view_->SetWebContents(nullptr);

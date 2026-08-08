@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "chrome/browser/profiles/profile.h"
+#include "maho/browser/ai/maho_credential_redaction.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "url/gurl.h"
 
@@ -156,6 +157,16 @@ inline std::string WrapUntrusted(std::string_view content) {
   return std::string(kUntrustedContentBegin) + "\n" +
          EscapeForDelimiter(content) + "\n" +
          std::string(kUntrustedContentEnd);
+}
+
+// ---------------------------------------------------------------------------
+// 5. Credential-token redaction for AI-facing page text
+// ---------------------------------------------------------------------------
+
+// True for base64url alphabet plus padding/url-safe variants. Kept local so
+// this header stays dependency-free (no re2) and safe to include anywhere.
+inline std::string RedactCredentialTokens(std::string_view input) {
+  return credential_redaction::RedactCredentialText(input);
 }
 
 }  // namespace maho::ai_security

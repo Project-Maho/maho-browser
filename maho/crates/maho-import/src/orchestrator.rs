@@ -94,12 +94,13 @@ pub trait ImportDestination: Send + Sync {
     /// Create a new space. Returns the new space ID, or None on failure.
     fn create_space(&self, name: &str, theme: &str, icon: &str) -> Option<String>;
     /// Create a tab in a space. Returns the new tab ID.
-    fn create_tab(&self, space_id: &str, url: &str) -> Option<String>;
+    fn create_tab(&self, space_id: &str, url: &str, title: &str) -> Option<String>;
     /// Create a tab in a specific folder. Returns the new tab ID.
     fn create_tab_in_folder(
         &self,
         space_id: &str,
         url: &str,
+        title: &str,
         folder_id: &str,
     ) -> Option<String>;
     /// Create a folder. Returns the new folder ID.
@@ -290,8 +291,7 @@ impl Orchestrator {
                 worker.run(browser, &*self.destination, &self.cancelled, progress)
             }
             ImportType::Passwords => {
-                let worker =
-                    workers::password::PasswordWorker::new(self.password_csv_path.clone());
+                let worker = workers::password::PasswordWorker::new(self.password_csv_path.clone());
                 worker.run(browser, &*self.destination, &self.cancelled, progress)
             }
             ImportType::Autofill => {
@@ -369,13 +369,27 @@ mod tests {
 
         let browser = make_browser(BrowserType::Chrome, ImportServices::HISTORY);
         // Request bookmarks + history, only history should run
-        orch.start_import(&browser, ImportServices::BOOKMARKS | ImportServices::HISTORY, tx)
-            .unwrap();
+        orch.start_import(
+            &browser,
+            ImportServices::BOOKMARKS | ImportServices::HISTORY,
+            tx,
+        )
+        .unwrap();
 
         let msgs: Vec<_> = rx.try_iter().collect();
         // Should see Starting(History), then an error (file not found) or TypeComplete, then AllComplete
-        assert!(msgs.iter().any(|m| matches!(m, ImportProgress::Starting { import_type: ImportType::History })));
-        assert!(!msgs.iter().any(|m| matches!(m, ImportProgress::Starting { import_type: ImportType::Bookmarks })));
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ImportProgress::Starting {
+                import_type: ImportType::History
+            }
+        )));
+        assert!(!msgs.iter().any(|m| matches!(
+            m,
+            ImportProgress::Starting {
+                import_type: ImportType::Bookmarks
+            }
+        )));
         assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete));
     }
 
@@ -392,15 +406,23 @@ mod tests {
             BrowserType::Chrome,
             ImportServices::BOOKMARKS | ImportServices::HISTORY,
         );
-        orch.start_import(&browser, ImportServices::BOOKMARKS | ImportServices::HISTORY, tx)
-            .unwrap();
+        orch.start_import(
+            &browser,
+            ImportServices::BOOKMARKS | ImportServices::HISTORY,
+            tx,
+        )
+        .unwrap();
 
         let msgs: Vec<_> = rx.try_iter().collect();
         // Should get Error("Cancelled") + AllComplete, nothing else
-        assert!(msgs.iter().any(|m| matches!(m, ImportProgress::Error { message } if message == "Cancelled")));
+        assert!(msgs
+            .iter()
+            .any(|m| matches!(m, ImportProgress::Error { message } if message == "Cancelled")));
         assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete));
         // No Starting events
-        assert!(!msgs.iter().any(|m| matches!(m, ImportProgress::Starting { .. })));
+        assert!(!msgs
+            .iter()
+            .any(|m| matches!(m, ImportProgress::Starting { .. })));
     }
 
     #[test]
@@ -413,23 +435,51 @@ mod tests {
             sleep_per_call: Duration,
         }
         impl ImportDestination for SlowDestination {
-            fn create_space(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("s".into()) }
-            fn create_tab(&self, _: &str, _: &str) -> Option<String> { Some("t".into()) }
-            fn create_tab_in_folder(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("t".into()) }
-            fn create_folder(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("f".into()) }
+            fn create_space(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                Some("s".into())
+            }
+            fn create_tab(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                Some("t".into())
+            }
+            fn create_tab_in_folder(&self, _: &str, _: &str, _: &str, _: &str) -> Option<String> {
+                Some("t".into())
+            }
+            fn create_folder(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                Some("f".into())
+            }
             fn pin_tab(&self, _: &str) {}
             fn favorite_tab(&self, _: &str) {}
             fn activate_space(&self, _: &str) {}
-            fn get_active_space_id(&self) -> Option<String> { None }
-            fn add_bookmark(&self, _: &str, _: &str, _: &[String]) -> Option<String> { None }
+            fn get_active_space_id(&self) -> Option<String> {
+                None
+            }
+            fn add_bookmark(&self, _: &str, _: &str, _: &[String]) -> Option<String> {
+                None
+            }
             fn add_history(&self, _: &str, _: &str, _: f64, _: u32) -> bool {
                 self.history_calls.fetch_add(1, Ordering::SeqCst);
                 std::thread::sleep(self.sleep_per_call);
                 true
             }
-            fn add_cookie(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: bool, _: bool, _: i32) -> bool { false }
-            fn add_autofill(&self, _: &str, _: &str, _: i32, _: i64, _: i64) -> bool { false }
-            fn add_favicon(&self, _: &str, _: &[u8]) -> bool { false }
+            fn add_cookie(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: i64,
+                _: bool,
+                _: bool,
+                _: i32,
+            ) -> bool {
+                false
+            }
+            fn add_autofill(&self, _: &str, _: &str, _: i32, _: i64, _: i64) -> bool {
+                false
+            }
+            fn add_favicon(&self, _: &str, _: &[u8]) -> bool {
+                false
+            }
         }
 
         let dest = Arc::new(SlowDestination {
@@ -458,13 +508,22 @@ mod tests {
 
         let msgs: Vec<_> = rx.try_iter().collect();
 
-        assert!(elapsed < Duration::from_secs(5),
-                "cancel should terminate quickly, took {:?}", elapsed);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "cancel should terminate quickly, took {:?}",
+            elapsed
+        );
         let calls = dest_ref.history_calls.load(Ordering::SeqCst);
-        assert!(calls < 1000,
-                "mid-import cancel should stop history additions early, got {} calls", calls);
-        assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete),
-                   "orchestrator must always emit AllComplete (INV-7), even on cancel");
+        assert!(
+            calls < 1000,
+            "mid-import cancel should stop history additions early, got {} calls",
+            calls
+        );
+        assert_eq!(
+            msgs.last(),
+            Some(&ImportProgress::AllComplete),
+            "orchestrator must always emit AllComplete (INV-7), even on cancel"
+        );
     }
 
     #[test]
@@ -475,8 +534,12 @@ mod tests {
 
         let browser = make_browser(BrowserType::Chrome, 0xFF);
         // Import with nonexistent paths — workers will error but AllComplete still fires exactly once
-        orch.start_import(&browser, ImportServices::HISTORY | ImportServices::BOOKMARKS, tx)
-            .unwrap();
+        orch.start_import(
+            &browser,
+            ImportServices::HISTORY | ImportServices::BOOKMARKS,
+            tx,
+        )
+        .unwrap();
 
         let msgs: Vec<_> = rx.try_iter().collect();
         let all_complete_count = msgs

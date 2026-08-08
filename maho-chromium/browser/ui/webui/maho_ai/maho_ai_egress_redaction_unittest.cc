@@ -38,7 +38,7 @@ TEST(MahoAiEgressRedactionTest,
 }
 
 TEST(MahoAiEgressRedactionTest,
-     PersistedRuntimeEventRedactsNestedToolOutputAndPreservesIdentifiers) {
+      PersistedRuntimeEventRedactsNestedToolOutputAndPreservesIdentifiers) {
   auto event = maho_ai::mojom::RuntimeEvent::New();
   event->kind = maho_ai::mojom::RuntimeEventKind::kToolResult;
   event->session_id = "ses_ordinary_123";
@@ -60,6 +60,28 @@ TEST(MahoAiEgressRedactionTest,
   EXPECT_NE(serialized.find("ses_ordinary_123"), std::string::npos);
   EXPECT_NE(serialized.find("req_ordinary_456"), std::string::npos);
   EXPECT_NE(serialized.find("call_ordinary_789"), std::string::npos);
+}
+
+TEST(MahoAiEgressRedactionTest,
+     PersistedCredentialFailureStoresOnlyAllowlistedSymbolAndSafeText) {
+  auto event = maho_ai::mojom::RuntimeEvent::New();
+  event->kind = maho_ai::mojom::RuntimeEventKind::kError;
+  event->session_id = "session-credential";
+  event->sequence = 8;
+  event->timestamp = 10;
+  event->text = "S3NTINEL-raw-credential-diagnostic";
+  event->credential_error_code =
+      maho_ai::mojom::CredentialErrorCode::kSecureStoreUnavailable;
+
+  std::string serialized;
+  ASSERT_TRUE(base::JSONWriter::Write(
+      base::Value(SerializeRuntimeEventForPersistence(*event)), &serialized));
+
+  EXPECT_EQ(serialized.find("S3NTINEL-raw-credential-diagnostic"),
+            std::string::npos);
+  EXPECT_NE(serialized.find("secure_store_unavailable"), std::string::npos);
+  EXPECT_NE(serialized.find("Your saved AI credential could not be used."),
+            std::string::npos);
 }
 
 }  // namespace

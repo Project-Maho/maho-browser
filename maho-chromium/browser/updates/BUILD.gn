@@ -88,6 +88,10 @@ component("maho_updates_lib") {
     "//services/network/public/cpp",
     "//third_party/boringssl",
   ]
+  if (is_win) {
+    deps += [ "//chrome/browser:browser_process" ]
+    libs = [ "runtimeobject.lib" ]
+  }
 }
 
 source_set("maho_updates_unittests") {

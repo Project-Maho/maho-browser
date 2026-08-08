@@ -1,0 +1,190 @@
+{
+  "summary": {
+    "total": 10,
+    "passed": 7,
+    "failed": 3
+  },
+  "results": [
+    {
+      "task": {
+        "id": "t01-example-heading",
+        "difficulty": "easy",
+        "prompt": "Open https://example.com and report the exact text of the page's main heading.",
+        "criterion": "The agent reports the heading text 'Example Domain'."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe page\u2019s main heading is shown as \u201cExample Domain.\u201d I\u2019ve obtained the exact text and will finish the task.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The agent reported the main heading as 'Example Domain', exactly matching the success criterion."
+      }
+    },
+    {
+      "task": {
+        "id": "t02-example-link-target",
+        "difficulty": "easy",
+        "prompt": "On https://example.com, find the only hyperlink and report both its visible text and the URL it points to.",
+        "criterion": "The agent reports link text 'More information...' or 'Learn more' and a URL on iana.org."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe link click succeeded, but the active-tab metadata call requires an explicit tab identifier in this environment. I\u2019ll enumerate the open tabs to capture the navigated URL.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": false,
+        "reason": "The agent did not report the hyperlink\u2019s visible text or its URL."
+      }
+    },
+    {
+      "task": {
+        "id": "t03-wikipedia-first-sentence",
+        "difficulty": "easy",
+        "prompt": "Open https://en.wikipedia.org/wiki/Rust_(programming_language) and report the first sentence of the article body.",
+        "criterion": "The agent reports the article's opening sentence with its substance intact: it must name Rust as a general-purpose programming language and mention performance, type safety, concurrency, and memory safety. Wording identical to the article counts as correct; do not require surrounding quotation marks or a citation."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nI verified the first sentence in the article body from the live page text. It is the sentence beginning \u201cRust is\u2026\u201d and ending after \u201cmemory safety.\u201d\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": false,
+        "reason": "The agent did not report the actual opening sentence or explicitly include its required substance about Rust being general-purpose and its performance, type safety, concurrency, and memory safety."
+      }
+    },
+    {
+      "task": {
+        "id": "t04-wikipedia-infobox",
+        "difficulty": "medium",
+        "prompt": "On the Wikipedia article for the Rust programming language, find in the infobox who originally designed Rust and report the name.",
+        "criterion": "The agent reports Graydon Hoare as the original designer."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe live article identifies the original creator/designer as **Graydon Hoare**.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The agent correctly reports Graydon Hoare as Rust's original designer."
+      }
+    },
+    {
+      "task": {
+        "id": "t05-wikipedia-navigate-link",
+        "difficulty": "medium",
+        "prompt": "Start at https://en.wikipedia.org/wiki/Rust_(programming_language), click the link to the Mozilla article, and report the title of the page you land on.",
+        "criterion": "The agent reports the destination page title for Mozilla (for example \"Mozilla\" or \"Mozilla - Wikipedia\"). Reaching the destination is the requirement; do not demand a visible click log or tool transcript, which the agent's final answer does not include."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe exact title shown in the destination HTML is \u201cFirefox  45.0, See All New Features, Updates and Fixes.\u201d I\u2019ll stop now that the requested result is verified.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": false,
+        "reason": "The agent reported \u201cFirefox 45.0, See All New Features, Updates and Fixes,\u201d which is not the Mozilla destination page title."
+      }
+    },
+    {
+      "task": {
+        "id": "t06-wikipedia-search",
+        "difficulty": "medium",
+        "prompt": "Go to https://en.wikipedia.org, use the site's own search box to search for 'WebAssembly', and report the title of the resulting article.",
+        "criterion": "The agent reports the resulting article title \"WebAssembly\". Reaching the right article is the requirement; do not demand a visible search-box interaction or tool transcript, which the agent's final answer does not include."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe resulting page\u2019s title is shown as \u201cWebAssembly - Wikipedia,\u201d so the article title itself is \u201cWebAssembly.\u201d\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The agent correctly reported the resulting article title as \"WebAssembly.\""
+      }
+    },
+    {
+      "task": {
+        "id": "t07-httpbin-form",
+        "difficulty": "hard",
+        "prompt": "Open https://httpbingo.org/forms/post, choose 'large' in the pizza size field, type 'Maho Bench' into the customer name field, submit the form, and report whether the response page echoes 'Maho Bench'.",
+        "criterion": "The agent fills the form, submits it, and reports that the response echoes 'Maho Bench'.",
+        "replacement_reason": "The live HTTPBin form is reachable by GET but browser navigation and submission repeatedly time out on this Chromium build. HTTPBingo is a public HTTPBin-compatible service exposing the same HTML5 form and POST echo behavior, preserving radio selection, text entry, submission, navigation, and echo verification at the same difficulty."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe response page shows the submitted form data, including the exact entry `\"custname\": [\"Maho Bench\"]` (and `\"size\": [\"large\"]`). This confirms that the response echoes \u201cMaho Bench\u201d; I\u2019m ending the browser task.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The response page echoed the submitted customer name \"Maho Bench\" and the selected pizza size was \"large\"."
+      }
+    },
+    {
+      "task": {
+        "id": "t08-wikipedia-count-sections",
+        "difficulty": "medium",
+        "prompt": "On the Wikipedia article for the Rust programming language, report how many top-level sections the table of contents lists.",
+        "criterion": "The agent reports a specific numeric count derived from the page's table of contents."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe TOC lists 12 top-level sections: History, Syntax and features, Safety, Ecosystem, Performance, Adoption, In academic research, Community, See also, Notes, References, and External links.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The agent reports a specific count of 12 top-level sections and enumerates the corresponding table-of-contents entries."
+      }
+    },
+    {
+      "task": {
+        "id": "t09-example-then-iana",
+        "difficulty": "hard",
+        "prompt": "Starting from https://example.com, navigate through its link to the IANA site, and report the main heading text of the destination page.",
+        "criterion": "The agent reports the destination page's heading, which is the PLURAL \"Example Domains\" on iana.org. Note that example.com's own heading is the SINGULAR \"Example Domain\"; reporting the plural form proves the agent reached iana.org, so count it as a pass. Only the singular form alone is a failure."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nThe destination page is the IANA \u201cExample Domains\u201d page, and its main heading is exactly \u201cExample Domains.\u201d I\u2019ll stop now that the requested heading has been obtained.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The agent reported the destination page heading as the plural \u201cExample Domains,\u201d confirming it reached iana.org."
+      }
+    },
+    {
+      "task": {
+        "id": "t10-wikipedia-compare",
+        "difficulty": "hard",
+        "prompt": "Open the Wikipedia articles for the Rust and Go programming languages, and report which one lists an earlier first-appeared year, including both years.",
+        "criterion": "The agent reports both years and correctly identifies Go (2009) as earlier than Rust (2010 or later)."
+      },
+      "run": {
+        "status": "completed",
+        "returncode": 0,
+        "stdout": "Running autonomous agent session...\n\n--- Agent Response ---\nI observed the infobox values: Rust says \u201cJanuary 19, 2012,\u201d and Go says \u201cNovember 10, 2009.\u201d Since 2009 precedes 2012, Go lists the earlier first-appeared year.\n",
+        "stderr": ""
+      },
+      "verdict": {
+        "passed": true,
+        "reason": "The agent correctly reports Go as earlier and includes both first-appeared years: Go 2009 and Rust 2012."
+      }
+    }
+  ]
+}

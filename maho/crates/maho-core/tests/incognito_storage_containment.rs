@@ -56,6 +56,7 @@ fn collect_exported_corpus(sqlite: &SqliteStorage, lmdb: &LmdbStorage) -> String
 
 #[test]
 fn exported_named_stores_exclude_all_otr_values() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let dir = tempdir().expect("temp dir");
     let sqlite_path = dir.path().join("maho.db");
     let lmdb_dir = dir.path().join("maho-core.lmdb");
@@ -86,6 +87,9 @@ fn exported_named_stores_exclude_all_otr_values() {
             "complete",
             Some("/tmp/regular.bin"),
             "2024-01-01T00:00:00Z",
+            None,
+            None,
+            None,
         )
         .expect("download");
     sqlite

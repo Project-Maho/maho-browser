@@ -16,7 +16,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 #[cfg(unix)]
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::error::{McpBridgeError, Result};
@@ -210,6 +210,7 @@ impl BrowserClient {
             return Err(McpBridgeError::Rpc {
                 code: err.code,
                 message: err.message,
+                data: err.data,
             });
         }
 
@@ -232,6 +233,14 @@ impl BrowserClient {
             }
             other => other,
         }
+    }
+
+    /// Send a request without reconnecting or replaying it after connection loss.
+    ///
+    /// Stateful callers use this when the MCP session owns domain approvals or
+    /// tab leases, and when replaying a mutating request could duplicate effects.
+    pub async fn call_without_reconnect(&self, method: &str, params: Value) -> Result<Value> {
+        self.call_no_retry(method, params).await
     }
 
     /// Convenience wrapper that packages `name` and `arguments` into the
@@ -273,9 +282,7 @@ impl BrowserClient {
         {
             use base64::Engine as _;
             match crate::win_token::load_session_token() {
-                Ok(token) => {
-                    Some(base64::engine::general_purpose::STANDARD.encode(&token))
-                }
+                Ok(token) => Some(base64::engine::general_purpose::STANDARD.encode(&token)),
                 Err(e) => {
                     tracing::warn!("Failed to load session token: {e}");
                     None
@@ -467,17 +474,85 @@ mod tests {
         });
 
         let client = BrowserClient::connect(&sock_path).await.unwrap();
-        let err = client
-            .call("nonexistent", json!({}))
-            .await
-            .unwrap_err();
+        let err = client.call("nonexistent", json!({})).await.unwrap_err();
         match err {
             McpBridgeError::Rpc { code, .. } => assert_eq!(code, -32601),
             other => panic!("expected Rpc error, got: {other:?}"),
         }
     }
 
-    /// SC6: client.rs out-of-order correlation — fire 3 requests, server responds in reverse.
+    /// SC6: structured `error.data` is preserved end-to-end so policy
+    /// classification never depends on English prose.
+    #[tokio::test]
+    async fn rpc_error_preserves_structured_data() {
+        let (_dir, sock_path, listener) = make_listener().await;
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+
+            // Initialize.
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let id = req["id"].as_i64().unwrap();
+            let resp = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }
+            });
+            let mut buf = serde_json::to_vec(&resp).unwrap();
+            buf.push(b'\n');
+            writer.write_all(&buf).await.unwrap();
+
+            // Respond with a domain-approval error that includes structured data.
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let req2: Value = serde_json::from_str(&line).unwrap();
+            let id2 = req2["id"].as_i64().unwrap();
+            let err_resp = json!({
+                "jsonrpc": "2.0",
+                "id": id2,
+                "error": {
+                    "code": -32000,
+                    "message": "Navigation blocked: host not in allowed_domains",
+                    "data": {
+                        "status": "domain_not_allowed",
+                        "host": "example.com"
+                    }
+                }
+            });
+            let mut buf2 = serde_json::to_vec(&err_resp).unwrap();
+            buf2.push(b'\n');
+            writer.write_all(&buf2).await.unwrap();
+        });
+
+        let client = BrowserClient::connect(&sock_path).await.unwrap();
+        let err = client
+            .call(
+                "tools/call",
+                json!({"name":"browser_navigate","arguments":{"url":"https://example.com"}}),
+            )
+            .await
+            .unwrap_err();
+        match err {
+            McpBridgeError::Rpc { code, data, .. } => {
+                assert_eq!(code, -32000);
+                // Structured data must survive the transport.
+                let d = data.expect("rpc error must carry structured data");
+                assert_eq!(d["status"].as_str(), Some("domain_not_allowed"));
+                assert_eq!(d["host"].as_str(), Some("example.com"));
+            }
+            other => panic!("expected Rpc error, got: {other:?}"),
+        }
+    }
+
+    /// SC7: client.rs out-of-order correlation — fire 3 requests, server responds in reverse.
     #[tokio::test]
     async fn out_of_order_correlation() {
         let (_dir, sock_path, listener) = make_listener().await;

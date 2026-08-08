@@ -34,10 +34,12 @@ impl ImportWorker for FaviconWorker {
             | BrowserType::Brave
             | BrowserType::Edge
             | BrowserType::Vivaldi
-            | BrowserType::Opera => parsers::chromium::favicons::parse_chromium_favicons(profile_dir)?
-                .into_iter()
-                .map(|e| (e.page_urls, e.image_data))
-                .collect(),
+            | BrowserType::Opera => {
+                parsers::chromium::favicons::parse_chromium_favicons(profile_dir)?
+                    .into_iter()
+                    .map(|e| (e.page_urls, e.image_data))
+                    .collect()
+            }
             BrowserType::Safari => parsers::safari::favicon::parse_safari_favicons(profile_dir)?
                 .into_iter()
                 .map(|e| (e.page_urls, e.image_data))
@@ -179,7 +181,9 @@ mod tests {
             requires_full_disk_access: false,
         };
 
-        let count = FaviconWorker.run(&browser, &*dest, &cancelled, &tx).unwrap();
+        let count = FaviconWorker
+            .run(&browser, &*dest, &cancelled, &tx)
+            .unwrap();
         assert_eq!(count, 1);
         let favicons = dest.favicons.lock().unwrap();
         assert_eq!(favicons.len(), 1);

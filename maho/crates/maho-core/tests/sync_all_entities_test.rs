@@ -3,6 +3,7 @@ use maho_core::sync_models::{SyncEntity, SyncEntityType, SyncStatus};
 
 #[test]
 fn test_sync_all_entities_round_trip() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let mut core = MahoCore::new().with_storage(":memory:");
     core.start_sync("wss://localhost:8080", "room-123");
     core.set_sync_status(SyncStatus::Synced);

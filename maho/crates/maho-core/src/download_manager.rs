@@ -18,6 +18,7 @@ pub struct Download {
     pub error: Option<String>,
     pub completed_at: Option<DateTime>,
     pub original_filename: Option<String>,
+    pub chromium_guid: Option<String>,
 }
 
 pub struct DownloadManager {
@@ -44,6 +45,7 @@ impl DownloadManager {
         total_bytes: u64,
         file_path: Option<String>,
         mime_type: Option<String>,
+        chromium_guid: Option<String>,
     ) -> DownloadId {
         let id = DownloadId::generate();
         let download = Download {
@@ -60,6 +62,7 @@ impl DownloadManager {
             error: None,
             completed_at: None,
             original_filename: None,
+            chromium_guid,
         };
         self.downloads.insert(id.clone(), download);
         id
@@ -179,5 +182,47 @@ impl DownloadManager {
         } else {
             None
         }
+    }
+
+    pub fn seed_download(&mut self, download: Download) {
+        self.downloads.insert(download.id.clone(), download);
+    }
+
+    pub fn update_metadata(
+        &mut self,
+        download_id: &DownloadId,
+        filename: Option<String>,
+        file_path: Option<String>,
+        mime_type: Option<String>,
+        total_bytes: Option<u64>,
+    ) {
+        if let Some(download) = self.downloads.get_mut(download_id) {
+            if let Some(f) = filename {
+                if !f.is_empty() {
+                    download.filename = f;
+                }
+            }
+            if let Some(p) = file_path {
+                if !p.is_empty() {
+                    download.file_path = Some(p);
+                }
+            }
+            if let Some(m) = mime_type {
+                if !m.is_empty() {
+                    download.mime_type = Some(m);
+                }
+            }
+            if let Some(t) = total_bytes {
+                if t > 0 {
+                    download.total_bytes = t;
+                }
+            }
+        }
+    }
+
+    pub fn find_by_chromium_guid(&self, guid: &str) -> Option<&Download> {
+        self.downloads
+            .values()
+            .find(|d| d.chromium_guid.as_deref() == Some(guid))
     }
 }

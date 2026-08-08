@@ -2478,6 +2478,11 @@ impl MahoCore {
             "Navigation".into(),
         );
         command_bar.add_action(
+            "peek".into(),
+            "Open Current Page in Peek".into(),
+            "Navigation".into(),
+        );
+        command_bar.add_action(
             "share_page".into(),
             "Share Page".into(),
             "Navigation".into(),

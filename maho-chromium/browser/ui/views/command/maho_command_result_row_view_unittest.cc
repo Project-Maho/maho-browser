@@ -6,8 +6,11 @@
 #include <vector>
 
 #include "base/functional/callback_helpers.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/background.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_base.h"
@@ -114,12 +117,15 @@ TEST_F(MahoCommandResultRowViewTest,
 
   auto* row = CreateRow(suggestion);
 
-  EXPECT_EQ(gfx::Size(0, 48), row->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(0, MahoCommandResultRowView::kRowHeightDp),
+            row->GetPreferredSize());
 
   auto* content_view = GetContentView(row);
   ASSERT_FALSE(content_view->children().empty());
   auto* glyph_container = content_view->children().front().get();
-  EXPECT_EQ(gfx::Size(26, 26), glyph_container->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(MahoCommandResultRowView::kGlyphTileSizeDp,
+                      MahoCommandResultRowView::kGlyphTileSizeDp),
+            glyph_container->GetPreferredSize());
 }
 
 TEST_F(MahoCommandResultRowViewTest,
@@ -255,7 +261,7 @@ TEST_F(MahoCommandResultRowViewTest,
   auto* default_row = CreateRow(suggestion);
   auto* default_title = default_row->GetTitleLabelForTesting();
   ASSERT_NE(nullptr, default_title);
-  EXPECT_NE(MahoCommandResultRowView::GetSeededRowTitleFontWeightForTesting(),
+  EXPECT_EQ(gfx::Font::Weight::MEDIUM,
             default_title->font_list().GetFontWeight());
 }
 
@@ -334,8 +340,28 @@ TEST_F(MahoCommandResultRowViewTest,
 
   EXPECT_FALSE(row->UsesFallbackGlyphForTesting());
   ASSERT_NE(nullptr, row->GetFaviconImageForTesting());
-  EXPECT_EQ(gfx::Size(16, 16),
+  EXPECT_EQ(gfx::Size(14, 14),
             row->GetFaviconImageForTesting()->GetPreferredSize());
+}
+
+TEST_F(MahoCommandResultRowViewTest,
+       SearchRowsRenderFallbackGlyphWithoutIconAndProvidedFavicon) {
+  CommandSuggestion iconless;
+  iconless.title = "Remote suggestion";
+  iconless.subtitle = "Search suggestion";
+  iconless.type = CommandSuggestionType::kSearch;
+
+  auto* iconless_row = CreateRow(iconless);
+  EXPECT_TRUE(iconless_row->UsesFallbackGlyphForTesting());
+  EXPECT_EQ(nullptr, iconless_row->GetFaviconImageForTesting());
+
+  CommandSuggestion with_icon = iconless;
+  with_icon.icon = MakeTestFaviconImageData();
+  auto* icon_row = CreateRow(with_icon);
+  EXPECT_FALSE(icon_row->UsesFallbackGlyphForTesting());
+  ASSERT_NE(nullptr, icon_row->GetFaviconImageForTesting());
+  EXPECT_EQ(gfx::Size(16, 16),
+            icon_row->GetFaviconImageForTesting()->GetPreferredSize());
 }
 
 TEST_F(MahoCommandResultRowViewTest,
@@ -368,6 +394,56 @@ TEST_F(MahoCommandResultRowViewTest,
   auto* content_view = GetContentView(row);
   EXPECT_NE(nullptr, content_view->GetBackground());
   EXPECT_EQ(nullptr, content_view->GetBorder());
+}
+
+TEST_F(MahoCommandResultRowViewTest,
+       AskAffordanceSwapsGlyphAndAddsRightSideExplanation) {
+  CommandSuggestion suggestion;
+  suggestion.title = "weather seoul";
+  suggestion.subtitle = "Search suggestion";
+  suggestion.type = CommandSuggestionType::kSearch;
+
+  auto* plain_row = CreateRow(suggestion);
+  EXPECT_FALSE(plain_row->UsesAskGlyphForTesting());
+  EXPECT_EQ(nullptr, plain_row->GetAskExplanationLabelForTesting());
+
+  auto* ask_row = CreateRow(suggestion);
+  ask_row->SetAskAffordance(true);
+  EXPECT_TRUE(ask_row->UsesAskGlyphForTesting());
+  ASSERT_NE(nullptr, ask_row->GetAskExplanationLabelForTesting());
+  EXPECT_TRUE(ask_row->GetAskExplanationLabelForTesting()->GetVisible());
+  EXPECT_EQ(u"Ask Maho",
+            ask_row->GetAskExplanationLabelForTesting()->GetText());
+
+  // The explanation reuses the right-aligned affordance lane, i.e. it lives in
+  // the trailing child of the row content view.
+  auto* content_view = ask_row->GetContentViewForTesting();
+  ASSERT_NE(nullptr, content_view);
+  ASSERT_FALSE(content_view->children().empty());
+  EXPECT_TRUE(content_view->children().back()->Contains(
+      ask_row->GetAskExplanationLabelForTesting()));
+
+  ask_row->SetAskAffordance(false);
+  EXPECT_FALSE(ask_row->UsesAskGlyphForTesting());
+  ASSERT_NE(nullptr, ask_row->GetAskExplanationLabelForTesting());
+  EXPECT_FALSE(ask_row->GetAskExplanationLabelForTesting()->GetVisible());
+}
+
+TEST_F(MahoCommandResultRowViewTest,
+       AskAffordanceOnTabRowReplacesSwitchToTabAffordance) {
+  CommandSuggestion suggestion;
+  suggestion.title = "Example Tab";
+  suggestion.subtitle = "https://example.com";
+  suggestion.type = CommandSuggestionType::kTab;
+
+  auto* row = CreateRow(suggestion);
+  ASSERT_NE(nullptr, row->GetSwitchTabContainerForTesting());
+  EXPECT_TRUE(row->GetSwitchTabContainerForTesting()->GetVisible());
+
+  row->SetAskAffordance(true);
+  EXPECT_FALSE(row->GetSwitchTabContainerForTesting()->GetVisible());
+  ASSERT_NE(nullptr, row->GetAskExplanationLabelForTesting());
+  EXPECT_TRUE(row->GetAskExplanationLabelForTesting()->GetVisible());
 }
 
 TEST_F(MahoCommandResultRowViewTest,

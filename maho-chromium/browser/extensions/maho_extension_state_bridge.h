@@ -18,6 +18,8 @@ class Profile;
 
 namespace maho {
 
+void EnsureMahoExtensionStateBridgeFactoryBuilt();
+
 class MahoExtensionStateBridge : public KeyedService,
                                  public extensions::ExtensionRegistryObserver {
  public:

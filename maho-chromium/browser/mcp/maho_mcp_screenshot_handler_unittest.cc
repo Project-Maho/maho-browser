@@ -210,6 +210,67 @@ TEST(MahoMcpScreenshotHandlerTest, FindPasswordFieldBounds_DetectsProtected) {
   EXPECT_EQ(rects[0].height(), 25);
 }
 
+ui::AXTreeUpdate MakeTreeWithAutocompleteField(const char* autocomplete_token) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+  update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
+
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kTextField;
+  update.nodes[1].SetName("Sensitive field");
+  update.nodes[1].AddStringAttribute(
+      ax::mojom::StringAttribute::kAutoComplete, autocomplete_token);
+  update.nodes[1].relative_bounds.bounds = gfx::RectF(10, 10, 200, 30);
+
+  return update;
+}
+
+TEST(MahoMcpScreenshotHandlerTest, FindBounds_OneTimeCodeAutocompleteDetected) {
+  ui::AXTreeUpdate update = MakeTreeWithAutocompleteField("one-time-code");
+  ui::AXTree tree(update);
+  std::vector<gfx::Rect> rects =
+      MahoMcpScreenshotHandler::FindPasswordFieldBounds(&tree);
+  ASSERT_EQ(rects.size(), 1u);
+  EXPECT_EQ(rects[0].width(), 200);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, FindBounds_CreditCardAutocompleteDetected) {
+  ui::AXTreeUpdate update = MakeTreeWithAutocompleteField("cc-number");
+  ui::AXTree tree(update);
+  std::vector<gfx::Rect> rects =
+      MahoMcpScreenshotHandler::FindPasswordFieldBounds(&tree);
+  ASSERT_EQ(rects.size(), 1u);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, FindBounds_OrdinarySearchNotDetected) {
+  ui::AXTreeUpdate update = MakeTreeWithAutocompleteField("off");
+  update.nodes[1].role = ax::mojom::Role::kSearchBox;
+  ui::AXTree tree(update);
+  std::vector<gfx::Rect> rects =
+      MahoMcpScreenshotHandler::FindPasswordFieldBounds(&tree);
+  EXPECT_EQ(rects.size(), 0u);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, FindBounds_CustomRecoveryFieldDetected) {
+  ui::AXTreeUpdate update = MakeTreeWithAutocompleteField("off");
+  update.nodes[1].role = ax::mojom::Role::kGenericContainer;
+  update.nodes[1].SetName("Recovery code");
+  update.nodes[1].html_attributes.emplace_back("aria-label", "Recovery code");
+  ui::AXTree tree(update);
+  const std::vector<gfx::Rect> rects =
+      MahoMcpScreenshotHandler::FindPasswordFieldBounds(&tree);
+  ASSERT_EQ(rects.size(), 1u);
+  EXPECT_EQ(rects[0].x(), 10);
+  EXPECT_EQ(rects[0].y(), 10);
+  EXPECT_EQ(rects[0].width(), 200);
+  EXPECT_EQ(rects[0].height(), 30);
+}
+
 TEST(MahoMcpScreenshotHandlerTest, EncodePng_EmptyBitmap_ReturnsEmpty) {
   SkBitmap empty;
   std::vector<uint8_t> result = MahoMcpScreenshotHandler::EncodePng(empty);

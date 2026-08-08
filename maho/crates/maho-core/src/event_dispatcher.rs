@@ -154,6 +154,7 @@ pub trait SpaceManagerInterface {
         to: usize,
     );
     fn remove_tab_from_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: &TabId);
+    fn remove_empty_folders_in_space(&mut self, space_id: &SpaceId) -> Vec<FolderId>;
     fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool;
     fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool>;
     fn set_folder_pinned(
@@ -225,11 +226,15 @@ pub trait SettingsInterface {
 pub trait ContentBlockerInterface {
     fn set_enabled(&mut self, enabled: bool);
     fn is_enabled(&self) -> bool;
+    fn mode(&self) -> maho_types::content_blocking::ContentBlockingMode;
+    fn set_mode(&mut self, mode: maho_types::content_blocking::ContentBlockingMode);
     fn set_popup_blocking(&mut self, enabled: bool);
     fn is_popup_blocking_enabled(&self) -> bool;
     fn add_filter_list(&mut self, id: String, name: String, url: String);
     fn remove_filter_list(&mut self, id: &str);
     fn toggle_filter_list(&mut self, id: &str, enabled: bool);
+    fn add_site_exception(&mut self, _domain: &str) {}
+    fn remove_site_exception(&mut self, _domain: &str) {}
 }
 
 pub trait LLMManagerInterface {
@@ -286,6 +291,8 @@ impl EventDispatcher {
         }
     }
 
+    pub fn notify_listeners(&mut self, _update: CoreUpdate) {}
+
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
@@ -295,7 +302,7 @@ impl EventDispatcher {
         cmd_bar: &dyn CommandBarInterface,
         _note_mgr: &mut dyn NoteManagerInterface,
         _settings_mgr: &mut dyn SettingsInterface,
-        content_blocker: &mut dyn ContentBlockerInterface,
+        _content_blocker: &mut dyn ContentBlockerInterface,
         notification_mgr: &mut dyn NotificationManagerInterface,
         llm_mgr: &mut dyn LLMManagerInterface,
         ctx: &SearchContext,
@@ -616,9 +623,9 @@ impl EventDispatcher {
                     &tab_id,
                     before_tab_id.as_ref(),
                 );
-                vec![
+                let mut updates = vec![
                     CoreUpdate::FolderUpdated {
-                        folder_id,
+                        folder_id: folder_id.clone(),
                         changes: FolderUpdate {
                             name: None,
                             is_expanded: None,
@@ -626,10 +633,20 @@ impl EventDispatcher {
                         },
                     },
                     CoreUpdate::TabOrderChanged {
-                        space_id,
+                        space_id: space_id.clone(),
                         order: vec![],
                     },
-                ]
+                ];
+                let is_empty = space_mgr
+                    .get_space(&space_id)
+                    .and_then(|space| space.folders.iter().find(|f| f.id == folder_id))
+                    .map(|f| f.tab_ids.is_empty())
+                    .unwrap_or(false);
+                if is_empty {
+                    space_mgr.delete_folder(&space_id, &folder_id);
+                    updates.push(CoreUpdate::FolderDeleted { folder_id });
+                }
+                updates
             }
             ShellEvent::ReopenLastClosed => {
                 if let Some(tab) = tab_mgr.reopen_last_closed() {
@@ -843,10 +860,16 @@ impl EventDispatcher {
                 folder_id,
                 tab_id,
             } => {
+                let previous_parent_folder_id: Option<FolderId> = space_mgr
+                    .get_space(&space_id)
+                    .and_then(|space| {
+                        space.folders.iter().find(|f| f.tab_ids.contains(&tab_id)).map(|f| f.id.clone())
+                    });
+
                 space_mgr.add_tab_to_folder(&space_id, &folder_id, tab_id);
-                vec![
+                let mut updates = vec![
                     CoreUpdate::FolderUpdated {
-                        folder_id,
+                        folder_id: folder_id.clone(),
                         changes: FolderUpdate {
                             name: None,
                             is_expanded: None,
@@ -854,10 +877,23 @@ impl EventDispatcher {
                         },
                     },
                     CoreUpdate::TabOrderChanged {
-                        space_id,
+                        space_id: space_id.clone(),
                         order: vec![],
                     },
-                ]
+                ];
+
+                if let Some(prev_fid) = previous_parent_folder_id {
+                    let is_empty = space_mgr
+                        .get_space(&space_id)
+                        .and_then(|space| space.folders.iter().find(|f| f.id == prev_fid))
+                        .map(|f| f.tab_ids.is_empty())
+                        .unwrap_or(false);
+                    if is_empty {
+                        space_mgr.delete_folder(&space_id, &prev_fid);
+                        updates.push(CoreUpdate::FolderDeleted { folder_id: prev_fid });
+                    }
+                }
+                updates
             }
             ShellEvent::ReorderTabInFolder {
                 space_id,
@@ -883,14 +919,24 @@ impl EventDispatcher {
                 space_mgr.remove_tab_from_folder(&space_id, &folder_id, &tab_id);
                 let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
                 space_mgr.apply_tab_residency(&space_id, &tab_id, is_favorite, false); // L3-EXEMPT: local parameter
-                vec![CoreUpdate::FolderUpdated {
-                    folder_id,
+                let mut updates = vec![CoreUpdate::FolderUpdated {
+                    folder_id: folder_id.clone(),
                     changes: FolderUpdate {
                         name: None,
                         is_expanded: None,
                         is_pinned: None,
                     },
-                }]
+                }];
+                let is_empty = space_mgr
+                    .get_space(&space_id)
+                    .and_then(|space| space.folders.iter().find(|f| f.id == folder_id))
+                    .map(|f| f.tab_ids.is_empty())
+                    .unwrap_or(false);
+                if is_empty {
+                    space_mgr.delete_folder(&space_id, &folder_id);
+                    updates.push(CoreUpdate::FolderDeleted { folder_id });
+                }
+                updates
             }
             ShellEvent::ToggleFolderExpanded {
                 space_id,
@@ -1224,16 +1270,7 @@ impl EventDispatcher {
                         active_tab_id,
                     }]
                 }
-                QuickAction::ArchiveTab => {
-                    if let Some(tab_id) = space_mgr
-                        .get_last_active_tab(space_mgr.get_active_space_id())
-                        .cloned()
-                    {
-                        tab_mgr.suspend_tab(&tab_id);
-                        tab_mgr.archive_tab(&tab_id);
-                    }
-                    vec![]
-                }
+                QuickAction::ArchiveTab => vec![],
                 QuickAction::SharePage => vec![],
                 QuickAction::NewIncognito => vec![],
                 QuickAction::ScrollToTop => vec![],
@@ -1433,33 +1470,17 @@ impl EventDispatcher {
             ShellEvent::RemoveDownload { .. } => vec![],
             ShellEvent::RestoreDownloadName { .. } => vec![],
 
-            // Content Blocker
-            ShellEvent::ToggleContentBlocker { enabled } => {
-                content_blocker.set_enabled(enabled);
-                vec![CoreUpdate::ContentBlockerStateChanged {
-                    enabled,
-                    popup_blocking: content_blocker.is_popup_blocking_enabled(),
-                }]
-            }
-            ShellEvent::TogglePopupBlocking { enabled } => {
-                content_blocker.set_popup_blocking(enabled);
-                vec![CoreUpdate::ContentBlockerStateChanged {
-                    enabled: content_blocker.is_enabled(),
-                    popup_blocking: enabled,
-                }]
-            }
-            ShellEvent::AddFilterList { id, name, url } => {
-                content_blocker.add_filter_list(id, name, url);
-                vec![]
-            }
-            ShellEvent::RemoveFilterList { id } => {
-                content_blocker.remove_filter_list(&id);
-                vec![]
-            }
-            ShellEvent::ToggleFilterList { id, enabled } => {
-                content_blocker.toggle_filter_list(&id, enabled);
-                vec![]
-            }
+            // Content Blocker (handled in MahoCore::handle_event before dispatch so
+            // every mutation converges through the authoritative persistent path)
+            ShellEvent::SetContentBlockingMode { .. } => vec![],
+            ShellEvent::ToggleContentBlocker { .. } => vec![],
+            ShellEvent::TogglePopupBlocking { .. } => vec![],
+            ShellEvent::AddFilterList { .. } => vec![],
+            ShellEvent::RemoveFilterList { .. } => vec![],
+            ShellEvent::ToggleFilterList { .. } => vec![],
+            ShellEvent::AddSiteException { .. } => vec![],
+            ShellEvent::RemoveSiteException { .. } => vec![],
+            ShellEvent::TriggerFilterUpdate { .. } => vec![],
 
             // Browsing
             ShellEvent::TogglePiP { .. } => vec![],
@@ -1582,32 +1603,6 @@ impl NoteManagerInterface for NoteManager {
 impl SettingsInterface for SettingsManager {
     fn update_settings(&mut self, changes: SettingsUpdate) -> Settings {
         self.update_settings(changes).clone()
-    }
-}
-
-use crate::content_blocker::ContentBlocker;
-
-impl ContentBlockerInterface for ContentBlocker {
-    fn set_enabled(&mut self, enabled: bool) {
-        self.set_enabled(enabled);
-    }
-    fn is_enabled(&self) -> bool {
-        self.is_enabled()
-    }
-    fn set_popup_blocking(&mut self, enabled: bool) {
-        self.set_popup_blocking(enabled);
-    }
-    fn is_popup_blocking_enabled(&self) -> bool {
-        self.is_popup_blocking_enabled()
-    }
-    fn add_filter_list(&mut self, id: String, name: String, url: String) {
-        self.add_filter_list(id, name, url);
-    }
-    fn remove_filter_list(&mut self, id: &str) {
-        self.remove_filter_list(id);
-    }
-    fn toggle_filter_list(&mut self, id: &str, enabled: bool) {
-        self.toggle_filter_list(id, enabled);
     }
 }
 

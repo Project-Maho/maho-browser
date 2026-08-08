@@ -3,8 +3,10 @@ use std::collections::{HashMap, HashSet};
 use maho_types::common::DateTime;
 use maho_types::folder::Folder;
 use maho_types::identifiers::{FolderId, ProfileId, SpaceId, TabId};
+use maho_types::space::{
+    ColorHarmony, Space, SpaceColor, SpaceConfigUpdate, SpaceTheme, ThemeColor,
+};
 use maho_types::space::{RootInsertionPoint, RootItem};
-use maho_types::space::{Space, SpaceColor, SpaceConfigUpdate};
 use maho_types::traits::shell_renderer::{
     FolderViewModel, SidebarNode, SpaceViewModel, TabViewModel,
 };
@@ -1229,6 +1231,43 @@ impl Default for SpaceManager {
     }
 }
 
+// Out-of-box default Space theme: a translucent pink->orange gradient.
+// Fractional hue (0..1): pink 0.92 (~331deg) primary, orange 0.07 (~25deg);
+// opacity 0.8 keeps it translucent so the glass vibrancy shows through.
+fn default_space_theme() -> SpaceTheme {
+    SpaceTheme::Gradient {
+        colors: vec![
+            ThemeColor {
+                hue: 0.92,
+                saturation: 0.75,
+                brightness: 0.95,
+                is_custom: false,
+                is_primary: true,
+                c_raw: None,
+                position: None,
+                lightness: None,
+                algorithm: None,
+            },
+            ThemeColor {
+                hue: 0.07,
+                saturation: 0.85,
+                brightness: 1.0,
+                is_custom: false,
+                is_primary: false,
+                c_raw: None,
+                position: None,
+                lightness: None,
+                algorithm: None,
+            },
+        ],
+        harmony: ColorHarmony::Analogous,
+        scheme: None,
+        opacity: 0.8,
+        texture: 0.0,
+        schema_version: 0,
+    }
+}
+
 impl SpaceManager {
     pub fn new() -> Self {
         let mut mgr = Self {
@@ -1247,7 +1286,11 @@ impl SpaceManager {
             },
             ProfileId::new(""),
         );
-        mgr.active_space_id = default_space.id;
+        let default_space_id = default_space.id.clone();
+        if let Some(s) = mgr.spaces.get_mut(&default_space_id) {
+            s.theme = Some(default_space_theme());
+        }
+        mgr.active_space_id = default_space_id;
         mgr
     }
 

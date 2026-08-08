@@ -7,3 +7,5 @@
 // Applied changes:
 //   - Suppress MediaToolbarButtonView addition to the toolbar since media
 //     playback controls are integrated directly into the vertical sidebar.
+//   - Guard the overflow button during minimum-size queries because macOS can
+//     ask for titlebar sizing before ToolbarView initialization completes.

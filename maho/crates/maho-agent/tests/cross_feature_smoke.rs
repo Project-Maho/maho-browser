@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
-use axum::{Router, extract::State, http::StatusCode, routing::post};
+use axum::{extract::State, http::StatusCode, routing::post, Router};
 use maho_agent::{AgentError, AgentRuntime, AgentStorage, SwiftideBackend, ZeroizedString};
 use maho_types::chat::{ChatContent, ChatMessage};
 use maho_types::identifiers::{SpaceId, TabId};
@@ -91,7 +91,7 @@ async fn handle_tidy_completions(
         "id": "chatcmpl-tidy-001",
         "object": "chat.completion",
         "created": 1700000000,
-        "model": "google/gemini-2.5-flash",
+        "model": "google/gemini-3-flash-lite:free",
         "choices": [{
             "index": 0,
             "message": {
@@ -158,14 +158,46 @@ async fn test_cross_feature_agent_stack_e2e() {
     let mut llm_manager = maho_core::llm_manager::LLMManager::new();
     let space_id = SpaceId::new("space-1");
     let tabs: Vec<(TabId, String, String)> = vec![
-        (TabId::new("tab_1"), "Rust Docs".into(), "https://doc.rust-lang.org".into()),
-        (TabId::new("tab_2"), "GitHub PR".into(), "https://github.com/pulls".into()),
-        (TabId::new("tab_3"), "VS Code".into(), "https://code.visualstudio.com".into()),
-        (TabId::new("tab_4"), "Twitter".into(), "https://twitter.com".into()),
-        (TabId::new("tab_5"), "LinkedIn".into(), "https://linkedin.com".into()),
-        (TabId::new("tab_6"), "HN".into(), "https://news.ycombinator.com".into()),
-        (TabId::new("tab_7"), "TechCrunch".into(), "https://techcrunch.com".into()),
-        (TabId::new("tab_8"), "The Verge".into(), "https://theverge.com".into()),
+        (
+            TabId::new("tab_1"),
+            "Rust Docs".into(),
+            "https://doc.rust-lang.org".into(),
+        ),
+        (
+            TabId::new("tab_2"),
+            "GitHub PR".into(),
+            "https://github.com/pulls".into(),
+        ),
+        (
+            TabId::new("tab_3"),
+            "VS Code".into(),
+            "https://code.visualstudio.com".into(),
+        ),
+        (
+            TabId::new("tab_4"),
+            "Twitter".into(),
+            "https://twitter.com".into(),
+        ),
+        (
+            TabId::new("tab_5"),
+            "LinkedIn".into(),
+            "https://linkedin.com".into(),
+        ),
+        (
+            TabId::new("tab_6"),
+            "HN".into(),
+            "https://news.ycombinator.com".into(),
+        ),
+        (
+            TabId::new("tab_7"),
+            "TechCrunch".into(),
+            "https://techcrunch.com".into(),
+        ),
+        (
+            TabId::new("tab_8"),
+            "The Verge".into(),
+            "https://theverge.com".into(),
+        ),
     ];
 
     let core_update = llm_manager.request_tidy_tabs(&space_id, tabs);
@@ -181,7 +213,7 @@ async fn test_cross_feature_agent_stack_e2e() {
     // Step 5: Send prompt through SwiftideBackend → mock proxy
     let user_msg = ChatMessage::user(ChatContent::text(prompt));
     let result = backend
-        .run_turn("session-tidy-e2e", user_msg, None)
+        .run_turn("session-tidy-e2e", user_msg, None, None)
         .await;
 
     unsafe { std::env::remove_var("MAHO_PROXY_URL") };
@@ -246,7 +278,7 @@ async fn test_cross_feature_agent_stack_e2e() {
 
 #[tokio::test]
 async fn test_routine_tier_gate_integration() {
-    use maho_core::routines::{run_routine, UserTier, RoutineError};
+    use maho_core::routines::{run_routine, RoutineError, UserTier};
 
     // Free user → rejected
     let result = run_routine("morning_briefing", UserTier::Free, |_prompt| async {

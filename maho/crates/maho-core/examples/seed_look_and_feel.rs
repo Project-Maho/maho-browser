@@ -75,7 +75,11 @@ fn main() {
         .get_active_profile_id()
         .cloned()
         .or_else(|| core.list_profiles().first().map(|p| p.id.clone()))
-        .unwrap_or_else(|| core.create_profile_persisted("Default".to_string()).id);
+        .unwrap_or_else(|| {
+            core.create_profile_persisted("Default".to_string())
+                .unwrap()
+                .id
+        });
     println!("Using profile: {:?}", profile_id);
 
     let active_space_id = core.get_active_space_id();

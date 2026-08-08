@@ -24,6 +24,20 @@ inline constexpr char kMahoBoostUntrustedHost[] = "maho-boost-editor";
 inline constexpr char kMahoBoostUntrustedURL[] =
     "chrome-untrusted://maho-boost-editor/";
 
+// Untrusted artifact preview host: serves sanitized static HTML for the
+// chrome://maho-ai side panel's sandboxed preview iframe (capability-gated).
+inline constexpr char kMahoArtifactPreviewUntrustedHost[] =
+    "maho-ai-artifact-preview";
+inline constexpr char kMahoArtifactPreviewUntrustedURL[] =
+    "chrome-untrusted://maho-ai-artifact-preview/";
+
+// Untrusted artifact export host: streams raw artifact bytes for drag-out
+// (capability-gated, application/octet-stream, never a trusted origin).
+inline constexpr char kMahoArtifactExportUntrustedHost[] =
+    "maho-ai-artifact-export";
+inline constexpr char kMahoArtifactExportUntrustedURL[] =
+    "chrome-untrusted://maho-ai-artifact-export/";
+
 inline constexpr char kMahoTestHost[] = "maho-test";
 inline constexpr char kMahoTestURL[] = "chrome://maho-test/";
 

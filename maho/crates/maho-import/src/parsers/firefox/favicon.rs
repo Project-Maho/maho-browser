@@ -267,8 +267,16 @@ mod tests {
         create_favicons_db(
             tmp.path(),
             &[
-                ("https://example.com/favicon.ico", &png, "https://example.com"),
-                ("https://example.com/favicon.ico", &png, "https://example.com/page"),
+                (
+                    "https://example.com/favicon.ico",
+                    &png,
+                    "https://example.com",
+                ),
+                (
+                    "https://example.com/favicon.ico",
+                    &png,
+                    "https://example.com/page",
+                ),
             ],
         );
 
@@ -276,8 +284,12 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].favicon_url, "https://example.com/favicon.ico");
         assert_eq!(entries[0].page_urls.len(), 2);
-        assert!(entries[0].page_urls.contains(&"https://example.com".to_string()));
-        assert!(entries[0].page_urls.contains(&"https://example.com/page".to_string()));
+        assert!(entries[0]
+            .page_urls
+            .contains(&"https://example.com".to_string()));
+        assert!(entries[0]
+            .page_urls
+            .contains(&"https://example.com/page".to_string()));
         assert_eq!(entries[0].image_data, png);
     }
 
@@ -286,7 +298,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         create_favicons_db(
             tmp.path(),
-            &[("https://bad.com/fav", &[0xDE, 0xAD, 0xBE, 0xEF], "https://bad.com")],
+            &[(
+                "https://bad.com/fav",
+                &[0xDE, 0xAD, 0xBE, 0xEF],
+                "https://bad.com",
+            )],
         );
         let entries = parse_firefox_favicons(tmp.path()).unwrap();
         assert!(entries.is_empty());
@@ -296,10 +312,7 @@ mod tests {
     fn skips_non_http_page_urls() {
         let tmp = tempfile::tempdir().unwrap();
         let png = minimal_png();
-        create_favicons_db(
-            tmp.path(),
-            &[("https://x.com/fav", &png, "not a url")],
-        );
+        create_favicons_db(tmp.path(), &[("https://x.com/fav", &png, "not a url")]);
         let entries = parse_firefox_favicons(tmp.path()).unwrap();
         assert!(entries.is_empty());
     }

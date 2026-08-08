@@ -40,7 +40,7 @@ Sync is **off by default**. It only activates if you explicitly enable it and cr
 
 If you enable sync, the following applies:
 
-- The account and sync services run at `relay.mahobrowser.com` and `sync.mahobrowser.com`.
+- The account and sync services run at `relay.mahobrowser.com`.
 - Authentication uses **opaque tokens** (not JWTs). Tokens are **SHA-256 hashed at rest**.
 - Data you choose to sync (which may include bookmarks, history, open tabs, settings, and similar browser data) is associated with your account so it can be delivered to your other devices.
 - We collect the minimal account information needed to operate the service, such as your account identifier and sync payloads.
@@ -108,7 +108,7 @@ We do **not** sell your personal information, and we do not share it for adverti
 
 We rely on a small number of infrastructure providers ("processors") strictly to operate the Browser's supporting services:
 
-- **Cloudflare, Inc.** for hosting, content delivery, and protection of our web and service endpoints (maho.app, `crashes.maho.app`, `relay.mahobrowser.com`, `sync.mahobrowser.com`). Data is processed on Cloudflare infrastructure located in the **United States**.
+- **Cloudflare, Inc.** for hosting, content delivery, and protection of our web and service endpoints (maho.app, `crashes.maho.app`, `relay.mahobrowser.com`). Data is processed on Cloudflare infrastructure located in the **United States**.
 - **GitHub (GitHub Releases)** for distributing the Browser binary and update packages.
 
 These providers process data only as needed to provide their infrastructure services to us. We may also disclose information if required by law, to comply with a valid legal process, or to protect the rights, safety, or property of users or the public.

@@ -297,6 +297,36 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'atc.peek_enabled',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Enable Peek',
+      description: 'Show supported links and popups in an in-window preview.',
+      control: 'toggle',
+    },
+  },
+  {
+    key: 'atc.peek_link_routing_enabled',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Open links in Peek',
+      description: 'Open supported links from pinned and favorite tabs in Peek.',
+      control: 'toggle',
+    },
+  },
+  {
+    key: 'atc.peek_popup_routing_enabled',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Open popups in Peek',
+      description: 'Open supported web popups, including sign-in flows, in Peek.',
+      control: 'toggle',
+    },
+  },
+  {
     key: 'autofill.passwords_enabled',
     metadata: {
       scope: 'core-global',

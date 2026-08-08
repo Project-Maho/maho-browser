@@ -7,7 +7,7 @@
 //! database are prefixed with `v10` followed by AES-128-CBC ciphertext (IV = 16
 //! spaces, PKCS#7 padded).
 
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use hmac::Hmac;
 use sha1::Sha1;
 use zeroize::{Zeroize, Zeroizing};
@@ -45,7 +45,11 @@ pub enum DecryptError {
 /// Abstraction over macOS Keychain access for testability.
 pub trait KeychainProvider {
     /// Retrieves the raw password bytes for a given service/account pair.
-    fn get_password(&self, service: &str, account: &str) -> Result<Zeroizing<Vec<u8>>, KeychainError>;
+    fn get_password(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, KeychainError>;
 }
 
 /// Real macOS Keychain implementation using `security-framework`.
@@ -54,7 +58,11 @@ pub struct MacOsKeychain;
 
 #[cfg(target_os = "macos")]
 impl KeychainProvider for MacOsKeychain {
-    fn get_password(&self, service: &str, account: &str) -> Result<Zeroizing<Vec<u8>>, KeychainError> {
+    fn get_password(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, KeychainError> {
         use security_framework::passwords::get_generic_password;
 
         match get_generic_password(service, account) {
@@ -85,7 +93,11 @@ pub struct MockKeychain {
 
 #[cfg(test)]
 impl KeychainProvider for MockKeychain {
-    fn get_password(&self, _service: &str, _account: &str) -> Result<Zeroizing<Vec<u8>>, KeychainError> {
+    fn get_password(
+        &self,
+        _service: &str,
+        _account: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, KeychainError> {
         Ok(Zeroizing::new(self.password.clone()))
     }
 }
@@ -113,13 +125,8 @@ const AES_KEY_LEN: usize = 16;
 /// Derives the AES-128 key from a Keychain password using PBKDF2-HMAC-SHA1.
 pub fn derive_aes_key(keychain_password: &[u8]) -> ChromiumKey {
     let mut key = [0u8; AES_KEY_LEN];
-    pbkdf2::pbkdf2::<Hmac<Sha1>>(
-        keychain_password,
-        PBKDF2_SALT,
-        PBKDF2_ITERATIONS,
-        &mut key,
-    )
-    .expect("HMAC can be initialized with any key length");
+    pbkdf2::pbkdf2::<Hmac<Sha1>>(keychain_password, PBKDF2_SALT, PBKDF2_ITERATIONS, &mut key)
+        .expect("HMAC can be initialized with any key length");
     ChromiumKey(key)
 }
 
@@ -231,9 +238,8 @@ mod tests {
 
     /// v10 + AES-128-CBC(key=0x42*16, iv=0x20*16, plaintext="hunter2" PKCS7)
     const TEST_CIPHERTEXT: &[u8] = &[
-        b'v', b'1', b'0',
-        0x9c, 0x31, 0x37, 0xcc, 0x50, 0xf8, 0xd5, 0x93,
-        0x0e, 0xe3, 0x7a, 0x1e, 0x63, 0x0c, 0xce, 0x75,
+        b'v', b'1', b'0', 0x9c, 0x31, 0x37, 0xcc, 0x50, 0xf8, 0xd5, 0x93, 0x0e, 0xe3, 0x7a, 0x1e,
+        0x63, 0x0c, 0xce, 0x75,
     ];
 
     fn test_key() -> ChromiumKey {
@@ -248,7 +254,7 @@ mod tests {
 
     #[test]
     fn decrypt_v10_roundtrip() {
-        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
         type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 
         let plaintext = b"my$ecretP@ss!";
@@ -281,9 +287,10 @@ mod tests {
 
     #[test]
     fn decrypt_v10_rejects_no_prefix() {
-        let bad = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-                    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-                    0x10, 0x11, 0x12];
+        let bad = &[
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12,
+        ];
         let err = decrypt_v10(bad, &test_key()).unwrap_err();
         assert!(matches!(err, DecryptError::MissingPrefix));
     }
@@ -316,8 +323,8 @@ mod tests {
         // Result: d9a09d499b4e1b7461f28e67972c6dbd
         let key = derive_aes_key(b"peanuts");
         let expected: [u8; 16] = [
-            0xd9, 0xa0, 0x9d, 0x49, 0x9b, 0x4e, 0x1b, 0x74,
-            0x61, 0xf2, 0x8e, 0x67, 0x97, 0x2c, 0x6d, 0xbd,
+            0xd9, 0xa0, 0x9d, 0x49, 0x9b, 0x4e, 0x1b, 0x74, 0x61, 0xf2, 0x8e, 0x67, 0x97, 0x2c,
+            0x6d, 0xbd,
         ];
         assert_eq!(key.0, expected);
     }

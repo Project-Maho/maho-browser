@@ -63,6 +63,7 @@ interface PlanPickerProps {
   busyTier?: PlanTier | null;
   disabled?: boolean;
   freeLabel?: string;
+  allowCurrentSelection?: boolean;
   onSelect: (tier: PlanTier) => void;
 }
 
@@ -71,15 +72,17 @@ export function PlanPicker({
   busyTier = null,
   disabled = false,
   freeLabel = 'Select Free',
+  allowCurrentSelection = false,
   onSelect,
 }: PlanPickerProps) {
   return (
     <div className="grid w-full gap-4 sm:grid-cols-3">
       {PLANS.map((plan) => {
         const isCurrent = plan.tier === currentTier;
+        const isSelectableCurrent = isCurrent && allowCurrentSelection;
         const isBusy = busyTier === plan.tier;
         const isLowerThanCurrent = TIER_RANK[plan.tier] < TIER_RANK[currentTier];
-        const label = isCurrent
+        const label = isCurrent && !isSelectableCurrent
           ? 'Current plan'
           : plan.tier === 'free'
           ? freeLabel
@@ -129,9 +132,9 @@ export function PlanPicker({
 
             <Button
               type="button"
-              variant={isCurrent ? 'outline' : plan.recommended ? 'default' : 'secondary'}
+              variant={isCurrent && !isSelectableCurrent ? 'outline' : plan.recommended ? 'default' : 'secondary'}
               className="mt-5 w-full"
-              disabled={disabled || isCurrent || isBusy}
+              disabled={disabled || (isCurrent && !isSelectableCurrent) || isBusy}
               onClick={() => onSelect(plan.tier)}
             >
               {isBusy ? 'Opening\u2026' : label}

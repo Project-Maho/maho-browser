@@ -102,6 +102,10 @@ export default defineConfig({
         find: /^@radix-ui\/react-dropdown-menu$/,
         replacement: sharedNodeModulePath('@radix-ui/react-dropdown-menu'),
       },
+      {
+        find: /^@radix-ui\/react-context-menu$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-context-menu'),
+      },
     ],
   },
 });

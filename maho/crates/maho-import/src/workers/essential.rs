@@ -48,7 +48,7 @@ impl ImportWorker for EssentialWorker {
             if !url_str.contains("://") {
                 continue;
             }
-            if let Some(tab_id) = destination.create_tab(&space_id, url_str) {
+            if let Some(tab_id) = destination.create_tab(&space_id, url_str, "") {
                 destination.favorite_tab(&tab_id);
                 count += 1;
             }

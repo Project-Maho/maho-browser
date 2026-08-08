@@ -674,10 +674,6 @@ MahoCommandResultRowView::MahoCommandResultRowView(
           compact ? 0 : kSelectedSubtitleTopInsetDp,
           0, 0, 0)));
   text_layout->SetFlexForView(compact_metadata_label_, compact ? 1 : 0);
-  if (!compact) {
-    compact_separator_label_->SetVisible(false);
-    compact_metadata_label_->SetVisible(false);
-  }
 
   if (!suggestion.shortcut_label.empty()) {
     shortcut_label_ = text_container_->AddChildView(std::make_unique<views::Label>(
@@ -828,10 +824,67 @@ void MahoCommandResultRowView::SetSelected(bool selected) {
                 : ax::mojom::Event::kSelectionRemove, true);
 }
 
+void MahoCommandResultRowView::SetAskAffordance(bool ask_affordance) {
+  if (ask_affordance_ == ask_affordance) {
+    return;
+  }
+  ask_affordance_ = ask_affordance;
+
+  if (ask_affordance_ && !ask_affordance_container_) {
+    ask_affordance_container_ =
+        content_view_->AddChildView(std::make_unique<views::View>());
+    auto* layout = ask_affordance_container_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal,
+            gfx::Insets::TLBR(0, 8, 0, 0), 6));
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+    ask_explanation_label_ = ask_affordance_container_->AddChildView(
+        std::make_unique<views::Label>(u"Ask Maho",
+                                       views::style::CONTEXT_LABEL,
+                                       views::style::STYLE_BODY_5));
+    ask_explanation_label_->SetAutoColorReadabilityEnabled(false);
+    ask_explanation_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  }
+
+  if (ask_affordance_container_) {
+    ask_affordance_container_->SetVisible(ask_affordance_);
+    ask_explanation_label_->SetVisible(ask_affordance_);
+  }
+  if (switch_tab_container_) {
+    switch_tab_container_->SetVisible(!ask_affordance_);
+  }
+  RebuildGlyph();
+  UpdateLayout();
+  UpdateColors();
+}
+
 void MahoCommandResultRowView::RebuildGlyph() {
   glyph_container_->RemoveAllChildViews();
   glyph_image_ = nullptr;
   favicon_image_ = nullptr;
+
+  if (ask_affordance_) {
+    uses_fallback_glyph_ = false;
+    auto* glyph_layout = glyph_container_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal));
+    glyph_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    glyph_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+    const int glyph_icon_size =
+        presentation_style_ == PresentationStyle::kCurrentTabSeeded
+            ? kCurrentTabSeededGlyphIconSizeDp
+            : kGlyphIconSizeDp;
+    auto* message_view = glyph_container_->AddChildView(
+        std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
+            maho_lucide_icons::kMessageCircleIcon, ui::kColorSysOnSurface,
+            glyph_icon_size - 6)));
+    message_view->SetCanProcessEventsWithinSubtree(false);
+    glyph_image_ = message_view;
+    return;
+  }
 
   const gfx::ImageSkia favicon_skia =
       icon_.has_value() ? GetOrDecodeFavicon(*icon_) : gfx::ImageSkia();
@@ -910,9 +963,7 @@ void MahoCommandResultRowView::UpdateLayout() {
   title_label_->SetText(title_text_);
   if (compact_metadata_label_) {
     compact_metadata_label_->SetText(compact_metadata_text_);
-    const bool show_metadata =
-        presentation_style_ == PresentationStyle::kCurrentTabSeeded &&
-        !compact_metadata_text_.empty();
+    const bool show_metadata = !compact_metadata_text_.empty();
     compact_metadata_label_->SetVisible(show_metadata);
     if (compact_separator_label_) {
       compact_separator_label_->SetVisible(show_metadata);
@@ -943,14 +994,15 @@ void MahoCommandResultRowView::UpdateColors() {
 
   if (selected_) {
     content_view_->SetBackground(views::CreateRoundedRectBackground(
-        selected_fill, SelectionCornerRadiusForPresentation(presentation_style_)));
+        selected_fill,
+        SelectionCornerRadiusForPresentation(presentation_style_)));
     content_view_->SetBorder(nullptr);
   } else {
     content_view_->SetBackground(nullptr);
     content_view_->SetBorder(nullptr);
   }
 
-  if (uses_fallback_glyph_) {
+  if (uses_fallback_glyph_ || !favicon_image_) {
     glyph_container_->SetBackground(nullptr);
     glyph_container_->SetBorder(nullptr);
   } else if (show_selected_seeded_favicon_tile) {
@@ -996,12 +1048,16 @@ void MahoCommandResultRowView::UpdateColors() {
                   : cp->GetColor(kMahoColorCommandBarShortcutText));
   }
 
+  const SkColor trailing_label_color = selected_
+      ? cp->GetColor(kMahoColorCommandBarRowSubtitleSelected)
+      : cp->GetColor(kMahoColorSecondaryText);
+  if (ask_explanation_label_) {
+    ask_explanation_label_->SetEnabledColor(trailing_label_color);
+  }
+
   if (is_tab_type_ && switch_tab_container_) {
     const bool dark_mode = SkColorGetR(cp->GetColor(kMahoColorCommandBarBackground)) < 0x80;
-    const SkColor label_color = selected_
-        ? cp->GetColor(kMahoColorCommandBarRowSubtitleSelected)
-        : cp->GetColor(kMahoColorSecondaryText);
-    switch_tab_label_->SetEnabledColor(label_color);
+    switch_tab_label_->SetEnabledColor(trailing_label_color);
 
     const SkColor chip_bg = selected_
         ? (dark_mode ? SK_ColorWHITE : SkColorSetRGB(0xE0, 0xE3, 0xEB))

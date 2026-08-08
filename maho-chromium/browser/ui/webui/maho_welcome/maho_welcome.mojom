@@ -83,6 +83,7 @@ interface PageHandler {
   // AI onboarding
   LoginFromWelcome(string email, string password) => (bool ok, string error_message);
   SignupFromWelcome(string email, string password, string display_name) => (bool ok, string error_message);
+  SignInWithGoogleFromWelcome() => (bool ok, string error_message);
   GetRelayAccountStatusFromWelcome() => (bool signed_in, string tier, string subscription_status, bool welcome_completed, bool has_stored_session, bool is_local_dev);
 
   // Password setup
@@ -92,6 +93,34 @@ interface PageHandler {
   GetVaultStatus() => (maho_settings.mojom.VaultOperationResult result);
   InitializeVault(string master_passphrase, string recovery_secret) => (maho_settings.mojom.VaultOperationResult result);
   UnlockVault(string master_passphrase) => (maho_settings.mojom.VaultOperationResult result);
+
+  // Sync key setup
+  GenerateSyncKey() => (string sync_key, string room_id, string recovery_phrase);
+  StartSync(string room_id, string recovery_phrase) => (bool ok, string error_message);
+
+  // Mail account onboarding
+  // Thin proxies to the profile-keyed MahoMailService; each returns
+  // (ok, result_json) and reports (false, "Mail service unavailable") when the
+  // service is missing for this profile.
+  MailAddAccount(string request_json) => (bool ok, string result_json);
+  MailTestConnection(string params_json) => (bool ok, string result_json);
+  // Browser-driven OAuth for the first-run welcome wizard: starts the loopback
+  // sign-in and opens the provider consent page in a NEW browser window (not
+  // in-place, so the wizard state is preserved; not renderer window.open, which
+  // is unreliable from a chrome:// WebUI page). The mail helper's loopback
+  // listener completes the flow and OnMailAccountsChanged advances the wizard.
+  MailBeginOAuth(string provider) => (bool ok, string error_json, string state);
+  MailListAccounts() => (bool ok, string result_json);
+  MailDeleteAccount(string account_id) => (bool ok, string result_json);
+  MailOAuthCancel(string state) => (bool accepted);
+
+  // Translation setup (cloud-backed; no local model).
+  GetAiProviderConfigured() => (bool configured);
+  SetTranslationProvider(string provider) => (bool ok);
+
+  // Returns the LemonSqueezy checkout URL for a monthly subscription tier.
+  // tier must be "pro" or "max". Returns empty string otherwise.
+  GetSubscriptionCheckoutUrl(string tier) => (string checkout_url);
 
   // Completion / FDA
   FinishOnboarding();
@@ -104,4 +133,5 @@ interface PageHandler {
 interface Page {
   // Import progress updates
   OnImportProgress(uint32 type, int32 items_imported, string error, bool complete);
+  OnMailAccountsChanged();
 };

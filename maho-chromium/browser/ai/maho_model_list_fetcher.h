@@ -48,6 +48,11 @@ class MahoModelListFetcher {
   // Subscribe to background refresh events (Mojo push).
   void SetRefreshedCallback(RefreshedCallback callback);
 
+  // Offline fallback models shared by selector surfaces that cannot initiate a
+  // model-list fetch themselves.
+  static std::vector<std::string> GetHardcodedFallback(
+      const std::string& provider_id);
+
  private:
   friend class ::MahoModelListFetcherTestHelper;
 
@@ -71,9 +76,6 @@ class MahoModelListFetcher {
   // Cache read/write:
   std::optional<std::vector<std::string>> ReadCache(const std::string& provider_id, base::Time* fetched_at);
   void WriteCache(const std::string& provider_id, const std::vector<std::string>& models);
-
-  // Offline fallback:
-  std::vector<std::string> GetHardcodedFallback(const std::string& provider_id) const;
 
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
   std::string DecryptKey(const std::string& encrypted_b64);

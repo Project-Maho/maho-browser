@@ -87,6 +87,14 @@ class MahoExtensionStateBridgeTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
 };
 
+TEST_F(MahoExtensionStateBridgeTest,
+       FactoryCanBeRegisteredBeforeProfileCreation) {
+  EnsureMahoExtensionStateBridgeFactoryBuilt();
+
+  TestingProfile profile;
+  EXPECT_NE(MahoExtensionStateBridge::FromProfile(&profile), nullptr);
+}
+
 TEST_F(MahoExtensionStateBridgeTest, FromProfileNullForNullProfile) {
   EXPECT_EQ(MahoExtensionStateBridge::FromProfile(nullptr), nullptr);
 }

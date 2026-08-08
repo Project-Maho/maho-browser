@@ -17,6 +17,7 @@
     { "name": "images", "file": "images.icon" },
     { "name": "inbox", "file": "inbox.icon" },
     { "name": "link", "file": "link.icon" },
+    { "name": "message-circle", "file": "message_circle.icon" },
     { "name": "message-square", "file": "message_square.icon" },
     { "name": "minus", "file": "minus.icon" },
     { "name": "notebook-text", "file": "notebook_text.icon" },
@@ -51,6 +52,9 @@
     { "name": "arrow-left", "file": "arrow_left.icon" },
     { "name": "gift", "file": "gift.icon" },
     { "name": "glasses", "file": "glasses.icon" },
-    { "name": "globe", "file": "globe.icon" }
+    { "name": "arrow-up-right", "file": "arrow_up_right.icon" },
+    { "name": "trash-2", "file": "trash_2.icon" },
+    { "name": "globe", "file": "globe.icon" },
+    { "name": "file", "file": "file.icon" }
   ]
 }

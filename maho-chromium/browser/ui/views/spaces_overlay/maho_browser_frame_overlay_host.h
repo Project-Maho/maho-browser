@@ -19,11 +19,19 @@ namespace maho {
 class MahoSidebarContainerView;
 class MahoSpacesOverlayController;
 class MahoLibraryOverlayController;
+class MahoPeekController;
 
 class MahoBrowserFrameOverlayHost : public views::View {
   METADATA_HEADER(MahoBrowserFrameOverlayHost, views::View)
 
  public:
+  enum class OverlayKind {
+    kSpaces,
+    kLibrary,
+    kCommand,
+    kPeek,
+  };
+
   MahoBrowserFrameOverlayHost(Browser* browser,
                               MahoSidebarContainerView* sidebar_container);
   MahoBrowserFrameOverlayHost(const MahoBrowserFrameOverlayHost&) = delete;
@@ -40,6 +48,8 @@ class MahoBrowserFrameOverlayHost : public views::View {
   bool IsLibraryOverlayVisible() const;
   void UpdateLibraryOverlayBounds();
 
+  void DismissAllOverlaysExcept(OverlayKind kind);
+
   MahoSpacesOverlayController* spaces_overlay_controller() {
     return spaces_overlay_controller_.get();
   }
@@ -48,6 +58,8 @@ class MahoBrowserFrameOverlayHost : public views::View {
     return library_overlay_controller_.get();
   }
 
+  MahoPeekController* peek_controller();
+
  private:
   void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
 
@@ -55,6 +67,7 @@ class MahoBrowserFrameOverlayHost : public views::View {
   raw_ptr<MahoSidebarContainerView> sidebar_container_;
   std::unique_ptr<MahoSpacesOverlayController> spaces_overlay_controller_;
   std::unique_ptr<MahoLibraryOverlayController> library_overlay_controller_;
+  std::unique_ptr<MahoPeekController> peek_controller_;
   MahoSidebarPalette sidebar_palette_;
   bool has_sidebar_palette_ = false;
   base::CallbackListSubscription sidebar_palette_subscription_;

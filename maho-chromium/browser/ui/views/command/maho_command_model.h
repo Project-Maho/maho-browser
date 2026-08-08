@@ -3,9 +3,10 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_COMMAND_MAHO_COMMAND_MODEL_H_
 #define MAHO_BROWSER_UI_VIEWS_COMMAND_MAHO_COMMAND_MODEL_H_
 
-#include <string>
-#include <optional>
 #include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
+#include "maho/browser/ui/views/command/maho_remote_search_suggestions.h"
 #include "ui/gfx/image/image.h"
 
 class Browser;
@@ -117,6 +119,8 @@ class MahoCommandModel : public TabStripModelObserver,
  public:
   using ResultsCallback =
       base::RepeatingCallback<void(std::vector<CommandSuggestion>)>;
+  using RemoteSourceFactory = base::RepeatingCallback<
+      std::unique_ptr<MahoRemoteSearchSuggestionSource>(Profile*)>;
 
   struct SiteSearchEngine {
     std::string prefix;
@@ -156,6 +160,28 @@ class MahoCommandModel : public TabStripModelObserver,
   Browser* browser() const { return browser_; }
   void RefetchCurrentQuery();
 
+  // Narrow lifecycle seams used to exercise generation-bound source replies
+  // without enabling production remote starts before Task 5.
+  void SetRemoteSearchSourceForTesting(
+      std::unique_ptr<MahoRemoteSearchSuggestionSource> source);
+  void SetRemoteSearchSourceFactoryForTesting(RemoteSourceFactory factory);
+  void StartRemoteSearchForTesting(uint32_t generation,
+                                   const std::string& query);
+  void AcceptLocalResultsForTesting(
+      uint32_t generation,
+      std::vector<CommandSuggestion> results);
+  void ApplyFaviconForTesting(uint32_t generation, const std::string& key);
+  uint32_t search_generation_for_testing() const {
+    return search_generation_;
+  }
+  const std::vector<RemoteSearchSuggestion>& remote_snapshot_for_testing()
+      const {
+    return remote_snapshot_;
+  }
+  int favicon_request_pass_count_for_testing() const {
+    return favicon_request_pass_count_for_testing_;
+  }
+
   static constexpr int kMaxVisibleRows = 5;
 
   static CommandSuggestionType ParseType(const std::string& kind);
@@ -163,6 +189,29 @@ class MahoCommandModel : public TabStripModelObserver,
   static void ApplyQuickActionGate(std::vector<CommandSuggestion>& results,
                                    CommandOverlayMode mode,
                                    const std::string& query);
+  static std::vector<CommandSuggestion> PrepareLocalCandidates(
+      std::vector<CommandSuggestion> results,
+      bool actions_only,
+      CommandOverlayMode mode,
+      const std::string& query);
+  static std::vector<CommandSuggestion> NormalizeRemoteSuggestions(
+      const std::string& query,
+      const std::vector<CommandSuggestion>& prepared_local_results,
+      const std::vector<RemoteSearchSuggestion>& remote_suggestions);
+  static std::vector<CommandSuggestion> AllocateFinalResults(
+      std::vector<CommandSuggestion> prepared_local_results,
+      const std::vector<CommandSuggestion>& remote_results,
+      CommandOverlayMode mode,
+      const std::string& query);
+  static bool FinalSnapshotsEqual(
+      const std::vector<CommandSuggestion>& lhs,
+      const std::vector<CommandSuggestion>& rhs);
+  static bool IsRemoteSearchEligible(
+      Profile* profile,
+      MahoPrivateContextClass context_class,
+      CommandOverlayMode mode,
+      const std::string& trimmed_query,
+      bool matches_site_search);
   static base::Value BuildTabEntryDict(const std::string& stable_id,
                                        const std::string& browser_session_id,
                                        const std::string& tab_session_id,
@@ -205,23 +254,27 @@ class MahoCommandModel : public TabStripModelObserver,
       CommandOverlayMode mode,
       bool is_incognito);
 
-  void FireSearch();
+  void FireSearch(uint32_t generation);
   // Exact-primary-Incognito search: builds only ephemeral sources (direct URL,
   // OTR TemplateURLService default-provider search, current-window OTR tabs,
   // and the frozen 13 actions) with no MahoCore call and no saved-source read.
-  void FireSearchPrivate();
+  void FireSearchPrivate(uint32_t generation);
   std::vector<CommandSuggestion> BuildPrivateResults(const std::string& query);
   std::optional<std::pair<std::string, std::string>>
   ResolveDefaultProviderSearch(const std::string& query) const;
-  void OnResults(ResultsCallback callback,
+  void OnResults(uint32_t generation,
                  std::vector<CommandSuggestion> results);
-  void RequestBookmarkFavicons();
+  void OnRemoteSnapshot(
+      uint32_t generation,
+      std::vector<RemoteSearchSuggestion> remote_snapshot);
+  bool PublishMergedResultsIfChanged(uint32_t generation);
+  void RequestBookmarkFavicons(uint32_t generation);
   void OnBookmarkLargeIconLoaded(uint32_t search_generation,
                                   std::string bookmark_url,
                                   const favicon_base::LargeIconResult& result);
-  void RequestTabFavicons();
+  void RequestTabFavicons(uint32_t generation);
   void HydrateSiteSearchEngines();
-  void RequestSearchEngineFavicons();
+  void RequestSearchEngineFavicons(uint32_t generation);
   void OnSearchEngineLargeIconLoaded(uint32_t search_generation,
                                      std::string engine_id,
                                      const favicon_base::LargeIconResult& result);
@@ -251,7 +304,16 @@ class MahoCommandModel : public TabStripModelObserver,
   base::OneShotTimer debounce_timer_;
   base::CancelableTaskTracker favicon_task_tracker_;
   uint32_t search_generation_ = 0;
+  uint32_t traced_generation_ = 0;
   base::TimeTicks search_start_ticks_;
+  RemoteSourceFactory remote_source_factory_;
+  std::unique_ptr<MahoRemoteSearchSuggestionSource> remote_search_source_;
+  std::vector<CommandSuggestion> local_snapshot_;
+  std::vector<RemoteSearchSuggestion> remote_snapshot_;
+  bool has_published_results_ = false;
+  std::optional<base::TimeTicks> first_results_publication_ticks_;
+  bool has_published_remote_results_ = false;
+  int favicon_request_pass_count_for_testing_ = 0;
 
   base::flat_map<std::string, gfx::Image> engine_favicon_cache_;
 

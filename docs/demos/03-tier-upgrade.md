@@ -49,7 +49,7 @@
 
 **On-screen action**
 - A quiet toast slides in lower-right, 1.5 seconds: "Heavy user? Try Max for $20/mo." Fades.
-- End card. Text: "Free $0.50/mo. Pro $5/mo. Max $20/mo."
+- End card. Text: "Free $0/mo (includes $0.50 AI ceiling). Pro $5/mo. Max $20/mo."
 - Subtext: "Or pay as you go. Or bring your own key."
 - Maho logo and URL.
 

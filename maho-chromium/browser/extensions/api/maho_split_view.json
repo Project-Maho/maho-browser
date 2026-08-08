@@ -36,6 +36,12 @@
             "type": "string",
             "optional": true,
             "description": "URL to open in the newly created split pane. Defaults to about:blank when omitted."
+          },
+          {
+            "name": "windowId",
+            "type": "integer",
+            "optional": true,
+            "description": "Target Maho window id. Defaults to a current window for the calling profile."
           }
         ],
         "returns_async": {
@@ -53,7 +59,14 @@
         "name": "close",
         "type": "function",
         "description": "Closes the split for the active tab, if one is active.",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "integer",
+            "optional": true,
+            "description": "Target Maho window id. Defaults to a current window for the calling profile."
+          }
+        ],
         "returns_async": {
           "name": "callback",
           "optional": true,
@@ -69,7 +82,14 @@
         "name": "query",
         "type": "function",
         "description": "Returns the current split-view state of the active browser window.",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "integer",
+            "optional": true,
+            "description": "Target Maho window id. Defaults to a current window for the calling profile."
+          }
+        ],
         "returns_async": {
           "name": "callback",
           "parameters": [

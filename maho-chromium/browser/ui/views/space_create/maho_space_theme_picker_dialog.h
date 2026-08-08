@@ -26,7 +26,9 @@ class MahoSpaceThemePickerDialog {
       base::OnceCallback<void(const std::string& committed_theme_json,
                               bool cancelled)>;
 
-  // Opens (or focuses) the singleton theme picker dialog parented to `browser`.
+  // Opens (or focuses) the theme picker dialog owned by `browser`. At most one
+  // picker is active for each browser; pickers in separate browsers are
+  // intentionally independent.
   // `initial_theme_json` is delivered to the WebUI via Page::Initialize.
   // `on_result` fires once with either committed JSON (cancelled=false) or
   // empty string (cancelled=true).
@@ -34,27 +36,32 @@ class MahoSpaceThemePickerDialog {
                              const std::string& initial_theme_json,
                              ResultCallback on_result);
 
-  // Test/diagnostic helper — returns widget if currently open, else nullptr.
+  // Test/diagnostic helper — returns an open widget, if any.
   static views::Widget* GetActiveWidgetForTesting();
 
   // Called by MahoSpaceCreatePageHandler from its CommitTheme Mojo handler.
   // Triggers the result callback with committed_=true and closes the widget.
-  static void DispatchCommitToActive(const std::string& theme_json);
+  static void DispatchCommitToActive(Browser* browser,
+                                     const std::string& theme_json);
 
   // Called by MahoSpaceCreatePageHandler from its CancelTheme Mojo handler.
   // Triggers the result callback with cancelled=true and closes the widget.
-  static void DispatchCancelToActive();
+  static void DispatchCancelToActive(Browser* browser);
 
   // Called by maho_space_create_ui.cc's CreatePageHandler so the handler can
   // deliver the initial theme_json via Page::Initialize after it binds.
-  // Returns the stored initial_theme_json and clears it (consume-once).
-  static std::string ConsumePendingInitialThemeJsonForActive();
+  // Returns the owning dialog's initial theme JSON and clears it
+  // (consume-once). A WebContents must belong to that dialog.
+  static std::string ConsumePendingInitialThemeJson(
+      Browser* browser,
+      content::WebContents* web_contents);
 
-  // Repaints all open browser windows, resetting color provider cache first.
-  static void RepaintAllBrowsers();
+  static void RepaintBrowser(Browser* browser);
 
-  // Returns true if the given WebContents is hosted within the active dialog.
-  static bool IsWebContentsHostingActiveDialog(content::WebContents* web_contents);
+  // Returns the browser that owns the picker hosting `web_contents`, or null
+  // for a standalone chrome://maho-space-create tab.
+  static Browser* GetOwnerBrowserForWebContents(
+      content::WebContents* web_contents);
 
  private:
   MahoSpaceThemePickerDialog() = delete;

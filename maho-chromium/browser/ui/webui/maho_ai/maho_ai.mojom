@@ -97,9 +97,8 @@ struct ContextAttachment {
 
 enum ChatIntent {
   kFreeform,
-  kAnalyzeCurrentPage,
-  kExplainCurrentPage,
   kSummarizeCurrentPage,
+  kQuizCurrentPage,
 };
 
 // Per-prompt interaction mode. Controls persona injection and response
@@ -231,6 +230,22 @@ enum RuntimeEventKind {
   kBrowserContextInjected,
   // Emitted when tools availability changed.
   kToolAvailabilityChanged,
+  // An output artifact was created by the agent (fs_write).
+  kArtifactCreated,
+};
+
+// A closed, non-secret category for a credential failure produced by the
+// runtime. kGeneric is used when replaying a persisted value newer than this
+// client understands. This deliberately excludes provider input, endpoints,
+// keys, ciphertext, platform details, and diagnostic text.
+enum CredentialErrorCode {
+  kGeneric,
+  kProviderNotConfigured,
+  kCredentialUnusable,
+  kSecureStoreUnavailable,
+  kCredentialDecryptFailed,
+  kManagedAuthUnavailable,
+  kUnsupportedProvider,
 };
 
 // Status of a tool invocation.
@@ -264,6 +279,17 @@ struct ToolResultInfo {
   string output;
   // Optional error message if success is false.
   string? error_message;
+};
+
+// Metadata for an output artifact produced by the agent. Paths never cross
+// this interface; artifact_id is an opaque handle resolved server-side.
+struct ArtifactInfo {
+  string artifact_id;
+  string session_id;
+  string display_name;
+  string mime_type;
+  uint64 size_bytes;
+  double created_at;
 };
 
 enum ApprovalPolicy {
@@ -335,6 +361,13 @@ struct RuntimeEvent {
   ApprovalRequestInfo? approval_request;
   ApprovalResultInfo? approval_result;
   BrowserContextPayload? browser_context;
+  // Set for kArtifactCreated: metadata for the created artifact.
+  ArtifactInfo? artifact;
+
+  // Optional typed metadata for kError credential failures. The associated
+  // text is always a generic safe message; raw credential diagnostics never
+  // cross this interface.
+  CredentialErrorCode? credential_error_code;
 };
 
 // Lifecycle status of a session.
@@ -404,16 +437,49 @@ struct CreditBalanceInfo {
   int64 last_purchase_at;
   // Unix timestamp (seconds) of last credit consumption. 0 if never consumed.
   int64 last_consumption_at;
+  // True only when a stored access token was rejected by the relay (401/403),
+  // i.e. the session expired and re-login is required. Distinct from the
+  // anonymous case (no token) where this is false and balance is a real 0.
+  bool session_expired;
 };
 
-// Snapshot of AI settings as stored in profile prefs. Used by the AI panel
-// to display the active provider + model in the composer.
+// A selectable model for a provider in the AI composer.
+struct AIModelOption {
+  string id;
+  string label;
+};
+
+// A selectable provider and its locally available model options. Dynamic
+// providers expose their persisted model when one is available.
+struct AIProviderOption {
+  string id;
+  string label;
+  array<AIModelOption> model_options;
+};
+
+enum ReasoningEffort {
+  kLow,
+  kMedium,
+  kHigh,
+};
+
+struct ReasoningOption {
+  ReasoningEffort effort;
+  string label;
+};
+
+// Snapshot of AI settings and locally available selector options. Used by the
+// AI panel to display and update the provider, model, and reasoning choices.
 struct AISettingsInfo {
   // Provider id selected in chrome://maho-settings?pane=maho-ai
   // (e.g., "openai", "anthropic", "openai-compat"). Empty if not configured.
   string active_provider_id;
   // Active model id (e.g., "gpt-4o-mini"). Empty if not configured.
   string active_model_id;
+  // Active reasoning effort. Defaults to kMedium for missing or invalid prefs.
+  ReasoningEffort active_reasoning_effort;
+  array<AIProviderOption> provider_options;
+  array<ReasoningOption> reasoning_options;
 };
 
 // ==========================================================================
@@ -455,6 +521,16 @@ interface PageHandler {
   GetSessionHistory(string session_id, uint32 offset, uint32 limit)
       => (array<RuntimeEvent> events, uint32 total_count);
 
+  // Artifact operations. All reject unknown/deleted ids. Preview/export URLs
+  // are capability-gated chrome-untrusted URLs (null until the untrusted hosts
+  // are registered).
+  ListArtifacts(string session_id) => (array<ArtifactInfo> artifacts);
+  RenameArtifact(string artifact_id, string display_name)
+      => (bool success, string? error);
+  DeleteArtifact(string artifact_id) => (bool success);
+  GetArtifactPreviewUrl(string artifact_id) => (string? url);
+  GetArtifactExportUrl(string artifact_id) => (string? url);
+
   // Return the list of open tabs in the browser window associated with this
   // panel.  Used by the context picker to populate the tab source list.
   // Tabs are returned in tab-strip order; the active tab has is_active=true.
@@ -490,7 +566,8 @@ interface PageHandler {
   // either |attach_browser_context|=true + null |attachments|, or non-null
   // |attachments| (possibly empty, meaning no context attached).
   SubmitPrompt(string session_id, string prompt, bool attach_browser_context,
-               InteractionMode mode, array<ContextAttachment>? attachments);
+               InteractionMode mode, array<ContextAttachment>? attachments,
+               ChatIntent chat_intent);
 
   // Cancel the current turn in a session.
   CancelTurn(string session_id);
@@ -507,10 +584,15 @@ interface PageHandler {
   // Open the settings page to a specific safe Maho AI pane.
   OpenSettingsPane(string pane_key);
 
-  // Get the current AI settings (provider + model) from prefs.
+  // Get the current AI selector settings and local option lists from prefs.
   // Called on mount and on visibility change to reflect changes saved in
   // chrome://maho-settings?pane=maho-ai.
   GetAISettings() => (AISettingsInfo info);
+
+  // Persist a validated provider, model, and reasoning selection. Returns
+  // false without changing prefs when any supplied option is invalid.
+  SetAISelection(string provider_id, string model_id,
+                 ReasoningEffort reasoning_effort) => (bool accepted);
 
   // Get the current view mode (sidebar or floating)
   GetViewMode() => (ViewMode mode);

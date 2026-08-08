@@ -48,6 +48,7 @@ source_set("maho_settings") {
   deps = [
     ":maho_settings_password_helpers",
     "//maho/browser:maho_auth_utils",
+    "//maho/browser:maho_google_sign_in",
     "//maho/browser:maho_extension_state_bridge",
     "//maho/browser:maho_password_provider",
     "//chrome/browser/extensions",
@@ -60,6 +61,7 @@ source_set("maho_settings") {
 
 
     "//components/safe_browsing/core/common",
+    "//components/translate/core/browser:translate_pref_names",
     "//extensions/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_content_blocker_update_service",
@@ -92,6 +94,7 @@ test("maho_settings_vault_handler_test") {
     "//base",
     "//base/test:test_support",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_hydration_state",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
     "//testing/gtest",

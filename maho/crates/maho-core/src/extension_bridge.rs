@@ -162,11 +162,7 @@ impl ExtensionBridge {
         self.register_extension_for_profile(DEFAULT_PROFILE_KEY, ext);
     }
 
-    pub fn register_extension_for_profile(
-        &mut self,
-        profile_key: &str,
-        ext: InstalledExtension,
-    ) {
+    pub fn register_extension_for_profile(&mut self, profile_key: &str, ext: InstalledExtension) {
         self.profile_mut(profile_key)
             .extensions
             .insert(ext.id.clone(), ext);
@@ -208,7 +204,10 @@ impl ExtensionBridge {
         profile_key: &str,
         extension_id: &str,
     ) -> Option<bool> {
-        let ext = self.profile_mut(profile_key).extensions.get_mut(extension_id)?;
+        let ext = self
+            .profile_mut(profile_key)
+            .extensions
+            .get_mut(extension_id)?;
         ext.enabled = !ext.enabled;
         Some(ext.enabled)
     }

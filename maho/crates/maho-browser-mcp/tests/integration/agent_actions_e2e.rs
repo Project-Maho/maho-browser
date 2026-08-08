@@ -293,7 +293,7 @@ async fn call_tool_expect_error(
     arguments: Value,
 ) -> (i32, String) {
     match client.call_tool(name, arguments).await {
-        Err(McpBridgeError::Rpc { code, message }) => (code, message),
+        Err(McpBridgeError::Rpc { code, message, .. }) => (code, message),
         Err(other) => panic!("expected RPC error for {name}, got: {other}"),
         Ok(value) => panic!("expected RPC error for {name}, got success: {value}"),
     }

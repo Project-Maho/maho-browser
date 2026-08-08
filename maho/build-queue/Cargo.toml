@@ -1,0 +1,15 @@
+# Standalone crate (own workspace root) so it is independent of maho/Cargo.toml.
+[workspace]
+
+[package]
+name = "maho-build-queue"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "maho-build-queued"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

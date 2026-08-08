@@ -5,6 +5,7 @@
 
 #include "base/callback_list.h"
 #include "base/files/file_path.h"
+#include "base/memory/weak_ptr.h"
 #include "base/power_monitor/power_observer.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
@@ -42,7 +43,12 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     void PostMainMessageLoopRun() override;
     void OnSuspend() override;
     void InitializeRegularServicesOnce(Profile* profile);
+    void OnRegularStorageDirectoryReady(Profile* profile,
+                                        bool storage_directory_ready);
     void MaybeLaunchMailHelper(Profile* profile);
+    void OnMailHelperCrashpadReady(Profile* profile,
+                                   const base::FilePath& crashpad_database,
+                                   bool crashpad_directory_ready);
     void StartObservingPowerSuspend();
     void StopObservingPowerSuspend();
     void LockVaultForLifecycle();
@@ -51,19 +57,22 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
    void ShutdownCoreAndServices();
 
    base::FilePath storage_path_;
-    RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
-    RAW_PTR_EXCLUSION Profile* regular_profile_ = nullptr;
-    bool observing_power_suspend_ = false;
+     RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
+     RAW_PTR_EXCLUSION Profile* regular_profile_ = nullptr;
+     bool observing_power_suspend_ = false;
+     bool regular_services_initializing_ = false;
 
-   std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
-   std::unique_ptr<maho::MahoSyncRelayClient> sync_relay_client_;
+    std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
+    std::unique_ptr<maho::MahoSyncRelayClient> sync_relay_client_;
 
- #if BUILDFLAG(IS_WIN)
+  #if BUILDFLAG(IS_WIN)
    std::unique_ptr<maho::MahoMcpSessionToken> mcp_session_token_;
    std::unique_ptr<maho::MahoMcpPipeServer> mcp_pipe_server_;
  #else
    std::unique_ptr<maho::MahoMcpSocketServer> mcp_socket_server_;
  #endif
- };
+
+    base::WeakPtrFactory<MahoBrowserMainExtraParts> weak_factory_{this};
+  };
 
 #endif  // MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_

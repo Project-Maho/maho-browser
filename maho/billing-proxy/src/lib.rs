@@ -43,6 +43,21 @@ pub fn hex_decode(hex_str: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// Constant-time equality for secret comparison (service tokens).
+///
+/// Avoids the early-exit timing side-channel of `==`/`!=` on `&str`, which would
+/// leak how many leading bytes of an attacker-supplied token match the real one.
+/// A length mismatch short-circuits: the length of the service token is not secret.
+pub fn ct_str_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    a.ct_eq(b).unwrap_u8() == 1
+}
+
 pub fn verify_bypass_token_at(token: &str, service_token: &str, now_sec: i64) -> Option<i32> {
     let parts: Vec<&str> = token.split(':').collect();
     if parts.len() != 3 {
@@ -77,6 +92,8 @@ pub fn verify_bypass_token_at(token: &str, service_token: &str, now_sec: i64) ->
 }
 
 // ─── Model allowlist (compiled-in fallback for when KV unreachable) ─────────
+
+pub const DEFAULT_MANAGED_MODEL: &str = "google/gemini-3-flash-lite:free";
 
 pub const FALLBACK_FREE_MODELS: &[&str] = &[
     "google/gemini-3-flash-lite:free",
@@ -182,7 +199,7 @@ pub fn get_per_request_cost_cap_usd(tier: &str) -> f64 {
 
 // ─── Cost calculation ───────────────────────────────────────────────────────
 
-/// Calculate model cost with 50% subscription markup (updated from 30%).
+/// Calculate model cost with 30% subscription markup (launch policy).
 pub fn calculate_model_cost(model: &str, prompt_tokens: u32, completion_tokens: u32) -> f64 {
     let is_free = FALLBACK_FREE_MODELS.contains(&model);
 
@@ -204,7 +221,20 @@ pub fn calculate_model_cost(model: &str, prompt_tokens: u32, completion_tokens: 
     };
 
     let base_cost = (prompt_tokens as f64 * prompt_price_per_m + completion_tokens as f64 * completion_price_per_m) / 1_000_000.0;
-    base_cost * 1.50
+    base_cost * 1.30
+}
+
+/// Amount to record as a durable "unsynced consumption" marker when a relay
+/// credit-consume call fails. Consume runs after the OpenRouter response is
+/// committed, so it cannot fail closed; the marker keeps the drift between the
+/// reserved cost and the relay ledger visible instead of silently dropping it.
+/// Returns `0.0` when the consume succeeded or there was nothing to consume.
+pub fn unsynced_consumption_on_failure(consume_succeeded: bool, cost_usd: f64) -> f64 {
+    if consume_succeeded || !(cost_usd > 0.0) {
+        0.0
+    } else {
+        cost_usd
+    }
 }
 
 // ─── Worker-only code (wasm32 target) ───────────────────────────────────────
@@ -219,6 +249,8 @@ pub struct UserUsageData {
     pub topup_ceiling_usd: f64,
     #[serde(default)]
     pub payg_balance_usd: f64,
+    #[serde(default)]
+    pub unsynced_consumption_usd: f64,
     pub period_start_at: i64,
     pub next_reset_at: i64,
 }
@@ -227,7 +259,7 @@ pub struct UserUsageData {
 #[durable_object]
 pub struct UserUsage {
     state: State,
-    env: Env,
+    _env: Env,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -243,7 +275,7 @@ fn get_next_reset_timestamp(period_start_at: i64) -> i64 {
 #[cfg(target_arch = "wasm32")]
 impl DurableObject for UserUsage {
     fn new(state: State, env: Env) -> Self {
-        Self { state, env }
+        Self { state, _env: env }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
@@ -258,6 +290,7 @@ impl DurableObject for UserUsage {
                 base_ceiling_usd: 0.50,
                 topup_ceiling_usd: 0.0,
                 payg_balance_usd: 0.0,
+                unsynced_consumption_usd: 0.0,
                 period_start_at: now_sec,
                 next_reset_at: get_next_reset_timestamp(now_sec),
             }
@@ -451,6 +484,18 @@ impl DurableObject for UserUsage {
 
                 Response::from_json(&data)
             }
+            "/mark_unsynced_consumption" => {
+                #[derive(Deserialize)]
+                struct MarkUnsyncedReq {
+                    amount_usd: f64,
+                }
+                let body: MarkUnsyncedReq = req.json().await?;
+                if body.amount_usd > 0.0 {
+                    data.unsynced_consumption_usd += body.amount_usd;
+                    self.state.storage().put("data", &data).await?;
+                }
+                Response::from_json(&data)
+            }
             _ => Response::error("Not Found", 404),
         }
     }
@@ -484,6 +529,7 @@ pub struct IntrospectResponse {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 fn verify_bypass_token(token: &str, service_token: &str) -> Option<i32> {
     let now = Date::now().as_millis() as i64 / 1000;
     verify_bypass_token_at(token, service_token, now)
@@ -955,13 +1001,42 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
                     let uid = user_info.user_id;
 
                     ctx.wait_until(async move {
-                        if let Ok(stub) = do_ns_clone.id_from_name(&user_id_str_clone).and_then(|id| id.get_stub()) {
-                            if source == "payg" {
-                                let _ = do_reconcile_payg(&stub, estimated_cost_usd, cost).await;
-                                // Fire-and-forget: consume credit from relay
-                                let _ = relay_consume_credit(&relay_url, &service_token, uid, cost).await;
-                            } else {
-                                let _ = do_reconcile(&stub, estimated_cost_usd, cost).await;
+                        let stub = do_ns_clone.id_from_name(&user_id_str_clone).and_then(|id| id.get_stub());
+                        match &stub {
+                            Ok(stub) => {
+                                if source == "payg" {
+                                    if let Err(e) = do_reconcile_payg(stub, estimated_cost_usd, cost).await {
+                                        console_error!("do_reconcile_payg failed for user {uid}: {e}");
+                                    }
+                                } else if let Err(e) = do_reconcile(stub, estimated_cost_usd, cost).await {
+                                    console_error!("do_reconcile failed for user {uid}: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                console_error!("DO stub acquisition failed for user {uid}: {e}");
+                            }
+                        }
+
+                        // Relay ledger consumption must run for PAYG even if the DO
+                        // stub could not be acquired: the spendable credit lives in
+                        // the relay, not the DO, so skipping it would give away paid
+                        // usage for free.
+                        if source == "payg" && cost > 0.0 {
+                            if let Err(e) = relay_consume_credit(&relay_url, &service_token, uid, cost).await {
+                                console_error!("relay consume_credit failed for user {uid} (${cost}): {e}");
+                                let unsynced = unsynced_consumption_on_failure(false, cost);
+                                if unsynced > 0.0 {
+                                    match &stub {
+                                        Ok(stub) => {
+                                            if let Err(mark_err) = do_mark_unsynced_consumption(stub, unsynced).await {
+                                                console_error!("failed to record unsynced marker ${unsynced} for user {uid}: {mark_err}");
+                                            }
+                                        }
+                                        Err(_) => {
+                                            console_error!("cannot record unsynced marker ${unsynced} for user {uid}: DO stub unavailable");
+                                        }
+                                    }
+                                }
                             }
                         }
                     });
@@ -1000,12 +1075,42 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
                             }
                         }
                         let cost = calculate_model_cost(&model_clone, prompt_tokens, completion_tokens);
-                        if let Ok(stub) = do_ns_clone.id_from_name(&user_id_str_clone).and_then(|id| id.get_stub()) {
-                            if source == "payg" {
-                                let _ = do_reconcile_payg(&stub, estimated_cost_usd, cost).await;
-                                let _ = relay_consume_credit(&relay_url, &service_token, uid, cost).await;
-                            } else {
-                                let _ = do_reconcile(&stub, estimated_cost_usd, cost).await;
+                        let stub = do_ns_clone.id_from_name(&user_id_str_clone).and_then(|id| id.get_stub());
+                        match &stub {
+                            Ok(stub) => {
+                                if source == "payg" {
+                                    if let Err(e) = do_reconcile_payg(stub, estimated_cost_usd, cost).await {
+                                        console_error!("do_reconcile_payg failed for user {uid}: {e}");
+                                    }
+                                } else if let Err(e) = do_reconcile(stub, estimated_cost_usd, cost).await {
+                                    console_error!("do_reconcile failed for user {uid}: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                console_error!("DO stub acquisition failed for user {uid}: {e}");
+                            }
+                        }
+
+                        // Relay ledger consumption must run for PAYG even if the DO
+                        // stub could not be acquired: the spendable credit lives in
+                        // the relay, not the DO, so skipping it would give away paid
+                        // usage for free.
+                        if source == "payg" && cost > 0.0 {
+                            if let Err(e) = relay_consume_credit(&relay_url, &service_token, uid, cost).await {
+                                console_error!("relay consume_credit failed for user {uid} (${cost}): {e}");
+                                let unsynced = unsynced_consumption_on_failure(false, cost);
+                                if unsynced > 0.0 {
+                                    match &stub {
+                                        Ok(stub) => {
+                                            if let Err(mark_err) = do_mark_unsynced_consumption(stub, unsynced).await {
+                                                console_error!("failed to record unsynced marker ${unsynced} for user {uid}: {mark_err}");
+                                            }
+                                        }
+                                        Err(_) => {
+                                            console_error!("cannot record unsynced marker ${unsynced} for user {uid}: DO stub unavailable");
+                                        }
+                                    }
+                                }
                             }
                         }
                     });
@@ -1041,7 +1146,7 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
             };
 
             let service_token = route_ctx.var("SERVICE_TOKEN")?.to_string();
-            if token != service_token {
+            if !ct_str_eq(token, &service_token) {
                 return Response::error("Unauthorized", 401);
             }
 
@@ -1068,7 +1173,7 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
             };
 
             let service_token = route_ctx.var("SERVICE_TOKEN")?.to_string();
-            if token != service_token {
+            if !ct_str_eq(token, &service_token) {
                 return Response::error("Unauthorized", 401);
             }
 
@@ -1109,7 +1214,7 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
             };
 
             let service_token = route_ctx.var("SERVICE_TOKEN")?.to_string();
-            if token != service_token {
+            if !ct_str_eq(token, &service_token) {
                 return Response::error("Unauthorized", 401);
             }
 
@@ -1154,7 +1259,7 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
             };
 
             let service_token = route_ctx.var("SERVICE_TOKEN")?.to_string();
-            if token != service_token {
+            if !ct_str_eq(token, &service_token) {
                 return Response::error("Unauthorized", 401);
             }
 
@@ -1236,7 +1341,7 @@ async fn do_reconcile_payg(do_stub: &Stub, estimated_cost_usd: f64, actual_cost_
     do_stub.fetch_with_request(recon_req).await
 }
 
-/// Fire-and-forget credit consumption call to relay.
+/// Credit consumption call to relay.
 #[cfg(target_arch = "wasm32")]
 async fn relay_consume_credit(relay_url: &str, service_token: &str, user_id: i32, amount_usd: f64) -> Result<()> {
     #[derive(Serialize)]
@@ -1255,8 +1360,33 @@ async fn relay_consume_credit(relay_url: &str, service_token: &str, user_id: i32
             .with_headers(headers)
             .with_body(Some(wasm_bindgen::JsValue::from_str(&body))),
     )?;
-    let _ = Fetch::Request(req).send().await;
-    Ok(())
+    let resp = Fetch::Request(req).send().await?;
+    if resp.status_code() >= 200 && resp.status_code() < 300 {
+        Ok(())
+    } else {
+        Err(Error::RustError(format!("Relay consume credit returned status {}", resp.status_code())))
+    }
+}
+
+/// Persist a durable marker on the user's Durable Object recording credit that
+/// was charged upstream but could not be synced to the relay ledger.
+#[cfg(target_arch = "wasm32")]
+async fn do_mark_unsynced_consumption(do_stub: &Stub, amount_usd: f64) -> Result<Response> {
+    #[derive(Serialize)]
+    struct MarkUnsyncedReq {
+        amount_usd: f64,
+    }
+    let headers = Headers::new();
+    headers.set("Content-Type", "application/json")?;
+    let body = serde_json::to_string(&MarkUnsyncedReq { amount_usd })?;
+    let mark_req = Request::new_with_init(
+        "http://durable/mark_unsynced_consumption",
+        RequestInit::new()
+            .with_method(Method::Post)
+            .with_headers(headers)
+            .with_body(Some(wasm_bindgen::JsValue::from_str(&body))),
+    )?;
+    do_stub.fetch_with_request(mark_req).await
 }
 
 // ─── Tests (host target only) ───────────────────────────────────────────────
@@ -1271,6 +1401,53 @@ mod tests {
         assert_eq!(DEGRADATION_MODE_FREE_ONLY, "free-only");
         assert_eq!(DEGRADATION_MODE_BYPASS_OVERRIDE, "bypass-override");
         assert_eq!(DEGRADATION_MODE_PAYG_FALLBACK, "payg-fallback");
+    }
+
+    #[test]
+    fn ct_str_eq_matches_only_on_exact_equality() {
+        assert!(ct_str_eq("s3cr3t-service-token", "s3cr3t-service-token"));
+        assert!(!ct_str_eq("s3cr3t-service-token", "s3cr3t-service-tokeX"));
+        assert!(!ct_str_eq("short", "short-but-longer"));
+        assert!(!ct_str_eq("", "x"));
+        assert!(ct_str_eq("", ""));
+    }
+
+    #[test]
+    fn failed_relay_consume_is_not_swallowed_and_yields_marker() {
+        // A relay consume failure must surface as a non-zero durable marker so
+        // the charged-but-unsynced credit is never silently dropped.
+        assert_eq!(unsynced_consumption_on_failure(false, 0.50), 0.50);
+    }
+
+    #[test]
+    fn successful_relay_consume_needs_no_marker() {
+        assert_eq!(unsynced_consumption_on_failure(true, 0.50), 0.0);
+    }
+
+    #[test]
+    fn failed_consume_of_zero_cost_needs_no_marker() {
+        assert_eq!(unsynced_consumption_on_failure(false, 0.0), 0.0);
+        assert_eq!(unsynced_consumption_on_failure(false, -1.0), 0.0);
+    }
+
+    #[test]
+    fn test_default_managed_model_is_allowed_for_free_tier() {
+        let default_model = DEFAULT_MANAGED_MODEL;
+        assert_eq!(default_model, "google/gemini-3-flash-lite:free");
+        let free_models: Vec<String> = FALLBACK_FREE_MODELS.iter().map(|s| s.to_string()).collect();
+        assert!(
+            is_model_allowed_for_tier(default_model, "free", &free_models, &[], &[]),
+            "Default managed model {} must be allowed for free tier",
+            default_model
+        );
+        assert!(
+            !is_frontier_forbidden(default_model),
+            "Default managed model must not be frontier forbidden"
+        );
+        assert!(
+            is_frontier_forbidden("anthropic/claude-opus-3"),
+            "Frontier model anthropic/claude-opus-3 must be forbidden"
+        );
     }
 
     #[test]
@@ -1305,18 +1482,33 @@ mod tests {
 
     #[test]
     fn test_calculate_model_cost_claude_sonnet() {
-        // claude-sonnet: $3/M prompt + $15/M completion, 50% markup
+        // claude-sonnet: $3/M prompt + $15/M completion, 30% markup
         let cost = calculate_model_cost("anthropic/claude-sonnet-4.7", 1_000_000, 1_000_000);
-        let expected = (3.0 + 15.0) * 1.50;
+        let expected = (3.0 + 15.0) * 1.30;
         assert!((cost - expected).abs() < 1e-10);
     }
 
     #[test]
     fn test_calculate_model_cost_default_fallback() {
-        // Unknown model: $0.50/M prompt + $2.0/M completion, 50% markup
+        // Unknown model: $0.50/M prompt + $2.0/M completion, 30% markup
         let cost = calculate_model_cost("some/unknown-model", 1_000_000, 1_000_000);
-        let expected = (0.50 + 2.0) * 1.50;
+        let expected = (0.50 + 2.0) * 1.30;
         assert!((cost - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_payg_reserve_reconcile() {
+        let initial_balance = 10.0;
+        let estimated_cost = 0.05;
+        assert!(initial_balance >= estimated_cost, "Pre-flight balance check");
+
+        let reserved_balance = initial_balance - estimated_cost;
+        assert_eq!(reserved_balance, 9.95);
+
+        let actual_cost = calculate_model_cost("google/gemini-3.5-flash", 500, 500);
+        let final_balance = reserved_balance + (estimated_cost - actual_cost);
+        assert!(final_balance > 0.0, "Reconciled balance must remain positive");
+        assert!(final_balance <= initial_balance, "Reconciled balance cannot exceed initial");
     }
 
     #[test]
@@ -1501,19 +1693,19 @@ mod tests {
 
     #[test]
     fn test_calculate_model_cost_with_new_lineup() {
-        // gemini-3.5-flash: $0.15/M prompt + $0.60/M completion, 50% markup
+        // gemini-3.5-flash: $0.15/M prompt + $0.60/M completion, 30% markup
         let cost = calculate_model_cost("google/gemini-3.5-flash", 1_000_000, 1_000_000);
-        let expected = (0.15 + 0.60) * 1.50;
+        let expected = (0.15 + 0.60) * 1.30;
         assert!((cost - expected).abs() < 1e-10);
 
-        // claude-haiku-4.5: $0.25/M + $1.25/M, 50% markup
+        // claude-haiku-4.5: $0.25/M + $1.25/M, 30% markup
         let cost2 = calculate_model_cost("anthropic/claude-haiku-4.5", 500_000, 500_000);
-        let expected2 = (500_000.0 * 0.25 + 500_000.0 * 1.25) / 1_000_000.0 * 1.50;
+        let expected2 = (500_000.0 * 0.25 + 500_000.0 * 1.25) / 1_000_000.0 * 1.30;
         assert!((cost2 - expected2).abs() < 1e-10);
 
-        // gpt-5-nano: $0.10/M + $0.40/M, 50% markup
+        // gpt-5-nano: $0.10/M + $0.40/M, 30% markup
         let cost3 = calculate_model_cost("openai/gpt-5-nano", 2_000_000, 1_000_000);
-        let expected3 = (2_000_000.0 * 0.10 + 1_000_000.0 * 0.40) / 1_000_000.0 * 1.50;
+        let expected3 = (2_000_000.0 * 0.10 + 1_000_000.0 * 0.40) / 1_000_000.0 * 1.30;
         assert!((cost3 - expected3).abs() < 1e-10);
 
         // Free model always zero

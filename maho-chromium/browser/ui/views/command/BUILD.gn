@@ -6,6 +6,8 @@ source_set("maho_command_overlay") {
     "maho_command_action_handler.h",
     "maho_command_model.cc",
     "maho_command_model.h",
+    "maho_remote_search_suggestions.cc",
+    "maho_remote_search_suggestions.h",
     "maho_command_sparkle_geometry.h",
     "maho_command_overlay_controller.cc",
     "maho_command_overlay_controller.h",
@@ -34,6 +36,7 @@ source_set("maho_command_overlay") {
     "//cc/paint",
     "//base",
     "//chrome/browser/favicon",
+    "//chrome/browser/autocomplete",
     "//chrome/browser/devtools",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/search_engines",
@@ -42,17 +45,18 @@ source_set("maho_command_overlay") {
     "//chrome/browser/ui/side_panel",
     "//chrome/browser/ui/tabs:tab_strip",
     "//components/search_engines",
+    "//components/omnibox/browser",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_tab_id_helper",
     "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
-    # maho_little_arc dep intentionally omitted: adding it creates a dependency
-    # cycle (command → maho_little_arc → chrome/browser/ui → command, because
-    # maho_little_arc depends on //chrome/browser:browser + //chrome/browser/ui).
+    # maho_mini dep intentionally omitted: adding it creates a dependency
+    # cycle (command → maho_mini → chrome/browser/ui → command, because
+    # maho_mini depends on //chrome/browser:browser + //chrome/browser/ui).
     # The header is included with // nogncheck in maho_command_action_handler.cc
     # and the symbols resolve at final link into //chrome/browser:browser.
     # Same pattern as split_view below and the browser.h nogncheck include.
-    # "//maho/browser:maho_little_arc",
+    # "//maho/browser:maho_mini",
     # split_view dep intentionally omitted: adding it creates a dependency
     # cycle (command → split_view → chrome/browser/ui → command). The header
     # is reachable through transitive deps. Track cleanup in the split_view
@@ -80,6 +84,7 @@ source_set("unit_tests") {
     "maho_command_overlay_controller_unittest.cc",
     "maho_command_overlay_view_unittest.cc",
     "maho_command_result_row_view_unittest.cc",
+    "maho_remote_search_suggestions_unittest.cc",
     "maho_unified_click_path_behavior_unittest.cc",
     "maho_command_action_selector_view_unittest.cc",
   ]

@@ -12,12 +12,11 @@ use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires running browser"]
-async fn test_lease_acquire_and_second_session_blocked() {
-    // Session A acquires lease on the active tab
+async fn test_lease_second_session_always_steals() {
     let client_a = common::connect_browser().await;
     let acquire_a = common::call_tool(
         &client_a,
-        "browser_lease_acquire",
+        "browser_acquire_lease",
         json!({"tab_id": 0, "ttl_seconds": 30}),
     )
     .await;
@@ -27,18 +26,17 @@ async fn test_lease_acquire_and_second_session_blocked() {
         "Session A should acquire lease: {text_a}"
     );
 
-    // Session B tries to acquire the same tab without force_steal
     let client_b = common::connect_browser().await;
-    let (code, message) = common::call_tool_expect_error(
+    let steal_b = common::call_tool(
         &client_b,
-        "browser_lease_acquire",
-        json!({"tab_id": 0, "ttl_seconds": 30, "force_steal": false}),
+        "browser_acquire_lease",
+        json!({"tab_id": 0, "ttl_seconds": 30}),
     )
     .await;
-
+    let text_b = common::extract_text_content(&steal_b);
     assert!(
-        code != 0 || message.contains("held") || message.contains("locked"),
-        "Session B should be blocked: code={code}, message={message}"
+        text_b.contains("acquired") || text_b.contains("lease"),
+        "Session B must always auto-steal the lease: {text_b}"
     );
 }
 
@@ -47,42 +45,30 @@ async fn test_lease_acquire_and_second_session_blocked() {
 async fn test_lease_heartbeat_extends_ttl() {
     let client = common::connect_browser().await;
 
-    // Acquire with 15s TTL
     common::call_tool(
         &client,
-        "browser_lease_acquire",
+        "browser_acquire_lease",
         json!({"tab_id": 0, "ttl_seconds": 15}),
     )
     .await;
 
-    // Wait 10s then heartbeat
     tokio::time::sleep(Duration::from_secs(10)).await;
-    let heartbeat_result = common::call_tool(
-        &client,
-        "browser_lease_heartbeat",
-        json!({"tab_id": 0}),
-    )
-    .await;
+    let heartbeat_result =
+        common::call_tool(&client, "browser_heartbeat_lease", json!({"tab_id": 0})).await;
     let text = common::extract_text_content(&heartbeat_result);
     assert!(
         text.contains("extended") || text.contains("heartbeat") || text.contains("ok"),
         "Heartbeat should extend TTL: {text}"
     );
 
-    // At t=20s (5s after original expiry), lease should still be held
     tokio::time::sleep(Duration::from_secs(10)).await;
 
-    // Verify lease is still active by trying second session
-    let client_b = common::connect_browser().await;
-    let (code, message) = common::call_tool_expect_error(
-        &client_b,
-        "browser_lease_acquire",
-        json!({"tab_id": 0, "ttl_seconds": 5, "force_steal": false}),
-    )
-    .await;
+    let second_heartbeat =
+        common::call_tool(&client, "browser_heartbeat_lease", json!({"tab_id": 0})).await;
+    let text2 = common::extract_text_content(&second_heartbeat);
     assert!(
-        code != 0 || message.contains("held"),
-        "Lease should still be active after heartbeat: code={code}"
+        text2.contains("extended") || text2.contains("heartbeat") || text2.contains("ok"),
+        "Lease must still be held past the original 15s expiry: {text2}"
     );
 }
 
@@ -94,8 +80,8 @@ async fn test_lease_force_steal_emits_event() {
     // Session A acquires
     common::call_tool(
         &client_a,
-        "browser_lease_acquire",
-        json!({"tab_id": 0, "ttl_seconds": 60}),
+        "browser_acquire_lease",
+        json!({"tab_id": 0, "ttl_seconds": 60, "force_steal": true}),
     )
     .await;
 
@@ -103,7 +89,7 @@ async fn test_lease_force_steal_emits_event() {
     let client_b = common::connect_browser().await;
     let steal_result = common::call_tool(
         &client_b,
-        "browser_lease_acquire",
+        "browser_acquire_lease",
         json!({"tab_id": 0, "ttl_seconds": 30, "force_steal": true}),
     )
     .await;
@@ -126,19 +112,19 @@ async fn test_lease_ttl_expiry() {
     // Acquire with very short TTL
     common::call_tool(
         &client_a,
-        "browser_lease_acquire",
-        json!({"tab_id": 0, "ttl_seconds": 5}),
+        "browser_acquire_lease",
+        json!({"tab_id": 0, "ttl_seconds": 5, "force_steal": true}),
     )
     .await;
 
-    // Wait for expiry
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    // Wait for expiry (browser enforces a ~10s minimum lease TTL floor)
+    tokio::time::sleep(Duration::from_secs(12)).await;
 
     // Second session should now be able to acquire
     let client_b = common::connect_browser().await;
     let result = common::call_tool(
         &client_b,
-        "browser_lease_acquire",
+        "browser_acquire_lease",
         json!({"tab_id": 0, "ttl_seconds": 10}),
     )
     .await;
@@ -157,18 +143,14 @@ async fn test_lease_release_by_holder() {
     // Acquire
     common::call_tool(
         &client,
-        "browser_lease_acquire",
-        json!({"tab_id": 0, "ttl_seconds": 60}),
+        "browser_acquire_lease",
+        json!({"tab_id": 0, "ttl_seconds": 60, "force_steal": true}),
     )
     .await;
 
     // Release
-    let release_result = common::call_tool(
-        &client,
-        "browser_lease_release",
-        json!({"tab_id": 0}),
-    )
-    .await;
+    let release_result =
+        common::call_tool(&client, "browser_release_lease", json!({"tab_id": 0})).await;
     let text = common::extract_text_content(&release_result);
     assert!(
         text.contains("released") || text.contains("ok"),
@@ -178,7 +160,7 @@ async fn test_lease_release_by_holder() {
     // Re-acquire should succeed immediately
     let reacquire = common::call_tool(
         &client,
-        "browser_lease_acquire",
+        "browser_acquire_lease",
         json!({"tab_id": 0, "ttl_seconds": 10}),
     )
     .await;

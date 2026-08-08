@@ -81,7 +81,11 @@ class MahoCommandOverlayView : public views::View,
   ~MahoCommandOverlayView() override;
 
   views::Textfield* textfield() { return textfield_; }
+  MahoCommandModel* GetModelForTesting() const { return model_.get(); }
   size_t GetRenderedResultCountForTesting() const;
+  int GetResultViewRebuildCountForTesting() const {
+    return result_view_rebuild_count_for_testing_;
+  }
   views::View* GetResultsContainerForTesting() const { return results_container_; }
   bool IsModeChipVisibleForTesting() const {
     return mode_chip_ && mode_chip_->GetVisible();
@@ -228,6 +232,7 @@ class MahoCommandOverlayView : public views::View,
   bool esc_accelerator_registered_ = false;
   uint64_t search_seq_ = 0;
   int last_resized_height_ = -1;
+  int result_view_rebuild_count_for_testing_ = 0;
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};
 };

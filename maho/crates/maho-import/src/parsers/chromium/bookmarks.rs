@@ -151,8 +151,7 @@ mod tests {
     use std::fs;
 
     fn create_test_dir(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("maho-import-test-chromium-bookmarks-{name}"));
+        let dir = std::env::temp_dir().join(format!("maho-import-test-chromium-bookmarks-{name}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

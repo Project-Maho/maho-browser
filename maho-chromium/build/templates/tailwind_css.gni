@@ -1,6 +1,6 @@
 template("tailwind_css") {
   action(target_name) {
-    forward_variables_from(invoker, [ "deps", "visibility" ])
+    forward_variables_from(invoker, [ "deps", "visibility", "depfile" ])
 
     script = "//maho/build/scripts/run_tailwind.py"
 
@@ -17,5 +17,11 @@ template("tailwind_css") {
       "--cwd", rebase_path("//website", root_build_dir),
       "--minify",
     ]
+
+    if (defined(depfile)) {
+      args += [
+        "--depfile", rebase_path(depfile, root_build_dir),
+      ]
+    }
   }
 }

@@ -21,6 +21,38 @@
 namespace maho {
 namespace passwords {
 
+MahoPasswordForm::MahoPasswordForm() = default;
+
+MahoPasswordForm::~MahoPasswordForm() {
+  Zeroize();
+}
+
+MahoPasswordForm::MahoPasswordForm(const MahoPasswordForm&) = default;
+
+MahoPasswordForm::MahoPasswordForm(MahoPasswordForm&& other) noexcept
+    : id(std::move(other.id)),
+      signon_realm(std::move(other.signon_realm)),
+      username_value(std::move(other.username_value)),
+      password_value(std::move(other.password_value)),
+      date_created(other.date_created),
+      date_last_used(other.date_last_used),
+      revision(other.revision) {}
+
+MahoPasswordForm& MahoPasswordForm::operator=(
+    MahoPasswordForm&& other) noexcept {
+  if (this != &other) {
+    Zeroize();
+    id = std::move(other.id);
+    signon_realm = std::move(other.signon_realm);
+    username_value = std::move(other.username_value);
+    password_value = std::move(other.password_value);
+    date_created = other.date_created;
+    date_last_used = other.date_last_used;
+    revision = other.revision;
+  }
+  return *this;
+}
+
 namespace {
 
 void SecureZeroizeString(std::string& s) {

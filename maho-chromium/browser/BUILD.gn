@@ -17,7 +17,6 @@ source_set("maho_core_holder") {
     "//maho/browser/mail_helper:maho_mail_launcher",
   ]
   deps = [
-    "//maho/browser/mail_helper:maho_mail_helper",
     "//maho/browser/mail_helper:mojo_bindings",
     "//base",
     "//content/public/browser",
@@ -26,6 +25,16 @@ source_set("maho_core_holder") {
     "//mojo/public/cpp/platform",
     "//mojo/public/cpp/system",
   ]
+
+  # The helper executable is excluded on Windows: maho_mail_ffi statically
+  # links a vendored OpenSSL whose PKCS7/EVP symbols collide with Chromium's
+  # BoringSSL, and lld-link rejects duplicate symbols (mac/linux linkers do
+  # not). Mail is deferred from the current ship, so the helper binary is
+  # unreachable anyway; restoring it on Windows requires resolving the
+  # OpenSSL/BoringSSL conflict in maho/mail-core first.
+  if (!is_win) {
+    deps += [ "//maho/browser/mail_helper:maho_mail_helper" ]
+  }
 }
 
 
@@ -119,6 +128,22 @@ source_set("maho_ai_client") {
     "//net",
     "//services/network/public/cpp",
     "//url",
+  ]
+}
+
+source_set("maho_artifact_registry") {
+  sources = [
+    "ai/maho_artifact_registry.cc",
+    "ai/maho_artifact_registry.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
+    "//content/public/browser",
+    "//net",
   ]
 }
 
@@ -221,6 +246,13 @@ source_set("maho_prompt_utils") {
   ]
   deps = [
     "//base",
+  ]
+}
+
+source_set("maho_artifact_html_sanitizer") {
+  sources = [
+    "ai/maho_artifact_html_sanitizer.cc",
+    "ai/maho_artifact_html_sanitizer.h",
   ]
 }
 
@@ -919,6 +951,7 @@ source_set("maho_unified_agent_adapter") {
   ]
   deps = [
     ":maho_ai_runtime_adapter_interface",
+    ":maho_artifact_registry",
     ":maho_conversation_task",
     ":maho_core_holder",
     ":maho_ffi_callback_handle",
@@ -928,6 +961,48 @@ source_set("maho_unified_agent_adapter") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//services/network/public/cpp",
     "//third_party/crashpad/crashpad/client",
+  ]
+}
+
+source_set("maho_google_sign_in") {
+  sources = [
+    "ui/webui/maho_google_sign_in.cc",
+    "ui/webui/maho_google_sign_in.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/browser",
+  ]
+
+  deps = [
+    ":maho_auth_utils",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//content/public/browser",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("maho_google_sign_in_browser_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [ "ui/webui/maho_google_sign_in_peek_browsertest.cc" ]
+  deps = [
+    ":maho_google_sign_in",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//maho/browser/ui/views/peek:maho_peek",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//net:test_support",
   ]
 }
 
@@ -996,6 +1071,8 @@ source_set("maho_context_menus_unittests") {
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
+    "ai/maho_artifact_html_sanitizer_unittest.cc",
+    "ai/maho_artifact_registry_unittest.cc",
     "ai/maho_unified_agent_adapter_lifecycle_unittest.cc",
     "maho_vault_runtime_bridge_unittest.cc",
     "ui/theme/maho_sidebar_palette_unittest.cc",
@@ -1006,6 +1083,8 @@ source_set("maho_theme_io_unittests") {
     "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
   ]
   deps = [
+    ":maho_artifact_html_sanitizer",
+    ":maho_artifact_registry",
     ":maho_tab_id_helper",
     ":maho_theme_support",
     ":maho_unified_agent_adapter",
@@ -1326,6 +1405,7 @@ if (!is_android) {
       "//maho/components/constants",
       "//maho/browser/ui/webui/maho_ai:maho_ai",
       "//maho/browser/ui/views/command:maho_command_overlay",
+      "//maho/browser/ui/views/peek:maho_peek",
       "//maho/browser/ui/webui/maho_settings:maho_settings",
       "//maho/browser/ui/webui/maho_space_config:maho_space_config",
       "//maho/browser/ui/webui/maho_space_create:maho_space_create",

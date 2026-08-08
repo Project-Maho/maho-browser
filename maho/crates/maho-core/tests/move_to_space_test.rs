@@ -211,7 +211,10 @@ fn move_favorite_cross_profile_downgrades_when_target_at_limit() {
     let mut core = MahoCore::new();
     let space_a = core.get_active_space_id().clone();
 
-    let other_profile = core.create_profile_persisted("Other".to_string()).id;
+    let other_profile = core
+        .create_profile_persisted("Other".to_string())
+        .unwrap()
+        .id;
     let space_b = create_space_in_profile(&mut core, "B", 30.0, other_profile);
 
     // Fill the target profile to its favorite cap.
@@ -243,7 +246,10 @@ fn move_favorite_cross_profile_keeps_role_when_room() {
     let mut core = MahoCore::new();
     let space_a = core.get_active_space_id().clone();
 
-    let other_profile = core.create_profile_persisted("Other".to_string()).id;
+    let other_profile = core
+        .create_profile_persisted("Other".to_string())
+        .unwrap()
+        .id;
     let space_b = create_space_in_profile(&mut core, "B", 30.0, other_profile);
 
     let fav = create_tab_in_space(&mut core, &space_a);

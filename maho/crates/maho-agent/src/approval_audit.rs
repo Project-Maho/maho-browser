@@ -208,9 +208,7 @@ impl ApprovalAuditRecord {
             }
             FallbackSafetyState::EscalationApprovalRequired
             | FallbackSafetyState::EscalationApproved
-            | FallbackSafetyState::EscalationDenied => {
-                ApprovalAuditEventKind::FallbackEscalation
-            }
+            | FallbackSafetyState::EscalationDenied => ApprovalAuditEventKind::FallbackEscalation,
         };
         Self {
             kind,

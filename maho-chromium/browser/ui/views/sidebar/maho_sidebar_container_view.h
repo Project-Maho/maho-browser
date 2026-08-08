@@ -11,6 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "maho/browser/ui/views/peek/maho_peek_route.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -21,6 +22,10 @@
 #include "ui/views/widget/widget_observer.h"
 
 class Browser;
+
+namespace content {
+class WebContents;
+}
 
 namespace maho {
 
@@ -51,6 +56,14 @@ class MahoSidebarContainerView : public views::View,
 
   bool TryActivateFavoriteByIndex(size_t index);
 
+  // Resolves the source tab role used by Peek link routing. Native pinned
+  // state takes precedence; Favorite is derived from the matching maho-core
+  // tab role. Returns kUnresolved when any required browser/sidebar mapping is
+  // unavailable rather than guessing a normal role.
+  static PeekSourceRole GetPeekSourceRole(
+      Browser* browser,
+      content::WebContents* web_contents);
+
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
   double GetRevealFraction() const;
@@ -64,6 +77,7 @@ class MahoSidebarContainerView : public views::View,
   bool IsLibraryOverlayVisible() const;
   int GetLibraryRailWidth() const;
   MahoBrowserFrameOverlayHost* overlay_host() { return overlay_host_; }
+  MahoBrowserFrameOverlayHost* GetOrCreateOverlayHost();
 
   bool IsResizeDragEnabled() const;
   bool IsResizeDragging() const;

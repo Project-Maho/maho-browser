@@ -2,114 +2,92 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Integration tests for domain allowlist enforcement (D1).
-//! All tests are `#[ignore]`d — they require a running Maho browser instance.
-
 mod common;
 
 use serde_json::json;
+use std::time::Duration;
+
+async fn attempt_navigate(client: &maho_browser_mcp::client::BrowserClient, url: &str) -> bool {
+    let params = json!({"name": "browser_navigate", "arguments": {"url": url}});
+    match tokio::time::timeout(Duration::from_secs(5), client.call("tools/call", params)).await {
+        Ok(Ok(v)) => v["navigated"] == true,
+        _ => false,
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires running browser"]
-async fn test_first_navigate_prompts_when_allowlist_empty() {
+async fn test_navigation_allowed_by_default_when_blocklist_empty() {
     let client = common::connect_browser().await;
-
-    // Without setting allowed_domains, navigate should require approval
-    let result = common::call_tool(
-        &client,
-        "browser_navigate",
-        json!({"url": "https://untrusted-domain.example"}),
-    )
-    .await;
-    let text = common::extract_text_content(&result);
-
+    let blocked = common::call_tool(&client, "browser_get_blocked_domains", json!({})).await;
+    assert_eq!(
+        blocked["domains"].as_array().map(|a| a.len()),
+        Some(0),
+        "Fresh session should start with an empty disallow list: {blocked}"
+    );
+    common::call_tool(&client, "browser_tab_new", json!({"url": "about:blank"})).await;
+    common::acquire_active_lease(&client, 60).await;
+    let navigated = attempt_navigate(&client, "https://example.com").await;
     assert!(
-        text.contains("domain_approval_required") || text.contains("not allowed"),
-        "Navigate to unknown domain should require approval: {text}"
+        navigated,
+        "Navigation must be allowed by default when the disallow list is empty"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires running browser"]
-async fn test_navigate_succeeds_after_set_allowed_domains() {
+async fn test_navigate_blocked_after_set_blocked_domains() {
     let client = common::connect_browser().await;
-
-    // Set allowed domains
+    common::call_tool(&client, "browser_tab_new", json!({"url": "about:blank"})).await;
+    common::acquire_active_lease(&client, 60).await;
     common::call_tool(
         &client,
-        "browser_set_allowed_domains",
+        "browser_set_blocked_domains",
         json!({"domains": ["example.com"]}),
     )
     .await;
-
-    // Navigate should now succeed
-    let result = common::call_tool(
-        &client,
-        "browser_navigate",
-        json!({"url": "https://example.com"}),
-    )
-    .await;
-    let text = common::extract_text_content(&result);
-
+    let blocked = attempt_navigate(&client, "https://example.com").await;
+    assert!(!blocked, "Navigate to a disallowed domain must fail");
+    let allowed = attempt_navigate(&client, "https://example.org").await;
     assert!(
-        !text.contains("domain_approval_required") && !text.contains("not allowed"),
-        "Navigate to allowed domain should succeed: {text}"
+        allowed,
+        "Navigate to a domain not on the disallow list must succeed"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires running browser"]
-async fn test_wildcard_matches_subdomain() {
+async fn test_wildcard_blocklist_entry_is_stored() {
     let client = common::connect_browser().await;
-
-    // Set wildcard domain
     common::call_tool(
         &client,
-        "browser_set_allowed_domains",
+        "browser_set_blocked_domains",
         json!({"domains": ["*.github.com"]}),
     )
     .await;
-
-    // Subdomain should match
-    let result = common::call_tool(
-        &client,
-        "browser_navigate",
-        json!({"url": "https://api.github.com"}),
-    )
-    .await;
-    let text = common::extract_text_content(&result);
-
+    let blocked = common::call_tool(&client, "browser_get_blocked_domains", json!({})).await;
+    let domains = blocked["domains"].as_array().expect("domains array");
     assert!(
-        !text.contains("domain_approval_required") && !text.contains("not allowed"),
-        "Wildcard should match subdomain: {text}"
+        domains.iter().any(|d| d == "*.github.com"),
+        "Wildcard disallow entry should be stored: {blocked}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires running browser"]
-async fn test_new_session_empty_allowlist() {
+async fn test_new_session_empty_blocklist() {
     let client_a = common::connect_browser().await;
-
-    // Set allowed domains in session A
     common::call_tool(
         &client_a,
-        "browser_set_allowed_domains",
+        "browser_set_blocked_domains",
         json!({"domains": ["example.com"]}),
     )
     .await;
-
-    // New session should have empty allowlist (session-scoped)
     let client_b = common::connect_browser().await;
-    let result = common::call_tool(
-        &client_b,
-        "browser_navigate",
-        json!({"url": "https://example.com"}),
-    )
-    .await;
-    let text = common::extract_text_content(&result);
-
-    assert!(
-        text.contains("domain_approval_required") || text.contains("not allowed"),
-        "New session should have empty allowlist: {text}"
+    let blocked_b = common::call_tool(&client_b, "browser_get_blocked_domains", json!({})).await;
+    assert_eq!(
+        blocked_b["domains"].as_array().map(|a| a.len()),
+        Some(0),
+        "A new session must not inherit another session's disallow list: {blocked_b}"
     );
 }

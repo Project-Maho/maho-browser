@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use hmac::Hmac;
 use rusqlite::{Connection, OpenFlags};
 use sha1::Sha1;
@@ -19,8 +19,8 @@ use sha2::{Digest, Sha256, Sha384};
 use zeroize::Zeroizing;
 
 use super::asn1::{
-    self, OID_3DES_CBC, OID_AES_256_CBC, OID_PBES2, OID_PBKDF2,
-    OID_PKCS12_PBE_SHA1_3DES, TAG_SEQUENCE,
+    self, OID_3DES_CBC, OID_AES_256_CBC, OID_PBES2, OID_PBKDF2, OID_PKCS12_PBE_SHA1_3DES,
+    TAG_SEQUENCE,
 };
 
 // ---------- Error type ----------
@@ -112,8 +112,8 @@ pub fn unlock_nss_master_key(
     }
 
     // Copy to temp to avoid locking a running Firefox.
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| NssError::Database(format!("creating temp dir: {e}")))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|e| NssError::Database(format!("creating temp dir: {e}")))?;
     let temp_db = temp_dir.path().join("key4.db");
     std::fs::copy(&key4_path, &temp_db)
         .map_err(|e| NssError::Database(format!("copying key4.db: {e}")))?;
@@ -159,20 +159,10 @@ pub fn unlock_nss_master_key(
             ciphertext,
         } => {
             let password_bmp = encode_password_bmp(master_password);
-            let mut key = Zeroizing::new(pkcs12_derive(
-                &password_bmp,
-                &entry_salt,
-                iterations,
-                24,
-                1,
-            ));
-            let mut iv = Zeroizing::new(pkcs12_derive(
-                &password_bmp,
-                &entry_salt,
-                iterations,
-                8,
-                2,
-            ));
+            let mut key =
+                Zeroizing::new(pkcs12_derive(&password_bmp, &entry_salt, iterations, 24, 1));
+            let mut iv =
+                Zeroizing::new(pkcs12_derive(&password_bmp, &entry_salt, iterations, 8, 2));
             let result = decrypt_3des(&key, &iv, &ciphertext)?;
             key.iter_mut().for_each(|b| *b = 0);
             iv.iter_mut().for_each(|b| *b = 0);
@@ -223,9 +213,7 @@ fn read_metadata(conn: &Connection) -> Result<(Vec<u8>, Vec<u8>), NssError> {
         .map_err(|e| NssError::Database(format!("metadata query: {e}")))?;
 
     let (item1, item2): (Vec<u8>, Vec<u8>) = stmt
-        .query_row([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+        .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|e| NssError::Database(format!("metadata row: {e}")))?;
 
     if item1.is_empty() {
@@ -293,7 +281,9 @@ fn parse_encrypted_key_asn1(data: &[u8]) -> Result<EncryptedKeyParams, NssError>
         }
         let pbe_params = asn1::expect_sequence(&algo_seq[1])?;
         if pbe_params.len() < 2 {
-            return Err(NssError::Asn1("PKCS12 PBE params: need salt + iterations".into()));
+            return Err(NssError::Asn1(
+                "PKCS12 PBE params: need salt + iterations".into(),
+            ));
         }
         let entry_salt = asn1::expect_octet_string(&pbe_params[0])?.to_vec();
         let iterations = asn1::parse_integer_u32(&pbe_params[1])?;
@@ -332,7 +322,9 @@ fn parse_encrypted_key_asn1(data: &[u8]) -> Result<EncryptedKeyParams, NssError>
 
     let pbkdf2_params = asn1::expect_sequence(&kdf_seq[1])?;
     if pbkdf2_params.len() < 2 {
-        return Err(NssError::Asn1("PBKDF2 params: need salt + iterations".into()));
+        return Err(NssError::Asn1(
+            "PBKDF2 params: need salt + iterations".into(),
+        ));
     }
     let entry_salt = asn1::expect_octet_string(&pbkdf2_params[0])?.to_vec();
     let iterations = asn1::parse_integer_u32(&pbkdf2_params[1])?;
@@ -506,7 +498,9 @@ fn pkcs12_derive(
         Vec::new()
     } else {
         let p_len = BLOCK_LEN * ((password_bmp.len() + BLOCK_LEN - 1) / BLOCK_LEN);
-        (0..p_len).map(|i| password_bmp[i % password_bmp.len()]).collect()
+        (0..p_len)
+            .map(|i| password_bmp[i % password_bmp.len()])
+            .collect()
     };
 
     let mut i_buf = Vec::with_capacity(s.len() + p.len());
@@ -613,11 +607,13 @@ const BDB_HASH_MAGIC: u32 = 0x00061561;
 const BDB_VERSION: u32 = 2;
 
 fn parse_key3_db(path: &Path) -> Result<HashMap<Vec<u8>, Vec<u8>>, NssError> {
-    let data = std::fs::read(path)
-        .map_err(|e| NssError::Database(format!("reading key3.db: {e}")))?;
+    let data =
+        std::fs::read(path).map_err(|e| NssError::Database(format!("reading key3.db: {e}")))?;
 
     if data.len() < 60 {
-        return Err(NssError::Database("key3.db too small for BDB header".into()));
+        return Err(NssError::Database(
+            "key3.db too small for BDB header".into(),
+        ));
     }
 
     // BDB 1.85 header: big-endian u32 fields
@@ -637,7 +633,9 @@ fn parse_key3_db(path: &Path) -> Result<HashMap<Vec<u8>, Vec<u8>>, NssError> {
         )));
     }
     if pagesize == 0 || pagesize > 65536 {
-        return Err(NssError::Database(format!("key3.db bad pagesize: {pagesize}")));
+        return Err(NssError::Database(format!(
+            "key3.db bad pagesize: {pagesize}"
+        )));
     }
 
     let mut db = HashMap::new();
@@ -724,11 +722,15 @@ fn unlock_nss3_master_key(
 
     // password-check entry format: [type_byte, entry_salt_len, name_len?, entry_salt..., encrypted_data[-16:]]
     if password_check_raw.len() < 4 {
-        return Err(NssError::Database("key3.db: password-check entry too short".into()));
+        return Err(NssError::Database(
+            "key3.db: password-check entry too short".into(),
+        ));
     }
     let entry_salt_len = password_check_raw[1] as usize;
     if password_check_raw.len() < 3 + entry_salt_len + 16 {
-        return Err(NssError::Database("key3.db: password-check truncated".into()));
+        return Err(NssError::Database(
+            "key3.db: password-check truncated".into(),
+        ));
     }
     let check_entry_salt = &password_check_raw[3..3 + entry_salt_len];
     let check_encrypted = &password_check_raw[password_check_raw.len() - 16..];
@@ -742,8 +744,8 @@ fn unlock_nss3_master_key(
 
     // CKA_ID for the master key entry
     const CKA_ID: [u8; 16] = [
-        0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01,
     ];
 
     let priv_key_entry = db
@@ -752,13 +754,17 @@ fn unlock_nss3_master_key(
 
     // Private key entry format: [type_byte, salt_len, name_len, salt..., name..., ASN.1...]
     if priv_key_entry.len() < 3 {
-        return Err(NssError::Database("key3.db: private key entry too short".into()));
+        return Err(NssError::Database(
+            "key3.db: private key entry too short".into(),
+        ));
     }
     let pk_salt_len = priv_key_entry[1] as usize;
     let pk_name_len = priv_key_entry[2] as usize;
     let asn1_start = 3 + pk_salt_len + pk_name_len;
     if asn1_start >= priv_key_entry.len() {
-        return Err(NssError::Database("key3.db: private key ASN.1 offset out of bounds".into()));
+        return Err(NssError::Database(
+            "key3.db: private key ASN.1 offset out of bounds".into(),
+        ));
     }
     let pk_asn1_data = &priv_key_entry[asn1_start..];
 
@@ -766,13 +772,17 @@ fn unlock_nss3_master_key(
     let (outer, _) = asn1::read_item(pk_asn1_data)?;
     let outer_items = asn1::expect_sequence(&outer)?;
     if outer_items.len() < 2 {
-        return Err(NssError::Asn1("key3.db private key: need algo + ciphertext".into()));
+        return Err(NssError::Asn1(
+            "key3.db private key: need algo + ciphertext".into(),
+        ));
     }
     let algo_items = asn1::expect_sequence(&outer_items[0])?;
     let pk_ciphertext = asn1::expect_octet_string(&outer_items[1])?;
 
     if algo_items.len() < 2 || !asn1::match_oid(&algo_items[0], OID_PKCS12_PBE_SHA1_3DES) {
-        return Err(NssError::Asn1("key3.db: unexpected algorithm in private key".into()));
+        return Err(NssError::Asn1(
+            "key3.db: unexpected algorithm in private key".into(),
+        ));
     }
     let pbe_params = asn1::expect_sequence(&algo_items[1])?;
     if pbe_params.is_empty() {
@@ -789,7 +799,9 @@ fn unlock_nss3_master_key(
     let (pk_outer, _) = asn1::read_item(&decrypted_pk)?;
     let pk_items = asn1::expect_sequence(&pk_outer)?;
     if pk_items.len() < 3 {
-        return Err(NssError::Asn1("key3.db: decrypted private key too short".into()));
+        return Err(NssError::Asn1(
+            "key3.db: decrypted private key too short".into(),
+        ));
     }
     let pr_key_data = asn1::expect_octet_string(&pk_items[2])?;
 
@@ -875,11 +887,7 @@ fn decrypt_aes256(
     Ok(Zeroizing::new(decrypted.to_vec()))
 }
 
-fn decrypt_3des(
-    key: &[u8],
-    iv: &[u8],
-    ciphertext: &[u8],
-) -> Result<Zeroizing<Vec<u8>>, NssError> {
+fn decrypt_3des(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, NssError> {
     if key.len() < 24 {
         return Err(NssError::Crypto(format!(
             "3DES key too short: {} bytes",
@@ -1043,7 +1051,8 @@ pub(crate) mod tests_support {
         // Build a11 ASN.1.
         let pbkdf2_params = asn1_seq(&[asn1_octet(entry_salt), asn1_int(iterations)].concat());
         let kdf_seq = asn1_seq(&[asn1_oid(super::asn1::OID_PBKDF2), pbkdf2_params].concat());
-        let enc_algo_seq = asn1_seq(&[asn1_oid(super::asn1::OID_AES_256_CBC), asn1_octet(&iv)].concat());
+        let enc_algo_seq =
+            asn1_seq(&[asn1_oid(super::asn1::OID_AES_256_CBC), asn1_octet(&iv)].concat());
         let pbes2_params = asn1_seq(&[kdf_seq, enc_algo_seq].concat());
         let algo_seq = asn1_seq(&[asn1_oid(super::asn1::OID_PBES2), pbes2_params].concat());
         let a11 = asn1_seq(&[algo_seq, asn1_octet(&encrypted_master_key)].concat());
@@ -1055,23 +1064,32 @@ pub(crate) mod tests_support {
             &check_iv,
             b"password-check",
         );
-        let check_algo = asn1_seq(&[asn1_oid(super::asn1::OID_AES_256_CBC), asn1_octet(&check_iv)].concat());
+        let check_algo = asn1_seq(
+            &[
+                asn1_oid(super::asn1::OID_AES_256_CBC),
+                asn1_octet(&check_iv),
+            ]
+            .concat(),
+        );
         let password_check_blob = asn1_seq(&[check_algo, asn1_octet(&encrypted_check)].concat());
 
         // Create key4.db.
         let conn = Connection::open(profile.join("key4.db")).unwrap();
         conn.execute_batch(
             "CREATE TABLE metadata (id TEXT PRIMARY KEY, item1 BLOB, item2 BLOB);
-             CREATE TABLE nssPrivate (a11 BLOB);"
-        ).unwrap();
+             CREATE TABLE nssPrivate (a11 BLOB);",
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO metadata (id, item1, item2) VALUES ('password', ?1, ?2)",
             rusqlite::params![global_salt, password_check_blob],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO nssPrivate (a11) VALUES (?1)",
             rusqlite::params![a11],
-        ).unwrap();
+        )
+        .unwrap();
         drop(conn);
 
         // Create logins.json.
@@ -1096,9 +1114,21 @@ pub(crate) mod tests_support {
             );
 
             // Wrap in ASN.1.
-            let user_algo = asn1_seq(&[asn1_oid(super::asn1::OID_AES_256_CBC), asn1_octet(&field_iv)].concat());
+            let user_algo = asn1_seq(
+                &[
+                    asn1_oid(super::asn1::OID_AES_256_CBC),
+                    asn1_octet(&field_iv),
+                ]
+                .concat(),
+            );
             let user_blob = asn1_seq(&[user_algo, asn1_octet(&enc_user)].concat());
-            let pass_algo = asn1_seq(&[asn1_oid(super::asn1::OID_AES_256_CBC), asn1_octet(&field_iv)].concat());
+            let pass_algo = asn1_seq(
+                &[
+                    asn1_oid(super::asn1::OID_AES_256_CBC),
+                    asn1_octet(&field_iv),
+                ]
+                .concat(),
+            );
             let pass_blob = asn1_seq(&[pass_algo, asn1_octet(&enc_pass)].concat());
 
             let user_b64 = base64::engine::general_purpose::STANDARD.encode(&user_blob);
@@ -1117,7 +1147,8 @@ pub(crate) mod tests_support {
         std::fs::write(
             profile.join("logins.json"),
             serde_json::to_string_pretty(&logins_json).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         (temp, profile, master_key)
     }
@@ -1236,8 +1267,9 @@ mod tests {
         // Create tables.
         conn.execute_batch(
             "CREATE TABLE metadata (id TEXT PRIMARY KEY, item1 BLOB, item2 BLOB);
-             CREATE TABLE nssPrivate (a11 BLOB);"
-        ).unwrap();
+             CREATE TABLE nssPrivate (a11 BLOB);",
+        )
+        .unwrap();
 
         // Derive intermediate key the same way unlock_nss_master_key does.
         let use_sha384 = global_salt.len() > 40;
@@ -1266,38 +1298,23 @@ mod tests {
         let iv = [0x01u8; 16]; // 16-byte IV for AES-256-CBC
 
         // Encrypt the master key.
-        let encrypted_master_key = encrypt_aes256(
-            intermediate.as_slice().try_into().unwrap(),
-            &iv,
-            master_key,
-        );
+        let encrypted_master_key =
+            encrypt_aes256(intermediate.as_slice().try_into().unwrap(), &iv, master_key);
 
         // Build ASN.1 for a11 (PBES2 + PBKDF2 + AES-256-CBC).
-        let pbkdf2_params_content = [
-            asn1_octet(entry_salt),
-            asn1_int(iterations),
-        ].concat();
+        let pbkdf2_params_content = [asn1_octet(entry_salt), asn1_int(iterations)].concat();
         let pbkdf2_params = asn1_seq(&pbkdf2_params_content);
 
-        let kdf_content = [
-            asn1_oid(OID_PBKDF2),
-            pbkdf2_params,
-        ].concat();
+        let kdf_content = [asn1_oid(OID_PBKDF2), pbkdf2_params].concat();
         let kdf_seq = asn1_seq(&kdf_content);
 
-        let enc_algo_content = [
-            asn1_oid(OID_AES_256_CBC),
-            asn1_octet(&iv),
-        ].concat();
+        let enc_algo_content = [asn1_oid(OID_AES_256_CBC), asn1_octet(&iv)].concat();
         let enc_algo_seq = asn1_seq(&enc_algo_content);
 
         let pbes2_params_content = [kdf_seq, enc_algo_seq].concat();
         let pbes2_params = asn1_seq(&pbes2_params_content);
 
-        let algo_content = [
-            asn1_oid(OID_PBES2),
-            pbes2_params,
-        ].concat();
+        let algo_content = [asn1_oid(OID_PBES2), pbes2_params].concat();
         let algo_seq = asn1_seq(&algo_content);
 
         let a11 = asn1_seq(&[algo_seq, asn1_octet(&encrypted_master_key)].concat());
@@ -1310,22 +1327,12 @@ mod tests {
                 &check_iv_aes,
                 b"password-check",
             );
-            let algo_content = [
-                asn1_oid(OID_AES_256_CBC),
-                asn1_octet(&check_iv_aes),
-            ].concat();
+            let algo_content = [asn1_oid(OID_AES_256_CBC), asn1_octet(&check_iv_aes)].concat();
             let algo = asn1_seq(&algo_content);
             asn1_seq(&[algo, asn1_octet(&encrypted_check)].concat())
         } else {
-            let encrypted_check = encrypt_3des(
-                &master_key[..24],
-                &check_iv,
-                b"password-check",
-            );
-            let algo_content = [
-                asn1_oid(OID_3DES_CBC),
-                asn1_octet(&check_iv),
-            ].concat();
+            let encrypted_check = encrypt_3des(&master_key[..24], &check_iv, b"password-check");
+            let algo_content = [asn1_oid(OID_3DES_CBC), asn1_octet(&check_iv)].concat();
             let algo = asn1_seq(&algo_content);
             asn1_seq(&[algo, asn1_octet(&encrypted_check)].concat())
         };
@@ -1333,12 +1340,14 @@ mod tests {
         conn.execute(
             "INSERT INTO metadata (id, item1, item2) VALUES ('password', ?1, ?2)",
             rusqlite::params![global_salt, password_check_blob],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO nssPrivate (a11) VALUES (?1)",
             rusqlite::params![a11],
-        ).unwrap();
+        )
+        .unwrap();
 
         (temp, profile)
     }
@@ -1384,7 +1393,10 @@ mod tests {
         std::fs::File::create(temp.path().join("key3.db")).unwrap();
 
         let err = unlock_nss_master_key(temp.path(), "").unwrap_err();
-        assert!(matches!(err, NssError::Database(_)), "expected Database error, got: {err:?}");
+        assert!(
+            matches!(err, NssError::Database(_)),
+            "expected Database error, got: {err:?}"
+        );
     }
 
     #[test]
@@ -1408,10 +1420,7 @@ mod tests {
         );
 
         // Build ASN.1: SEQUENCE { SEQUENCE { OID(AES-256-CBC), OCTET STRING(iv) }, OCTET STRING(ct) }
-        let algo_content = [
-            asn1_oid(OID_AES_256_CBC),
-            asn1_octet(&iv),
-        ].concat();
+        let algo_content = [asn1_oid(OID_AES_256_CBC), asn1_octet(&iv)].concat();
         let algo = asn1_seq(&algo_content);
         let field_blob = asn1_seq(&[algo, asn1_octet(&encrypted)].concat());
 
@@ -1432,16 +1441,9 @@ mod tests {
         let iv = [0x10; 8];
         let plaintext = "secret_password";
 
-        let encrypted = encrypt_3des(
-            &master_key_bytes,
-            &iv,
-            plaintext.as_bytes(),
-        );
+        let encrypted = encrypt_3des(&master_key_bytes, &iv, plaintext.as_bytes());
 
-        let algo_content = [
-            asn1_oid(OID_3DES_CBC),
-            asn1_octet(&iv),
-        ].concat();
+        let algo_content = [asn1_oid(OID_3DES_CBC), asn1_octet(&iv)].concat();
         let algo = asn1_seq(&algo_content);
         let field_blob = asn1_seq(&[algo, asn1_octet(&encrypted)].concat());
 
@@ -1510,29 +1512,16 @@ mod tests {
         let encrypted_master = encrypt_3des(&des_key, &des_iv, &master_key_raw);
 
         // Build a11 ASN.1 with PKCS12 PBE OID
-        let pbe_params_content = [
-            asn1_octet(entry_salt),
-            asn1_int(iterations),
-        ].concat();
+        let pbe_params_content = [asn1_octet(entry_salt), asn1_int(iterations)].concat();
         let pbe_params = asn1_seq(&pbe_params_content);
-        let algo_content = [
-            asn1_oid(OID_PKCS12_PBE_SHA1_3DES),
-            pbe_params,
-        ].concat();
+        let algo_content = [asn1_oid(OID_PKCS12_PBE_SHA1_3DES), pbe_params].concat();
         let algo_seq = asn1_seq(&algo_content);
         let a11 = asn1_seq(&[algo_seq, asn1_octet(&encrypted_master)].concat());
 
         // Build password-check using master key with 3DES
         let check_iv = [0x09u8; 8];
-        let encrypted_check = encrypt_3des(
-            &master_key_raw,
-            &check_iv,
-            b"password-check",
-        );
-        let check_algo_content = [
-            asn1_oid(OID_3DES_CBC),
-            asn1_octet(&check_iv),
-        ].concat();
+        let encrypted_check = encrypt_3des(&master_key_raw, &check_iv, b"password-check");
+        let check_algo_content = [asn1_oid(OID_3DES_CBC), asn1_octet(&check_iv)].concat();
         let check_algo = asn1_seq(&check_algo_content);
         let password_check_blob = asn1_seq(&[check_algo, asn1_octet(&encrypted_check)].concat());
 
@@ -1540,17 +1529,20 @@ mod tests {
         let conn = Connection::open(profile.join("key4.db")).unwrap();
         conn.execute_batch(
             "CREATE TABLE metadata (id TEXT PRIMARY KEY, item1 BLOB, item2 BLOB);
-             CREATE TABLE nssPrivate (a11 BLOB);"
-        ).unwrap();
+             CREATE TABLE nssPrivate (a11 BLOB);",
+        )
+        .unwrap();
         let global_salt = vec![0xAAu8; 20];
         conn.execute(
             "INSERT INTO metadata (id, item1, item2) VALUES ('password', ?1, ?2)",
             rusqlite::params![global_salt, password_check_blob],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO nssPrivate (a11) VALUES (?1)",
             rusqlite::params![a11],
-        ).unwrap();
+        )
+        .unwrap();
         drop(conn);
 
         let key = unlock_nss_master_key(&profile, "").unwrap();
@@ -1612,7 +1604,8 @@ mod tests {
             asn1_int(0),
             asn1_int(0),
             asn1_int(15),
-        ].concat();
+        ]
+        .concat();
         let pr_key_seq = asn1_seq(&pr_key_inner_content);
 
         // PKCS#8-like wrapper
@@ -1624,23 +1617,13 @@ mod tests {
         let pkcs8_blob = asn1_seq(&pkcs8_content);
 
         // Encrypt pkcs8_blob using moz3des with priv entry salt
-        let (priv_key, priv_iv) = super::derive_moz_3des(
-            global_salt,
-            b"",
-            entry_salt_priv,
-        );
+        let (priv_key, priv_iv) = super::derive_moz_3des(global_salt, b"", entry_salt_priv);
         let encrypted_pkcs8 = encrypt_3des(&priv_key, &priv_iv, &pkcs8_blob);
 
         // Build the outer ASN.1 for the private key entry
-        let pbe_params_content = [
-            asn1_octet(entry_salt_priv),
-            asn1_int(1),
-        ].concat();
+        let pbe_params_content = [asn1_octet(entry_salt_priv), asn1_int(1)].concat();
         let pbe_params = asn1_seq(&pbe_params_content);
-        let algo_content = [
-            asn1_oid(OID_PKCS12_PBE_SHA1_3DES),
-            pbe_params,
-        ].concat();
+        let algo_content = [asn1_oid(OID_PKCS12_PBE_SHA1_3DES), pbe_params].concat();
         let algo_seq_asn1 = asn1_seq(&algo_content);
         let priv_key_asn1 = asn1_seq(&[algo_seq_asn1, asn1_octet(&encrypted_pkcs8)].concat());
 
@@ -1673,8 +1656,13 @@ mod tests {
         let entries_data: Vec<(&[u8], &[u8])> = vec![
             (b"global-salt", global_salt.as_slice()),
             (b"password-check", pw_check_entry.as_slice()),
-            (&[0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01], priv_entry.as_slice()),
+            (
+                &[
+                    0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x01,
+                ],
+                priv_entry.as_slice(),
+            ),
         ];
 
         // Calculate data placement within page 1

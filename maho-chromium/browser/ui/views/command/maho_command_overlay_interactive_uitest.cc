@@ -40,7 +40,6 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/run_until.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -57,11 +56,11 @@
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
-#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"
+#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/gfx/range/range.h"
 #include "ui/gfx/font.h"
+#include "ui/gfx/range/range.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/view.h"
 
@@ -95,7 +94,9 @@ class MahoCommandOverlayInteractiveUiTest : public InProcessBrowserTest {
   // wait for IsVisible() before calling this.
   maho::MahoCommandOverlayController* GetController() {
     BrowserView* bv = GetBrowserView();
-    if (!bv) return nullptr;
+    if (!bv) {
+      return nullptr;
+    }
     return bv->GetMahoCommandOverlayControllerForTesting();
   }
 
@@ -340,9 +341,11 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
       controller->GetOverlayViewForTesting();
   ASSERT_TRUE(overlay_view);
 
-  const auto& children = overlay_view->GetResultsContainerForTesting()->children();
+  const auto& children =
+      overlay_view->GetResultsContainerForTesting()->children();
   ASSERT_FALSE(children.empty());
-  auto* row = static_cast<maho::MahoCommandResultRowView*>(children.front().get());
+  auto* row =
+      static_cast<maho::MahoCommandResultRowView*>(children.front().get());
   ASSERT_NE(nullptr, row->GetCompactMetadataLabelForTesting());
   EXPECT_NE(std::u16string::npos,
             row->GetCompactMetadataLabelForTesting()->GetText().find(
@@ -372,12 +375,15 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
       controller->GetOverlayViewForTesting();
   ASSERT_TRUE(overlay_view);
 
-  const auto& children = overlay_view->GetResultsContainerForTesting()->children();
+  const auto& children =
+      overlay_view->GetResultsContainerForTesting()->children();
   ASSERT_FALSE(children.empty());
-  auto* row = static_cast<maho::MahoCommandResultRowView*>(children.front().get());
+  auto* row =
+      static_cast<maho::MahoCommandResultRowView*>(children.front().get());
   ASSERT_NE(nullptr, row->GetTitleLabelForTesting());
-  EXPECT_EQ(maho::MahoCommandResultRowView::GetSeededRowTitleFontWeightForTesting(),
-            row->GetTitleLabelForTesting()->font_list().GetFontWeight());
+  EXPECT_EQ(
+      maho::MahoCommandResultRowView::GetSeededRowTitleFontWeightForTesting(),
+      row->GetTitleLabelForTesting()->font_list().GetFontWeight());
 
   controller->Hide();
   ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
@@ -482,23 +488,26 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
 
   EXPECT_EQ(visible_cap,
             overlay_view->GetResultsContainerForTesting()->children().size())
-       << "No hint label must be present in the results container when seeded "
-          "state is active at the visible cap";
+      << "No hint label must be present in the results container when seeded "
+         "state is active at the visible cap";
 
   controller->Hide();
   ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
 }
 
-IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
-                       CurrentTabSeed_InternalHistoryEntriesDoNotConsumeVisibleCap) {
+IN_PROC_BROWSER_TEST_F(
+    MahoCommandOverlayInteractiveUiTest,
+    CurrentTabSeed_InternalHistoryEntriesDoNotConsumeVisibleCap) {
   const GURL ordinary_url = embedded_test_server()->GetURL("/title1.html");
-  const GURL favicon_url = embedded_test_server()->GetURL("/favicon/title2_with_favicon.html");
+  const GURL favicon_url =
+      embedded_test_server()->GetURL("/favicon/title2_with_favicon.html");
   const GURL page3_url = embedded_test_server()->GetURL("/title3.html");
   const GURL page4_url = embedded_test_server()->GetURL("/button.html");
   const GURL page5_url = embedded_test_server()->GetURL("/click.html");
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), ordinary_url));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://history/")));
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), GURL("chrome://history/")));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), favicon_url));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page3_url));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page4_url));
@@ -590,8 +599,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   EXPECT_EQ(urls[3].spec(), seeds[2].execution_payload);
   EXPECT_EQ("Button", seeds[2].title);
 
-   controller->Hide();
-   ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
+  controller->Hide();
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
@@ -629,8 +638,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   EXPECT_EQ(&children_before.front()->GetViewAccessibility(), active_before)
       << "Row 0 must be selected on open";
 
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_DOWN,
-                                              false, false, false, false))
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_DOWN, false,
+                                              false, false, false))
       << "Failed to dispatch Down arrow key";
 
   views::ViewAccessibility* active_after =
@@ -677,8 +686,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
             overlay_view->GetSeededResultsForTesting()[0].execution_payload)
       << "Row 0 seed must be the current page URL before pressing Enter";
 
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
-                                              false, false, false, false))
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN, false,
+                                              false, false, false))
       << "Failed to dispatch Return key event";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -740,7 +749,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
     ASSERT_TRUE(base::test::RunUntil([&]() {
       maho::MahoCommandOverlayController* c = GetController();
       return c && c->IsVisible();
-    })) << "Cycle " << i << ": SetFocusToLocationBar(true) failed to open overlay";
+    })) << "Cycle "
+        << i << ": SetFocusToLocationBar(true) failed to open overlay";
 
     maho::MahoCommandOverlayController* controller = GetController();
     ASSERT_TRUE(controller) << "Cycle " << i << ": controller is null";
@@ -752,9 +762,10 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
         << "Cycle " << i << ": textfield is null";
 
     controller->Hide();
-    ASSERT_TRUE(
-        base::test::RunUntil([&]() { return !controller->IsVisible(); }))
-        << "Cycle " << i << ": Hide() did not hide the overlay";
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return !controller->IsVisible();
+    })) << "Cycle "
+        << i << ": Hide() did not hide the overlay";
   }
 }
 
@@ -781,7 +792,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
 
   ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }))
       << "Overlay must hide when the browser window loses activation to a "
-         "second browser window; OnWidgetActivationChanged hide path is broken.";
+         "second browser window; OnWidgetActivationChanged hide path is "
+         "broken.";
 
   {
     base::RunLoop drain;
@@ -935,13 +947,12 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
 
 namespace {
 
-class MahoLittleArcInteractiveTest : public InProcessBrowserTest {
+class MahoMiniInteractiveTest : public InProcessBrowserTest {
  public:
-  MahoLittleArcInteractiveTest() = default;
-  MahoLittleArcInteractiveTest(const MahoLittleArcInteractiveTest&) = delete;
-  MahoLittleArcInteractiveTest& operator=(
-      const MahoLittleArcInteractiveTest&) = delete;
-  ~MahoLittleArcInteractiveTest() override = default;
+  MahoMiniInteractiveTest() = default;
+  MahoMiniInteractiveTest(const MahoMiniInteractiveTest&) = delete;
+  MahoMiniInteractiveTest& operator=(const MahoMiniInteractiveTest&) = delete;
+  ~MahoMiniInteractiveTest() override = default;
 
   void SetUpOnMainThread() override {
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
@@ -965,8 +976,8 @@ class MahoLittleArcInteractiveTest : public InProcessBrowserTest {
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
-                       LittleArc_OpensPopupFromNormalBrowser) {
+IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
+                       MahoMini_OpensPopupFromNormalBrowser) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
@@ -974,52 +985,58 @@ IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
   const size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
 
-  maho::ExecuteCommandAction(browser(), "little_arc");
+  maho::ExecuteCommandAction(browser(), "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return GlobalBrowserCollection::GetInstance()->GetSize() > initial_browser_count;
-  })) << "little_arc action must open a new popup browser window";
+    return GlobalBrowserCollection::GetInstance()->GetSize() >
+           initial_browser_count;
+  })) << "maho_mini action must open a new popup browser window";
 
   Browser* popup = FindPopupBrowser();
-  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after little_arc";
+  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after maho_mini";
   EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
 }
 
-IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
-                       LaunchLittleArc_WithNoOpenBrowser) {
+IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
+                       LaunchMahoMini_WithNoOpenBrowser) {
   const size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
 
-  maho::LittleArcRequest request;
+  maho::MahoMiniRequest request;
   request.url = embedded_test_server()->GetURL("/title1.html");
 
   // Launch with nullptr context (parentless launch)
-  maho::LaunchLittleArc(nullptr, request);
+  maho::LaunchMahoMini(nullptr, request);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return GlobalBrowserCollection::GetInstance()->GetSize() > initial_browser_count;
-  })) << "LaunchLittleArc must open a new popup browser window";
+    return GlobalBrowserCollection::GetInstance()->GetSize() >
+           initial_browser_count;
+  })) << "LaunchMahoMini must open a new popup browser window";
 
   Browser* popup = FindPopupBrowser();
-  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after LaunchLittleArc";
+  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after LaunchMahoMini";
   EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
 
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(request.url, popup->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL());
+  EXPECT_EQ(
+      request.url,
+      popup->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL());
 
   CloseBrowserSynchronously(popup);
 }
 
-IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
-                       LittleArc_PopupNavigatesIndependently) {
+IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
+                       MahoMini_PopupNavigatesIndependently) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
 
-  const GURL opener_url =
-      browser()->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL();
+  const GURL opener_url = browser()
+                              ->tab_strip_model()
+                              ->GetActiveWebContents()
+                              ->GetLastCommittedURL();
 
-  maho::ExecuteCommandAction(browser(), "little_arc");
+  maho::ExecuteCommandAction(browser(), "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return FindPopupBrowser() != nullptr;
@@ -1029,30 +1046,30 @@ IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
   ASSERT_TRUE(popup);
 
   const GURL nav_url = embedded_test_server()->GetURL("/title2.html");
-  ASSERT_TRUE(
-      ui_test_utils::NavigateToURL(popup, nav_url));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(popup, nav_url));
   base::RunLoop().RunUntilIdle();
 
   const GURL popup_url =
       popup->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL();
-  EXPECT_EQ(nav_url, popup_url)
-      << "Popup must navigate to the target URL";
+  EXPECT_EQ(nav_url, popup_url) << "Popup must navigate to the target URL";
 
-  const GURL opener_url_after =
-      browser()->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL();
+  const GURL opener_url_after = browser()
+                                    ->tab_strip_model()
+                                    ->GetActiveWebContents()
+                                    ->GetLastCommittedURL();
   EXPECT_EQ(opener_url, opener_url_after)
       << "Navigating in the popup must not change the opener's active tab URL";
 
   CloseBrowserSynchronously(popup);
 }
 
-IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
-                       LittleArc_PromoteClosesPopupAndMovesTabToNormalBrowser) {
+IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
+                       MahoMini_PromoteClosesPopupAndMovesTabToNormalBrowser) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
 
-  maho::ExecuteCommandAction(browser(), "little_arc");
+  maho::ExecuteCommandAction(browser(), "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return FindPopupBrowser() != nullptr;
@@ -1065,21 +1082,21 @@ IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(popup, nav_url));
   base::RunLoop().RunUntilIdle();
 
-  const int opener_tab_count_before =
-      browser()->tab_strip_model()->count();
+  const int opener_tab_count_before = browser()->tab_strip_model()->count();
 
-  maho::ExecuteCommandAction(popup, "little_arc");
+  maho::ExecuteCommandAction(popup, "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return FindPopupBrowser() == nullptr;
-  })) << "little_arc from popup must close the popup via PromoteToTab";
+  })) << "maho_mini from popup must close the popup via PromoteToTab";
 
-  EXPECT_EQ(opener_tab_count_before + 1,
-            browser()->tab_strip_model()->count())
+  EXPECT_EQ(opener_tab_count_before + 1, browser()->tab_strip_model()->count())
       << "Promoted tab must be inserted into the normal browser";
 
-  const GURL promoted_url =
-      browser()->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL();
+  const GURL promoted_url = browser()
+                                ->tab_strip_model()
+                                ->GetActiveWebContents()
+                                ->GetLastCommittedURL();
   EXPECT_EQ(nav_url, promoted_url)
       << "The promoted tab must carry the URL that was loaded in the popup";
 }
@@ -1118,8 +1135,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   const GURL target_url = embedded_test_server()->GetURL("/title2.html");
   textfield->SetText(base::UTF8ToUTF16(target_url.spec()));
 
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
-                                              false, false, false, false))
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN, false,
+                                              false, false, false))
       << "Failed to dispatch Return key event";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -1144,9 +1161,9 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   })) << "New tab must navigate to the typed URL; got: "
       << new_active->GetLastCommittedURL().spec();
 
-  EXPECT_EQ(initial_url, browser()->tab_strip_model()
-                             ->GetWebContentsAt(0)
-                             ->GetLastCommittedURL())
+  EXPECT_EQ(
+      initial_url,
+      browser()->tab_strip_model()->GetWebContentsAt(0)->GetLastCommittedURL())
       << "Original tab URL must remain unchanged after new-tab open";
 }
 
@@ -1158,8 +1175,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page1));
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), page2,
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), page2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   base::RunLoop().RunUntilIdle();
 
@@ -1194,8 +1210,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   overlay_view->InitializeSeededStateForTesting({tab_suggestion});
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
-                                              false, false, false, false))
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN, false,
+                                              false, false, false))
       << "Failed to dispatch Return key event";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -1248,8 +1264,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   overlay_view->UpdateResultViewsForTesting({nav_suggestion});
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
-                                              false, false, false, false))
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN, false,
+                                              false, false, false))
       << "Failed to dispatch Return key event";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -1266,9 +1282,9 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   EXPECT_EQ(tab_count_before + 1, browser()->tab_strip_model()->count())
       << "Tab count must increase by exactly 1";
 
-  EXPECT_EQ(initial_url, browser()->tab_strip_model()
-                              ->GetWebContentsAt(0)
-                              ->GetLastCommittedURL())
+  EXPECT_EQ(
+      initial_url,
+      browser()->tab_strip_model()->GetWebContentsAt(0)->GetLastCommittedURL())
       << "The original tab must remain at its original URL";
 }
 

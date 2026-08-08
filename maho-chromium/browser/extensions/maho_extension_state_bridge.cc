@@ -76,6 +76,10 @@ class MahoExtensionStateBridgeFactory : public ProfileKeyedServiceFactory {
 
 }  // namespace
 
+void EnsureMahoExtensionStateBridgeFactoryBuilt() {
+  MahoExtensionStateBridgeFactory::GetInstance();
+}
+
 // static
 MahoExtensionStateBridge* MahoExtensionStateBridge::FromProfile(
     Profile* profile) {

@@ -26,4 +26,11 @@ describe('parseBehaviorPrefs', () => {
     expect(prefs?.desktop_notifications).toBe(true);
     expect(prefs?.sync_interval).toBe(300);
   });
+
+  it('defaults the unread badge on and preserves an explicit disable', () => {
+    expect(parseBehaviorPrefs('{}')?.unread_badge_enabled).toBe(true);
+    expect(parseBehaviorPrefs(JSON.stringify({
+      unread_badge_enabled: false,
+    }))?.unread_badge_enabled).toBe(false);
+  });
 });

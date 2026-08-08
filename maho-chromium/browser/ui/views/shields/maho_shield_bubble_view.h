@@ -37,6 +37,7 @@ class MahoShieldBubbleView : public views::View {
                        uint32_t blocked_count,
                        bool is_excepted,
                        content::WebContents* target_web_contents);
+  ~MahoShieldBubbleView() override;
   MahoShieldBubbleView(const MahoShieldBubbleView&) = delete;
   MahoShieldBubbleView& operator=(const MahoShieldBubbleView&) = delete;
 

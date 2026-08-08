@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Final B-based folder-storing placeholder motion for the Maho sidebar">
+  <link rel="icon" href="data:,">
+  <title>Maho Tab Organization Placeholder — Final B</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Maho native sidebar contract. */
+      --shell: #111214;
+      --surface: #202124;
+      --surface-elevated: #2f3033;
+      --surface-hover: #303134;
+      --surface-pressed: #3c4043;
+      --text-primary: #ecedef;
+      --text-secondary: #a7abb1;
+      --border: #858a91;
+      --focus: #8ab4f8;
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+
+      --radius-button: 6px;
+      --radius-frame: 16px;
+      --radius-canvas: 11px;
+      --radius-row: 6px;
+      --button-height: 36px;
+      --icon-size: 17px;
+      --canvas-height: 240px;
+      --control-gap: 6px;
+
+      /* 실제 사이드바 상수 (maho_sidebar_tab_list_view.cc):
+         kRowHeightDp 36 · kRowSpacingDp 0 · kRowCornerRadiusDp 6 ·
+         kRowIconSizeDp 17 · kRowIconTextSpacingDp 12 ·
+         row insets L9/R7 · kFolderIndentDp 15 · kFolderRowLeadingInsetDp 8 */
+      --row-inset: 12px;
+      --row-height: 36px;
+      --slot-pitch: 36px;
+      --slot-base: 12px;
+      --row-pad-left: 9px;
+      --row-pad-right: 7px;
+      --icon-text-gap: 12px;
+      --favicon-size: 17px;
+      --folder-indent: 15px;
+      --folder-pad-left: 8px;
+
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --text-button: 13px;
+      --text-body: 13px;
+      --text-caption: 12px;
+      --text-meta: 11px;
+      --text-kicker: 10px;
+
+      --ease-exit: cubic-bezier(.3, .05, .2, 1);
+      --ease-fold: cubic-bezier(.24, .7, .22, 1);
+      --duration-hover: 120ms;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      padding: var(--space-6);
+      background:
+        radial-gradient(circle at 50% 0%, rgb(138 180 248 / 7%), transparent 34%),
+        linear-gradient(180deg, #17181b 0%, var(--shell) 72%);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .page {
+      width: min(100%, 920px);
+      margin: 0 auto;
+    }
+
+    .page-heading {
+      margin-bottom: var(--space-5);
+      text-align: center;
+    }
+
+    .kicker {
+      margin: 0 0 var(--space-1);
+      color: var(--text-secondary);
+      font-size: var(--text-kicker);
+      font-weight: 650;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 630;
+      letter-spacing: -.025em;
+    }
+
+    .page-lede {
+      max-width: 590px;
+      margin: var(--space-1) auto 0;
+      color: var(--text-secondary);
+      font-size: var(--text-caption);
+      line-height: 1.5;
+      text-wrap: pretty;
+    }
+
+    .variant-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 460px);
+      justify-content: center;
+    }
+
+    .study {
+      min-width: 0;
+    }
+
+    .study-heading {
+      margin-bottom: var(--space-2);
+      padding-inline: var(--space-1);
+      text-align: center;
+    }
+
+    .study-intent {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      line-height: 1.4;
+      text-wrap: pretty;
+    }
+
+    .sidebar-frame {
+      position: relative;
+      padding: var(--space-3);
+      border: 1px solid rgb(133 138 145 / 17%);
+      border-radius: var(--radius-frame);
+      background:
+        linear-gradient(180deg, rgb(255 255 255 / 2.5%), transparent 28%),
+        var(--surface);
+      box-shadow:
+        0 18px 46px rgb(0 0 0 / 28%),
+        inset 0 1px rgb(255 255 255 / 3%);
+    }
+
+    .sidebar-heading {
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-2) var(--space-2);
+      color: var(--text-primary);
+      font-size: var(--text-caption);
+      font-weight: 590;
+    }
+
+    .space-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--focus);
+      box-shadow: 0 0 0 3px rgb(138 180 248 / 10%);
+    }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--control-gap);
+      margin-bottom: var(--space-2);
+    }
+
+    .action-button {
+      width: 100%;
+      min-width: 0;
+      height: var(--button-height);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--control-gap);
+      padding: 0 var(--space-3);
+      border: 0;
+      border-radius: var(--radius-button);
+      background: transparent;
+      color: var(--text-secondary);
+      font: 500 var(--text-button)/1 var(--font-ui);
+      cursor: pointer;
+      outline: none;
+      transition:
+        background-color var(--duration-hover) ease,
+        color var(--duration-hover) ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .action-button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      color: var(--text-primary);
+    }
+
+    .action-button:active:not(:disabled),
+    .action-button.is-engaged {
+      background: var(--surface-pressed);
+      color: var(--text-primary);
+    }
+
+    .action-button:disabled {
+      cursor: default;
+    }
+
+    .action-button:disabled:not(.is-engaged) {
+      color: rgb(167 171 177 / 48%);
+    }
+
+    .action-button:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--focus);
+    }
+
+    .button-icon {
+      width: var(--icon-size);
+      height: var(--icon-size);
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.7;
+    }
+
+    .motion-canvas {
+      position: relative;
+      height: var(--canvas-height);
+      overflow: hidden;
+      border-radius: var(--radius-canvas);
+      background:
+        radial-gradient(circle at 48% 50%, rgb(138 180 248 / 5%), transparent 55%),
+        rgb(17 18 20 / 44%);
+      box-shadow: inset 0 0 0 1px rgb(133 138 145 / 9%);
+      isolation: isolate;
+    }
+
+    .motion-canvas::after {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow: inset 0 1px rgb(255 255 255 / 2%);
+      content: "";
+      pointer-events: none;
+    }
+
+    /* Skeleton tab row: real metrics (36px height, 0 spacing), favicon + title bar.
+       평상시엔 실제 탭처럼 배경 없음, 실행 중에만 hover풍 행 박스가 드러남. */
+    .tab-row {
+      position: absolute;
+      left: var(--row-inset);
+      right: var(--row-inset);
+      top: calc(var(--slot-base) + var(--top-slot) * var(--slot-pitch));
+      height: var(--row-height);
+      display: flex;
+      align-items: center;
+      gap: var(--icon-text-gap);
+      padding: 0 var(--row-pad-right) 0 var(--row-pad-left);
+      border-radius: var(--radius-row);
+      opacity: .55;
+      will-change: transform, opacity, filter;
+    }
+
+    /* 행 박스는 36px 슬롯 안에서 상하 2px 인셋으로 그려 인접 행과 붙어 보이지 않게 함. */
+    .tab-row::before {
+      content: "";
+      position: absolute;
+      inset: 2px 0;
+      z-index: -1;
+      border-radius: var(--radius-row);
+      background: rgb(47 48 51 / 74%);
+      box-shadow: inset 0 0 0 1px rgb(133 138 145 / 10%);
+      opacity: 0;
+      transition: opacity 180ms ease;
+    }
+
+    .motion-canvas.is-running .tab-row::before,
+    .motion-canvas.is-resolved .tab-row::before {
+      opacity: 1;
+    }
+
+    .row-favicon {
+      width: var(--favicon-size);
+      height: var(--favicon-size);
+      flex: 0 0 auto;
+      border-radius: 4px;
+      background: var(--dot-color, rgb(167 171 177 / 70%));
+    }
+
+    .row-title {
+      width: var(--title-w, 50%);
+      height: 8px;
+      border-radius: 4px;
+      background: rgb(236 237 239 / 15%);
+    }
+
+    /* Newly created folder row: same footprint as a tab row, folder identity. */
+    .folder-row {
+      position: absolute;
+      left: var(--row-inset);
+      right: var(--row-inset);
+      top: calc(var(--slot-base) + var(--top-slot) * var(--slot-pitch));
+      height: var(--row-height);
+      display: flex;
+      align-items: center;
+      gap: var(--icon-text-gap);
+      padding: 0 var(--row-pad-right) 0 var(--folder-pad-left);
+      border-radius: var(--radius-row);
+      opacity: 0;
+      z-index: 20;
+      will-change: transform, opacity, filter;
+    }
+
+    .folder-row::before {
+      content: "";
+      position: absolute;
+      inset: 2px 0;
+      z-index: -1;
+      border-radius: var(--radius-row);
+      background:
+        linear-gradient(180deg, rgb(138 180 248 / 8%), transparent 62%),
+        rgb(50 57 72 / 84%);
+      box-shadow:
+        inset 0 0 0 1px rgb(138 180 248 / 24%),
+        0 6px 16px rgb(0 0 0 / 16%);
+    }
+
+    .folder-icon {
+      width: var(--favicon-size);
+      height: var(--favicon-size);
+      flex: 0 0 auto;
+      fill: none;
+      stroke: rgb(138 180 248 / 90%);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.8;
+    }
+
+    .folder-row .row-title {
+      background: rgb(138 180 248 / 22%);
+    }
+
+    /* 폴더 소속을 표시하는 세로 레일: 폴더 아래 담긴 탭 구간만 덮음. */
+    .contain-rail {
+      position: absolute;
+      left: calc(var(--row-inset) + 8px);
+      top: 50px;
+      width: 2px;
+      height: 70px;
+      border-radius: 1px;
+      background: rgb(138 180 248 / 30%);
+      opacity: 0;
+      transform: scaleY(0);
+      transform-origin: top;
+      will-change: transform, opacity;
+    }
+
+    /* 1단계: 오래된 탭이 왼쪽으로 빠져나가며 제거 (기존 C 액션). */
+    .motion-canvas .tab-row.is-stale {
+      opacity: .35;
+    }
+
+    .motion-canvas .tab-row.is-stale .row-title {
+      background: rgb(236 237 239 / 9%);
+    }
+
+    .motion-canvas.is-running .tab-row.is-stale {
+      animation: staleOut 900ms var(--ease-exit) var(--delay) both;
+    }
+
+    .motion-canvas.is-resolved .tab-row.is-stale {
+      opacity: 0;
+    }
+
+    @keyframes staleOut {
+      0% {
+        opacity: .35;
+        filter: saturate(.8) brightness(.95);
+        transform: translate3d(0, 0, 0);
+      }
+      28% {
+        opacity: .8;
+        filter: saturate(1) brightness(1.12);
+        transform: translate3d(0, 0, 0);
+      }
+      100% {
+        opacity: 0;
+        filter: saturate(.7) brightness(.9);
+        transform: translate3d(-28px, 0, 0);
+      }
+    }
+
+    /* 2단계: 폴더 생성 + 일부 탭만 폴더에 담기고, 나머지는 일반 탭으로 남음. */
+    .final-canvas.is-running .folder-row {
+      animation: folderIn 2600ms var(--ease-fold) both;
+    }
+
+    .final-canvas.is-running .tab-row.is-contained {
+      animation: containTab 2600ms var(--ease-fold) var(--delay) both;
+    }
+
+    .final-canvas.is-running .tab-row.is-loose {
+      animation: looseTab 2600ms var(--ease-fold) var(--delay) both;
+    }
+
+    .final-canvas.is-running .contain-rail {
+      animation: railGrow 2600ms var(--ease-fold) both;
+    }
+
+    .final-canvas.is-resolved .folder-row {
+      opacity: .9;
+    }
+
+    .final-canvas.is-resolved .tab-row.is-contained {
+      left: calc(var(--row-inset) + var(--folder-indent));
+      opacity: .8;
+      filter: none;
+      transform: translate3d(0, var(--mid-y), 0);
+    }
+
+    .final-canvas.is-resolved .tab-row.is-loose {
+      opacity: .8;
+      filter: none;
+      transform: translate3d(0, var(--settle-y), 0);
+    }
+
+    .final-canvas.is-resolved .contain-rail {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+
+    /* 폴더 자식은 실제처럼 왼쪽 모서리만 15px 들여쓰기 (오른쪽 모서리 고정). */
+    @keyframes containTab {
+      0%, 24% {
+        left: var(--row-inset);
+        opacity: .55;
+        filter: saturate(.8) brightness(.92);
+        transform: translate3d(0, 0, 0);
+      }
+      44% {
+        left: calc(var(--row-inset) + 9px);
+        opacity: .8;
+        filter: saturate(1) brightness(1.02);
+        transform: translate3d(0, calc(var(--mid-y) * .6), 0);
+      }
+      60% {
+        left: calc(var(--row-inset) + var(--folder-indent));
+        opacity: .92;
+        filter: saturate(1) brightness(1.08);
+        transform: translate3d(0, var(--mid-y), 0);
+      }
+      74% {
+        left: calc(var(--row-inset) + var(--folder-indent));
+        opacity: .9;
+        filter: saturate(.94) brightness(1);
+        transform: translate3d(0, var(--mid-y), 0);
+      }
+      90% {
+        left: calc(var(--row-inset) + var(--folder-indent));
+        opacity: .78;
+        transform: translate3d(0, var(--mid-y), 0);
+      }
+      100% {
+        left: calc(var(--row-inset) + var(--folder-indent));
+        opacity: 0;
+        filter: saturate(.7) brightness(.92) blur(2px);
+        transform: translate3d(0, calc(var(--mid-y) + 2px), 0);
+      }
+    }
+
+    @keyframes looseTab {
+      0%, 26% {
+        opacity: .55;
+        filter: saturate(.8) brightness(.92);
+        transform: translate3d(0, 0, 0);
+      }
+      48% {
+        opacity: .8;
+        filter: saturate(1) brightness(1.02);
+        transform: translate3d(0, calc(var(--settle-y) * .7), 0);
+      }
+      62% {
+        opacity: .9;
+        filter: saturate(1) brightness(1.05);
+        transform: translate3d(0, var(--settle-y), 0);
+      }
+      76% {
+        opacity: .88;
+        filter: saturate(.94) brightness(1);
+        transform: translate3d(0, var(--settle-y), 0);
+      }
+      90% {
+        opacity: .78;
+        transform: translate3d(0, var(--settle-y), 0);
+      }
+      100% {
+        opacity: 0;
+        filter: saturate(.7) brightness(.92) blur(2px);
+        transform: translate3d(0, calc(var(--settle-y) + 2px), 0);
+      }
+    }
+
+    @keyframes folderIn {
+      0%, 24% {
+        opacity: 0;
+        transform: translateY(-6px);
+        filter: brightness(1);
+      }
+      36% {
+        opacity: .95;
+        transform: translateY(0);
+        filter: brightness(1.08);
+      }
+      58% {
+        opacity: .95;
+        filter: brightness(1);
+      }
+      64% {
+        filter: brightness(1.12);
+      }
+      70% {
+        filter: brightness(1.02);
+      }
+      88% {
+        opacity: .85;
+        filter: brightness(1);
+      }
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes railGrow {
+      0%, 50% {
+        opacity: 0;
+        transform: scaleY(0);
+      }
+      66% {
+        opacity: 1;
+        transform: scaleY(1);
+      }
+      90% {
+        opacity: .9;
+        transform: scaleY(1);
+      }
+      100% {
+        opacity: 0;
+        transform: scaleY(1);
+      }
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 700px) {
+      body {
+        padding: var(--space-3);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      :root {
+        --duration-hover: 0ms;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="page-heading">
+      <p class="kicker">Tab organization placeholder — final</p>
+      <h1>비우기 + 폴더 수납 (B 최종안)</h1>
+      <p class="page-lede">오래된 탭이 빠져나가고, 폴더가 새로 생기며 일부 탭만 폴더에 담기고, 나머지 탭은 일반 탭으로 남습니다. 행 높이 36px·간격 0·코너 6px·파비콘 17px·아이콘-텍스트 12px·폴더 인덴트 15px — 실제 사이드바 상수와 동일합니다.</p>
+    </header>
+
+    <section class="variant-grid" aria-label="Final folder-storing motion">
+      <article class="study" data-duration="2800">
+        <header class="study-heading">
+          <p class="study-intent">제거 2개 · 폴더 수납 2개 · 일반 탭으로 남는 2개</p>
+        </header>
+        <div class="sidebar-frame">
+          <div class="sidebar-heading"><span class="space-dot" aria-hidden="true"></span>Product build</div>
+          <div class="action-row">
+            <button class="action-button" type="button" data-action="Tidy" aria-describedby="live-final">
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5L9 20l-5 1 1-5Z"></path><path d="m14 5 5 5"></path><path d="M6 4v3"></path><path d="M4.5 5.5h3"></path><path d="M19 15v3"></path><path d="M17.5 16.5h3"></path></svg><span>Tidy</span>
+            </button>
+            <button class="action-button" type="button" data-action="Clear" aria-describedby="live-final">
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg><span>Clear</span>
+            </button>
+          </div>
+          <div class="motion-canvas final-canvas" aria-hidden="true">
+            <span class="folder-row" style="--top-slot:0">
+              <svg class="folder-icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg>
+              <span class="row-title" style="--title-w:40%"></span>
+            </span>
+            <span class="contain-rail"></span>
+            <span class="tab-row is-contained" style="--top-slot:0;--mid-y:36px;--delay:60ms;--dot-color:rgb(122 156 212 / 88%);--title-w:55%">
+              <span class="row-favicon"></span><span class="row-title"></span>
+            </span>
+            <span class="tab-row is-contained" style="--top-slot:1;--mid-y:36px;--delay:120ms;--dot-color:rgb(96 152 140 / 85%);--title-w:46%">
+              <span class="row-favicon"></span><span class="row-title"></span>
+            </span>
+            <span class="tab-row is-stale" style="--top-slot:2;--delay:0ms;--dot-color:rgb(128 138 158 / 60%);--title-w:52%">
+              <span class="row-favicon"></span><span class="row-title"></span>
+            </span>
+            <span class="tab-row is-loose" style="--top-slot:3;--settle-y:0px;--delay:160ms;--dot-color:rgb(176 142 96 / 85%);--title-w:60%">
+              <span class="row-favicon"></span><span class="row-title"></span>
+            </span>
+            <span class="tab-row is-stale" style="--top-slot:4;--delay:60ms;--dot-color:rgb(128 138 158 / 60%);--title-w:41%">
+              <span class="row-favicon"></span><span class="row-title"></span>
+            </span>
+            <span class="tab-row is-loose" style="--top-slot:5;--settle-y:-36px;--delay:200ms;--dot-color:rgb(122 118 186 / 85%);--title-w:49%">
+              <span class="row-favicon"></span><span class="row-title"></span>
+            </span>
+          </div>
+        </div>
+        <p class="sr-only" id="live-final" role="status" aria-live="polite">폴더 수납 최종안 준비됨.</p>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const studies = Array.from(document.querySelectorAll(".study"));
+      const controllers = new Map();
+
+      function controllerFor(study) {
+        if (!controllers.has(study)) {
+          controllers.set(study, { timer: 0, settleTimer: 0 });
+        }
+        return controllers.get(study);
+      }
+
+      function releaseStudy(study) {
+        const controller = controllerFor(study);
+        if (controller.timer) {
+          window.clearTimeout(controller.timer);
+          controller.timer = 0;
+        }
+        if (controller.settleTimer) {
+          window.clearTimeout(controller.settleTimer);
+          controller.settleTimer = 0;
+        }
+        const canvas = study.querySelector(".motion-canvas");
+        canvas.classList.remove("is-running", "is-resolved");
+        canvas.setAttribute("aria-busy", "false");
+        study.querySelectorAll(".action-button").forEach((button) => {
+          button.disabled = false;
+          button.classList.remove("is-engaged");
+          button.removeAttribute("aria-busy");
+        });
+      }
+
+      function announce(study, message) {
+        const liveId = study.querySelector(".action-button").getAttribute("aria-describedby");
+        document.getElementById(liveId).textContent = message;
+      }
+
+      function runStudy(study, action) {
+        releaseStudy(study);
+        const controller = controllerFor(study);
+        const canvas = study.querySelector(".motion-canvas");
+        const selected = Array.from(study.querySelectorAll(".action-button"))
+          .find((button) => button.dataset.action === action);
+
+        study.querySelectorAll(".action-button").forEach((button) => {
+          button.disabled = true;
+          button.classList.toggle("is-engaged", button === selected);
+        });
+        selected.setAttribute("aria-busy", "true");
+        canvas.setAttribute("aria-busy", "true");
+        announce(study, `${action} 진행 중.`);
+
+        if (reduceMotion.matches) {
+          canvas.classList.add("is-resolved");
+          announce(study, `${action} 완료 (모션 축소).`);
+          controller.settleTimer = window.setTimeout(() => {
+            releaseStudy(study);
+          }, 180);
+          return;
+        }
+
+        void canvas.offsetWidth;
+        canvas.classList.add("is-running");
+        const duration = Number(study.dataset.duration);
+        controller.timer = window.setTimeout(() => {
+          announce(study, `${action} 완료.`);
+          releaseStudy(study);
+        }, duration + 460);
+      }
+
+      studies.forEach((study) => {
+        study.querySelectorAll(".action-button").forEach((button) => {
+          button.addEventListener("click", () => {
+            runStudy(study, button.dataset.action);
+          });
+        });
+      });
+
+      reduceMotion.addEventListener("change", () => {
+        studies.forEach((study) => {
+          releaseStudy(study);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

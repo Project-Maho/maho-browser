@@ -1,9 +1,9 @@
 // CLI Tool Executor Subprocess Adapter
+use anyhow::{anyhow, Result};
 use maho_types::ai::AiCliTool;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
-use serde_json::Value;
-use anyhow::{Result, anyhow};
 use tokio::io::AsyncReadExt;
 
 pub struct CliToolExecutor {
@@ -26,7 +26,11 @@ impl CliToolExecutor {
             serde_json::from_str(&self.tool.command_template)
                 .unwrap_or_else(|_| vec![self.tool.command_template.clone()])
         } else {
-            self.tool.command_template.split_whitespace().map(|s| s.to_string()).collect()
+            self.tool
+                .command_template
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect()
         };
 
         if parts.is_empty() {
@@ -77,11 +81,18 @@ impl CliToolExecutor {
             }
         }
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| anyhow!("Failed to spawn CLI subprocess: {:?}", e))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to open stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to open stderr"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stderr"))?;
 
         // 4. Timeout after timeout_ms (capped at 60s) -> SIGKILL
         let timeout_ms = self.tool.timeout_ms.min(60_000);
@@ -94,33 +105,38 @@ impl CliToolExecutor {
         // 5. Read stdout/stderr concurrently with waiting to prevent pipe deadlock
         match tokio::time::timeout(timeout_duration, async {
             tokio::join!(stdout_fut, stderr_fut, wait_fut)
-        }).await {
+        })
+        .await
+        {
             Ok((stdout_res, stderr_res, status_res)) => {
                 let stdout_bytes = stdout_res?;
                 let stderr_bytes = stderr_res?;
                 let status = status_res?;
-                
+
                 let stdout_str = String::from_utf8_lossy(&stdout_bytes).to_string();
                 let stderr_str = String::from_utf8_lossy(&stderr_bytes).to_string();
-                
+
                 let result = serde_json::json!({
                     "stdout": stdout_str,
                     "stderr": stderr_str,
                     "exit_code": status.code(),
                 });
-                
+
                 Ok(result)
             }
             Err(_) => {
                 let _ = child.kill().await;
-                Err(anyhow!("CLI tool execution timed out after {:?}", timeout_duration))
+                Err(anyhow!(
+                    "CLI tool execution timed out after {:?}",
+                    timeout_duration
+                ))
             }
         }
     }
 
     fn validate_args(&self, args: &Value) -> Result<()> {
         let schema = &self.tool.parameters_schema;
-        
+
         // Lightweight schema validator
         if let Some(obj) = schema.as_object() {
             if let Some(req_val) = obj.get("required") {
@@ -139,31 +155,48 @@ impl CliToolExecutor {
                     for (key, val) in args.as_object().unwrap_or(&serde_json::Map::new()) {
                         if let Some(prop_schema_val) = props.get(key) {
                             if let Some(prop_schema) = prop_schema_val.as_object() {
-                                if let Some(expected_type) = prop_schema.get("type").and_then(|t| t.as_str()) {
+                                if let Some(expected_type) =
+                                    prop_schema.get("type").and_then(|t| t.as_str())
+                                {
                                     match expected_type {
                                         "string" => {
                                             if !val.is_string() {
-                                                return Err(anyhow!("Parameter {} must be a string", key));
+                                                return Err(anyhow!(
+                                                    "Parameter {} must be a string",
+                                                    key
+                                                ));
                                             }
                                         }
                                         "number" | "integer" => {
                                             if !val.is_number() {
-                                                return Err(anyhow!("Parameter {} must be a number", key));
+                                                return Err(anyhow!(
+                                                    "Parameter {} must be a number",
+                                                    key
+                                                ));
                                             }
                                         }
                                         "boolean" => {
                                             if !val.is_boolean() {
-                                                return Err(anyhow!("Parameter {} must be a boolean", key));
+                                                return Err(anyhow!(
+                                                    "Parameter {} must be a boolean",
+                                                    key
+                                                ));
                                             }
                                         }
                                         "array" => {
                                             if !val.is_array() {
-                                                return Err(anyhow!("Parameter {} must be an array", key));
+                                                return Err(anyhow!(
+                                                    "Parameter {} must be an array",
+                                                    key
+                                                ));
                                             }
                                         }
                                         "object" => {
                                             if !val.is_object() {
-                                                return Err(anyhow!("Parameter {} must be an object", key));
+                                                return Err(anyhow!(
+                                                    "Parameter {} must be an object",
+                                                    key
+                                                ));
                                             }
                                         }
                                         _ => {}
@@ -178,7 +211,10 @@ impl CliToolExecutor {
         Ok(())
     }
 
-    async fn read_with_limit<R: tokio::io::AsyncRead + Unpin>(&self, mut reader: R) -> Result<Vec<u8>> {
+    async fn read_with_limit<R: tokio::io::AsyncRead + Unpin>(
+        &self,
+        mut reader: R,
+    ) -> Result<Vec<u8>> {
         let limit = self.tool.output_cap_bytes;
         let mut buf = vec![0; 4096];
         let mut output = Vec::new();

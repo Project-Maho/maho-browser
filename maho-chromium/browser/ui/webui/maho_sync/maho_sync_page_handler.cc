@@ -215,7 +215,7 @@ maho_sync::mojom::SyncStatusPtr MahoSyncPageHandler::JoinSyncOnPool(
     status->room_id = room_id;
     return status;
   }
-  char* result = maho_core_join_sync(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
+  char* result = maho_core_join_sync(core, maho::auth::GetSyncRelayUrl().c_str(), recovery_phrase.c_str());
   if (result) {
     std::string json(result);
     maho_string_free(result);
@@ -291,7 +291,7 @@ void MahoSyncPageHandler::ConfigureSyncEncryption(const std::string& recovery_ph
   maho::PostCoreTask<maho_sync::mojom::SyncStatusPtr>(
       FROM_HERE,
       base::BindOnce(&MahoSyncPageHandler::ConfigureSyncEncryptionOnPool,
-                     maho::auth::kSyncRelayUrl, recovery_phrase),
+                     maho::auth::GetSyncRelayUrl(), recovery_phrase),
       base::BindOnce(&MahoSyncPageHandler::OnJoinSyncComplete,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }

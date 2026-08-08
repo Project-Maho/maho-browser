@@ -9,6 +9,7 @@ inline constexpr char kProvider[] = "maho.ai.provider";
 inline constexpr char kBaseUrl[] = "maho.ai.base_url";
 inline constexpr char kApiKey[] = "maho.ai.api_key";
 inline constexpr char kModel[] = "maho.ai.model";
+inline constexpr char kReasoningEffort[] = "maho.ai.reasoning_effort";
 inline constexpr char kStructuredContextV2Enabled[] =
     "maho.ai.structured_context_v2_enabled";
 inline constexpr char kBrowserToolsV1Enabled[] = "maho.ai.browser_tools_v1_enabled";

@@ -7,6 +7,7 @@ import type {TimelineEntry} from '../../../types.js';
 import {collectConversationItems} from '../../../views/conversation_thread.js';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
 import {Markdown} from '../../components/markdown.js';
+import {ArtifactCard} from '../../components/artifact-card.js';
 import {ConversationMessage} from './conversation-message.js';
 import {ConversationSystemItem} from './conversation-system-item.js';
 import {PendingThought} from './pending-thought.js';
@@ -31,7 +32,7 @@ function ThinkingBubble({item}: {item: ConversationItem}) {
         </button>
         {expanded ? (
           <Markdown
-            className="border-t border-border/60 px-3 py-3 text-xs leading-5 text-muted-foreground [&_p]:m-0 [&_p:not(:last-child)]:mb-3 [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-2 [&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-background/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/70 [&_pre]:p-3"
+            className="min-w-0 border-t border-border/60 px-3 py-3 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere] [&_p]:m-0 [&_p:not(:last-child)]:mb-3 [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-2 [&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-background/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:[overflow-wrap:anywhere] [&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:rounded-xl [&_pre]:bg-background/70 [&_pre]:p-3"
             text={item.text}
           />
         ) : null}
@@ -47,6 +48,11 @@ export function ConversationThread(
       onOpenSettings,
       onRegenerate,
       onRespondToApproval,
+      onRenameArtifact,
+      onDeleteArtifact,
+      onOpenArtifactPreview,
+      onGetArtifactPreviewUrl,
+      onGetArtifactExportUrl,
       readOnly,
       thinkingLabel,
       topPadding,
@@ -56,6 +62,11 @@ export function ConversationThread(
       onOpenSettings: (paneKey: string) => void;
       onRegenerate?: () => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
+      onRenameArtifact?: (artifactId: string, displayName: string) => Promise<string | null>;
+      onDeleteArtifact?: (artifactId: string) => boolean | Promise<boolean>;
+      onOpenArtifactPreview?: (artifactId: string) => void;
+      onGetArtifactPreviewUrl?: (artifactId: string) => Promise<string | null>;
+      onGetArtifactExportUrl?: (artifactId: string) => Promise<string | null>;
       readOnly: boolean;
       thinkingLabel: string | null;
       topPadding: number;
@@ -85,6 +96,25 @@ export function ConversationThread(
         {items.map(item => {
           if (item.kind === 'thinking') {
             return <ThinkingBubble key={item.key} item={item} />;
+          }
+          if (item.kind === 'artifact' && item.artifact) {
+            const artifact = item.artifact;
+            return (
+              <ArtifactCard
+                key={item.key}
+                artifact={artifact}
+                onOpenPreview={onOpenArtifactPreview ?
+                    () => onOpenArtifactPreview(artifact.artifactId) : undefined}
+                onRename={onRenameArtifact ?
+                    name => onRenameArtifact(artifact.artifactId, name) : undefined}
+                onDelete={onDeleteArtifact ?
+                    () => onDeleteArtifact(artifact.artifactId) : undefined}
+                getPreviewUrl={onGetArtifactPreviewUrl ?
+                    () => onGetArtifactPreviewUrl(artifact.artifactId) : undefined}
+                getExportUrl={onGetArtifactExportUrl ?
+                    () => onGetArtifactExportUrl(artifact.artifactId) : undefined}
+              />
+            );
           }
           if (item.role === 'system') {
             return (

@@ -24,7 +24,6 @@ export interface GlobalKeyNavigationActions {
   readonly complete: () => void;
   readonly openMigrationDialog: () => void;
   readonly skipImport: () => void;
-  readonly skipMailSetup: () => void;
 }
 
 export interface FooterPrimaryNavigationInput {
@@ -42,15 +41,14 @@ export interface FooterPrimaryNavigationActions {
   readonly nextPage: () => void;
   readonly complete: () => void;
   readonly openMainBrowser: () => void;
-  readonly skipMailSetup: () => void;
 }
 
 export function isStandalonePage(page: WelcomePage): boolean {
-  return page === WelcomePage.Splash;
+  return page === WelcomePage.Splash || page === WelcomePage.PlanSelect;
 }
 
 export function shouldShowFooterPrimary(page: WelcomePage): boolean {
-  return page !== WelcomePage.PasswordSetup && page !== WelcomePage.MailSetup;
+  return page !== WelcomePage.PasswordSetup;
 }
 
 export function shouldRenderContentActions(page: WelcomePage): boolean {
@@ -82,9 +80,6 @@ export function applyGlobalKeyNavigation(
   }
 
   if (input.key === 'Enter') {
-    if (input.currentPage === WelcomePage.MailSetup) {
-      return false;
-    }
     if (isStandalonePage(input.currentPage)) {
       actions.nextPage();
       return true;
@@ -102,10 +97,6 @@ export function applyGlobalKeyNavigation(
   }
 
   if (input.key === 'Escape') {
-    if (input.currentPage === WelcomePage.MailSetup) {
-      actions.skipMailSetup();
-      return true;
-    }
     if (input.currentPage !== WelcomePage.Completion &&
         !isStandalonePage(input.currentPage)) {
       if (input.currentPage === WelcomePage.SourceSelect) {
@@ -143,10 +134,6 @@ export async function applyFooterPrimaryNavigation(
   if (input.currentPage === WelcomePage.Completion) {
     actions.complete();
     actions.openMainBrowser();
-    return;
-  }
-  if (input.currentPage === WelcomePage.MailSetup) {
-    actions.skipMailSetup();
     return;
   }
   if (input.currentPage === WelcomePage.PasswordSetup) {

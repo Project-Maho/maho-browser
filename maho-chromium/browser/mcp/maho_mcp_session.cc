@@ -4,6 +4,8 @@
 
 #include "maho/browser/mcp/maho_mcp_session.h"
 
+#include "maho/browser/mcp/maho_mcp_capability_registry.h"
+
 #include "build/build_config.h"
 
 #if !BUILDFLAG(IS_WIN)
@@ -37,6 +39,38 @@
 #endif
 
 namespace maho {
+
+MahoMcpBrowserActionHandler::Error::Error() = default;
+MahoMcpBrowserActionHandler::Error::Error(int code, std::string message)
+    : code(code), message(std::move(message)) {}
+MahoMcpBrowserActionHandler::Error::Error(const Error&) = default;
+MahoMcpBrowserActionHandler::Error& MahoMcpBrowserActionHandler::Error::operator=(
+    const Error&) = default;
+MahoMcpBrowserActionHandler::Error::Error(Error&&) noexcept = default;
+MahoMcpBrowserActionHandler::Error& MahoMcpBrowserActionHandler::Error::operator=(
+    Error&&) noexcept = default;
+MahoMcpBrowserActionHandler::Error::~Error() = default;
+
+MahoMcpBrowserActionHandler::Result::Result() = default;
+MahoMcpBrowserActionHandler::Result::Result(Result&&) noexcept = default;
+MahoMcpBrowserActionHandler::Result&
+MahoMcpBrowserActionHandler::Result::operator=(Result&&) noexcept = default;
+MahoMcpBrowserActionHandler::Result::~Result() = default;
+
+MahoMcpBrowserDelegate::SameOriginFetchResult::SameOriginFetchResult() =
+    default;
+MahoMcpBrowserDelegate::SameOriginFetchResult::SameOriginFetchResult(
+    const SameOriginFetchResult&) = default;
+MahoMcpBrowserDelegate::SameOriginFetchResult&
+MahoMcpBrowserDelegate::SameOriginFetchResult::operator=(
+    const SameOriginFetchResult&) = default;
+MahoMcpBrowserDelegate::SameOriginFetchResult::SameOriginFetchResult(
+    SameOriginFetchResult&&) noexcept = default;
+MahoMcpBrowserDelegate::SameOriginFetchResult&
+MahoMcpBrowserDelegate::SameOriginFetchResult::operator=(
+    SameOriginFetchResult&&) noexcept = default;
+MahoMcpBrowserDelegate::SameOriginFetchResult::~SameOriginFetchResult() =
+    default;
 
 namespace {
 
@@ -242,6 +276,7 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "page_get_text",
       "page_get_attribute",
       "page_wait_for_selector",
+      "browser_same_origin_fetch",
       "browser_accessibility_snapshot",
       "browser_click",
       "browser_type",
@@ -298,7 +333,21 @@ bool IsLeaseGatedMutation(std::string_view tool_name) {
   return tool_name == "browser_click" || tool_name == "browser_type" ||
          tool_name == "browser_select" || tool_name == "browser_scroll" ||
          tool_name == "browser_key_press" || tool_name == "browser_navigate" ||
+         tool_name == "browser_same_origin_fetch" ||
          tool_name == "vault_fill_credential" || tool_name == "vault_fill_totp";
+}
+
+bool IsSensitiveReadTool(std::string_view tool_name) {
+  return tool_name == "browser_page_content" ||
+         tool_name == "browser_page_text" ||
+         tool_name == "browser_page_context" ||
+         tool_name == "browser_screenshot_full" ||
+         tool_name == "browser_screenshot_element" ||
+         tool_name == "browser_accessibility_snapshot" ||
+         tool_name == "browser_console_messages" ||
+         tool_name == "browser_network_get_har" ||
+         tool_name == "browser_network_start_capture" ||
+         tool_name == "browser_network_stop_capture";
 }
 
 int TargetErrorCode(MahoMcpTargetError error) {
@@ -357,6 +406,7 @@ MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token,
     : session_token_(session_token),
       lease_registry_(lease_registry),
       session_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
+      capability_registry_(std::make_unique<MahoMcpCapabilityRegistry>()),
       network_capture_state_(
           base::MakeRefCounted<MahoMcpNetworkCaptureState>()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -376,6 +426,7 @@ MahoMcpSession::MahoMcpSession(uid_t peer_uid,
     : peer_uid_(peer_uid),
       lease_registry_(lease_registry),
       session_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
+      capability_registry_(std::make_unique<MahoMcpCapabilityRegistry>()),
       network_capture_state_(
           base::MakeRefCounted<MahoMcpNetworkCaptureState>()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -420,6 +471,18 @@ MahoMcpBrowserDelegate::BookmarkInfo::BookmarkInfo(BookmarkInfo&&) noexcept = de
 MahoMcpBrowserDelegate::BookmarkInfo& MahoMcpBrowserDelegate::BookmarkInfo::operator=(const BookmarkInfo&) = default;
 MahoMcpBrowserDelegate::BookmarkInfo& MahoMcpBrowserDelegate::BookmarkInfo::operator=(BookmarkInfo&&) noexcept = default;
 
+void MahoMcpBrowserDelegate::SameOriginFetch(
+    int tab_id,
+    const GURL& url,
+    const std::string& method,
+    const std::string& body,
+    const std::string& headers_json,
+    SameOriginFetchCallback callback) {
+  SameOriginFetchResult result;
+  result.error = "Same-origin fetch unavailable";
+  std::move(callback).Run(std::move(result));
+}
+
 void MahoMcpSession::AddConsoleMessageForTesting(int tab_id, ConsoleMessage message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (message.message.size() > 4096) {
@@ -432,12 +495,12 @@ void MahoMcpSession::AddConsoleMessageForTesting(int tab_id, ConsoleMessage mess
   buffer.push_back(std::move(message));
 }
 
-bool MahoMcpSession::IsHostAllowed(std::string_view host) const {
-  if (host.empty() || allowed_domains_.empty()) {
+bool MahoMcpSession::IsHostBlocked(std::string_view host) const {
+  if (host.empty() || blocked_domains_.empty()) {
     return false;
   }
   const std::string host_lc = base::ToLowerASCII(host);
-  for (const std::string& entry : allowed_domains_) {
+  for (const std::string& entry : blocked_domains_) {
     const std::string entry_lc = base::ToLowerASCII(entry);
     // Exact match.
     if (host_lc == entry_lc) {
@@ -483,8 +546,7 @@ bool MahoMcpSession::HandleAcquireLease(
     return true;
   }
   const int ttl_seconds = arguments->FindInt("ttl_seconds").value_or(60);
-  const bool force_steal =
-      arguments->FindBool("force_steal").value_or(false);
+  const bool force_steal = true;
   auto result = lease_registry_->Acquire(
       static_cast<int64_t>(*tab_id), session_id_,
       base::Seconds(ttl_seconds), force_steal);
@@ -809,18 +871,29 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
     }
     {
       base::DictValue t;
-      t.Set("name", "browser_set_allowed_domains");
+      t.Set("name", "browser_same_origin_fetch");
       t.Set("description",
-            "Set the session-scoped allowlist of domains for "
-            "browser_navigate and browser_tab_new(url=...). "
+            "Fetch an HTTPS URL from the current tab renderer. The URL must "
+            "have the exact same origin as the tab. Args: url (string), "
+            "method ('GET' or 'POST', optional), body (string, optional), "
+            "headers (string-to-string object, optional), "
+            "tab_id (int, optional). Response text is capped at 1 MiB.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_set_blocked_domains");
+      t.Set("description",
+            "Set the session-scoped disallow list of domains the agent "
+            "may not navigate to. Everything else is allowed by default. "
             "Supports wildcards like '*.example.com'.");
       tools.Append(base::Value(std::move(t)));
     }
     {
       base::DictValue t;
-      t.Set("name", "browser_get_allowed_domains");
+      t.Set("name", "browser_get_blocked_domains");
       t.Set("description",
-            "Get the session-scoped allowlist of domains.");
+            "Get the session-scoped disallow list of domains.");
       tools.Append(base::Value(std::move(t)));
     }
     {
@@ -964,8 +1037,8 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
       t.Set("name", "browser_acquire_lease");
       t.Set("description",
             "Acquire exclusive lease on a tab. Args: tab_id (int), "
-            "ttl_seconds (int, 10-300, default 60), force_steal "
-            "(bool, default false).");
+            "ttl_seconds (int, 10-300, default 60). Acquisition always "
+            "steals any existing lease (auto-acquire).");
       tools.Append(base::Value(std::move(t)));
     }
     {
@@ -1249,6 +1322,29 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   const int resolved_tab_id =
       use_resolved_target ? last_resolved_target_.tab_id : 0;
 
+  // ----- sandbox ownership gate (B3) -----
+  // When the capability registry owns any tabs, every sensitive read must
+  // target a sandbox-owned tab. Tab-list metadata remains discoverable.
+  if (capability_registry_ && !capability_registry_->ListOwnedTabs().empty() &&
+      IsSensitiveReadTool(*tool_name) &&
+      !capability_registry_->IsTabOwned(resolved_tab_id)) {
+    base::DictValue data;
+    data.Set("status", "tab_adoption_required");
+    data.Set("tab_id", resolved_tab_id);
+    base::DictValue error;
+    error.Set("code", -32000);
+    error.Set("message", "Tab not owned by this session: adopt it first");
+    error.Set("data", std::move(data));
+    base::DictValue response;
+    response.Set("id", msg.id ? msg.id->Clone() : base::Value());
+    response.Set("error", std::move(error));
+    std::string out;
+    base::JSONWriter::Write(base::Value(std::move(response)), &out);
+    out.push_back('\n');
+    responses.push_back(std::move(out));
+    return;
+  }
+
   // Todo 6: single mutation gate. After stable concrete target resolution and
   // before any delegate dispatch, input/navigation mutators require an active
   // lease held by THIS session on the resolved tab. A session without a lease
@@ -1391,7 +1487,22 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     // D1: allowed_domains enforcement.
     const std::string& url_str = *arguments->FindString("url");
-    const GURL nav_url(url_str);
+    GURL nav_url(url_str);
+    if (!nav_url.is_valid()) {
+      // Agents quote href values verbatim ("/sites", "?page=2"). Resolve
+      // relative references against the target tab's current URL instead of
+      // rejecting them, matching how a user clicking the link would behave.
+      const int base_tab_id =
+          use_resolved_target ? resolved_tab_id : active_tab_id_;
+      if (g_browser_delegate) {
+        for (const auto& t : g_browser_delegate->GetTabList()) {
+          if (t.id == base_tab_id) {
+            nav_url = GURL(t.url).Resolve(url_str);
+            break;
+          }
+        }
+      }
+    }
     if (!nav_url.is_valid()) {
       std::string err = framer_.BuildErrorResponse(
           msg.id, -32602, "Invalid params: url is not a valid GURL");
@@ -1399,9 +1510,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
     // Reject host-less/dangerous schemes outright. data:, javascript:, file:,
-    // chrome: and friends carry no host, so they can never be in
-    // allowed_domains_; navigating to them would bypass the domain-approval
-    // trust boundary that gates automated (MCP client) navigation.
+    // chrome: and friends carry no host, so the disallow list can never
+    // constrain them; automated (MCP client) navigation must never reach
+    // these schemes regardless of the disallow list.
     if (nav_url.SchemeIs("data") || nav_url.SchemeIs("javascript") ||
         nav_url.SchemeIs("file") || nav_url.SchemeIs("chrome") ||
         nav_url.SchemeIs("chrome-untrusted") || nav_url.SchemeIs("blob") ||
@@ -1412,21 +1523,13 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
-    if (!IsHostAllowed(nav_url.host())) {
+    if (IsHostBlocked(nav_url.host())) {
       base::DictValue data;
-      data.Set("host", std::string(nav_url.host()));
-      if (allowed_domains_.empty()) {
-        data.Set("status", "domain_approval_required");
-      } else {
-        data.Set("status", "domain_not_allowed");
-      }
+      data.Set("host", nav_url.host());
+      data.Set("status", "domain_blocked");
       base::DictValue error;
       error.Set("code", -32000);
-      error.Set("message",
-                allowed_domains_.empty()
-                    ? "Set allowed domains before navigating "
-                      "(call browser_set_allowed_domains)"
-                    : "Navigation blocked: host not in allowed_domains");
+      error.Set("message", "Navigation blocked: host is in the disallow list");
       error.Set("data", std::move(data));
       base::DictValue response;
       response.Set("id", msg.id ? msg.id->Clone() : base::Value());
@@ -1446,7 +1549,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     // Update active tab URL
     for (auto& t : tabs_) {
       if (t.id == active_tab_id_) {
-        t.url = url_str;
+        t.url = nav_url.spec();
         t.title = nav_url.host();
       }
     }
@@ -1458,7 +1561,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     return;
   }
 
-  if (*tool_name == "browser_set_allowed_domains") {
+  if (*tool_name == "browser_set_blocked_domains") {
     if (!arguments) {
       std::string err = framer_.BuildErrorResponse(
           msg.id, -32602, "Invalid params: domains list required");
@@ -1482,22 +1585,148 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       }
       new_set.insert(base::ToLowerASCII(d.GetString()));
     }
-    allowed_domains_ = std::move(new_set);
+    blocked_domains_ = std::move(new_set);
     base::DictValue result;
-    result.Set("count", static_cast<int>(allowed_domains_.size()));
+    result.Set("count", static_cast<int>(blocked_domains_.size()));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
     responses.push_back(std::move(resp));
     return;
   }
 
-  if (*tool_name == "browser_get_allowed_domains") {
+  if (*tool_name == "browser_get_blocked_domains") {
     base::ListValue domains;
-    for (const auto& d : allowed_domains_) {
+    for (const auto& d : blocked_domains_) {
       domains.Append(d);
     }
     base::DictValue result;
     result.Set("domains", std::move(domains));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  // ----- atomic exact-origin grants (sandbox capability) -----
+
+  if (*tool_name == "browser_grant_exact_origin") {
+    if (!arguments || !arguments->FindString("origin")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: origin required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    const std::string& origin_str = *arguments->FindString("origin");
+    const GURL grant_url(origin_str);
+    if (!grant_url.is_valid()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: url is not a valid GURL");
+      responses.push_back(std::move(err));
+      return;
+    }
+    const url::Origin origin = url::Origin::Create(grant_url);
+    if (!capability_registry_->IsValidGrantOrigin(origin)) {
+      base::DictValue data;
+      data.Set("status", "unsupported_origin");
+      base::DictValue error;
+      error.Set("code", -32000);
+      error.Set("message", "Origin not grantable: use an exact http/https origin");
+      error.Set("data", std::move(data));
+      base::DictValue response;
+      response.Set("id", msg.id ? msg.id->Clone() : base::Value());
+      response.Set("error", std::move(error));
+      std::string out;
+      base::JSONWriter::Write(base::Value(std::move(response)), &out);
+      out.push_back('\n');
+      responses.push_back(std::move(out));
+      return;
+    }
+    bool added = capability_registry_->GrantExactOrigin(origin);
+    base::DictValue result;
+    result.Set("granted", added);
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_revoke_exact_origin") {
+    if (!arguments || !arguments->FindString("origin")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: origin required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    const std::string& origin_str = *arguments->FindString("origin");
+    const GURL revoke_url(origin_str);
+    const url::Origin origin = url::Origin::Create(revoke_url);
+    bool removed = capability_registry_->RevokeExactOrigin(origin);
+    base::DictValue result;
+    result.Set("revoked", removed);
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_list_exact_origins") {
+    base::ListValue origins;
+    for (const url::Origin& o : capability_registry_->ListGrantedOrigins()) {
+      origins.Append(o.Serialize());
+    }
+    base::DictValue result;
+    result.Set("origins", std::move(origins));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  // ----- sandbox tab ownership -----
+
+  if (*tool_name == "browser_adopt_tab") {
+    if (!arguments) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: tab_id required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    std::optional<int> tab_id = arguments->FindInt("tab_id");
+    if (!tab_id.has_value()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: tab_id must be an integer");
+      responses.push_back(std::move(err));
+      return;
+    }
+    auto r = capability_registry_->AdoptTab(*tab_id);
+    base::DictValue result;
+    result.Set("adopted", r == MahoMcpCapabilityRegistry::AdoptResult::kOk);
+    if (r == MahoMcpCapabilityRegistry::AdoptResult::kConflict) {
+      result.Set("status", "conflict");
+    }
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_release_tab") {
+    if (!arguments) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: tab_id required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    std::optional<int> tab_id = arguments->FindInt("tab_id");
+    if (!tab_id.has_value()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: tab_id must be an integer");
+      responses.push_back(std::move(err));
+      return;
+    }
+    capability_registry_->ReleaseTab(*tab_id);
+    base::DictValue result;
+    result.Set("released", true);
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
     responses.push_back(std::move(resp));
@@ -1835,6 +2064,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
     g_browser_delegate->MailSendEmail(*request_json,
+                                      /*already_authorized=*/false,
                                       make_mail_read_completion());
     return;
   }
@@ -1850,6 +2080,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
     g_browser_delegate->MailSaveDraft(*request_json,
+                                      /*already_authorized=*/false,
                                       make_mail_read_completion());
     return;
   }
@@ -1867,6 +2098,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
     g_browser_delegate->MailUpdateDraft(*draft_id, *request_json,
+                                        /*already_authorized=*/false,
                                         make_mail_read_completion());
     return;
   }
@@ -2066,13 +2298,10 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         responses.push_back(std::move(err));
         return;
       }
-      if (!IsHostAllowed(nav_url.host())) {
+      if (IsHostBlocked(nav_url.host())) {
         std::string err = framer_.BuildErrorResponse(
             msg.id, -32000,
-            allowed_domains_.empty()
-                ? "Set allowed domains before opening a new tab with url "
-                  "(call browser_set_allowed_domains)"
-                : "New tab blocked: host not in allowed_domains");
+            "New tab blocked: host is in the disallow list");
         responses.push_back(std::move(err));
         return;
       }
@@ -2373,6 +2602,107 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_same_origin_fetch") {
+    const std::string* url_arg = FindRequiredStringArgument(arguments, "url");
+    if (!url_arg) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, RequiredStringArgumentMessage("url")));
+      return;
+    }
+    const GURL url(*url_arg);
+    if (!url.is_valid() || !url.SchemeIs("https") || !url.has_host()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: url must be an HTTPS URL"));
+      return;
+    }
+    const std::string method =
+        arguments && arguments->FindString("method")
+            ? base::ToUpperASCII(*arguments->FindString("method"))
+            : "GET";
+    if (method != "GET" && method != "POST") {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: method must be GET or POST"));
+      return;
+    }
+    const std::string body =
+        arguments && arguments->FindString("body")
+            ? *arguments->FindString("body")
+            : std::string();
+    base::DictValue headers;
+    if (arguments && arguments->Find("headers")) {
+      const base::DictValue* requested_headers =
+          arguments->FindDict("headers");
+      if (!requested_headers) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32602,
+            "Invalid params: headers must be an object of strings"));
+        return;
+      }
+      for (const auto [name, value] : *requested_headers) {
+        if (!value.is_string()) {
+          responses.push_back(framer_.BuildErrorResponse(
+              msg.id, -32602,
+              "Invalid params: header values must be strings"));
+          return;
+        }
+        headers.Set(name, value.GetString());
+      }
+    }
+    if (method == "POST" && !headers.contains("content-type")) {
+      headers.Set("content-type", "application/json");
+    }
+    std::string headers_json;
+    base::JSONWriter::Write(base::Value(std::move(headers)), &headers_json);
+    const int tab_id = use_resolved_target ? resolved_tab_id : active_tab_id_;
+    if (!g_browser_delegate || !deferred_response_sender_) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Same-origin fetch unavailable"));
+      return;
+    }
+    const GURL page_url(g_browser_delegate->GetPageContent(tab_id).url);
+    if (!page_url.is_valid() ||
+        page_url.DeprecatedGetOriginAsURL() != url.DeprecatedGetOriginAsURL()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Same-origin fetch blocked: URL origin does not match target tab"));
+      return;
+    }
+    std::optional<base::Value> msg_id_copy = CloneMessageId(msg.id);
+    DeferredResponseSender sender = deferred_response_sender_;
+    g_browser_delegate->SameOriginFetch(
+        tab_id, url, method, body, headers_json,
+        base::BindOnce(
+            [](std::optional<base::Value> id, DeferredResponseSender sender,
+               MahoMcpBrowserDelegate::SameOriginFetchResult result) {
+              if (!result.success) {
+                sender.Run(BuildJsonRpcErrorLine(
+                    std::move(id), -32000,
+                    result.error.empty() ? "Same-origin fetch failed"
+                                         : std::move(result.error)));
+                return;
+              }
+              base::DictValue out;
+              out.Set("status", result.status);
+              out.Set("url", std::move(result.final_url));
+              out.Set("content_type", std::move(result.content_type));
+              out.Set("text", std::move(result.text));
+              out.Set("truncated", result.truncated);
+              auto redacted =
+                  MahoMcpFirewall::Wrap(base::Value(std::move(out)));
+              base::DictValue response;
+              response.Set("jsonrpc", "2.0");
+              response.Set("id", id.has_value() ? id->Clone() : base::Value());
+              response.Set("result", redacted.get().Clone());
+              std::string serialized;
+              base::JSONWriter::Write(base::Value(std::move(response)),
+                                      &serialized);
+              serialized.push_back('\n');
+              sender.Run(std::move(serialized));
+            },
+            std::move(msg_id_copy), std::move(sender)));
     return;
   }
 
@@ -3104,17 +3434,20 @@ void MahoMcpBrowserDelegate::MailExtractOtp(const std::string& account_id,
 }
 
 void MahoMcpBrowserDelegate::MailSendEmail(const std::string& request_json,
+                                           bool /*already_authorized*/,
                                            MailReadCallback callback) {
   std::move(callback).Run(false, "Mail write broker unavailable");
 }
 
 void MahoMcpBrowserDelegate::MailSaveDraft(const std::string& request_json,
+                                           bool /*already_authorized*/,
                                            MailReadCallback callback) {
   std::move(callback).Run(false, "Mail write broker unavailable");
 }
 
 void MahoMcpBrowserDelegate::MailUpdateDraft(const std::string& draft_id,
                                              const std::string& request_json,
+                                             bool /*already_authorized*/,
                                              MailReadCallback callback) {
   std::move(callback).Run(false, "Mail write broker unavailable");
 }

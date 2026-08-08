@@ -40,6 +40,13 @@ class MahoShieldSiteState : public KeyedService {
 
  private:
   struct OverlayState {
+    OverlayState();
+    OverlayState(const OverlayState&);
+    OverlayState& operator=(const OverlayState&);
+    OverlayState(OverlayState&&) noexcept;
+    OverlayState& operator=(OverlayState&&) noexcept;
+    ~OverlayState();
+
     int content_blocking_mode = -1;
     base::flat_set<std::string> site_exceptions;
   };

@@ -6,6 +6,7 @@
 
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/grit/maho_space_create_resources.h"
 #include "chrome/grit/maho_space_create_resources_map.h"
@@ -50,7 +51,11 @@ void MahoSpaceCreateUI::BindInterface(
 void MahoSpaceCreateUI::CreatePageHandler(
     mojo::PendingRemote<maho_space_create::mojom::Page> page,
     mojo::PendingReceiver<maho_space_create::mojom::PageHandler> receiver) {
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  Browser* browser = MahoSpaceThemePickerDialog::GetOwnerBrowserForWebContents(
+      web_ui()->GetWebContents());
+  if (!browser) {
+    browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  }
   if (!browser) {
     auto* profile = Profile::FromWebUI(web_ui());
     if (profile) {
@@ -65,6 +70,8 @@ void MahoSpaceCreateUI::CreatePageHandler(
       std::move(receiver), std::move(page), browser,
       web_ui()->GetWebContents());
   page_handler_->SetDialogCallbacks(
-      base::BindOnce(&MahoSpaceThemePickerDialog::DispatchCommitToActive),
-      base::BindOnce(&MahoSpaceThemePickerDialog::DispatchCancelToActive));
+      base::BindOnce(&MahoSpaceThemePickerDialog::DispatchCommitToActive,
+                     browser),
+      base::BindOnce(&MahoSpaceThemePickerDialog::DispatchCancelToActive,
+                     browser));
 }

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use base64::Engine;
 use maho_types::common::{ImageData, ImageFormat};
@@ -21,6 +21,12 @@ struct HistoryEntry {
     title: String,
     icon: Option<ImageData>,
     visited_at: u64,
+    /// `"{title} {url}"` lowercased, computed once at insert.
+    ///
+    /// `search` fuzzy-matches every candidate against this on each keystroke;
+    /// building it per candidate per keystroke meant two allocations per
+    /// candidate, and the sub-3-character path scans the whole history.
+    lower_target: String,
 }
 
 struct Action {
@@ -40,10 +46,21 @@ struct FuzzyMatchResult {
     matched_indices: Vec<usize>,
 }
 
+/// Postings are keyed by a monotonic history sequence id, never by position in
+/// the history buffer.
+///
+/// Positions shift on every eviction, which is why the old position-keyed index
+/// had to be rebuilt wholesale each time the history hit its cap — an O(N x L)
+/// walk on the UI thread for every single navigation. Sequence ids are stable,
+/// so an eviction only has to unlink the departing entry's own trigrams.
+///
+/// Because ids are handed out in increasing order and only the oldest entry is
+/// ever evicted, each posting list is sorted ascending and the id being removed
+/// is always at its front — hence `VecDeque` and O(1) `pop_front`.
 struct TrigramIndex {
-    index: HashMap<[u8; 3], Vec<usize>>, // trigram -> indices into history
-    cache: HashMap<String, Vec<usize>>,  // query -> cached result indices
-    cache_order: Vec<String>,            // LRU order tracking
+    index: HashMap<[u8; 3], VecDeque<u64>>, // trigram -> history sequence ids
+    cache: HashMap<String, Vec<u64>>,       // query -> cached sequence ids
+    cache_order: Vec<String>,               // LRU order tracking
     max_cache_size: usize,
 }
 
@@ -57,20 +74,50 @@ impl TrigramIndex {
         }
     }
 
-    fn add_entry(&mut self, idx: usize, text: &str) {
-        let lower = text.to_lowercase();
-        let bytes = lower.as_bytes();
+    /// Insert `lower_text`'s trigrams under `seq`.
+    ///
+    /// `lower_text` must already be lowercased — callers hold a precomputed
+    /// lowercase target, so lowercasing again here would be a wasted allocation.
+    ///
+    /// Does NOT invalidate the query cache; the caller must, once, after its
+    /// batch of inserts.
+    fn add_entry(&mut self, seq: u64, lower_text: &str) {
+        let bytes = lower_text.as_bytes();
         if bytes.len() < 3 {
             return;
         }
         for i in 0..bytes.len() - 2 {
             let trigram = [bytes[i], bytes[i + 1], bytes[i + 2]];
-            self.index.entry(trigram).or_default().push(idx);
+            self.index.entry(trigram).or_default().push_back(seq);
         }
-        self.invalidate_cache();
     }
 
-    fn query_candidates(&mut self, query: &str) -> Option<Vec<usize>> {
+    /// Unlink an evicted entry's trigrams. `lower_text` must be the exact string
+    /// that was passed to `add_entry` for `seq`, so the same trigrams are visited.
+    ///
+    /// `seq` is the oldest live id, so it sits at the front of every posting list
+    /// containing it. A trigram repeated within one entry was pushed more than
+    /// once, so drain the whole run of leading matches. Emptied posting lists are
+    /// dropped to keep the map from growing without bound.
+    fn remove_entry(&mut self, seq: u64, lower_text: &str) {
+        let bytes = lower_text.as_bytes();
+        if bytes.len() < 3 {
+            return;
+        }
+        for i in 0..bytes.len() - 2 {
+            let trigram = [bytes[i], bytes[i + 1], bytes[i + 2]];
+            if let Some(postings) = self.index.get_mut(&trigram) {
+                while postings.front() == Some(&seq) {
+                    postings.pop_front();
+                }
+                if postings.is_empty() {
+                    self.index.remove(&trigram);
+                }
+            }
+        }
+    }
+
+    fn query_candidates(&mut self, query: &str) -> Option<Vec<u64>> {
         if let Some(cached) = self.cache.get(query) {
             return Some(cached.clone());
         }
@@ -80,22 +127,22 @@ impl TrigramIndex {
             return None; // too short for trigram, fall back to full scan
         }
 
-        let mut candidate_counts: HashMap<usize, usize> = HashMap::new();
+        let mut candidate_counts: HashMap<u64, usize> = HashMap::new();
         let num_trigrams = bytes.len() - 2;
         for i in 0..num_trigrams {
             let trigram = [bytes[i], bytes[i + 1], bytes[i + 2]];
-            if let Some(indices) = self.index.get(&trigram) {
-                for &idx in indices {
-                    *candidate_counts.entry(idx).or_insert(0) += 1;
+            if let Some(postings) = self.index.get(&trigram) {
+                for &seq in postings {
+                    *candidate_counts.entry(seq).or_insert(0) += 1;
                 }
             }
         }
         // Keep candidates matching at least 50% of trigrams
         let threshold = num_trigrams.div_ceil(2);
-        let candidates: Vec<usize> = candidate_counts
+        let candidates: Vec<u64> = candidate_counts
             .into_iter()
             .filter(|&(_, count)| count >= threshold)
-            .map(|(idx, _)| idx)
+            .map(|(seq, _)| seq)
             .collect();
 
         self.insert_cache(query.to_string(), candidates.clone());
@@ -113,7 +160,7 @@ impl TrigramIndex {
         self.cache_order.clear();
     }
 
-    fn insert_cache(&mut self, key: String, value: Vec<usize>) {
+    fn insert_cache(&mut self, key: String, value: Vec<u64>) {
         if self.cache_order.len() >= self.max_cache_size {
             if let Some(oldest) = self.cache_order.first().cloned() {
                 self.cache.remove(&oldest);
@@ -126,7 +173,11 @@ impl TrigramIndex {
 }
 
 pub struct CommandBarEngine {
-    history: Vec<HistoryEntry>,
+    history: VecDeque<HistoryEntry>,
+    /// Sequence id of `history.front()`; the entry at position `i` has id
+    /// `history_base_seq + i`. Lets a trigram posting resolve to an entry in
+    /// O(1) without the index having to track shifting positions.
+    history_base_seq: u64,
     actions: Vec<Action>,
     recent_searches: Vec<String>,
     search_engines: Vec<SearchEngine>,
@@ -184,7 +235,8 @@ impl CommandBarEngine {
 
     pub fn new() -> Self {
         let mut engine = Self {
-            history: Vec::new(),
+            history: VecDeque::new(),
+            history_base_seq: 0,
             actions: Vec::new(),
             recent_searches: Vec::new(),
             usage_frequency: HashMap::new(),
@@ -255,35 +307,48 @@ impl CommandBarEngine {
     }
 
     pub fn add_history_entry(&mut self, url: String, title: String, icon: Option<ImageData>) {
-        let combined_text = format!("{} {}", title, url);
-        self.history.push(HistoryEntry {
+        let lower_target = format!("{} {}", title, url).to_lowercase();
+        let seq = self.history_base_seq + self.history.len() as u64;
+
+        let mut index = self.trigram_index.borrow_mut();
+        // Index before the push so `lower_target` can then be moved into the
+        // entry instead of cloned.
+        index.add_entry(seq, &lower_target);
+        self.history.push_back(HistoryEntry {
             url,
             title,
             icon,
             visited_at: now_millis(),
+            lower_target,
         });
+
+        // Evict the oldest entry, unlinking only its own trigrams. This used to
+        // rebuild the entire index, which at the 10k cap meant an O(N x L) walk
+        // on the UI thread for every navigation.
         if self.history.len() > MAX_HISTORY_ENTRIES {
-            self.history.remove(0);
-            self.rebuild_trigram_index();
-        } else {
-            let idx = self.history.len() - 1;
-            self.trigram_index
-                .borrow_mut()
-                .add_entry(idx, &combined_text);
+            if let Some(evicted) = self.history.pop_front() {
+                index.remove_entry(self.history_base_seq, &evicted.lower_target);
+                self.history_base_seq += 1;
+            }
         }
+
+        // Cached candidate lists predate this insert (and any eviction).
+        index.invalidate_cache();
     }
 
-    fn rebuild_trigram_index(&self) {
-        let mut index = self.trigram_index.borrow_mut();
-        index.clear();
-        for (i, entry) in self.history.iter().enumerate() {
-            let text = format!("{} {}", entry.title, entry.url);
-            index.add_entry(i, &text);
-        }
+    /// Resolve a trigram posting to its entry. Returns `None` for ids that have
+    /// already been evicted.
+    fn history_by_seq(&self, seq: u64) -> Option<&HistoryEntry> {
+        let offset = seq.checked_sub(self.history_base_seq)?;
+        self.history.get(usize::try_from(offset).ok()?)
     }
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+        // Postings keyed by now-dead ids would otherwise resolve against the
+        // refilled buffer. Ids restart from 0 alongside the empty buffer.
+        self.history_base_seq = 0;
+        self.trigram_index.borrow_mut().clear();
     }
 
     pub fn search(
@@ -298,6 +363,14 @@ impl CommandBarEngine {
         // ">" prefix → action-only mode
         if let Some(action_query) = query.strip_prefix('>') {
             return self.search_actions_only(action_query.trim(), false);
+        }
+        // Empty query → surface recently-opened (suspended) tabs as switch-to-tab
+        // suggestions, ordered by recency. Does not fuzzy-match an empty needle.
+        if query.trim().is_empty() {
+            let recent = Self::recent_tab_suggestions(ctx);
+            if !recent.is_empty() {
+                return recent;
+            }
         }
         let mut results: Vec<SearchResult> = Vec::new();
         let lower_query = query.to_lowercase();
@@ -323,6 +396,8 @@ impl CommandBarEngine {
                     relevance_score: 3.0,
                     match_ranges: None,
                     shortcut: None,
+                    tab_core_id: None,
+                    is_suspended: false,
                 },
                 score: 3.0,
             });
@@ -341,6 +416,8 @@ impl CommandBarEngine {
                     relevance_score: 2.8,
                     match_ranges: None,
                     shortcut: None,
+                    tab_core_id: None,
+                    is_suspended: false,
                 },
                 score: 2.8,
             });
@@ -364,6 +441,8 @@ impl CommandBarEngine {
                     relevance_score: 2.0,
                     match_ranges: None,
                     shortcut: None,
+                    tab_core_id: None,
+                    is_suspended: false,
                 },
                 score: 2.0,
             });
@@ -389,6 +468,8 @@ impl CommandBarEngine {
                     relevance_score: 1.5,
                     match_ranges: None,
                     shortcut: None,
+                    tab_core_id: None,
+                    is_suspended: false,
                 },
                 score: 1.5,
             });
@@ -414,6 +495,8 @@ impl CommandBarEngine {
                             relevance_score: score,
                             match_ranges: None,
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score,
                     });
@@ -440,6 +523,8 @@ impl CommandBarEngine {
                             tab.title.len(),
                         )),
                         shortcut: None,
+                        tab_core_id: None,
+                        is_suspended: false,
                     },
                     score: match_result.score,
                 });
@@ -465,6 +550,8 @@ impl CommandBarEngine {
                             space.name.len(),
                         )),
                         shortcut: None,
+                        tab_core_id: None,
+                        is_suspended: false,
                     },
                     score: match_result.score,
                 });
@@ -490,6 +577,8 @@ impl CommandBarEngine {
                             folder.name.len(),
                         )),
                         shortcut: None,
+                        tab_core_id: None,
+                        is_suspended: false,
                     },
                     score: match_result.score,
                 });
@@ -515,6 +604,8 @@ impl CommandBarEngine {
                             tab.title.len(),
                         )),
                         shortcut: None,
+                        tab_core_id: None,
+                        is_suspended: false,
                     },
                     score: match_result.score - 0.2,
                 });
@@ -546,6 +637,8 @@ impl CommandBarEngine {
                                 title.len(),
                             )),
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score: match_result.score,
                     });
@@ -577,6 +670,8 @@ impl CommandBarEngine {
                                 tab.title.len(),
                             )),
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score: match_result.score - 0.1,
                     });
@@ -604,6 +699,8 @@ impl CommandBarEngine {
                             name.len(),
                         )),
                         shortcut: None,
+                        tab_core_id: None,
+                        is_suspended: false,
                     },
                     score: match_result.score - 0.3,
                 });
@@ -630,6 +727,8 @@ impl CommandBarEngine {
                                 action.label.len(),
                             )),
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score: match_result.score,
                     });
@@ -640,11 +739,10 @@ impl CommandBarEngine {
         // Search history with trigram index optimization
         if !ctx.is_incognito {
             let candidates = self.trigram_index.borrow_mut().query_candidates(query);
-            if let Some(indices) = candidates {
-                for idx in indices {
-                    if let Some(entry) = self.history.get(idx) {
-                        let target = format!("{} {}", entry.title, entry.url).to_lowercase();
-                        let match_result = Self::fuzzy_match(&lower_query, &target);
+            if let Some(seqs) = candidates {
+                for seq in seqs {
+                    if let Some(entry) = self.history_by_seq(seq) {
+                        let match_result = Self::fuzzy_match(&lower_query, &entry.lower_target);
                         if match_result.is_match {
                             results.push(SearchResult {
                                 suggestion: SuggestionViewModel {
@@ -663,6 +761,8 @@ impl CommandBarEngine {
                                         entry.title.len(),
                                     )),
                                     shortcut: None,
+                                    tab_core_id: None,
+                                    is_suspended: false,
                                 },
                                 score: match_result.score + Self::recency_boost(entry.visited_at),
                             });
@@ -672,8 +772,7 @@ impl CommandBarEngine {
             } else {
                 // Fall back to full scan for queries shorter than 3 characters
                 for entry in &self.history {
-                    let target = format!("{} {}", entry.title, entry.url).to_lowercase();
-                    let match_result = Self::fuzzy_match(&lower_query, &target);
+                    let match_result = Self::fuzzy_match(&lower_query, &entry.lower_target);
                     if match_result.is_match {
                         results.push(SearchResult {
                             suggestion: SuggestionViewModel {
@@ -692,6 +791,8 @@ impl CommandBarEngine {
                                     entry.title.len(),
                                 )),
                                 shortcut: None,
+                                tab_core_id: None,
+                                is_suspended: false,
                             },
                             score: match_result.score + Self::recency_boost(entry.visited_at),
                         });
@@ -782,6 +883,39 @@ impl CommandBarEngine {
             .collect()
     }
 
+    fn recent_tab_suggestions(ctx: &SearchContext) -> Vec<SuggestionViewModel> {
+        let live_ids: std::collections::HashSet<String> =
+            ctx.tabs.iter().map(|tab| tab.id.to_string()).collect();
+        let live_urls: std::collections::HashSet<String> =
+            ctx.tabs.iter().map(|tab| normalize_url(&tab.url)).collect();
+
+        let mut suggestions: Vec<SuggestionViewModel> = Vec::new();
+        for (index, tab) in ctx.recent_tabs.iter().enumerate() {
+            if live_ids.contains(&tab.id.to_string())
+                || live_urls.contains(&normalize_url(&tab.url))
+            {
+                continue;
+            }
+            suggestions.push(SuggestionViewModel {
+                kind: SuggestionType::Tab,
+                key: format!("tab:{}", tab.id),
+                title: tab.title.clone(),
+                subtitle: Some(tab.url.clone()),
+                execution_payload: Some(tab.url.clone()),
+                icon: tab.favicon.clone(),
+                relevance_score: MAX_RESULTS as f64 - index as f64,
+                match_ranges: None,
+                shortcut: None,
+                tab_core_id: Some(tab.id.to_string()),
+                is_suspended: true,
+            });
+            if suggestions.len() >= MAX_RESULTS {
+                break;
+            }
+        }
+        suggestions
+    }
+
     fn search_actions_only(&self, query: &str, is_incognito: bool) -> Vec<SuggestionViewModel> {
         let lower_query = query.to_lowercase();
         let mut results: Vec<SearchResult> = Vec::new();
@@ -829,6 +963,8 @@ impl CommandBarEngine {
                                 label.len(),
                             )),
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score: match_result.score,
                     });
@@ -861,6 +997,8 @@ impl CommandBarEngine {
                                 action.label.len(),
                             )),
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score: match_result.score,
                     });
@@ -923,6 +1061,8 @@ impl CommandBarEngine {
                     relevance_score: 2.0,
                     match_ranges: None,
                     shortcut: None,
+                    tab_core_id: None,
+                    is_suspended: false,
                 },
                 score: 2.0,
             });
@@ -946,6 +1086,8 @@ impl CommandBarEngine {
                     relevance_score: 1.5,
                     match_ranges: None,
                     shortcut: None,
+                    tab_core_id: None,
+                    is_suspended: false,
                 },
                 score: 1.5,
             });
@@ -970,6 +1112,8 @@ impl CommandBarEngine {
                             tab.title.len(),
                         )),
                         shortcut: None,
+                        tab_core_id: None,
+                        is_suspended: false,
                     },
                     score: match_result.score,
                 });
@@ -1012,6 +1156,8 @@ impl CommandBarEngine {
                                 label.len(),
                             )),
                             shortcut: None,
+                            tab_core_id: None,
+                            is_suspended: false,
                         },
                         score: match_result.score,
                     });
@@ -1354,6 +1500,10 @@ impl CommandBarEngine {
     }
 }
 
+fn normalize_url(url: &str) -> String {
+    url.trim_end_matches('/').to_lowercase()
+}
+
 fn indices_to_ranges(indices: &[usize], max_len: usize) -> Vec<(usize, usize)> {
     let filtered: Vec<usize> = indices.iter().copied().filter(|&i| i < max_len).collect();
     if filtered.is_empty() {
@@ -1663,5 +1813,144 @@ fn format_value(val: f64) -> String {
     } else {
         let s = format!("{:.4}", val);
         s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+#[cfg(test)]
+mod trigram_eviction_tests {
+    use super::*;
+
+    // Built by hand: SearchContext derives neither Default nor PartialEq, and a
+    // shared contract crate should not grow derives just to serve a test here.
+    fn ctx() -> SearchContext {
+        SearchContext {
+            tabs: Vec::new(),
+            spaces: Vec::new(),
+            folders: Vec::new(),
+            archived_tabs: Vec::new(),
+            bookmarks: Vec::new(),
+            bookmark_favicons: Vec::new(),
+            closed_tabs: Vec::new(),
+            extensions: Vec::new(),
+            is_incognito: false,
+            recent_tabs: Vec::new(),
+        }
+    }
+
+    fn titles_for(engine: &CommandBarEngine, query: &str) -> Vec<String> {
+        engine
+            .search(query, None, &ctx())
+            .into_iter()
+            .filter(|s| matches!(s.kind, SuggestionType::History))
+            .map(|s| s.title)
+            .collect()
+    }
+
+    /// The sequence-id index must survive eviction: postings for the entry that
+    /// was dropped are unlinked, and every surviving entry still resolves to
+    /// itself (not to whatever slid into its old position).
+    #[test]
+    fn eviction_unlinks_only_the_dropped_entry() {
+        let mut engine = CommandBarEngine::new();
+        for i in 0..MAX_HISTORY_ENTRIES {
+            engine.add_history_entry(
+                format!("https://example.com/zzz{i}"),
+                format!("zzzentry{i}"),
+                None,
+            );
+        }
+        assert_eq!(engine.history.len(), MAX_HISTORY_ENTRIES);
+        assert_eq!(engine.history_base_seq, 0);
+
+        // Overflow by one: the oldest entry must go, nothing else.
+        engine.add_history_entry(
+            "https://example.com/zzzfresh".to_string(),
+            "zzzentryfresh".to_string(),
+            None,
+        );
+        assert_eq!(engine.history.len(), MAX_HISTORY_ENTRIES);
+        assert_eq!(engine.history_base_seq, 1);
+
+        // Resolve ids directly: fuzzy search is subsequence-based, so "zzzentry0"
+        // also matches "zzzentry1000" and friends. What matters here is the id
+        // -> entry mapping, not ranking.
+        assert!(
+            engine.history_by_seq(0).is_none(),
+            "evicted id still resolves"
+        );
+        // Survivors keep their own records. Position-keyed postings would have
+        // shifted every one of these by one after the eviction.
+        assert_eq!(engine.history_by_seq(1).unwrap().title, "zzzentry1");
+        assert_eq!(engine.history_by_seq(5000).unwrap().title, "zzzentry5000");
+        assert_eq!(
+            engine
+                .history_by_seq(MAX_HISTORY_ENTRIES as u64)
+                .unwrap()
+                .title,
+            "zzzentryfresh"
+        );
+
+        // And the evicted title is genuinely unreachable through search.
+        assert!(
+            !titles_for(&engine, "zzzentry0")
+                .iter()
+                .any(|t| t == "zzzentry0"),
+            "evicted entry still surfaced by search"
+        );
+    }
+
+    /// Every posting for an evicted id must be dropped, including the repeats
+    /// produced when one trigram occurs several times in the same entry.
+    #[test]
+    fn eviction_drains_repeated_trigrams() {
+        let mut engine = CommandBarEngine::new();
+        // "aba" recurs many times within this single title.
+        engine.add_history_entry(
+            "https://example.com/a".to_string(),
+            "abababababab".to_string(),
+            None,
+        );
+        for i in 0..MAX_HISTORY_ENTRIES {
+            engine.add_history_entry(
+                format!("https://example.com/f{i}"),
+                format!("filler{i}"),
+                None,
+            );
+        }
+        assert_eq!(engine.history_base_seq, 1);
+
+        let index = engine.trigram_index.borrow();
+        let leftover = index
+            .index
+            .values()
+            .flat_map(|postings| postings.iter())
+            .filter(|&&seq| seq == 0)
+            .count();
+        assert_eq!(leftover, 0, "evicted id still referenced by the index");
+    }
+
+    /// clear_history must reset ids alongside the buffer, or stale postings
+    /// would resolve against freshly added entries.
+    #[test]
+    fn clear_history_resets_sequence_space() {
+        let mut engine = CommandBarEngine::new();
+        engine.add_history_entry(
+            "https://example.com/one".to_string(),
+            "zzzalpha".to_string(),
+            None,
+        );
+        engine.clear_history();
+        assert_eq!(engine.history_base_seq, 0);
+        assert!(titles_for(&engine, "zzzalpha").is_empty());
+
+        engine.add_history_entry(
+            "https://example.com/two".to_string(),
+            "zzzbeta".to_string(),
+            None,
+        );
+        assert!(titles_for(&engine, "zzzbeta")
+            .iter()
+            .any(|t| t == "zzzbeta"));
+        assert!(titles_for(&engine, "zzzalpha").is_empty());
     }
 }

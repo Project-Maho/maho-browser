@@ -3,6 +3,7 @@ import { useState } from 'preact/hooks';
 import { Icon } from '../../ui/icon';
 import { clsx } from '../../utils/clsx';
 import type { AgentMessage, AgentPhase } from './agent-types';
+import type { ArtifactInfo } from '../../bridge/types';
 import { isRunActive } from './agent-types';
 import { MarkdownRenderer } from './markdown-renderer';
 
@@ -12,6 +13,7 @@ interface ConversationThreadProps {
   errorMessage: string | null;
   scrollRef: RefObject<HTMLDivElement>;
   onScroll: () => void;
+  onShareArtifact: (artifactId: string) => Promise<boolean>;
 }
 
 export function ConversationThread({
@@ -20,6 +22,7 @@ export function ConversationThread({
   errorMessage,
   scrollRef,
   onScroll,
+  onShareArtifact,
 }: ConversationThreadProps) {
   return (
     <main class="agent-thread-shell">
@@ -33,7 +36,7 @@ export function ConversationThread({
       >
         {errorMessage && <ErrorBanner message={errorMessage} />}
         {messages.map((message) => (
-          <ConversationMessage key={message.id} message={message} />
+          <ConversationMessage key={message.id} message={message} onShareArtifact={onShareArtifact} />
         ))}
         {isRunActive(phase) && <PendingThought />}
       </div>
@@ -41,7 +44,12 @@ export function ConversationThread({
   );
 }
 
-function ConversationMessage({ message }: { message: AgentMessage }) {
+interface ConversationMessageProps {
+  readonly message: AgentMessage;
+  readonly onShareArtifact: (artifactId: string) => Promise<boolean>;
+}
+
+function ConversationMessage({ message, onShareArtifact }: ConversationMessageProps) {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : 'Maho';
 
@@ -92,6 +100,8 @@ function ConversationMessage({ message }: { message: AgentMessage }) {
             case 'message':
               if (!block.text) return null;
               return <MarkdownRenderer key={block.id} text={block.text} />;
+            case 'artifact':
+              return <ArtifactBlock key={block.id} artifact={block.artifact} onShare={onShareArtifact} />;
             default:
               return null;
           }
@@ -99,6 +109,64 @@ function ConversationMessage({ message }: { message: AgentMessage }) {
       </div>
     </article>
   );
+}
+
+function formatArtifactSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+interface ArtifactBlockProps {
+  readonly artifact: ArtifactInfo;
+  readonly onShare: (artifactId: string) => Promise<boolean>;
+}
+
+type ArtifactShareState = 'idle' | 'sharing' | 'shared';
+
+function ArtifactBlock({ artifact, onShare }: ArtifactBlockProps) {
+  const [shareState, setShareState] = useState<ArtifactShareState>('idle');
+  const [shareError, setShareError] = useState<string | null>(null);
+
+  const share = async () => {
+    if (shareState === 'sharing') return;
+    setShareState('sharing');
+    setShareError(null);
+    try {
+      const shared = await onShare(artifact.artifactId);
+      if (!shared) {
+        throw new Error('Artifact could not be shared.');
+      }
+      setShareState('shared');
+    } catch (error) {
+      setShareState('idle');
+      setShareError(messageFromError(error, 'Unable to share artifact.'));
+    }
+  };
+
+  return (
+    <div class="agent-artifact" data-testid="agent-artifact">
+      <Icon name="download" aria-hidden />
+      <div class="agent-artifact-details">
+        <span class="agent-artifact-name">{artifact.displayName}</span>
+        <span class="agent-artifact-meta">{formatArtifactSize(artifact.sizeBytes)}</span>
+        {shareError && <span class="agent-artifact-error" role="alert">{shareError}</span>}
+      </div>
+      <button
+        type="button"
+        class="agent-artifact-share"
+        aria-label={`Share ${artifact.displayName}`}
+        disabled={shareState === 'sharing'}
+        onClick={() => void share()}
+      >
+        {shareState === 'sharing' ? 'Sharing…' : shareState === 'shared' ? 'Shared' : 'Share'}
+      </button>
+    </div>
+  );
+}
+
+function messageFromError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
 interface ToolExecutionProps {

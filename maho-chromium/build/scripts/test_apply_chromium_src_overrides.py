@@ -8,9 +8,62 @@ from apply_chromium_src_overrides import REPLACEMENTS, apply_replacements
 _BROWSER_BUILD_PATH = "chrome/browser/BUILD.gn"
 _APP_CONTROLLER_HEADER_PATH = "chrome/browser/app_controller_mac.h"
 _APP_CONTROLLER_MM_PATH = "chrome/browser/app_controller_mac.mm"
+_BROWSER_VIEW_CC_PATH = "chrome/browser/ui/views/frame/browser_view.cc"
+_TOOLBAR_VIEW_CC_PATH = "chrome/browser/ui/views/toolbar/toolbar_view.cc"
+_SIDE_PANEL_CC_PATH = "chrome/browser/ui/views/side_panel/side_panel.cc"
+_CA_LAYER_TREE_COORDINATOR_PATH = "ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm"
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+    def test_toolbar_minimum_size_tolerates_preinit_overflow_button(self):
+        source = (
+            "  if (media_button) {\n"
+            "    media_button_ = AddChildView(std::move(media_button));\n"
+            "  }\n"
+            "      if (browser_->is_type_normal() && !overflow_button_->GetVisible()) {\n"
+            "        size.Enlarge(1, 0);\n"
+            "      }\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "toolbar_view.cc"
+            target.write_text(source)
+
+            changed, _ = apply_replacements(
+                target,
+                REPLACEMENTS[_TOOLBAR_VIEW_CC_PATH],
+                relative_path=_TOOLBAR_VIEW_CC_PATH,
+            )
+
+            self.assertTrue(changed)
+            self.assertIn(
+                "browser_->is_type_normal() && overflow_button_ &&",
+                target.read_text(),
+            )
+
+    def test_macos_remote_compositor_preserves_transparent_web_contents_alpha(self):
+        source = (
+            "  if (allow_remote_layers_) {\n"
+            "    root_ca_layer_ = [[CALayer alloc] init];\n"
+            "    root_ca_layer_.opaque = YES;\n"
+            "  }\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "ca_layer_tree_coordinator.mm"
+            target.write_text(source)
+
+            changed, _ = apply_replacements(
+                target,
+                REPLACEMENTS[_CA_LAYER_TREE_COORDINATOR_PATH],
+                relative_path=_CA_LAYER_TREE_COORDINATOR_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("root_ca_layer_.opaque = NO;", output)
+            self.assertNotIn("root_ca_layer_.opaque = YES;", output)
+
     def test_macos_reopen_activates_welcome_before_creating_browser(self):
         replacements = REPLACEMENTS[_APP_CONTROLLER_MM_PATH]
 
@@ -36,6 +89,55 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             reopen_patch.new.index("MahoWelcomeWindow::ActivateIfOpen()"),
             reopen_patch.new.index("GetStartupProfilePathMac()"),
         )
+
+    def test_shared_glass_patch_uses_blank_page_state_not_tab_count(self):
+        replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+        replacement = next(
+            item for item in replacements
+            if item.description.startswith(
+                "Maho: define BrowserView content-surface palette projection")
+        )
+
+        self.assertIn("MahoShouldRevealSharedGlass", replacement.new)
+        self.assertIn("url.is_empty()", replacement.new)
+        self.assertIn('url.SchemeIs("about") && url.path() == "blank"',
+                      replacement.new)
+        self.assertIn("chrome::kChromeUINewTabHost", replacement.new)
+        self.assertNotIn("tab_strip_model()->count() == 0", replacement.new)
+        self.assertIn("SetMahoBackgroundOverride(std::nullopt)", replacement.new)
+        self.assertIn("SetPageBaseBackgroundColor(SK_ColorTRANSPARENT)",
+                      replacement.new)
+
+    def test_shared_glass_view_is_browser_owned_and_spans_all_three_panes(self):
+        replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+        rendered = "\n".join(item.new for item in replacements)
+
+        self.assertIn(
+            "maho_content_gradient_view_ = AddChildView(\n"
+            "        std::make_unique<maho::MahoContentGradientView>());",
+            rendered,
+        )
+        self.assertNotIn(
+            "maho_content_gradient_view_ = contents_container->AddChildView(",
+            rendered,
+        )
+        self.assertIn("SetSharedBrowserGlassActive(true)", rendered)
+
+        layout_replacements = REPLACEMENTS[
+            "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc"
+        ]
+        layout_rendered = "\n".join(item.new for item in layout_replacements)
+        self.assertIn("shared_glass_bounds.Union(*panel_bounds)", layout_rendered)
+        self.assertIn("shared_glass_bounds.Union(contents_bounds)", layout_rendered)
+        self.assertIn("layout.AddChild(views().maho_content_gradient_view",
+                      layout_rendered)
+
+    def test_maho_ai_content_parent_is_transparent(self):
+        rendered = "\n".join(
+            item.new for item in REPLACEMENTS[_SIDE_PANEL_CC_PATH]
+        )
+        self.assertIn("MahoAiSidePanelWebView", rendered)
+        self.assertIn("return;", rendered)
 
     def test_url_alias_dep_uses_context_menus_when_password_provider_is_absent(self):
         source = (

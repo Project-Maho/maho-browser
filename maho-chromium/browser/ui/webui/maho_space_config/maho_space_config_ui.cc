@@ -10,6 +10,7 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/webui/maho_space_config/maho_space_config_page_handler.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
@@ -107,6 +108,13 @@ void MahoSpaceConfigUI::CreatePageHandler(
     std::string focus_param;
     if (net::GetValueForKeyInQuery(url, "focus", &focus_param)) {
       initial_focus_ = ParseFocus(focus_param);
+    }
+  }
+
+  if (space_id_.empty()) {
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    if (bridge) {
+      space_id_ = bridge->GetActiveSpaceId(browser);
     }
   }
 

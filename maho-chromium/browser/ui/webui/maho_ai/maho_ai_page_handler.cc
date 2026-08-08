@@ -19,6 +19,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/base64.h"
+#include "base/files/file_util.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
@@ -593,11 +595,14 @@ MahoAIPageHandler::MahoAIPageHandler(
     mojo::PendingRemote<maho_ai::mojom::Page> page,
     std::unique_ptr<MahoPrivateContextToken> token,
     Browser* browser,
+    content::WebContents* host_web_contents,
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
       token_(std::move(token)),
+      host_web_contents_(host_web_contents ? host_web_contents->GetWeakPtr()
+                                           : base::WeakPtr<content::WebContents>()),
       browser_(browser),
       prefs_(prefs),
       url_loader_factory_(url_loader_factory) {
@@ -2243,7 +2248,8 @@ void MahoAIPageHandler::GetArtifactPreviewUrl(
                      browser_->profile())
                : nullptr;
   content::WebContents* web_contents =
-      token_ ? token_->web_contents() : nullptr;
+      host_web_contents_ ? host_web_contents_.get()
+                         : (token_ ? token_->web_contents() : nullptr);
   if (!registry || !web_contents) {
     std::move(callback).Run(std::nullopt);
     return;
@@ -2260,6 +2266,35 @@ void MahoAIPageHandler::GetArtifactPreviewUrl(
           .spec());
 }
 
+namespace {
+
+// Reads a contained artifact off the UI thread and returns it as a
+// self-contained data: URL. Used as the drag-out DownloadURL source: macOS
+// DragDownloadFile can fetch data: URLs (the download system supports the data
+// scheme), whereas it cannot fetch the chrome-untrusted:// export endpoint, so
+// a capability URL never produced a dropped file in Finder.
+std::optional<std::string> ReadArtifactAsDragDataUrl(
+    base::FilePath artifact_root,
+    std::string storage_rel_path,
+    std::string mime_type,
+    size_t max_bytes) {
+  std::optional<base::FilePath> path =
+      maho::ai::MahoArtifactRegistry::ResolveContainedStoragePath(
+          artifact_root, storage_rel_path);
+  if (!path) {
+    return std::nullopt;
+  }
+  std::string contents;
+  if (!base::ReadFileToStringWithMaxSize(*path, &contents, max_bytes)) {
+    return std::nullopt;
+  }
+  const std::string mime =
+      mime_type.empty() ? "application/octet-stream" : mime_type;
+  return "data:" + mime + ";base64," + base::Base64Encode(contents);
+}
+
+}  // namespace
+
 void MahoAIPageHandler::GetArtifactExportUrl(
     const std::string& artifact_id,
     GetArtifactExportUrlCallback callback) {
@@ -2268,22 +2303,30 @@ void MahoAIPageHandler::GetArtifactExportUrl(
       browser_ ? maho::ai::MahoArtifactRegistry::GetForProfile(
                      browser_->profile())
                : nullptr;
-  content::WebContents* web_contents =
-      token_ ? token_->web_contents() : nullptr;
-  if (!registry || !web_contents) {
+  if (!registry) {
     std::move(callback).Run(std::nullopt);
     return;
   }
-  std::optional<std::string> capability =
-      registry->IssueCapability(artifact_id, "export", web_contents);
-  if (!capability) {
+  std::optional<maho::ai::MahoArtifact> artifact =
+      registry->GetArtifact(artifact_id);
+  if (!artifact) {
     std::move(callback).Run(std::nullopt);
     return;
   }
-  std::move(callback).Run(
-      net::AppendQueryParameter(
-          GURL(maho::kMahoArtifactExportUntrustedURL), "cap", *capability)
-          .spec());
+  // Cap the drag data: URL size: base64 inflates ~33% and the whole thing is
+  // held in memory. Larger artifacts return null (card stays non-draggable)
+  // until a native file-promise drag fallback lands.
+  constexpr size_t kMaxDragDataUrlBytes = 32u * 1024u * 1024u;
+  if (artifact->size_bytes > kMaxDragDataUrlBytes) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&ReadArtifactAsDragDataUrl, registry->artifact_root(),
+                     artifact->storage_rel_path, artifact->mime_type,
+                     kMaxDragDataUrlBytes),
+      std::move(callback));
 }
 
 void MahoAIPageHandler::GetSessionHistory(const std::string& session_id,

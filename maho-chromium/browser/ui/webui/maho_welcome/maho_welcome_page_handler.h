@@ -11,8 +11,10 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "maho/browser/importer/maho_browser_detector.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -34,7 +36,8 @@ class EssentialImporter;
 class MahoImportSessionBridge;
 }
 
-class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
+class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
+                               public maho::MahoMailService::Observer {
  public:
   MahoWelcomePageHandler(
       mojo::PendingReceiver<maho_welcome::mojom::PageHandler> receiver,
@@ -45,6 +48,9 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
   MahoWelcomePageHandler(const MahoWelcomePageHandler&) = delete;
   MahoWelcomePageHandler& operator=(const MahoWelcomePageHandler&) = delete;
   ~MahoWelcomePageHandler() override;
+
+  // maho::MahoMailService::Observer:
+  void OnAccountsChanged() override;
 
   // maho_welcome::mojom::PageHandler:
   void GetAvailableBrowsers(GetAvailableBrowsersCallback callback) override;
@@ -70,6 +76,8 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
   void LoginFromWelcome(const std::string& email,
                         const std::string& password,
                         LoginFromWelcomeCallback callback) override;
+  void SignInWithGoogleFromWelcome(
+      SignInWithGoogleFromWelcomeCallback callback) override;
   void SignupFromWelcome(const std::string& email,
                          const std::string& password,
                          const std::string& display_name,
@@ -91,6 +99,34 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
   void UnlockVault(const std::string& master_passphrase,
                    UnlockVaultCallback callback) override;
 
+  // Sync key setup
+  void GenerateSyncKey(GenerateSyncKeyCallback callback) override;
+  void StartSync(const std::string& room_id,
+                 const std::string& recovery_phrase,
+                 StartSyncCallback callback) override;
+
+  // Mail account onboarding. Thin proxies to the profile-keyed
+  // MahoMailService (via MahoMailServiceFactory::GetForProfile(profile_)).
+  void MailAddAccount(const std::string& request_json,
+                      MailAddAccountCallback callback) override;
+  void MailTestConnection(const std::string& params_json,
+                          MailTestConnectionCallback callback) override;
+  void MailBeginOAuth(const std::string& provider,
+                      MailBeginOAuthCallback callback) override;
+  void MailListAccounts(MailListAccountsCallback callback) override;
+  void MailDeleteAccount(const std::string& account_id,
+                         MailDeleteAccountCallback callback) override;
+  void MailOAuthCancel(const std::string& state,
+                       MailOAuthCancelCallback callback) override;
+
+  // Translation setup (cloud-backed; no local model).
+  void GetAiProviderConfigured(GetAiProviderConfiguredCallback callback) override;
+  void SetTranslationProvider(const std::string& provider,
+                              SetTranslationProviderCallback callback) override;
+  void GetSubscriptionCheckoutUrl(
+      const std::string& tier,
+      GetSubscriptionCheckoutUrlCallback callback) override;
+
   void FinishOnboarding() override;
   void DevSkipOnboarding() override;
   void OpenFDASettings() override;
@@ -104,6 +140,9 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
 
  private:
   void CloseWelcomeTab();
+  void CompletePendingMailOAuth();
+  void CloseMailOAuthTab(content::WebContents* oauth_contents);
+  void ReactivateWelcomeTab();
   void DoFinishOnboarding();
   void RevealBrowserAndCloseWelcome();
   void OnBrowsersDetected(GetAvailableBrowsersCallback callback,
@@ -114,12 +153,23 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler {
       std::vector<maho::DetectedBrowser> browsers);
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
+  // Idempotent mail-helper launch, called only after relay login/signup
+  // succeeds (prefs already hold a valid session, so no gate is needed).
+  // Runs on the UI thread where blocking is forbidden, so the crashpad-dir
+  // mkdir hops to the thread pool and resumes in OnMailHelperCrashpadReady().
+  void LaunchMailHelperIfReady();
+  void OnMailHelperCrashpadReady(const base::FilePath& crashpad_database);
+
 
   mojo::Receiver<maho_welcome::mojom::PageHandler> receiver_;
   mojo::Remote<maho_welcome::mojom::Page> page_;
   raw_ptr<Profile> profile_;
   raw_ptr<Browser> browser_;
   raw_ptr<content::WebContents> web_contents_;
+  base::WeakPtr<content::WebContents> pending_mail_oauth_web_contents_;
+  base::ScopedObservation<maho::MahoMailService,
+                          maho::MahoMailService::Observer>
+      mail_service_observation_{this};
 
   std::vector<maho::DetectedBrowser> detected_browsers_;
   std::unique_ptr<maho::MahoImportSessionBridge> import_session_bridge_;

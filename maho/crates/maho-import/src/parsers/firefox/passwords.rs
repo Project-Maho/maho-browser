@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::decrypt::firefox_nss::{NssError, decrypt_nss_value, unlock_nss_master_key};
+use crate::decrypt::firefox_nss::{decrypt_nss_value, unlock_nss_master_key, NssError};
 use crate::{ImportError, ImportResult, PasswordEntry};
 
 #[derive(Deserialize)]
@@ -36,18 +36,15 @@ pub fn parse_firefox_passwords(
 ) -> ImportResult<Vec<PasswordEntry>> {
     let logins_path = profile_dir.join("logins.json");
     if !logins_path.exists() {
-        return Err(ImportError::FileNotFound(
-            logins_path.display().to_string(),
-        ));
+        return Err(ImportError::FileNotFound(logins_path.display().to_string()));
     }
 
-    let master_key = unlock_nss_master_key(profile_dir, master_password)
-        .map_err(|e| match e {
-            NssError::KeyDbMissing => ImportError::FileNotFound("key4.db".into()),
-            NssError::WrongMasterPassword => ImportError::Parse("master password incorrect".into()),
-            NssError::UnsupportedVersion => ImportError::UnsupportedScheme(e.to_string()),
-            _ => ImportError::Parse(e.to_string()),
-        })?;
+    let master_key = unlock_nss_master_key(profile_dir, master_password).map_err(|e| match e {
+        NssError::KeyDbMissing => ImportError::FileNotFound("key4.db".into()),
+        NssError::WrongMasterPassword => ImportError::Parse("master password incorrect".into()),
+        NssError::UnsupportedVersion => ImportError::UnsupportedScheme(e.to_string()),
+        _ => ImportError::Parse(e.to_string()),
+    })?;
 
     let json_bytes = std::fs::read_to_string(&logins_path)
         .map_err(|e| ImportError::Io(format!("reading logins.json: {e}")))?;
@@ -99,7 +96,8 @@ mod tests {
 
     #[test]
     fn parses_valid_fixture() {
-        let (_temp, profile, _master_key) = create_test_profile("", &["user1", "pass1", "https://example.com"]);
+        let (_temp, profile, _master_key) =
+            create_test_profile("", &["user1", "pass1", "https://example.com"]);
         let entries = parse_firefox_passwords(&profile, "").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].username, "user1");

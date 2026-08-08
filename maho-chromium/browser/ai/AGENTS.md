@@ -24,6 +24,7 @@ browser/ai/
 ├── maho_extract_prompt_messages.cc/h # System/user prompt assembly
 ├── maho_ai_settings_migration.cc/h  # Migrate legacy AI settings
 ├── maho_ai_security_utils.h         # API key sanitization helpers
+├── maho_artifact_registry.cc/h      # Profile artifact metadata + capabilities
 ├── maho_managed_connection_test.*   # Test helpers for managed connection
 └── *_unittest.cc                    # Per-file unit tests
 ```
@@ -37,6 +38,7 @@ browser/ai/
 | Chat session management | `maho_chat_orchestration_service.cc` |
 | Agent mode / tool use | `maho_unified_agent_adapter.cc` + `maho_tool_execution_graph.cc` |
 | Tool registration | `maho_browser_tool_registry.cc` |
+| Artifact metadata / capabilities | `maho_artifact_registry.cc` |
 | FFI async callbacks | `maho_ffi_callback_handle.cc` |
 | Available models list | `maho_model_list_fetcher.cc` |
 | Tab-Tidy feature | `maho_tab_tidy_orchestrator.cc` |

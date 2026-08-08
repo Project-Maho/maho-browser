@@ -1,5 +1,13 @@
 # Aside Followup — Decisions Locked-In (2026-06-27)
 
+> **⚠️ HISTORICAL PLANNING ARTIFACT (updated 2026-07)**: 이 문서는 역사 기록용 의사결정 산출물입니다. 편집하지 말고 참조 용도로만 사용하세요. 현재 진실(current truth)은 아래 정본 문서에 있습니다:
+> - `docs/competitive-analysis/aside-benchmark-status-2026-07.md`
+> - `docs/competitive-analysis/aside-benchmark-evidence-2026-07.md`
+> - `docs/decisions/0009-openrouter-subscription-bm.md` (v2)
+> - `docs/decisions/0010-payg-credits-model.md`
+>
+> 본문 §2 등에 남아 있는 Maho $20 / $200 가격과 과거 token cap 수치는 v1 잔재이며 현재 pricing으로 대체되었습니다: **Free $0 / Pro $5 / Max $20 구독 + PAYG 크레딧 $10 / $50 / $100 + BYOK (무료, 무제한, frontier는 BYOK 전용)**. 아래 "Revision 2026-06-28" 노트가 이 전환을 부분적으로 기록합니다.
+
 **상태**: 의사결정 단계 종료, 실행 단계 진입 준비
 **참조**: `aside-followup-bm-redesign-2026-06-27.md` (v2.0 plan), `docs/decisions/0009-openrouter-subscription-bm.md` (ADR)
 **검토 단계**: hyperplan adversarial review (5명 적대팀, 19 high-confidence findings 추출, plan agent 실행 계획 산출)

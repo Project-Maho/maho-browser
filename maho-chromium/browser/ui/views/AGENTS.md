@@ -14,7 +14,7 @@ browser/ui/views/
 ├── spaces_overlay/  # Arc-style Spaces overlay (archive/spaces library)
 ├── space_config/    # Space configuration native dialog
 ├── space_create/    # Space creation entry (launches chrome://maho-space-create WebUI dialog)
-├── little_arc/      # Little Arc preview popover (link preview)
+├── maho_mini/      # Maho Mini preview popover (link preview)
 ├── boost/           # Boost badge/UI in toolbar
 ├── shields/         # Ad/tracker shield status indicator
 ├── side_panel/      # Side panel host integration
@@ -33,7 +33,7 @@ browser/ui/views/
 | Split view | `split_view/` | `maho_split_view_manager.cc` coordinates two WebContents |
 | Spaces overlay (Arc-style library) | `spaces_overlay/` | Consult `maho/reference_screenshots/arc-library-space.jpeg` |
 | Theme picker entry | `space_create/` → `MahoSpaceThemePickerDialog::Open` | Hosts `chrome://maho-space-create` WebUI |
-| Link preview | `little_arc/` | |
+| Link preview | `maho_mini/` | |
 | Lucide icons (C++) | `maho_lucide_icons/` | `manifest.json` → `generate.py --write`. NEVER hand-edit `.icon` files |
 
 ## CONVENTIONS

@@ -173,6 +173,7 @@ void MahoManagedConnectionTest::OnRefreshComplete(
   store_params.user_id = prefs_->GetString(maho::account_prefs::kRelayUserId);
   store_params.user_display_name = prefs_->GetString(maho::account_prefs::kRelayUserDisplayName);
   store_params.user_tier = prefs_->GetString(maho::account_prefs::kRelayUserTier);
+  maho::auth::PreserveRelayIdentityMetadata(prefs_, &store_params);
 
   maho::auth::StoreRelayTokens(prefs_, *encryptor_, store_params);
 

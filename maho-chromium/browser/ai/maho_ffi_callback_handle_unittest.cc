@@ -36,6 +36,11 @@ class FfiCallbackHandleTest : public testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
 
+template <typename Handle>
+void ReleaseFromProducer(void* producer_user_data) {
+  Handle::ReleaseFromProducer(producer_user_data);
+}
+
 // Verifies that constructing and destroying a handle does not leak memory.
 // We observe the Pointee's shared_ptr refcount via a weak_ptr<Pointee>.
 TEST_F(FfiCallbackHandleTest, ConstructAndDestroy_NoLeak) {
@@ -51,11 +56,76 @@ TEST_F(FfiCallbackHandleTest, ConstructAndDestroy_NoLeak) {
     auto sp = FfiCallbackHandle<FakeOwner>::FromUserData(handle.user_data());
     observer = sp;
     EXPECT_FALSE(observer.expired());
+    EXPECT_EQ(sp->generation, 0u);
     // sp goes out of scope here, dropping one refcount.
   }
 
   // After handle destruction: the bridge is deleted, pointee_ in handle is
   // gone. Since no in-flight callbacks hold a shared_ptr, observer expires.
+  EXPECT_TRUE(observer.expired());
+}
+
+TEST_F(FfiCallbackHandleTest,
+       ProducerLeaseAllowsCallbackCopyAfterWrapperDestruction) {
+  auto owner = std::make_unique<FakeOwner>();
+  void* producer_user_data = nullptr;
+
+  {
+    FfiCallbackHandle<FakeOwner> handle(
+        base::SequencedTaskRunner::GetCurrentDefault(), owner->AsWeakPtr());
+    producer_user_data = handle.user_data();
+    handle.HandOffToProducer();
+  }
+
+  auto callback_copy =
+      FfiCallbackHandle<FakeOwner>::FromUserData(producer_user_data);
+  std::weak_ptr<FfiCallbackHandle<FakeOwner>::Pointee> observer(callback_copy);
+  EXPECT_FALSE(observer.expired());
+  EXPECT_TRUE(callback_copy->cancelled.load(std::memory_order_acquire));
+
+  ReleaseFromProducer<FfiCallbackHandle<FakeOwner>>(producer_user_data);
+  EXPECT_FALSE(observer.expired());
+  callback_copy.reset();
+  EXPECT_TRUE(observer.expired());
+}
+
+TEST_F(FfiCallbackHandleTest,
+       ProducerReleaseReclaimsBridgeAfterLocalCallbackCopiesDrop) {
+  auto owner = std::make_unique<FakeOwner>();
+  std::shared_ptr<FfiCallbackHandle<FakeOwner>::Pointee> callback_copy;
+  std::weak_ptr<FfiCallbackHandle<FakeOwner>::Pointee> observer;
+  void* producer_user_data = nullptr;
+
+  {
+    FfiCallbackHandle<FakeOwner> handle(
+        base::SequencedTaskRunner::GetCurrentDefault(), owner->AsWeakPtr());
+    producer_user_data = handle.user_data();
+    callback_copy =
+        FfiCallbackHandle<FakeOwner>::FromUserData(producer_user_data);
+    observer = callback_copy;
+    handle.HandOffToProducer();
+  }
+
+  callback_copy.reset();
+  EXPECT_FALSE(observer.expired());
+
+  ReleaseFromProducer<FfiCallbackHandle<FakeOwner>>(producer_user_data);
+  EXPECT_TRUE(observer.expired());
+}
+
+TEST_F(FfiCallbackHandleTest, UnacceptedProducerLeaseIsReclaimedLocally) {
+  auto owner = std::make_unique<FakeOwner>();
+  std::weak_ptr<FfiCallbackHandle<FakeOwner>::Pointee> observer;
+
+  {
+    FfiCallbackHandle<FakeOwner> handle(
+        base::SequencedTaskRunner::GetCurrentDefault(), owner->AsWeakPtr());
+    auto callback_copy =
+        FfiCallbackHandle<FakeOwner>::FromUserData(handle.user_data());
+    observer = callback_copy;
+    EXPECT_FALSE(observer.expired());
+  }
+
   EXPECT_TRUE(observer.expired());
 }
 

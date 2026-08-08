@@ -137,13 +137,23 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO urls (url, title, visit_count, last_visit_time) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["https://rust-lang.org", "Rust", 3u32, 13_349_000_000_000_000i64],
+            rusqlite::params![
+                "https://rust-lang.org",
+                "Rust",
+                3u32,
+                13_349_000_000_000_000i64
+            ],
         )
         .unwrap();
         // Should be filtered out (chrome:// scheme):
         conn.execute(
             "INSERT INTO urls (url, title, visit_count, last_visit_time) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["chrome://settings", "Settings", 1u32, 13_348_000_000_000_000i64],
+            rusqlite::params![
+                "chrome://settings",
+                "Settings",
+                1u32,
+                13_348_000_000_000_000i64
+            ],
         )
         .unwrap();
     }

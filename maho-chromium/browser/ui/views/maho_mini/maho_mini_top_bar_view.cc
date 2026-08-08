@@ -73,7 +73,9 @@ namespace {
 
 constexpr int kMahoMiniTopBarHeight = 46;
 constexpr int kBarOuterInset = 8;
+#if BUILDFLAG(IS_MAC)
 constexpr int kTrafficLightsReservation = 60;
+#endif
 constexpr int kZoneGap = 6;
 constexpr int kIntegratedSurfaceY = 7;
 constexpr int kIntegratedSurfaceHeight = 32;

@@ -71,8 +71,12 @@ bool VerifySha256(const base::FilePath& path, std::string_view expected_hex) {
   return base::EqualsCaseInsensitiveASCII(hex, expected_hex);
 }
 
-void FreeEngineOnWorker(MahoSttSession* engine) {
-  maho_stt_session_free(engine);
+// Bound args are passed as an opaque uintptr_t token: MahoSttSession is an
+// incomplete FFI type, and base::Bind's unretained check static_asserts on a
+// raw pointer to an incomplete type (clang-cl is strict; libc++ on mac lets it
+// pass). Casting to/from uintptr_t keeps the handle opaque past that check.
+void FreeEngineOnWorker(uintptr_t engine_token) {
+  maho_stt_session_free(reinterpret_cast<MahoSttSession*>(engine_token));
 }
 
 }  // namespace
@@ -97,8 +101,9 @@ MahoAiVoiceSession::~MahoAiVoiceSession() {
     // Abort any in-flight decode (thread-safe atomic), then free on the worker
     // sequence after the transcribe task drains.
     maho_stt_session_cancel(engine_);
-    stt_runner_->PostTask(FROM_HERE,
-                          base::BindOnce(&FreeEngineOnWorker, engine_));
+    stt_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&FreeEngineOnWorker,
+                                  reinterpret_cast<uintptr_t>(engine_)));
     engine_ = nullptr;
   }
 }
@@ -131,8 +136,8 @@ void MahoAiVoiceSession::Stop() {
   pcm_.clear();
   stt_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
-      base::BindOnce(&MahoAiVoiceSession::TranscribeOnWorker, engine_,
-                     std::move(pcm)),
+      base::BindOnce(&MahoAiVoiceSession::TranscribeOnWorker,
+                     reinterpret_cast<uintptr_t>(engine_), std::move(pcm)),
       base::BindOnce(&MahoAiVoiceSession::OnTranscribed,
                      weak_factory_.GetWeakPtr()));
 }
@@ -171,8 +176,9 @@ MahoSttSession* MahoAiVoiceSession::CreateEngineOnWorker(
 
 // static
 std::optional<std::string> MahoAiVoiceSession::TranscribeOnWorker(
-    MahoSttSession* engine,
+    uintptr_t engine_token,
     std::vector<float> pcm) {
+  auto* engine = reinterpret_cast<MahoSttSession*>(engine_token);
   if (!engine) {
     return std::nullopt;
   }

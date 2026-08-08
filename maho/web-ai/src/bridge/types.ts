@@ -97,8 +97,22 @@ export type AgentEvent =
   | { kind: 'thinking'; thinking: string }
   | { kind: 'tool_call'; id: string; name: string; args: string }
   | { kind: 'tool_result'; id: string; name: string; result: string }
+  | { kind: 'artifact_created'; artifact: ArtifactInfo }
   | { kind: 'complete'; fullText: string }
   | { kind: 'error'; message: string };
+
+/**
+ * Metadata for an agent output artifact. Paths never cross this boundary;
+ * artifactId is an opaque handle resolved natively.
+ */
+export interface ArtifactInfo {
+  artifactId: string;
+  sessionId: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: number;
+}
 
 /**
  * ToolDescriptor returned by agentListTools().
@@ -248,6 +262,8 @@ export interface MahoBridge {
   // Returns a single queued event JSON string, or null if the queue is empty.
   // Events are `{ "type": "token"|"complete"|"error", "data": string | object }`.
   agentPollEvent(handle: AgentHandle): Promise<string | null>;
+  agentListArtifacts(handle: AgentHandle): Promise<ArtifactInfo[]>;
+  artifactShare(handle: AgentHandle, artifactId: string): Promise<boolean>;
   // Returns JSON array of AgentToolDescriptor for the session's registered tools.
   agentListTools(handle: AgentHandle): Promise<AgentToolDescriptor[]>;
 

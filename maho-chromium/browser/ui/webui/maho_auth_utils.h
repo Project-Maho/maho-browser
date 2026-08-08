@@ -18,7 +18,10 @@ class SharedURLLoaderFactory;
 
 namespace maho::auth {
 
-inline constexpr char kSyncRelayUrl[] = "https://sync.mahobrowser.com";
+// Returns the sync relay base URL. Honors MAHO_SYNC_RELAY_URL, then falls back
+// to GetRelayBaseUrl() (MAHO_RELAY_URL, else the default relay host) so local
+// dev relays are reachable for sync, matching the auth path.
+std::string GetSyncRelayUrl();
 
 // Returns decrypted access token, or empty string if not stored or decrypt
 // failed. Synchronous — only safe to call after the Encryptor is ready.
@@ -47,13 +50,26 @@ struct StoreTokensParams {
   std::string user_id;
   std::string user_display_name;
   std::string user_tier;
+  std::string oauth_provider;
+  std::string oauth_provider_sub;
 };
 bool StoreRelayTokens(PrefService* prefs,
                       const os_crypt_async::Encryptor& encryptor,
                       const StoreTokensParams& params);
 
+// Copies the currently persisted optional identity pair into token-refresh
+// parameters so rotating relay tokens does not unlink the signed-in account.
+void PreserveRelayIdentityMetadata(PrefService* prefs,
+                                   StoreTokensParams* params);
+
 // Clear all auth-related prefs (tokens + expiry + user info).
 void ClearRelayTokens(PrefService* prefs);
+
+// Returns Mail OAuth identity-binding options for a linked Google relay
+// session, or an empty JSON object for password/non-Google/invalid metadata.
+// Values are read from plaintext identity prefs; relay tokens are never
+// included.
+std::string BuildMailOAuthStartOptionsJson(PrefService* prefs);
 
 // Returns true if there is a valid relay session (an unexpired access token
 // or a valid refresh token to obtain one).
@@ -93,6 +109,17 @@ void MahoRelayLogin(
     LoginResultCallback callback);
 
 using SignupResultCallback = LoginResultCallback;
+
+// Exchanges a Google id_token (obtained by the maho-core PKCE flow) for a relay
+// session, storing the returned tokens exactly as MahoRelayLogin does.
+void MahoRelayGoogleLogin(
+    base::RepeatingCallback<PrefService*()> prefs_provider,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor& encryptor,
+    const std::string& id_token,
+    const std::string& nonce,
+    LoginResultCallback callback);
+
 void MahoRelaySignup(
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,

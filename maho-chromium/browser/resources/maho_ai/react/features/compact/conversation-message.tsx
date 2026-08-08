@@ -83,9 +83,9 @@ const markdownMessageClassName = cn(
     '[&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5',
     '[&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5',
     '[&_li+li]:mt-2',
-    '[&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/80 [&_pre]:p-3 [&_pre]:text-xs',
+    '[&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:rounded-xl [&_pre]:bg-background/80 [&_pre]:p-3 [&_pre]:text-xs',
     '[&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:p-0',
-    '[&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-secondary/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[0.85em]',
+    '[&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-secondary/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[0.85em] [&_code]:[overflow-wrap:anywhere]',
     '[&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
     '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-foreground');
 
@@ -95,7 +95,7 @@ export const ConversationMessage = React.memo(
             {item: ConversationItem; onRegenerate?: () => void}) {
   const isUser = item.role === 'user';
   const messageClassName = cn(
-      'relative min-w-0 break-words text-sm leading-6',
+      'relative min-w-0 [overflow-wrap:anywhere] text-sm leading-6',
       isUser ?
         'max-w-[82%] rounded-2xl rounded-tr-md bg-secondary px-4 py-3 text-foreground' :
         'w-full max-w-full px-1 text-foreground',
@@ -103,7 +103,7 @@ export const ConversationMessage = React.memo(
 
   return (
     <article className={cn(
-        'group/message grid w-full max-w-full gap-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none',
+        'group/message grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none',
         isUser ? 'justify-items-end' : 'justify-items-start')}>
       {item.markdown ?
         <Markdown className={messageClassName} text={item.text} /> :

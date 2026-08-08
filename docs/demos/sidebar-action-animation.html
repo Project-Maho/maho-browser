@@ -1,0 +1,1182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Maho sidebar Tidy and Clear semantic tab-list animation demo">
+  <link rel="icon" href="data:,">
+  <title>Maho Sidebar Action Motion</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Maho native sidebar contract. */
+      --shell: #111214;
+      --surface: #202124;
+      --surface-elevated: #2f3033;
+      --surface-hover: #303134;
+      --surface-pressed: #3c4043;
+      --text-primary: #ecedef;
+      --text-secondary: #a7abb1;
+      --border: #858a91;
+      --focus: #8ab4f8;
+
+      /* Demo-only semantic states derived from the Maho ramp. */
+      --analysis-fill: rgb(138 180 248 / 12%);
+      --analysis-line: rgb(138 180 248 / 30%);
+      --folder-fill: rgb(236 237 239 / 4%);
+      --target-fill: rgb(167 171 177 / 8%);
+      --danger-muted: #b8aeb0;
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+
+      --radius-button: 6px;
+      --radius-menu: 10px;
+      --radius-panel: 18px;
+      --radius-sidebar: 14px;
+      --radius-row: 6px;
+      --button-height: 36px;
+      --icon-size: 17px;
+      --favicon-size: 22px;
+      --row-height: 42px;
+      --folder-height: 28px;
+      --menu-width: 184px;
+      --control-gap: 6px;
+
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --text-button: 13px;
+      --text-body: 13px;
+      --text-caption: 12px;
+      --text-meta: 11px;
+      --text-kicker: 10px;
+
+      --ease-move: cubic-bezier(.2, .75, .25, 1);
+      --ease-exit: cubic-bezier(.4, 0, .25, 1);
+      --duration-hover: 120ms;
+      --duration-analysis: 560ms;
+      --duration-flip: 520ms;
+      --duration-folder: 220ms;
+      --duration-target: 180ms;
+      --duration-remove: 260ms;
+      --duration-menu: 130ms;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: var(--space-5);
+      background:
+        radial-gradient(circle at 50% 12%, rgb(138 180 248 / 6%), transparent 34%),
+        linear-gradient(180deg, #17181b 0%, var(--shell) 78%);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .demo {
+      width: min(100%, 420px);
+    }
+
+    .intro {
+      margin-bottom: var(--space-3);
+      padding-inline: var(--space-1);
+    }
+
+    .kicker {
+      margin: 0 0 var(--space-1);
+      color: var(--text-secondary);
+      font-size: var(--text-kicker);
+      font-weight: 650;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 620;
+      letter-spacing: -.02em;
+    }
+
+    .lede {
+      margin: var(--space-1) 0 0;
+      color: var(--text-secondary);
+      font-size: var(--text-caption);
+      line-height: 1.45;
+      text-wrap: pretty;
+    }
+
+    .prototype-shell {
+      position: relative;
+      padding: var(--space-3);
+      border: 1px solid rgb(133 138 145 / 17%);
+      border-radius: var(--radius-panel);
+      background:
+        linear-gradient(180deg, rgb(255 255 255 / 2.5%), transparent 28%),
+        var(--surface);
+      box-shadow:
+        0 22px 60px rgb(0 0 0 / 34%),
+        inset 0 1px rgb(255 255 255 / 3%);
+    }
+
+    .sidebar-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      min-height: 28px;
+      padding: 0 var(--space-2) var(--space-2);
+    }
+
+    .space-name {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-primary);
+      font-size: var(--text-caption);
+      font-weight: 590;
+    }
+
+    .space-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--focus);
+      box-shadow: 0 0 0 3px rgb(138 180 248 / 10%);
+    }
+
+    .tab-count {
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .action-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--control-gap);
+      margin-bottom: var(--space-2);
+    }
+
+    .action-wrap {
+      position: relative;
+      min-width: 0;
+    }
+
+    .action-button {
+      width: 100%;
+      min-width: 0;
+      height: var(--button-height);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--control-gap);
+      padding: 0 var(--space-3);
+      border: 0;
+      border-radius: var(--radius-button);
+      background: transparent;
+      color: var(--text-secondary);
+      font: 500 var(--text-button)/1 var(--font-ui);
+      cursor: pointer;
+      outline: none;
+      transition:
+        background-color var(--duration-hover) ease,
+        color var(--duration-hover) ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .action-button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      color: var(--text-primary);
+    }
+
+    .action-button:active:not(:disabled),
+    .action-button.is-engaged,
+    .action-button[aria-expanded="true"] {
+      background: var(--surface-pressed);
+      color: var(--text-primary);
+    }
+
+    .action-button:disabled {
+      cursor: default;
+    }
+
+    .action-button:disabled:not(.is-engaged) {
+      color: rgb(167 171 177 / 48%);
+    }
+
+    .action-button:focus-visible,
+    .reset-button:focus-visible,
+    .period-menu button:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--focus);
+    }
+
+    .button-icon {
+      width: var(--icon-size);
+      height: var(--icon-size);
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.7;
+    }
+
+    .period-menu {
+      position: absolute;
+      z-index: 4;
+      top: calc(100% + var(--space-1));
+      right: 0;
+      width: var(--menu-width);
+      margin: 0;
+      padding: var(--space-1);
+      border: 1px solid rgb(133 138 145 / 28%);
+      border-radius: var(--radius-menu);
+      background: var(--surface-elevated);
+      box-shadow: 0 14px 34px rgb(0 0 0 / 42%);
+      list-style: none;
+      transform-origin: top right;
+    }
+
+    .period-menu[hidden] {
+      display: none;
+    }
+
+    .period-menu.is-opening {
+      animation: menuIn var(--duration-menu) var(--ease-move) both;
+    }
+
+    .period-menu button {
+      width: 100%;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-2);
+      border: 0;
+      border-radius: var(--radius-button);
+      background: transparent;
+      color: var(--text-primary);
+      font: 500 var(--text-caption)/1 var(--font-ui);
+      text-align: left;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .period-menu button:hover,
+    .period-menu button:focus-visible {
+      background: var(--surface-hover);
+    }
+
+    .tab-list-shell {
+      position: relative;
+      min-height: calc(var(--row-height) * 3);
+      overflow: hidden;
+      border-radius: var(--radius-sidebar);
+      background: rgb(17 18 20 / 24%);
+      box-shadow: inset 0 0 0 1px rgb(133 138 145 / 9%);
+    }
+
+    .tab-list {
+      margin: 0;
+      padding: var(--space-1);
+      list-style: none;
+    }
+
+    .tab-row {
+      position: relative;
+      max-height: var(--row-height);
+      min-height: var(--row-height);
+      display: grid;
+      grid-template-columns: var(--favicon-size) minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-2);
+      overflow: hidden;
+      padding: 0 var(--space-2);
+      border-radius: var(--radius-row);
+      background: transparent;
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+      transition:
+        background-color var(--duration-hover) ease,
+        opacity var(--duration-target) ease,
+        transform var(--duration-target) ease,
+        max-height var(--duration-remove) var(--ease-exit),
+        min-height var(--duration-remove) var(--ease-exit),
+        padding var(--duration-remove) var(--ease-exit);
+      will-change: transform, opacity;
+    }
+
+    .tab-row:hover {
+      background: var(--surface-hover);
+    }
+
+    .tab-row::after {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: linear-gradient(90deg, transparent, var(--analysis-fill), var(--analysis-line), transparent);
+      content: "";
+      opacity: 0;
+      transform: translateX(-110%);
+      pointer-events: none;
+    }
+
+    .tab-row.is-analyzing::after {
+      animation: analysisWave var(--duration-analysis) var(--ease-move) both;
+    }
+
+    .tab-row.is-targeted {
+      background: var(--target-fill);
+      opacity: .48;
+    }
+
+    .tab-row.is-removing {
+      max-height: 0;
+      min-height: 0;
+      padding-block: 0;
+      opacity: 0;
+      transform: translate3d(18px, 4px, 0);
+      pointer-events: none;
+    }
+
+    .favicon {
+      width: var(--favicon-size);
+      height: var(--favicon-size);
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--favicon-bg, var(--surface-elevated));
+      color: var(--favicon-fg, var(--text-primary));
+      font-size: 10px;
+      font-weight: 720;
+      letter-spacing: -.02em;
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 7%),
+        0 1px 2px rgb(0 0 0 / 18%);
+    }
+
+    .tab-copy {
+      min-width: 0;
+    }
+
+    .tab-title,
+    .tab-domain {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab-title {
+      color: var(--text-primary);
+      font-size: var(--text-caption);
+      font-weight: 520;
+      line-height: 1.25;
+    }
+
+    .tab-domain {
+      margin-top: 1px;
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      line-height: 1.2;
+    }
+
+    .tab-age {
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .folder {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .folder + .folder {
+      margin-top: var(--space-1);
+    }
+
+    .folder-header {
+      max-height: var(--folder-height);
+      min-height: var(--folder-height);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      overflow: hidden;
+      padding: 0 var(--space-2);
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      font-weight: 650;
+      letter-spacing: .015em;
+      opacity: 1;
+      transform: translateY(0);
+      transition:
+        max-height var(--duration-folder) var(--ease-exit),
+        min-height var(--duration-folder) var(--ease-exit),
+        padding var(--duration-folder) var(--ease-exit),
+        opacity var(--duration-folder) ease,
+        transform var(--duration-folder) var(--ease-exit);
+    }
+
+    .folder-header.is-concealed {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+
+    .folder-header.is-revealing {
+      animation: revealFolder var(--duration-folder) var(--ease-move) both;
+    }
+
+    .folder-header.is-removing {
+      max-height: 0;
+      min-height: 0;
+      padding-block: 0;
+      opacity: 0;
+      transform: translateY(-5px);
+    }
+
+    .folder-chevron {
+      width: 12px;
+      height: 12px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }
+
+    .folder-count {
+      margin-left: auto;
+      color: rgb(167 171 177 / 70%);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .folder-tabs {
+      margin: 0;
+      padding: 0;
+      border-radius: var(--radius-row);
+      background: var(--folder-fill);
+      list-style: none;
+    }
+
+    .folder[data-expanded="false"] .folder-tabs {
+      display: none;
+    }
+
+    .empty-state {
+      min-height: 150px;
+      display: grid;
+      place-items: center;
+      padding: var(--space-5);
+      color: var(--text-secondary);
+      font-size: var(--text-caption);
+      text-align: center;
+    }
+
+    .prototype-footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      margin-top: var(--space-2);
+      padding: 0 var(--space-1);
+    }
+
+    .status {
+      min-width: 0;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      line-height: 1.4;
+    }
+
+    .status-dot {
+      width: var(--space-1);
+      height: var(--space-1);
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--border);
+      transition: background-color var(--duration-hover) ease;
+    }
+
+    .status[data-state="active"] .status-dot {
+      background: var(--focus);
+    }
+
+    .status[data-state="complete"] .status-dot {
+      background: #c3d8fb;
+    }
+
+    .reset-button {
+      min-height: 28px;
+      padding: 0 var(--space-2);
+      border: 0;
+      border-radius: var(--radius-button);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: var(--text-meta);
+      cursor: pointer;
+      outline: none;
+    }
+
+    .reset-button:hover {
+      background: var(--surface-hover);
+      color: var(--text-primary);
+    }
+
+    @keyframes analysisWave {
+      0% { opacity: 0; transform: translateX(-110%); }
+      24% { opacity: .78; }
+      72% { opacity: .56; }
+      100% { opacity: 0; transform: translateX(110%); }
+    }
+
+    @keyframes revealFolder {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes menuIn {
+      from { opacity: 0; transform: translateY(-4px) scale(.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (max-width: 390px) {
+      body {
+        padding: var(--space-3);
+      }
+
+      .prototype-shell {
+        padding: var(--space-2);
+      }
+
+      .intro {
+        padding-inline: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      :root {
+        --duration-hover: 0ms;
+        --duration-analysis: 0ms;
+        --duration-flip: 0ms;
+        --duration-folder: 0ms;
+        --duration-target: 0ms;
+        --duration-remove: 0ms;
+        --duration-menu: 0ms;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="demo">
+    <header class="intro">
+      <p class="kicker">Behavior prototype</p>
+      <h1>Actions move the tabs they affect</h1>
+      <p class="lede">Buttons stay stable while the sidebar list shows analysis, grouping, and removal.</p>
+    </header>
+
+    <section class="prototype-shell" aria-labelledby="sidebar-title">
+      <header class="sidebar-heading">
+        <div class="space-name" id="sidebar-title">
+          <span class="space-dot" aria-hidden="true"></span>
+          Product build
+        </div>
+        <span class="tab-count" id="tab-count">9 tabs</span>
+      </header>
+
+      <div class="action-row" aria-label="Tab actions">
+        <div class="action-wrap">
+          <button class="action-button" id="tidy-button" type="button" aria-describedby="demo-status">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m15 4 5 5L9 20l-5 1 1-5Z"></path>
+              <path d="m14 5 5 5"></path>
+              <path d="M6 4v3"></path>
+              <path d="M4.5 5.5h3"></path>
+              <path d="M19 15v3"></path>
+              <path d="M17.5 16.5h3"></path>
+            </svg>
+            <span>Tidy</span>
+          </button>
+        </div>
+
+        <div class="action-wrap" id="clear-wrap">
+          <button class="action-button" id="clear-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="period-menu" aria-describedby="demo-status">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="m7 10 5 5 5-5"></path>
+              <path d="M5 21h14"></path>
+            </svg>
+            <span>Clear</span>
+          </button>
+
+          <ul class="period-menu" id="period-menu" role="menu" aria-label="Clear tabs by period" hidden>
+            <li role="none"><button type="button" role="menuitem" data-period="Last hour">Last hour</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="Today">Today</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="This week">This week</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="This month">This month</button></li>
+            <li role="none"><button type="button" role="menuitem" data-period="Older than 30 days">Older than 30 days</button></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tab-list-shell" aria-live="off">
+        <div id="tab-list"></div>
+      </div>
+
+      <footer class="prototype-footer">
+        <div class="status" id="demo-status" role="status" aria-live="polite" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-copy">Choose Tidy or Clear to replay the list behavior.</span>
+        </div>
+        <button class="reset-button" id="reset-button" type="button">Reset</button>
+      </footer>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const ORIGINAL_TREE = [
+        {
+          type: "folder",
+          id: "work",
+          name: "Work",
+          expanded: true,
+          tabs: [
+            { id: "mail", title: "Inbox (14) - Product build", domain: "mail.google.com", ageHours: .4, ageLabel: "24m", tidyFolder: "Work", mark: "M", bg: "#d95f59", fg: "#fff4f2" },
+            { id: "linear", title: "Browser launch checklist", domain: "linear.app", ageHours: 28, ageLabel: "1d", tidyFolder: "Launch", mark: "L", bg: "#6c61c9", fg: "#f7f5ff" },
+            { id: "github", title: "Issue #842: sidebar transitions", domain: "github.com", ageHours: 148, ageLabel: "6d", tidyFolder: "Launch", mark: "G", bg: "#4b5059", fg: "#f4f5f6" }
+          ]
+        },
+        {
+          type: "folder",
+          id: "reading",
+          name: "Reading",
+          expanded: true,
+          tabs: [
+            { id: "mdn", title: "Animating layout with FLIP", domain: "developer.mozilla.org", ageHours: 10, ageLabel: "10h", tidyFolder: "Research", mark: "M", bg: "#3d4148", fg: "#f2f3f5" },
+            { id: "readwise", title: "Motion design notes", domain: "readwise.io", ageHours: 290, ageLabel: "12d", tidyFolder: "Research", mark: "R", bg: "#b47745", fg: "#fff7f0" }
+          ]
+        },
+        { type: "tab", tab: { id: "maho", title: "Maho browser architecture", domain: "docs.maho.local", ageHours: 2, ageLabel: "2h", tidyFolder: "Research", mark: "M", bg: "#5f78b8", fg: "#f3f6ff" } },
+        { type: "tab", tab: { id: "figma", title: "Sidebar motion explorations", domain: "figma.com", ageHours: 5, ageLabel: "5h", tidyFolder: "Work", mark: "F", bg: "#a765a9", fg: "#fff6ff" } },
+        { type: "tab", tab: { id: "youtube", title: "Deep focus ambient mix", domain: "youtube.com", ageHours: 74, ageLabel: "3d", tidyFolder: "Personal", mark: "Y", bg: "#bf4545", fg: "#fff5f5" } },
+        { type: "tab", tab: { id: "recipe", title: "Weeknight tomato pasta", domain: "cooking.nytimes.com", ageHours: 842, ageLabel: "35d", tidyFolder: "Personal", mark: "N", bg: "#8b7650", fg: "#fff9ef" } }
+      ];
+
+      const TIDY_FOLDER_ORDER = ["Work", "Launch", "Research", "Personal"];
+      const CLEAR_THRESHOLDS = {
+        "Last hour": 1,
+        "Today": 24,
+        "This week": 168,
+        "This month": 720,
+        "Older than 30 days": 720
+      };
+
+      const tidyButton = document.querySelector("#tidy-button");
+      const clearButton = document.querySelector("#clear-button");
+      const clearWrap = document.querySelector("#clear-wrap");
+      const periodMenu = document.querySelector("#period-menu");
+      const resetButton = document.querySelector("#reset-button");
+      const tabList = document.querySelector("#tab-list");
+      const tabCount = document.querySelector("#tab-count");
+      const status = document.querySelector("#demo-status");
+      const statusCopy = document.querySelector("#status-copy");
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+      let tree = cloneTree(ORIGINAL_TREE);
+      let activeAction = null;
+      let timerIds = [];
+      let activeAnimations = [];
+
+      function cloneTree(nodes) {
+        return nodes.map((node) => {
+          if (node.type === "folder") {
+            return { ...node, tabs: node.tabs.map((tab) => ({ ...tab })) };
+          }
+          return { type: "tab", tab: { ...node.tab } };
+        });
+      }
+
+      function flattenTabs(nodes = tree) {
+        return nodes.flatMap((node) => node.type === "folder" ? node.tabs : [node.tab]);
+      }
+
+      function folderNodes(nodes = tree) {
+        return nodes.filter((node) => node.type === "folder");
+      }
+
+      function schedule(callback, delay) {
+        const id = window.setTimeout(() => {
+          timerIds = timerIds.filter((timerId) => timerId !== id);
+          callback();
+        }, delay);
+        timerIds.push(id);
+        return id;
+      }
+
+      function cancelScheduledWork() {
+        timerIds.forEach((id) => {
+          window.clearTimeout(id);
+        });
+        timerIds = [];
+        activeAnimations.forEach((animation) => {
+          animation.cancel();
+        });
+        activeAnimations = [];
+      }
+
+      function setStatus(message, state) {
+        statusCopy.textContent = message;
+        status.dataset.state = state;
+      }
+
+      function setBusy(action) {
+        activeAction = action;
+        const isTidy = action === "tidy";
+        const isClear = action === "clear";
+        tidyButton.disabled = true;
+        clearButton.disabled = true;
+        tidyButton.classList.toggle("is-engaged", isTidy);
+        clearButton.classList.toggle("is-engaged", isClear);
+        tabList.setAttribute("aria-busy", "true");
+        if (isTidy) {
+          tidyButton.setAttribute("aria-busy", "true");
+        }
+        if (isClear) {
+          clearButton.setAttribute("aria-busy", "true");
+        }
+      }
+
+      function releaseBusy() {
+        activeAction = null;
+        tidyButton.disabled = false;
+        clearButton.disabled = false;
+        tidyButton.classList.remove("is-engaged");
+        clearButton.classList.remove("is-engaged");
+        tidyButton.removeAttribute("aria-busy");
+        clearButton.removeAttribute("aria-busy");
+        tabList.setAttribute("aria-busy", "false");
+      }
+
+      function updateCount() {
+        const count = flattenTabs().length;
+        tabCount.textContent = `${count} ${count === 1 ? "tab" : "tabs"}`;
+      }
+
+      function tabMarkup(tab) {
+        return `
+          <li class="tab-row" data-tab-id="${tab.id}">
+            <span class="favicon" style="--favicon-bg:${tab.bg};--favicon-fg:${tab.fg}" aria-hidden="true">${tab.mark}</span>
+            <span class="tab-copy">
+              <span class="tab-title">${tab.title}</span>
+              <span class="tab-domain">${tab.domain}</span>
+            </span>
+            <span class="tab-age">${tab.ageLabel}</span>
+          </li>`;
+      }
+
+      function folderMarkup(folder, concealedFolderIds) {
+        const concealed = concealedFolderIds.has(folder.id) ? " is-concealed" : "";
+        return `
+          <li class="folder" data-folder-id="${folder.id}" data-expanded="${folder.expanded}">
+            <div class="folder-header${concealed}" data-folder-header="${folder.id}">
+              <svg class="folder-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 5 5 5 5-5"></path></svg>
+              <span>${folder.name}</span>
+              <span class="folder-count">${folder.tabs.length}</span>
+            </div>
+            <ul class="folder-tabs">${folder.tabs.map(tabMarkup).join("")}</ul>
+          </li>`;
+      }
+
+      function render(options = {}) {
+        const concealedFolderIds = options.concealedFolderIds ?? new Set();
+        if (flattenTabs().length === 0) {
+          tabList.innerHTML = '<div class="empty-state">No tabs match this prototype state.<br>Use Reset to restore the tree.</div>';
+          updateCount();
+          return;
+        }
+
+        const markup = tree.map((node) => {
+          if (node.type === "folder") {
+            return folderMarkup(node, concealedFolderIds);
+          }
+          return tabMarkup(node.tab);
+        }).join("");
+        tabList.innerHTML = `<ul class="tab-list">${markup}</ul>`;
+        updateCount();
+      }
+
+      function rowPositions() {
+        return new Map(
+          Array.from(tabList.querySelectorAll("[data-tab-id]")).map((row) => [
+            row.dataset.tabId,
+            row.getBoundingClientRect()
+          ])
+        );
+      }
+
+      function animateRowsFrom(previousPositions, duration = 520) {
+        if (reduceMotion.matches) {
+          return [];
+        }
+
+        const animations = [];
+        tabList.querySelectorAll("[data-tab-id]").forEach((row) => {
+          const previous = previousPositions.get(row.dataset.tabId);
+          if (!previous) {
+            return;
+          }
+          const next = row.getBoundingClientRect();
+          const deltaX = previous.left - next.left;
+          const deltaY = previous.top - next.top;
+          if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
+            return;
+          }
+          const animation = row.animate(
+            [
+              { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
+              { transform: "translate3d(0, 0, 0)" }
+            ],
+            { duration, easing: "cubic-bezier(.2, .75, .25, 1)", fill: "both" }
+          );
+          animations.push(animation);
+        });
+        activeAnimations.push(...animations);
+        return animations;
+      }
+
+      function revealFolderHeaders(folderIds) {
+        folderIds.forEach((folderId, index) => {
+          const header = tabList.querySelector(`[data-folder-header="${folderId}"]`);
+          if (!header) {
+            return;
+          }
+          schedule(() => {
+            header.classList.remove("is-concealed");
+            header.classList.add("is-revealing");
+          }, index * 55);
+        });
+      }
+
+      function buildTidiedTree() {
+        const tabs = flattenTabs().slice().sort((left, right) => {
+          const groupDelta = TIDY_FOLDER_ORDER.indexOf(left.tidyFolder) - TIDY_FOLDER_ORDER.indexOf(right.tidyFolder);
+          return groupDelta || left.ageHours - right.ageHours;
+        });
+        return TIDY_FOLDER_ORDER.map((name) => {
+          const folderTabs = tabs.filter((tab) => tab.tidyFolder === name);
+          if (folderTabs.length === 0) {
+            return null;
+          }
+          return {
+            type: "folder",
+            id: name === "Work" ? "work" : `tidy-${name.toLowerCase()}`,
+            name,
+            expanded: true,
+            tabs: folderTabs
+          };
+        }).filter(Boolean);
+      }
+
+      function sourceFoldersEmptiedByTidy(nextTree) {
+        const nextFolderByTab = new Map();
+        folderNodes(nextTree).forEach((folder) => {
+          folder.tabs.forEach((tab) => {
+            nextFolderByTab.set(tab.id, folder.id);
+          });
+        });
+        return folderNodes()
+          .filter((folder) => folder.tabs.every((tab) => nextFolderByTab.get(tab.id) !== folder.id))
+          .map((folder) => folder.id);
+      }
+
+      function completeTidy() {
+        const previousPositions = rowPositions();
+        const previousFolderIds = new Set(folderNodes().map((folder) => folder.id));
+        const nextTree = buildTidiedTree();
+        const emptiedFolderIds = sourceFoldersEmptiedByTidy(nextTree);
+        const newFolderIds = folderNodes(nextTree)
+          .map((folder) => folder.id)
+          .filter((folderId) => !previousFolderIds.has(folderId));
+
+        if (reduceMotion.matches) {
+          tree = nextTree;
+          render();
+          releaseBusy();
+          setStatus("Tidy complete. Existing and loose tabs were regrouped into the revised folder tree.", "complete");
+          return;
+        }
+
+        emptiedFolderIds.forEach((folderId) => {
+          tabList.querySelector(`[data-folder-header="${folderId}"]`)?.classList.add("is-removing");
+        });
+
+        schedule(() => {
+          tree = nextTree;
+          render({ concealedFolderIds: new Set(newFolderIds) });
+          animateRowsFrom(previousPositions, 560);
+          schedule(() => revealFolderHeaders(newFolderIds), 330);
+          schedule(() => {
+            releaseBusy();
+            setStatus("Tidy complete. Tabs moved across folders and empty source folders were removed.", "complete");
+          }, 720);
+        }, 240);
+      }
+
+      function runTidy() {
+        if (activeAction) {
+          return;
+        }
+
+        closeMenu(false);
+        setBusy("tidy");
+        setStatus("Tidy is analyzing loose and folder-resident tabs without moving them yet.", "active");
+
+        if (reduceMotion.matches) {
+          completeTidy();
+          return;
+        }
+
+        const rows = Array.from(tabList.querySelectorAll("[data-tab-id]"));
+        rows.forEach((row, index) => {
+          schedule(() => row.classList.add("is-analyzing"), index * 115);
+          schedule(() => row.classList.remove("is-analyzing"), index * 115 + 580);
+        });
+
+        // Production hook: Tidy waits for OnTidyFinished and the post-action
+        // model revision before reading the regrouped tree. RequestTidyTabs
+        // includes folder-resident non-pinned tabs; ApplyTidyTabs can move them
+        // across folders. Empty source folders are auto-deleted when
+        // auto_delete_empty_folders_on_tidy is true (the default).
+        schedule(completeTidy, 2000);
+      }
+
+      function matchingTabs(period) {
+        const threshold = CLEAR_THRESHOLDS[period];
+        return flattenTabs().filter((tab) => tab.ageHours >= threshold);
+      }
+
+      function foldersEmptiedBy(targetIds) {
+        return folderNodes()
+          .filter((folder) => folder.tabs.length > 0 && folder.tabs.every((tab) => targetIds.has(tab.id)))
+          .map((folder) => folder.id);
+      }
+
+      function treeWithoutTabs(targetIds) {
+        return tree.map((node) => {
+          if (node.type === "tab") {
+            return targetIds.has(node.tab.id) ? null : node;
+          }
+          const remainingTabs = node.tabs.filter((tab) => !targetIds.has(tab.id));
+          return remainingTabs.length === 0 ? null : { ...node, tabs: remainingTabs };
+        }).filter(Boolean);
+      }
+
+      function finalizeClear(targetIds) {
+        // Capture after row and empty-folder collapse. The surviving rows are
+        // already at their compacted visual positions, so rebuilding cannot
+        // invert them back to stale pre-collapse coordinates and snap backward.
+        const compactedPositions = rowPositions();
+        tree = treeWithoutTabs(targetIds);
+        render();
+        animateRowsFrom(compactedPositions, 360);
+
+        if (reduceMotion.matches) {
+          releaseBusy();
+          clearButton.focus();
+          setStatus(`Clear complete. Removed ${targetIds.size} matching tabs, including folder-resident rows.`, "complete");
+          return;
+        }
+
+        schedule(() => {
+          releaseBusy();
+          clearButton.focus();
+          setStatus(`Clear complete. Removed ${targetIds.size} matching tabs, including folder-resident rows.`, "complete");
+        }, 380);
+      }
+
+      function runClear(period) {
+        if (activeAction) {
+          return;
+        }
+
+        closeMenu(false);
+        const targets = matchingTabs(period);
+        if (targets.length === 0) {
+          setStatus(`No tabs match ${period.toLowerCase()}.`, "complete");
+          clearButton.focus();
+          return;
+        }
+
+        setBusy("clear");
+        const targetIds = new Set(targets.map((tab) => tab.id));
+        const emptiedFolderIds = foldersEmptiedBy(targetIds);
+        setStatus(`Clear selected ${targets.length} matching tabs across the full folder tree.`, "active");
+
+        if (reduceMotion.matches) {
+          finalizeClear(targetIds);
+          return;
+        }
+
+        const targetRows = targets
+          .map((tab) => tabList.querySelector(`[data-tab-id="${tab.id}"]`))
+          .filter(Boolean);
+        targetRows.forEach((row) => {
+          row.classList.add("is-targeted");
+        });
+
+        // Production hook: Clear stages candidate-row motion around the real
+        // close in ExecuteCommand. Folder-resident tabs participate in the
+        // close, and any folder emptied by those closes is then removed.
+        targetRows.forEach((row, index) => {
+          schedule(() => row.classList.add("is-removing"), 220 + index * 45);
+        });
+
+        const lastRowStart = 220 + (targetRows.length - 1) * 45;
+        const folderRemovalStart = lastRowStart + 220;
+        emptiedFolderIds.forEach((folderId, index) => {
+          schedule(() => {
+            tabList.querySelector(`[data-folder-header="${folderId}"]`)?.classList.add("is-removing");
+          }, folderRemovalStart + index * 35);
+        });
+
+        const removalWindow = folderRemovalStart + (emptiedFolderIds.length ? 260 : 60);
+        schedule(() => finalizeClear(targetIds), removalWindow);
+      }
+
+      function menuItems() {
+        return Array.from(periodMenu.querySelectorAll('[role="menuitem"]'));
+      }
+
+      function openMenu() {
+        if (activeAction) {
+          return;
+        }
+        periodMenu.hidden = false;
+        periodMenu.classList.remove("is-opening");
+        void periodMenu.offsetWidth;
+        periodMenu.classList.add("is-opening");
+        clearButton.setAttribute("aria-expanded", "true");
+        setStatus("Choose the age cutoff for Clear.", "idle");
+        menuItems()[0].focus();
+      }
+
+      function closeMenu(restoreFocus = true) {
+        if (periodMenu.hidden) {
+          return;
+        }
+        periodMenu.hidden = true;
+        periodMenu.classList.remove("is-opening");
+        clearButton.setAttribute("aria-expanded", "false");
+        if (restoreFocus) {
+          clearButton.focus();
+        }
+      }
+
+      function resetDemo() {
+        cancelScheduledWork();
+        closeMenu(false);
+        tree = cloneTree(ORIGINAL_TREE);
+        releaseBusy();
+        render();
+        setStatus("Reset complete. The original folders and loose tabs are restored.", "idle");
+        resetButton.focus();
+      }
+
+      tidyButton.addEventListener("click", runTidy);
+
+      clearButton.addEventListener("click", () => {
+        if (activeAction) {
+          return;
+        }
+        if (periodMenu.hidden) {
+          openMenu();
+        } else {
+          closeMenu();
+        }
+      });
+
+      periodMenu.addEventListener("click", (event) => {
+        const item = event.target.closest('[role="menuitem"]');
+        if (item) {
+          runClear(item.dataset.period);
+        }
+      });
+
+      periodMenu.addEventListener("keydown", (event) => {
+        const items = menuItems();
+        const current = items.indexOf(document.activeElement);
+        let next = current;
+
+        if (event.key === "ArrowDown") {
+          next = (current + 1) % items.length;
+        } else if (event.key === "ArrowUp") {
+          next = (current - 1 + items.length) % items.length;
+        } else if (event.key === "Home") {
+          next = 0;
+        } else if (event.key === "End") {
+          next = items.length - 1;
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closeMenu();
+          return;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+        items[next].focus();
+      });
+
+      resetButton.addEventListener("click", resetDemo);
+
+      document.addEventListener("pointerdown", (event) => {
+        if (!clearWrap.contains(event.target)) {
+          closeMenu(false);
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !periodMenu.hidden) {
+          closeMenu();
+        }
+      });
+
+      reduceMotion.addEventListener("change", resetDemo);
+
+      tabList.setAttribute("aria-busy", "false");
+      render();
+    })();
+  </script>
+</body>
+</html>

@@ -54,9 +54,55 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(names.count("get_active_tab"), 1u);
   EXPECT_EQ(names.count("search_in_page"), 1u);
   EXPECT_EQ(names.count("extract_structured_page_context"), 1u);
+  EXPECT_EQ(names.count("mail_list_accounts"), 1u);
+  EXPECT_EQ(names.count("mail_list_folders"), 1u);
+  EXPECT_EQ(names.count("mail_list_emails"), 1u);
+  EXPECT_EQ(names.count("mail_get_email"), 1u);
+  EXPECT_EQ(names.count("mail_search_emails"), 1u);
+  EXPECT_EQ(names.count("mail_list_thread"), 1u);
   EXPECT_EQ(names.count("browser_click"), 1u);
   EXPECT_EQ(names.count("browser_navigate"), 1u);
   EXPECT_EQ(names.count("browser_accessibility_snapshot"), 1u);
+}
+
+TEST(MahoBrowserToolRegistryTest, AdvertisesApprovalGatedMailWriteTools) {
+  base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
+  std::set<std::string> names = ToolNames(tools);
+
+  EXPECT_EQ(names.count("mail_send"), 1u);
+  EXPECT_EQ(names.count("mail_save_draft"), 1u);
+  EXPECT_EQ(names.count("mail_update_draft"), 1u);
+
+  const base::DictValue* send = FindSerializedTool(tools, "mail_send");
+  ASSERT_TRUE(send);
+  const base::DictValue* send_schema = send->FindDict("input_schema");
+  ASSERT_TRUE(send_schema);
+  const base::ListValue* send_required = send_schema->FindList("required");
+  ASSERT_TRUE(send_required);
+  std::set<std::string> send_required_names;
+  for (const base::Value& value : *send_required) {
+    if (value.is_string()) {
+      send_required_names.insert(value.GetString());
+    }
+  }
+  EXPECT_EQ(send_required_names.count("account_id"), 1u);
+  EXPECT_EQ(send_required_names.count("to"), 1u);
+  EXPECT_EQ(send_required_names.count("subject"), 1u);
+
+  const base::DictValue* update =
+      FindSerializedTool(tools, "mail_update_draft");
+  ASSERT_TRUE(update);
+  const base::DictValue* update_schema = update->FindDict("input_schema");
+  ASSERT_TRUE(update_schema);
+  const base::ListValue* update_required = update_schema->FindList("required");
+  ASSERT_TRUE(update_required);
+  bool requires_draft_id = false;
+  for (const base::Value& value : *update_required) {
+    if (value.is_string() && value.GetString() == "draft_id") {
+      requires_draft_id = true;
+    }
+  }
+  EXPECT_TRUE(requires_draft_id);
 }
 
 TEST(MahoBrowserToolRegistryTest,

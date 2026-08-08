@@ -4,10 +4,13 @@
 
 #import <AppKit/AppKit.h>
 
+
+
 #include "base/logging.h"
 #include "ui/views/widget/widget.h"
 
 namespace maho {
+
 
 void ApplyVibrancyToUtilityPanel(views::Widget* widget) {
   if (!widget) {

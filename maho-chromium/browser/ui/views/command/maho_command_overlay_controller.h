@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/auto_reset.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -122,6 +123,9 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   gfx::SlideAnimation resize_animation_{this};
   base::OneShotTimer deactivation_hide_timer_;
   bool is_hiding_ = false;
+  // Guards OnWidgetActivationChanged against the synchronous activation↔focus
+  // re-entrancy that otherwise recurses until the stack overflows.
+  bool handling_activation_change_ = false;
 
   std::unique_ptr<views::EventMonitor> event_monitor_;
   raw_ptr<views::FocusManager> esc_target_focus_manager_ = nullptr;

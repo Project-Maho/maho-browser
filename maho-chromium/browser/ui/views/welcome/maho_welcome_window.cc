@@ -24,6 +24,7 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/views_delegate.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
@@ -232,6 +233,7 @@ void MahoWelcomeWindow::OnWidgetDestroying(views::Widget* widget) {
 MahoWelcomeWindow::MahoWelcomeWindow(Profile* profile) : profile_(profile) {
   keep_alive_ = std::make_unique<ScopedKeepAlive>(
       KeepAliveOrigin::USER_MANAGER_VIEW, KeepAliveRestartOption::DISABLED);
+  views::ViewsDelegate::GetInstance()->AddRef();
 }
 
 MahoWelcomeWindow::~MahoWelcomeWindow() {
@@ -244,6 +246,7 @@ MahoWelcomeWindow::~MahoWelcomeWindow() {
     widget_->RemoveObserver(this);
     widget_.reset();
   }
+  views::ViewsDelegate::GetInstance()->ReleaseRef();
 }
 
 void MahoWelcomeWindow::CreateAndShowWidget() {

@@ -126,10 +126,15 @@ impl ChatCompletion for OneToolCallLlm {
                 .expect("test tool-call response builds"));
         }
 
-        Ok(ChatCompletionResponse::builder()
-            .message("done".to_string())
+        // Build the final answer so it both carries the accumulated message
+        // and emits a streaming delta, mirroring a real streaming LLM. The
+        // tool-call turn above emits no message and therefore streams nothing,
+        // so only the authoritative final answer reaches the token callback.
+        let mut response = ChatCompletionResponse::builder()
             .build()
-            .expect("test assistant response builds"))
+            .expect("test assistant response builds");
+        response.append_message_delta(Some("done"));
+        Ok(response)
     }
 }
 

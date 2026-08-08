@@ -63,7 +63,7 @@ class MahoAiVoiceSession {
   static bool InstallAndVerifyOnWorker(base::FilePath temp_path,
                                        base::FilePath dest_path);
   static MahoSttSession* CreateEngineOnWorker(base::FilePath model_path);
-  static std::optional<std::string> TranscribeOnWorker(MahoSttSession* engine,
+  static std::optional<std::string> TranscribeOnWorker(uintptr_t engine_token,
                                                        std::vector<float> pcm);
 
   void OnModelChecked(ReadyCallback on_ready, ModelState state);

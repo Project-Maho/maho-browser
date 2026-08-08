@@ -1,12 +1,12 @@
+use anyhow::{anyhow, Result};
 use maho_types::ai::{AiMcpServer, McpTransport};
-use maho_types::tool::{ToolDescriptor, ToolProvenance, ToolPermission};
-use serde_json::Value;
-use anyhow::{Result, anyhow};
-use std::time::Duration;
-use std::sync::OnceLock;
-use tokio::runtime::Runtime;
-use rmcp::transport::IntoTransport;
+use maho_types::tool::{ToolDescriptor, ToolPermission, ToolProvenance};
 use rmcp::model::{ClientInfo, ProtocolVersion};
+use rmcp::transport::IntoTransport;
+use serde_json::Value;
+use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::runtime::Runtime;
 
 const UNSUPPORTED: &str = "MCP client is not available on iOS (banned syscalls: fork/execve/setsid). Configure MCP servers on desktop.";
 
@@ -37,7 +37,10 @@ fn get_mcp_runtime() -> &'static Runtime {
 ///
 /// SECURITY (FIX-9a): even at `AutoApprove`, only READ-ONLY dogfood tools may
 /// auto-run; sensitive browser actions stay gated — see [`is_readonly_dogfood_tool`].
-pub fn resolve_uds_permission(transport: McpTransport, socket_path: Option<&str>) -> ToolPermission {
+pub fn resolve_uds_permission(
+    transport: McpTransport,
+    socket_path: Option<&str>,
+) -> ToolPermission {
     let is_browser_dogfood = transport == McpTransport::Uds
         && socket_path.is_some_and(|p| {
             std::path::Path::new(p) == maho_browser_mcp::paths::default_socket_path()
@@ -73,7 +76,7 @@ pub fn is_readonly_dogfood_tool(raw_name: &str) -> bool {
             | "browser_accessibility_snapshot"
             | "browser_console_messages"
             | "browser_network_get_har"
-            | "browser_get_allowed_domains"
+            | "browser_get_blocked_domains"
             | "browser_routines_list"
     )
 }
@@ -110,9 +113,8 @@ impl McpClient {
     pub async fn connect(config: &AiMcpServer, auth_token: Option<String>) -> Result<Self> {
         if config.transport == McpTransport::Uds {
             let config_clone = config.clone();
-            let handle = get_mcp_runtime().spawn(async move {
-                Self::connect_uds(&config_clone, auth_token).await
-            });
+            let handle = get_mcp_runtime()
+                .spawn(async move { Self::connect_uds(&config_clone, auth_token).await });
             handle.await?
         } else {
             Err(anyhow!(UNSUPPORTED))
@@ -124,9 +126,10 @@ impl McpClient {
         let output_cap = config.output_cap_bytes;
         let server_name = config.name.clone();
 
-        let socket_path = config.socket_path.as_ref().ok_or_else(|| {
-            anyhow!("Socket path is required for UDS transport")
-        })?;
+        let socket_path = config
+            .socket_path
+            .as_ref()
+            .ok_or_else(|| anyhow!("Socket path is required for UDS transport"))?;
         let stream = tokio::net::UnixStream::connect(socket_path)
             .await
             .map_err(|e| anyhow!("Failed to connect to UDS: {:?}", e))?;
@@ -152,9 +155,10 @@ impl McpClient {
 
         let client_info =
             ClientInfo::default().with_protocol_version(ProtocolVersion::V_2025_03_26);
-        let client = rmcp::service::serve_client(client_info, IntoTransport::into_transport(stream))
-            .await
-            .map_err(|e| anyhow!("Failed to start MCP UDS client: {:?}", e))?;
+        let client =
+            rmcp::service::serve_client(client_info, IntoTransport::into_transport(stream))
+                .await
+                .map_err(|e| anyhow!("Failed to start MCP UDS client: {:?}", e))?;
 
         let peer = std::ops::Deref::deref(&client).clone();
 
@@ -190,7 +194,11 @@ impl McpClient {
                 .into_iter()
                 .map(|t| {
                     let namespaced_name = format!("mcp:{}/{}", server_name, t.name);
-                    let description = t.description.as_ref().map(|d| d.to_string()).unwrap_or_default();
+                    let description = t
+                        .description
+                        .as_ref()
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
                     let parameters_schema = t.schema_as_json_value();
 
                     ToolDescriptor {
@@ -238,7 +246,7 @@ impl McpClient {
                 .map_err(|e| anyhow!("Failed to call tool: {:?}", e))?;
 
             let mut val = serde_json::to_value(&res)?;
-            
+
             let mut truncated_inner = false;
             if let Some(content) = val.get_mut("content") {
                 if let Some(arr) = content.as_array_mut() {
@@ -250,7 +258,8 @@ impl McpClient {
                                     while end > 0 && !text.is_char_boundary(end) {
                                         end -= 1;
                                     }
-                                    let truncated = format!("{}... [output truncated]", &text[..end]);
+                                    let truncated =
+                                        format!("{}... [output truncated]", &text[..end]);
                                     *text_val = Value::String(truncated);
                                     truncated_inner = true;
                                 }
@@ -292,7 +301,7 @@ impl McpClient {
                 workspace_id: self.workspace_id.clone(),
                 server_name: self.server_name.clone(),
                 available: false,
-            }
+            },
         );
     }
 
@@ -300,13 +309,13 @@ impl McpClient {
         let mut client_opt = self.client.take();
         let ws_id = self.workspace_id.clone();
         let s_name = self.server_name.clone();
-        
+
         let handle = get_mcp_runtime().spawn(async move {
             if let Some(client) = client_opt.take() {
                 drop(client);
             }
         });
-        
+
         let _ = handle.await;
 
         maho_types::events::core_update::emit_core_update(
@@ -314,7 +323,7 @@ impl McpClient {
                 workspace_id: ws_id,
                 server_name: s_name,
                 available: false,
-            }
+            },
         );
     }
 }

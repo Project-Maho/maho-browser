@@ -24,9 +24,7 @@ impl ImportWorker for BookmarkWorker {
         progress: &Sender<ImportProgress>,
     ) -> ImportResult<u32> {
         // Arc and Zen use workspace import for their tabs/bookmarks; skip standalone bookmarks.
-        if browser.browser_type == BrowserType::Arc
-            || browser.browser_type == BrowserType::Zen
-        {
+        if browser.browser_type == BrowserType::Arc || browser.browser_type == BrowserType::Zen {
             return Ok(0);
         }
 
@@ -40,8 +38,12 @@ impl ImportWorker for BookmarkWorker {
             | BrowserType::Brave
             | BrowserType::Edge
             | BrowserType::Vivaldi
-            | BrowserType::Opera => parsers::chromium::bookmarks::parse_chromium_bookmarks(profile_dir)?,
-            BrowserType::Firefox => parsers::firefox::bookmarks::parse_firefox_bookmarks(profile_dir)?,
+            | BrowserType::Opera => {
+                parsers::chromium::bookmarks::parse_chromium_bookmarks(profile_dir)?
+            }
+            BrowserType::Firefox => {
+                parsers::firefox::bookmarks::parse_firefox_bookmarks(profile_dir)?
+            }
             BrowserType::Safari => parsers::safari::bookmarks::parse_safari_bookmarks(profile_dir)?,
             _ => return Ok(0),
         };
@@ -87,7 +89,12 @@ fn import_entries(
             destination.add_bookmark(&entry.title, &entry.url, folder_path);
             count += 1;
             if count % 100 == 0 {
-                send_update(progress, ImportType::Bookmarks, count, "Importing bookmarks...");
+                send_update(
+                    progress,
+                    ImportType::Bookmarks,
+                    count,
+                    "Importing bookmarks...",
+                );
             }
         }
     }

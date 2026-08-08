@@ -1,0 +1,26 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_library_overlay") {
+  sources = [
+    "maho_library_overlay_controller.cc",
+    "maho_library_overlay_controller.h",
+    "maho_library_overlay_view.cc",
+    "maho_library_overlay_view.h",
+  ]
+
+  public_deps = [
+    "//maho/browser/ui/views/sidebar:maho_sidebar_library",
+  ]
+
+  deps = [
+    "//base",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_downloads",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
+    "//skia",
+    "//ui/base",
+    "//ui/color",
+    "//ui/compositor",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}

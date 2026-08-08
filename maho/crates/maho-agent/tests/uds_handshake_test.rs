@@ -78,9 +78,7 @@ fn spawn_strict_server(socket_path: PathBuf, expected_version: &'static str) -> 
                             "message": "Invalid params: unsupported protocolVersion"
                         }
                     });
-                    let _ = write_half
-                        .write_all(format!("{}\n", err).as_bytes())
-                        .await;
+                    let _ = write_half.write_all(format!("{}\n", err).as_bytes()).await;
                     let _ = write_half.flush().await;
                     return;
                 }

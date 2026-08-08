@@ -14,15 +14,17 @@
 //! reference to the `MahoCore` pointer and the UI thread does not call
 //! mutating functions on it until the import completes (or is cancelled).
 
+mod callbacks;
+mod color;
+mod vault;
+
 use maho_core::maho_core::MahoCore;
 use maho_import::orchestrator::ImportDestination;
 use maho_types::common::Url;
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, ProfileId, SpaceId, TabId};
-use maho_types::space::SpaceColor;
-use maho_types::vault::{CredentialOrigin, VaultItemKind, VaultItemPublicMetadata};
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 
 use crate::import::{
     MahoImportAutofillCallback, MahoImportCookieCallback, MahoImportFaviconCallback,
@@ -116,14 +118,14 @@ impl MahoCoreDestination {
 
 impl ImportDestination for MahoCoreDestination {
     fn create_space(&self, name: &str, theme_color_hex: &str, _icon: &str) -> Option<String> {
-        let color = hex_to_space_color(theme_color_hex);
+        let color = color::hex_to_space_color(theme_color_hex);
         let space = self
             .core_mut()
             .create_space(name, color, ProfileId::default());
         Some(space.id.0.clone())
     }
 
-    fn create_tab(&self, space_id: &str, url: &str) -> Option<String> {
+    fn create_tab(&self, space_id: &str, url: &str, title: &str) -> Option<String> {
         let sid = SpaceId::new(space_id);
         let tab_id = TabId::generate();
         let tab_id_str = tab_id.0.clone();
@@ -132,17 +134,29 @@ impl ImportDestination for MahoCoreDestination {
             space_id: sid,
             url: Some(Url::new(url)),
             parent_id: None,
-            tab_id: Some(tab_id),
+            tab_id: Some(tab_id.clone()),
             window_id: None,
             is_private: false,
         };
         self.core_mut().handle_event(event);
+        if !title.is_empty() {
+            self.core_mut().handle_event(ShellEvent::TabTitleUpdated {
+                tab_id,
+                title: title.to_string(),
+            });
+        }
         Some(tab_id_str)
     }
 
-    fn create_tab_in_folder(&self, space_id: &str, url: &str, folder_id: &str) -> Option<String> {
+    fn create_tab_in_folder(
+        &self,
+        space_id: &str,
+        url: &str,
+        title: &str,
+        folder_id: &str,
+    ) -> Option<String> {
         // First create the tab
-        let tab_id_str = self.create_tab(space_id, url)?;
+        let tab_id_str = self.create_tab(space_id, url, title)?;
 
         // Then move it into the folder
         let event = ShellEvent::MoveTabToFolder {
@@ -240,31 +254,18 @@ impl ImportDestination for MahoCoreDestination {
         is_httponly: bool,
         same_site: i32,
     ) -> bool {
-        let Some(cb) = self.cookie_cb else {
-            return false;
-        };
-        let (Some(hc), Some(nc), Some(vc), Some(pc)) = (
-            CString::new(host).ok(),
-            CString::new(name).ok(),
-            CString::new(value).ok(),
-            CString::new(path).ok(),
-        ) else {
-            return false;
-        };
-        unsafe {
-            cb(
-                hc.as_ptr(),
-                nc.as_ptr(),
-                vc.as_ptr(),
-                pc.as_ptr(),
-                expires,
-                is_secure,
-                is_httponly,
-                same_site,
-                self.user_data,
-            );
-        }
-        true
+        callbacks::add_cookie(
+            self.cookie_cb,
+            self.user_data,
+            host,
+            name,
+            value,
+            path,
+            expires,
+            is_secure,
+            is_httponly,
+            same_site,
+        )
     }
 
     fn add_autofill(
@@ -275,178 +276,40 @@ impl ImportDestination for MahoCoreDestination {
         first_used: i64,
         last_used: i64,
     ) -> bool {
-        let Some(cb) = self.autofill_cb else {
-            return false;
-        };
-        let (Some(fnc), Some(vc)) = (CString::new(field_name).ok(), CString::new(value).ok())
-        else {
-            return false;
-        };
-        unsafe {
-            cb(
-                fnc.as_ptr(),
-                vc.as_ptr(),
-                times_used,
-                first_used,
-                last_used,
-                self.user_data,
-            );
-        }
-        true
+        callbacks::add_autofill(
+            self.autofill_cb,
+            self.user_data,
+            field_name,
+            value,
+            times_used,
+            first_used,
+            last_used,
+        )
     }
 
     fn add_favicon(&self, url: &str, png_bytes: &[u8]) -> bool {
         let mut delivered = false;
-
         if !self.core.0.is_null() {
-            // Match by exact URL first, then fall back to host-prefix match.
-            // Arc/Chrome favicons are often keyed on a representative page URL
-            // (e.g. https://app.mural.co/) while imported tabs point at deep
-            // paths (https://app.mural.co/t/X/board/Y). Without the fallback
-            // only the rare exact match wins and the sidebar shows globes.
-            let url_host = url_host_lower(url);
-            let matching: Vec<TabId> = self
-                .core_ref()
-                .tab_manager()
-                .get_all_tabs()
-                .iter()
-                .filter(|t| {
-                    if t.url.0 == url {
-                        return true;
-                    }
-                    if let Some(host) = url_host.as_deref() {
-                        url_host_lower(&t.url.0).as_deref() == Some(host)
-                    } else {
-                        false
-                    }
-                })
-                .map(|t| t.id.clone())
-                .collect();
+            // First borrow: read-only scan to collect matching TabIds into an owned Vec.
+            let matching = callbacks::find_matching_favicon_tabs(self.core_ref(), url);
             if !matching.is_empty() {
-                let image = maho_types::common::ImageData {
-                    data: png_bytes.to_vec(),
-                    width: 16,
-                    height: 16,
-                    format: maho_types::common::ImageFormat::Png,
-                };
-                for tab_id in matching {
-                    self.core_mut().handle_event(ShellEvent::TabFaviconUpdated {
-                        tab_id,
-                        favicon: Some(image.clone()),
-                    });
-                }
+                // Second borrow: mutable update to apply events.
+                callbacks::apply_favicon_updates(self.core_mut(), &matching, png_bytes);
                 delivered = true;
             }
         }
 
-        if let Some(cb) = self.favicon_cb {
-            if let Ok(url_c) = CString::new(url) {
-                unsafe {
-                    cb(
-                        url_c.as_ptr(),
-                        png_bytes.as_ptr(),
-                        png_bytes.len(),
-                        self.user_data,
-                    );
-                }
-                delivered = true;
-            }
+        if callbacks::dispatch_favicon_callback(self.favicon_cb, self.user_data, url, png_bytes) {
+            delivered = true;
         }
 
         delivered
     }
 
     fn add_password(&self, entry: maho_import::PasswordEntry) -> bool {
-        if self.core.0.is_null() || entry.origin_url.is_empty() {
+        if self.core.0.is_null() {
             return false;
         }
-        let origin = if let Ok(origin) = CredentialOrigin::try_from(entry.origin_url.as_str()) {
-            origin
-        } else {
-            return false;
-        };
-        let input = maho_core::vault_manager::VaultLoginInput {
-            metadata: VaultItemPublicMetadata {
-                title: entry.origin_url,
-                origins: vec![origin],
-                username_hint: entry.username.clone(),
-                item_kind: VaultItemKind::Login,
-                totp: None,
-                passkey: None,
-            },
-            username: entry.username,
-            password: zeroize::Zeroizing::new(entry.password),
-        };
-        self.core_mut().vault_add_login(input).is_ok()
+        vault::add_password(self.core_mut(), entry)
     }
-}
-
-/// Convert a hex color string (e.g. "#FF5733" or "FF5733") to `SpaceColor`.
-///
-/// SpaceColor uses HSB (hue 0–360, saturation 0–1, brightness 0–1).
-/// Falls back to a default blue if parsing fails.
-fn hex_to_space_color(hex: &str) -> SpaceColor {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() < 6 {
-        return default_space_color();
-    }
-
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(100);
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(149);
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(237);
-
-    let (h, s, v) = rgb_to_hsb(r, g, b);
-    SpaceColor {
-        hue: h,
-        saturation: s,
-        brightness: v,
-        grain: 0.0,
-    }
-}
-
-fn default_space_color() -> SpaceColor {
-    SpaceColor {
-        hue: 220.0,
-        saturation: 0.7,
-        brightness: 0.9,
-        grain: 0.0,
-    }
-}
-
-fn url_host_lower(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let host_with_port = after_scheme.split('/').next()?;
-    let host = host_with_port.split(':').next()?;
-    if host.is_empty() {
-        return None;
-    }
-    Some(host.to_ascii_lowercase())
-}
-
-/// Convert RGB (0–255 each) to HSB (hue 0–360, saturation 0–1, brightness 0–1).
-fn rgb_to_hsb(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
-    let rf = r as f64 / 255.0;
-    let gf = g as f64 / 255.0;
-    let bf = b as f64 / 255.0;
-
-    let max = rf.max(gf).max(bf);
-    let min = rf.min(gf).min(bf);
-    let delta = max - min;
-
-    let brightness = max;
-    let saturation = if max == 0.0 { 0.0 } else { delta / max };
-
-    let hue = if delta == 0.0 {
-        0.0
-    } else if max == rf {
-        60.0 * (((gf - bf) / delta) % 6.0)
-    } else if max == gf {
-        60.0 * (((bf - rf) / delta) + 2.0)
-    } else {
-        60.0 * (((rf - gf) / delta) + 4.0)
-    };
-
-    let hue = if hue < 0.0 { hue + 360.0 } else { hue };
-
-    (hue, saturation, brightness)
 }

@@ -80,9 +80,21 @@ class MahoCommandResultRowView : public views::View {
   void SetSelected(bool selected);
   void SetIcon(std::optional<ImageData> icon);
 
+  // Presents this row as the palette's "ask" affordance: speech-bubble glyph
+  // plus a right-aligned explanation, reusing the Switch-to-Tab lane styling.
+  void SetAskAffordance(bool ask_affordance);
+
   static gfx::Insets GetSelectionInsetsForTesting(PresentationStyle style);
   static int GetSelectionCornerRadiusForTesting(PresentationStyle style);
   static gfx::Font::Weight GetSeededRowTitleFontWeightForTesting();
+  bool UsesAskGlyphForTesting() const { return ask_affordance_; }
+  views::Label* GetAskExplanationLabelForTesting() const {
+    return ask_explanation_label_;
+  }
+  views::View* GetSwitchTabContainerForTesting() const {
+    return switch_tab_container_;
+  }
+  views::Label* GetShortcutLabelForTesting() const { return shortcut_label_; }
   std::u16string GetCompactMetadataTextForTesting() const {
     return compact_metadata_text_;
   }
@@ -126,7 +138,10 @@ class MahoCommandResultRowView : public views::View {
   raw_ptr<views::Label> switch_tab_label_ = nullptr;
   raw_ptr<views::View> switch_tab_chip_ = nullptr;
   raw_ptr<views::ImageView> switch_tab_icon_ = nullptr;
+  raw_ptr<views::View> ask_affordance_container_ = nullptr;
+  raw_ptr<views::Label> ask_explanation_label_ = nullptr;
   bool uses_fallback_glyph_ = false;
+  bool ask_affordance_ = false;
   bool selected_ = false;
 };
 

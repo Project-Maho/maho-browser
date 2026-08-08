@@ -9,12 +9,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
-use axum::{
-    Router,
-    extract::State,
-    http::StatusCode,
-    routing::post,
-};
+use axum::{extract::State, http::StatusCode, routing::post, Router};
 use maho_agent::{AgentError, AgentRuntime, AgentStorage, SwiftideBackend, ZeroizedString};
 use maho_types::chat::{ChatContent, ChatMessage};
 use tokio::net::TcpListener;
@@ -39,7 +34,10 @@ impl AgentStorage for MahoManagedStorage {
 
     async fn get_setting(&self, key: &str) -> Result<Option<ZeroizedString>, AgentError> {
         if key == "auth:access_token" {
-            Ok(self.access_token.as_ref().map(|t| ZeroizedString::new(t.clone())))
+            Ok(self
+                .access_token
+                .as_ref()
+                .map(|t| ZeroizedString::new(t.clone())))
         } else {
             Ok(None)
         }
@@ -51,10 +49,11 @@ impl AgentStorage for MahoManagedStorage {
         role: &str,
         content: &str,
     ) -> Result<(), AgentError> {
-        self.messages
-            .lock()
-            .unwrap()
-            .push((session_id.to_string(), role.to_string(), content.to_string()));
+        self.messages.lock().unwrap().push((
+            session_id.to_string(),
+            role.to_string(),
+            content.to_string(),
+        ));
         Ok(())
     }
 
@@ -90,7 +89,7 @@ async fn handle_chat_completions(
         "id": "chatcmpl-test-123",
         "object": "chat.completion",
         "created": 1700000000,
-        "model": "google/gemini-2.5-flash",
+        "model": "google/gemini-3-flash-lite:free",
         "choices": [{
             "index": 0,
             "message": {
@@ -151,7 +150,9 @@ async fn test_mahomanaged_path_sends_bearer_token_and_model() {
     );
 
     let user_msg = ChatMessage::user(ChatContent::text("Say hello".to_string()));
-    let result = backend.run_turn("session-maho-managed", user_msg, None).await;
+    let result = backend
+        .run_turn("session-maho-managed", user_msg, None, None)
+        .await;
 
     unsafe { std::env::remove_var("MAHO_PROXY_URL") };
 
@@ -178,8 +179,8 @@ async fn test_mahomanaged_path_sends_bearer_token_and_model() {
     assert!(!bodies.is_empty(), "Proxy must receive a request body");
     let model = bodies[0]["model"].as_str().unwrap_or("");
     assert_eq!(
-        model, "google/gemini-2.5-flash",
-        "MahoManaged path should use google/gemini-2.5-flash model"
+        model, "google/gemini-3-flash-lite:free",
+        "MahoManaged path should use google/gemini-3-flash-lite:free model"
     );
 }
 
@@ -203,7 +204,7 @@ async fn test_byok_fallback_when_no_access_token() {
     );
 
     let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
-    let result = backend.run_turn("session-byok", user_msg, None).await;
+    let result = backend.run_turn("session-byok", user_msg, None, None).await;
 
     // BYOK with fake key should fail (network/auth error to real openai)
     assert!(
@@ -240,12 +241,17 @@ async fn test_mahomanaged_stores_messages() {
     );
 
     let user_msg = ChatMessage::user(ChatContent::text("Store test".to_string()));
-    let _ = backend.run_turn("session-store", user_msg, None).await;
+    let _ = backend
+        .run_turn("session-store", user_msg, None, None)
+        .await;
 
     unsafe { std::env::remove_var("MAHO_PROXY_URL") };
 
     let messages = storage.messages.lock().unwrap();
-    assert!(messages.len() >= 2, "Should store user + assistant messages");
+    assert!(
+        messages.len() >= 2,
+        "Should store user + assistant messages"
+    );
     assert_eq!(messages[0].1, "user");
     assert_eq!(messages[0].2, "Store test");
     let has_assistant = messages.iter().any(|(_, role, _)| role == "assistant");

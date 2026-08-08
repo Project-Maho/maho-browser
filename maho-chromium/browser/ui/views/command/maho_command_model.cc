@@ -34,8 +34,10 @@
 #include "components/favicon/core/large_icon_service.h"
 #include "components/favicon_base/favicon_callback.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
@@ -64,6 +66,7 @@ namespace maho {
 
 namespace {
 constexpr base::TimeDelta kDebounceDelay = base::Milliseconds(150);
+constexpr base::TimeDelta kRemoteArrivalThreshold = base::Milliseconds(600);
 
 const net::NetworkTrafficAnnotationTag kBookmarkFaviconTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation(
@@ -330,6 +333,8 @@ bool IsProtocolLike(const std::string& query) {
   }
   return false;
 }
+
+bool IsUrlLikeQuery(const std::string& query);
 }  // namespace
 
 ImageData::ImageData() = default;
@@ -346,7 +351,10 @@ CommandSuggestion& CommandSuggestion::operator=(const CommandSuggestion&) = defa
 CommandSuggestion& CommandSuggestion::operator=(CommandSuggestion&&) = default;
 CommandSuggestion::~CommandSuggestion() = default;
 
-MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {
+MahoCommandModel::MahoCommandModel(Browser* browser)
+    : browser_(browser),
+      remote_source_factory_(base::BindRepeating(
+          &CreateMahoRemoteSearchSuggestionSource)) {
   context_class_ = MahoClassifyProfile(
       browser_ ? browser_->profile() : nullptr);
   browser_collection_observation_.Observe(
@@ -372,6 +380,7 @@ MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {
 }
 
 MahoCommandModel::~MahoCommandModel() {
+  Cancel();
   if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
     if (browser_ && browser_->tab_strip_model()) {
       browser_->tab_strip_model()->RemoveObserver(this);
@@ -415,49 +424,158 @@ MahoCommandModel::BuildChromiumBookmarkSuggestions(Browser* browser,
 void MahoCommandModel::Search(const std::string& query,
                               CommandOverlayMode mode,
                               ResultsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  debounce_timer_.Stop();
+  if (traced_generation_ != 0) {
+    TRACE_EVENT_NESTABLE_ASYNC_END1("ui", "MahoCommandPalette.Search",
+                                    traced_generation_, "cancelled", true);
+    traced_generation_ = 0;
+  }
+  ++search_generation_;
+  const uint32_t generation = search_generation_;
+  pending_callback_.Reset();
+  results_.clear();
+  local_snapshot_.clear();
+  remote_snapshot_.clear();
+  has_published_results_ = false;
+  first_results_publication_ticks_.reset();
+  has_published_remote_results_ = false;
+  favicon_task_tracker_.TryCancelAll();
+  if (remote_search_source_) {
+    remote_search_source_->Cancel();
+  }
+  weak_factory_.InvalidateWeakPtrs();
+
   query_ = query;
   mode_ = mode;
   selected_index_ = 0;
-  pending_callback_ = callback;
+  actions_only_ = false;
+  pending_callback_ = std::move(callback);
 
   if (query.empty()) {
-    debounce_timer_.Stop();
-    results_.clear();
     if (mode == CommandOverlayMode::kNewTab ||
         mode == CommandOverlayMode::kCommandsOnly ||
         mode == CommandOverlayMode::kCurrentTab) {
-      debounce_timer_.Start(FROM_HERE, kDebounceDelay,
-                            base::BindOnce(&MahoCommandModel::FireSearch,
-                                           weak_factory_.GetWeakPtr()));
+      debounce_timer_.Start(
+          FROM_HERE, kDebounceDelay,
+          base::BindOnce(&MahoCommandModel::FireSearch,
+                         weak_factory_.GetWeakPtr(), generation));
       return;
     }
-    callback.Run({});
+    if (pending_callback_) {
+      pending_callback_.Run({});
+    }
     return;
   }
 
-  debounce_timer_.Start(FROM_HERE, kDebounceDelay,
-                        base::BindOnce(&MahoCommandModel::FireSearch,
-                                       weak_factory_.GetWeakPtr()));
+  debounce_timer_.Start(
+      FROM_HERE, kDebounceDelay,
+      base::BindOnce(&MahoCommandModel::FireSearch,
+                     weak_factory_.GetWeakPtr(), generation));
 }
 
 void MahoCommandModel::Cancel() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   debounce_timer_.Stop();
+  if (traced_generation_ != 0) {
+    TRACE_EVENT_NESTABLE_ASYNC_END1("ui", "MahoCommandPalette.Search",
+                                    traced_generation_, "cancelled", true);
+    traced_generation_ = 0;
+  }
+  ++search_generation_;
+  pending_callback_.Reset();
+  results_.clear();
+  local_snapshot_.clear();
+  remote_snapshot_.clear();
+  has_published_results_ = false;
+  first_results_publication_ticks_.reset();
+  has_published_remote_results_ = false;
+  actions_only_ = false;
+  favicon_task_tracker_.TryCancelAll();
+  if (remote_search_source_) {
+    remote_search_source_->Cancel();
+  }
   weak_factory_.InvalidateWeakPtrs();
 }
 
 void MahoCommandModel::RefetchCurrentQuery() {
-  if (pending_callback_) {
-    Search(query_, mode_, pending_callback_);
+  if (!pending_callback_) {
+    return;
+  }
+  const std::string query = query_;
+  const CommandOverlayMode mode = mode_;
+  ResultsCallback callback = pending_callback_;
+  Search(query, mode, std::move(callback));
+}
+
+void MahoCommandModel::SetRemoteSearchSourceForTesting(
+    std::unique_ptr<MahoRemoteSearchSuggestionSource> source) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (remote_search_source_) {
+    remote_search_source_->Cancel();
+  }
+  remote_search_source_ = std::move(source);
+}
+
+void MahoCommandModel::SetRemoteSearchSourceFactoryForTesting(
+    RemoteSourceFactory factory) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (remote_search_source_) {
+    remote_search_source_->Cancel();
+    remote_search_source_.reset();
+  }
+  remote_source_factory_ = std::move(factory);
+}
+
+void MahoCommandModel::StartRemoteSearchForTesting(
+    uint32_t generation,
+    const std::string& query) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != search_generation_ || !remote_search_source_) {
+    return;
+  }
+  remote_search_source_->Start(
+      query, base::BindRepeating(&MahoCommandModel::OnRemoteSnapshot,
+                                 weak_factory_.GetWeakPtr(), generation));
+}
+
+void MahoCommandModel::AcceptLocalResultsForTesting(
+    uint32_t generation,
+    std::vector<CommandSuggestion> results) {
+  OnResults(generation, std::move(results));
+}
+
+void MahoCommandModel::ApplyFaviconForTesting(uint32_t generation,
+                                              const std::string& key) {
+  if (generation != search_generation_) {
+    return;
+  }
+  for (auto& result : results_) {
+    if (result.key != key || result.icon.has_value()) {
+      continue;
+    }
+    ImageData icon;
+    icon.format = "test";
+    result.icon = std::move(icon);
+    if (pending_callback_) {
+      pending_callback_.Run(results_);
+    }
+    return;
   }
 }
 
-void MahoCommandModel::FireSearch() {
-  ++search_generation_;
+void MahoCommandModel::FireSearch(uint32_t generation) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != search_generation_) {
+    return;
+  }
+
   search_start_ticks_ = base::TimeTicks::Now();
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1("ui",
-                                    "MahoCommandPalette.Search",
-                                    search_generation_,
-                                    "gen", search_generation_);
+  traced_generation_ = generation;
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1("ui", "MahoCommandPalette.Search",
+                                    generation, "gen", generation);
   std::string search_query = query_;
   actions_only_ = false;
 
@@ -472,23 +590,66 @@ void MahoCommandModel::FireSearch() {
     actions_only_ = true;
   }
 
+  Profile* profile = browser_ ? browser_->profile() : nullptr;
+  const std::string trimmed_query(
+      base::TrimWhitespaceASCII(query_, base::TRIM_ALL));
+  const bool remote_eligible = IsRemoteSearchEligible(
+      profile, context_class_, mode_, trimmed_query,
+      MatchSiteSearch(trimmed_query) != nullptr);
+  if (remote_eligible) {
+    if (!remote_search_source_) {
+      remote_search_source_ = remote_source_factory_.Run(profile);
+    }
+    if (remote_search_source_) {
+      base::WeakPtr<MahoCommandModel> alive = weak_factory_.GetWeakPtr();
+      remote_search_source_->Start(
+          trimmed_query,
+          base::BindRepeating(&MahoCommandModel::OnRemoteSnapshot,
+                              weak_factory_.GetWeakPtr(), generation));
+      if (!alive || generation != search_generation_) {
+        return;
+      }
+    }
+  }
+
   if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
-    FireSearchPrivate();
+    FireSearchPrivate(generation);
+    return;
+  }
+  if (!profile) {
+    OnResults(generation, {});
     return;
   }
 
   std::string tabs_json = actions_only_ ? std::string() : BuildTabsJson();
   std::vector<CommandSuggestion> chromium_bookmarks =
       BuildChromiumBookmarkSuggestions(browser_, search_query);
-  const bool is_incognito = browser_->profile()->IsOffTheRecord();
+  const bool is_incognito = profile->IsOffTheRecord();
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoCommandModel::SearchOnPool, search_query, tabs_json,
                      chromium_bookmarks, mode_, is_incognito),
-      base::BindOnce(&MahoCommandModel::OnResults, weak_factory_.GetWeakPtr(),
-                     pending_callback_));
+      base::BindOnce(&MahoCommandModel::OnResults,
+                     weak_factory_.GetWeakPtr(), generation));
+}
+
+// static
+bool MahoCommandModel::IsRemoteSearchEligible(
+    Profile* profile,
+    MahoPrivateContextClass context_class,
+    CommandOverlayMode mode,
+    const std::string& trimmed_query,
+    bool matches_site_search) {
+  return profile && context_class == MahoPrivateContextClass::kRegular &&
+         !profile->IsOffTheRecord() && profile->GetPrefs() &&
+         profile->GetPrefs()->GetBoolean(prefs::kSearchSuggestEnabled) &&
+         !trimmed_query.empty() && mode != CommandOverlayMode::kCommandsOnly &&
+         !base::StartsWith(trimmed_query, ">",
+                           base::CompareCase::SENSITIVE) &&
+         mode != CommandOverlayMode::kSiteSearch && !matches_site_search &&
+         !IsUrlLikeQuery(trimmed_query);
 }
 
 // static
@@ -554,13 +715,41 @@ bool PrivateActionMatchesQuery(const PrivateAction& action,
 }
 
 bool IsUrlLikeQuery(const std::string& query) {
-  if (query.empty() || query.find(' ') != std::string::npos) {
+  if (query.empty()) {
     return false;
   }
   if (IsProtocolLike(query)) {
     return true;
   }
-  return query.find('.') != std::string::npos;
+  if (query.find_first_of(" \t\r\n") != std::string::npos) {
+    return false;
+  }
+
+  const std::string lower_query = base::ToLowerASCII(query);
+  if (lower_query == "localhost" ||
+      base::StartsWith(lower_query, "localhost:",
+                       base::CompareCase::SENSITIVE) ||
+      base::StartsWith(lower_query, "localhost/",
+                       base::CompareCase::SENSITIVE)) {
+    return true;
+  }
+  if (query.find('.') != std::string::npos) {
+    return true;
+  }
+
+  const size_t colon = query.find(':');
+  if (colon == std::string::npos || colon == 0 ||
+      colon != query.rfind(':') || colon + 1 == query.size()) {
+    return false;
+  }
+  const auto is_hostname_character = [](char c) {
+    return base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '-';
+  };
+  const auto is_ascii_digit = [](char c) { return base::IsAsciiDigit(c); };
+  return base::IsAsciiAlphaNumeric(query.front()) &&
+         base::IsAsciiAlphaNumeric(query[colon - 1]) &&
+         std::ranges::all_of(query.substr(0, colon), is_hostname_character) &&
+         std::ranges::all_of(query.substr(colon + 1), is_ascii_digit);
 }
 
 // Mirrors IsSidebarEligibleUrl (maho_sidebar_tab_list_view.cc): the NTP,
@@ -823,8 +1012,11 @@ std::vector<CommandSuggestion> MahoCommandModel::BuildPrivateResults(
   return results;
 }
 
-void MahoCommandModel::FireSearchPrivate() {
+void MahoCommandModel::FireSearchPrivate(uint32_t generation) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != search_generation_) {
+    return;
+  }
   std::string prepared = query_;
   if (!prepared.empty() && prepared[0] == '>') {
     prepared = prepared.substr(1);
@@ -832,7 +1024,7 @@ void MahoCommandModel::FireSearchPrivate() {
       prepared = prepared.substr(1);
     }
   }
-  OnResults(pending_callback_, BuildPrivateResults(prepared));
+  OnResults(generation, BuildPrivateResults(prepared));
 }
 
 // static
@@ -1010,74 +1202,134 @@ CommandSuggestionType MahoCommandModel::ParseType(const std::string& kind) {
   return CommandSuggestionType::kHistory;
 }
 
-void MahoCommandModel::OnResults(ResultsCallback callback,
-                                 std::vector<CommandSuggestion> results) {
-  const base::TimeDelta elapsed = base::TimeTicks::Now() - search_start_ticks_;
-  TRACE_EVENT_INSTANT("ui", "MahoCommandPalette.SearchComplete",
-                      "elapsed_ms", elapsed.InMilliseconds(),
-                      "result_count", results.size(),
-                      "gen", search_generation_);
-  UMA_HISTOGRAM_TIMES("Maho.CommandPalette.SearchLatency", elapsed);
-
-  if (actions_only_) {
-    std::erase_if(results, [](const CommandSuggestion& s) {
-      return s.type != CommandSuggestionType::kAction;
-    });
+void MahoCommandModel::OnResults(
+    uint32_t generation,
+    std::vector<CommandSuggestion> results) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != search_generation_) {
+    return;
   }
 
-  if (!actions_only_) {
-    if (std::optional<CommandSuggestion> nav =
-            BuildNavigationSuggestionForQuery(query_)) {
-      const std::string payload = nav->execution_payload;
-      const bool already_present = std::ranges::any_of(
-          results, [&payload](const CommandSuggestion& result) {
-            return result.type == CommandSuggestionType::kNavigation &&
-                   result.execution_payload == payload;
-          });
-      if (!already_present) {
-        results.insert(results.begin(), std::move(*nav));
-      }
-    }
+  if (traced_generation_ == generation) {
+    const base::TimeDelta elapsed =
+        base::TimeTicks::Now() - search_start_ticks_;
+    TRACE_EVENT_INSTANT("ui", "MahoCommandPalette.SearchComplete",
+                        "elapsed_ms", elapsed.InMilliseconds(),
+                        "result_count", results.size(), "gen", generation);
+    UMA_HISTOGRAM_TIMES("Maho.CommandPalette.SearchLatency", elapsed);
   }
 
-  ApplyQuickActionGate(results, mode_, query_);
+  local_snapshot_ = PrepareLocalCandidates(
+      std::move(results), actions_only_, mode_, query_);
+  base::WeakPtr<MahoCommandModel> alive = weak_factory_.GetWeakPtr();
+  PublishMergedResultsIfChanged(generation);
+  if (!alive) {
+    return;
+  }
 
-  CapResults(results, mode_, query_);
+  if (traced_generation_ == generation) {
+    TRACE_EVENT_NESTABLE_ASYNC_END1("ui", "MahoCommandPalette.Search",
+                                    generation, "final_count",
+                                    results_.size());
+    traced_generation_ = 0;
+  }
+}
 
-  std::string prev_key;
+void MahoCommandModel::OnRemoteSnapshot(
+    uint32_t generation,
+    std::vector<RemoteSearchSuggestion> remote_snapshot) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != search_generation_) {
+    return;
+  }
+  if (first_results_publication_ticks_.has_value() &&
+      !has_published_remote_results_ &&
+      base::TimeTicks::Now() - *first_results_publication_ticks_ >
+          kRemoteArrivalThreshold) {
+    return;
+  }
+  remote_snapshot_ = std::move(remote_snapshot);
+  PublishMergedResultsIfChanged(generation);
+}
+
+bool MahoCommandModel::PublishMergedResultsIfChanged(uint32_t generation) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != search_generation_) {
+    return false;
+  }
+
+  std::vector<CommandSuggestion> remote_results =
+      NormalizeRemoteSuggestions(query_, local_snapshot_, remote_snapshot_);
+  std::vector<CommandSuggestion> merged = AllocateFinalResults(
+      local_snapshot_, remote_results, mode_, query_);
+  if (has_published_results_ && FinalSnapshotsEqual(results_, merged)) {
+    return false;
+  }
+
+  std::string previous_key;
   if (selected_index_ >= 0 &&
       selected_index_ < static_cast<int>(results_.size())) {
-    prev_key = results_[selected_index_].key;
+    previous_key = results_[selected_index_].key;
   }
 
-  results_ = std::move(results);
+  results_ = std::move(merged);
+  has_published_results_ = true;
+  if (!first_results_publication_ticks_.has_value()) {
+    first_results_publication_ticks_ = base::TimeTicks::Now();
+  }
+  if (!has_published_remote_results_) {
+    has_published_remote_results_ = std::ranges::any_of(
+        results_, [](const CommandSuggestion& result) {
+          return base::StartsWith(result.key, "remote-search:",
+                                  base::CompareCase::SENSITIVE);
+        });
+  }
 
-  int restored = -1;
-  if (!prev_key.empty()) {
+  int restored_index = -1;
+  if (!previous_key.empty()) {
     for (int i = 0; i < static_cast<int>(results_.size()); ++i) {
-      if (results_[i].key == prev_key) {
-        restored = i;
+      if (results_[i].key == previous_key) {
+        restored_index = i;
         break;
       }
     }
   }
-  selected_index_ = (restored >= 0) ? restored
-                                     : (results_.empty() ? -1 : 0);
-  TRACE_EVENT_NESTABLE_ASYNC_END1("ui",
-                                   "MahoCommandPalette.Search",
-                                   search_generation_,
-                                   "final_count", results_.size());
-  callback.Run(results_);
+  selected_index_ =
+      restored_index >= 0 ? restored_index : (results_.empty() ? -1 : 0);
+
+  ResultsCallback callback = pending_callback_;
+  base::WeakPtr<MahoCommandModel> alive = weak_factory_.GetWeakPtr();
+  if (callback) {
+    callback.Run(results_);
+  }
+  if (!alive || generation != search_generation_) {
+    return true;
+  }
+
   // Saved-source-backed favicon loaders (bookmarks, search engines) and the
   // cross-window tab scan must never run in exact-primary-Incognito.
   if (context_class_ != MahoPrivateContextClass::kPrimaryIncognito) {
-    RequestBookmarkFavicons();
-    RequestTabFavicons();
-    RequestSearchEngineFavicons();
+    ++favicon_request_pass_count_for_testing_;
+    RequestBookmarkFavicons(generation);
+    if (!alive) {
+      return true;
+    }
+    RequestTabFavicons(generation);
+    if (!alive) {
+      return true;
+    }
+    RequestSearchEngineFavicons(generation);
+    if (!alive) {
+      return true;
+    }
   }
+  return true;
 }
 
-void MahoCommandModel::RequestBookmarkFavicons() {
+void MahoCommandModel::RequestBookmarkFavicons(uint32_t generation) {
+  if (generation != search_generation_) {
+    return;
+  }
   favicon_task_tracker_.TryCancelAll();
   if (!browser_ || !browser_->profile()) {
     return;
@@ -1108,7 +1360,7 @@ void MahoCommandModel::RequestBookmarkFavicons() {
         /*should_trim_page_url_path=*/false,
         kBookmarkFaviconTrafficAnnotation,
         base::BindOnce(&MahoCommandModel::OnBookmarkLargeIconLoaded,
-                       weak_factory_.GetWeakPtr(), search_generation_,
+                       weak_factory_.GetWeakPtr(), generation,
                        result.execution_payload),
         &favicon_task_tracker_);
   }
@@ -1145,12 +1397,16 @@ void MahoCommandModel::OnBookmarkLargeIconLoaded(
     }
   }
 
-  if (updated && pending_callback_) {
+  if (updated && search_generation == search_generation_ &&
+      pending_callback_) {
     pending_callback_.Run(results_);
   }
 }
 
-void MahoCommandModel::RequestTabFavicons() {
+void MahoCommandModel::RequestTabFavicons(uint32_t generation) {
+  if (generation != search_generation_) {
+    return;
+  }
   if (!browser_) {
     return;
   }
@@ -1256,9 +1512,154 @@ void MahoCommandModel::RequestTabFavicons() {
         });
   }
 
-  if (updated && pending_callback_) {
+  if (updated && generation == search_generation_ && pending_callback_) {
     pending_callback_.Run(results_);
   }
+}
+
+// static
+std::vector<CommandSuggestion> MahoCommandModel::PrepareLocalCandidates(
+    std::vector<CommandSuggestion> results,
+    bool actions_only,
+    CommandOverlayMode mode,
+    const std::string& query) {
+  if (actions_only) {
+    std::erase_if(results, [](const CommandSuggestion& suggestion) {
+      return suggestion.type != CommandSuggestionType::kAction;
+    });
+  } else if (std::optional<CommandSuggestion> navigation =
+                 BuildNavigationSuggestionForQuery(query)) {
+    const std::string payload = navigation->execution_payload;
+    const bool already_present = std::ranges::any_of(
+        results, [&payload](const CommandSuggestion& result) {
+          return result.type == CommandSuggestionType::kNavigation &&
+                 result.execution_payload == payload;
+        });
+    if (!already_present) {
+      results.insert(results.begin(), std::move(*navigation));
+    }
+  }
+
+  ApplyQuickActionGate(results, mode, query);
+  return results;
+}
+
+// static
+std::vector<CommandSuggestion> MahoCommandModel::NormalizeRemoteSuggestions(
+    const std::string& query,
+    const std::vector<CommandSuggestion>& prepared_local_results,
+    const std::vector<RemoteSearchSuggestion>& remote_suggestions) {
+  auto normalize_terms = [](std::string_view value) {
+    return base::ToLowerASCII(base::UTF16ToUTF8(base::TrimWhitespace(
+        base::UTF8ToUTF16(value), base::TRIM_ALL)));
+  };
+  auto canonical_url = [](const std::string& value) {
+    const GURL url(value);
+    return url.is_valid() ? url.spec() : std::string();
+  };
+
+  std::set<std::string> seen_terms;
+  std::set<std::string> seen_destinations;
+  seen_terms.insert(normalize_terms(query));
+  for (const CommandSuggestion& local : prepared_local_results) {
+    if (local.type == CommandSuggestionType::kSearch &&
+        base::StartsWith(local.key, "search:",
+                         base::CompareCase::SENSITIVE)) {
+      const std::string terms = normalize_terms(local.key.substr(7));
+      if (!terms.empty()) {
+        seen_terms.insert(terms);
+      }
+    }
+    const std::string destination = canonical_url(local.execution_payload);
+    if (!destination.empty()) {
+      seen_destinations.insert(destination);
+    }
+  }
+
+  std::vector<CommandSuggestion> normalized;
+  normalized.reserve(remote_suggestions.size());
+  for (const RemoteSearchSuggestion& remote : remote_suggestions) {
+    const std::string terms =
+        normalize_terms(remote.normalized_search_terms);
+    const std::string destination = remote.destination_url.is_valid()
+                                        ? remote.destination_url.spec()
+                                        : std::string();
+    if (terms.empty() || destination.empty() || seen_terms.contains(terms) ||
+        seen_destinations.contains(destination)) {
+      continue;
+    }
+
+    seen_terms.insert(terms);
+    seen_destinations.insert(destination);
+
+    CommandSuggestion suggestion;
+    suggestion.type = CommandSuggestionType::kSearch;
+    suggestion.key = "remote-search:" + terms;
+    suggestion.title = base::UTF16ToUTF8(base::TrimWhitespace(
+        base::UTF8ToUTF16(remote.display_title), base::TRIM_ALL));
+    if (suggestion.title.empty()) {
+      suggestion.title = terms;
+    }
+    if (remote.subtitle.has_value()) {
+      suggestion.subtitle = base::UTF16ToUTF8(base::TrimWhitespace(
+          base::UTF8ToUTF16(*remote.subtitle), base::TRIM_ALL));
+    }
+    if (suggestion.subtitle.empty()) {
+      suggestion.subtitle = remote.destination_url.host();
+      if (base::StartsWith(suggestion.subtitle, "www.",
+                           base::CompareCase::SENSITIVE)) {
+        suggestion.subtitle.erase(0, 4);
+      }
+    }
+    suggestion.execution_payload = destination;
+    normalized.push_back(std::move(suggestion));
+  }
+  return normalized;
+}
+
+// static
+std::vector<CommandSuggestion> MahoCommandModel::AllocateFinalResults(
+    std::vector<CommandSuggestion> prepared_local_results,
+    const std::vector<CommandSuggestion>& remote_results,
+    CommandOverlayMode mode,
+    const std::string& query) {
+  if (remote_results.empty()) {
+    CapResults(prepared_local_results, mode, query);
+    return prepared_local_results;
+  }
+
+  const size_t remote_count = std::min<size_t>(2, remote_results.size());
+  const size_t local_slots = kMaxVisibleRows - remote_count;
+  if (prepared_local_results.size() > local_slots) {
+    prepared_local_results.resize(local_slots);
+  }
+  auto insertion_point = std::ranges::find_if(
+      prepared_local_results, [](const CommandSuggestion& result) {
+        return result.type == CommandSuggestionType::kSearch &&
+               base::StartsWith(result.key, "search:",
+                                base::CompareCase::SENSITIVE);
+      });
+  if (insertion_point != prepared_local_results.end()) {
+    ++insertion_point;
+  }
+  prepared_local_results.insert(insertion_point, remote_results.begin(),
+                                remote_results.begin() + remote_count);
+  return prepared_local_results;
+}
+
+// static
+bool MahoCommandModel::FinalSnapshotsEqual(
+    const std::vector<CommandSuggestion>& lhs,
+    const std::vector<CommandSuggestion>& rhs) {
+  return lhs.size() == rhs.size() &&
+         std::ranges::equal(
+             lhs, rhs,
+             [](const CommandSuggestion& left,
+                const CommandSuggestion& right) {
+               return left.key == right.key && left.title == right.title &&
+                      left.subtitle == right.subtitle &&
+                      left.execution_payload == right.execution_payload;
+             });
 }
 
 // static
@@ -1460,7 +1861,10 @@ std::vector<CommandSuggestion> MahoCommandModel::GetRecentSearches() {
   return results;
 }
 
-void MahoCommandModel::RequestSearchEngineFavicons() {
+void MahoCommandModel::RequestSearchEngineFavicons(uint32_t generation) {
+  if (generation != search_generation_) {
+    return;
+  }
   MahoCore* core = maho::GetCore();
   if (!core || !browser_ || !browser_->profile()) {
     return;
@@ -1518,7 +1922,7 @@ void MahoCommandModel::RequestSearchEngineFavicons() {
           updated = true;
         }
       }
-      if (updated && pending_callback_) {
+      if (updated && generation == search_generation_ && pending_callback_) {
         pending_callback_.Run(results_);
       }
     }
@@ -1539,7 +1943,7 @@ void MahoCommandModel::RequestSearchEngineFavicons() {
       /*should_trim_page_url_path=*/false,
       kBookmarkFaviconTrafficAnnotation,
       base::BindOnce(&MahoCommandModel::OnSearchEngineLargeIconLoaded,
-                     weak_factory_.GetWeakPtr(), search_generation_,
+                     weak_factory_.GetWeakPtr(), generation,
                      default_engine_id),
       &favicon_task_tracker_);
 }
@@ -1577,7 +1981,8 @@ void MahoCommandModel::OnSearchEngineLargeIconLoaded(
     }
   }
 
-  if (updated && pending_callback_) {
+  if (updated && search_generation == search_generation_ &&
+      pending_callback_) {
     pending_callback_.Run(results_);
   }
 }
@@ -1619,7 +2024,7 @@ void MahoCommandModel::OnBrowserClosed(BrowserWindowInterface* browser) {
     // on the shutting-down OTR profile after KeyedService::Shutdown() has run.
     if (browser_ && browser && browser->GetTabStripModel() &&
         browser->GetTabStripModel() == browser_->tab_strip_model()) {
-      debounce_timer_.Stop();
+      Cancel();
       browser_->tab_strip_model()->RemoveObserver(this);
       browser_ = nullptr;
     }

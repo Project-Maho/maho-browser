@@ -34,24 +34,18 @@ MahoSpaceCreatePageHandler::MahoSpaceCreatePageHandler(
     return;
   }
   // Deliver the initial theme selection (or empty default) to the WebUI so
-  // its React store can transition out of the loading=true state. When opened
-  // through MahoSpaceThemePickerDialog, the dialog wrapper stages the parent
-  // form's current theme_json into a global slot that we consume here. When
-  // opened directly as a tab (no parent dialog), the slot is empty and the
-  // store falls back to defaults.
+  // its React store can transition out of the loading=true state.
   auto initial = maho_space_create::mojom::ThemeSelection::New();
-  if (MahoSpaceThemePickerDialog::IsWebContentsHostingActiveDialog(web_contents)) {
-    initial->theme_json =
-        MahoSpaceThemePickerDialog::ConsumePendingInitialThemeJsonForActive();
-  }
+  initial->theme_json = MahoSpaceThemePickerDialog::ConsumePendingInitialThemeJson(
+      browser_, web_contents_);
   page_->Initialize(std::move(initial));
 }
 
 MahoSpaceCreatePageHandler::~MahoSpaceCreatePageHandler() {
-  if (MahoSpaceThemeState::HasPreviewOverride()) {
-    MahoSpaceThemeState::ClearPreviewOverride();
+  if (MahoSpaceThemeState::HasPreviewOverride(browser_)) {
+    MahoSpaceThemeState::ClearPreviewOverride(browser_);
     MahoSpaceThemeState::UpdateFromCore();
-    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+    MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
 }
 
@@ -65,9 +59,10 @@ void MahoSpaceCreatePageHandler::SetDialogCallbacks(
 void MahoSpaceCreatePageHandler::PreviewTheme(
     maho_space_create::mojom::ThemeSelectionPtr selection) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  bool ok = MahoSpaceThemeState::SetPreviewOverride(selection->theme_json);
+  bool ok =
+      MahoSpaceThemeState::SetPreviewOverride(browser_, selection->theme_json);
   if (ok) {
-    MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+    MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
 }
 
@@ -85,9 +80,9 @@ void MahoSpaceCreatePageHandler::CommitTheme(
 
 void MahoSpaceCreatePageHandler::CancelTheme() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  MahoSpaceThemeState::ClearPreviewOverride();
+  MahoSpaceThemeState::ClearPreviewOverride(browser_);
   MahoSpaceThemeState::UpdateFromCore();
-  MahoSpaceThemePickerDialog::RepaintAllBrowsers();
+  MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   if (cancel_callback_) {
     std::move(cancel_callback_).Run();
   }

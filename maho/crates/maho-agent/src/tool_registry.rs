@@ -1,6 +1,29 @@
 use crate::ToolDefinition;
 use maho_types::tool::{ToolPermission, ToolProvenance};
 
+fn fs_write_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "fs_write".to_string(),
+        description: "Write an artifact inside the session artifact directory".to_string(),
+        parameters_schema: serde_json::from_str(
+            r#"{
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "relative_path": { "type": "string" },
+                    "content": { "type": "string" },
+                    "mime_type": { "type": "string" }
+                },
+                "required": ["relative_path", "content"]
+            }"#,
+        )
+        .unwrap_or_default(),
+        provenance: ToolProvenance::BuiltinBrowser,
+        sensitive: true,
+        permission: ToolPermission::AutoApprove,
+    }
+}
+
 pub fn get_platform_tools() -> Vec<ToolDefinition> {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
@@ -42,6 +65,7 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
                 sensitive: false,
                 permission: ToolPermission::AutoApprove,
             },
+            fs_write_definition(),
         ]
     }
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -75,6 +99,28 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
                 sensitive: true,
                 permission: ToolPermission::AlwaysAsk,
             },
+            ToolDefinition {
+                name: "web_fetch".to_string(),
+                description: "Retrieve current content from a public HTTP or HTTPS URL".to_string(),
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "url": { "type": "string" }
+                    },
+                    "required": ["url"]
+                }),
+                provenance: ToolProvenance::BuiltinBrowser,
+                // Read-only retrieval of public web content, equivalent in
+                // reach to the user opening the URL in a tab. Per product
+                // decision this needs no per-call user consent, so URL
+                // validation in `web_fetch` is the enforcing boundary: public
+                // http(s) only, loopback/private/link-local rejected, DNS
+                // pinned, every redirect hop revalidated, response bounded.
+                sensitive: false,
+                permission: ToolPermission::AutoApprove,
+            },
+            fs_write_definition(),
         ]
     }
 }
@@ -89,20 +135,44 @@ mod tests {
 
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            assert_eq!(tools.len(), 3);
+            assert_eq!(tools.len(), 4);
             assert!(tools.iter().any(|t| t.name == "camera"));
             assert!(tools.iter().any(|t| t.name == "photo_library"));
             assert!(tools.iter().any(|t| t.name == "clipboard"));
+            assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(!tools.iter().any(|t| t.name == "fs_read"));
+            assert!(!tools.iter().any(|t| t.name == "shell_exec"));
         }
 
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            assert_eq!(tools.len(), 2);
+            assert_eq!(tools.len(), 4);
             assert!(tools.iter().any(|t| t.name == "fs_read"));
+            assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(tools.iter().any(|t| t.name == "shell_exec"));
+            assert!(tools.iter().any(|t| t.name == "web_fetch"));
             assert!(!tools.iter().any(|t| t.name == "camera"));
         }
+    }
+
+    #[test]
+    fn fs_write_is_sensitive_boundary_enforced_auto_approve() {
+        let tools = get_platform_tools();
+        let fs_write = tools
+            .iter()
+            .find(|tool| tool.name == "fs_write")
+            .expect("platform registry includes fs_write");
+        assert_eq!(fs_write.permission, ToolPermission::AutoApprove);
+        assert_eq!(fs_write.provenance, ToolProvenance::BuiltinBrowser);
+        assert!(fs_write.sensitive);
+        assert_eq!(
+            fs_write.parameters_schema["required"],
+            serde_json::json!(["relative_path", "content"])
+        );
+        assert_eq!(
+            fs_write.parameters_schema["properties"]["mime_type"]["type"],
+            "string"
+        );
     }
 
     #[test]
@@ -115,5 +185,20 @@ mod tests {
             .expect("desktop registry includes shell_exec");
         assert_eq!(shell_exec.permission, ToolPermission::AlwaysAsk);
         assert!(shell_exec.sensitive);
+    }
+
+    // Public web retrieval is auto-approved by product decision, so no
+    // approval prompt gates it. That makes URL validation the only boundary;
+    // see the scheme/SSRF/size/timeout tests in `web_fetch`.
+    #[test]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    fn web_fetch_is_auto_approved_and_not_sensitive() {
+        let tools = get_platform_tools();
+        let web_fetch = tools
+            .iter()
+            .find(|tool| tool.name == "web_fetch")
+            .expect("desktop registry includes web_fetch");
+        assert_eq!(web_fetch.permission, ToolPermission::AutoApprove);
+        assert!(!web_fetch.sensitive);
     }
 }
