@@ -82,42 +82,24 @@ const fonts = [
   },
 ];
 
-function titleSizeFor(title) {
-  const length = title.length;
-  if (length <= 6) return 168;
-  if (length <= 12) return 132;
-  if (length <= 24) return 112;
-  return 90;
-}
-
 async function renderOne(config) {
   const accentColor = accentPalette[config.accent] ?? accentPalette.neutral;
-  const category = accentCategories[config.accent] ?? '';
-  const titleSize = titleSizeFor(config.title);
-
-  const footerRight = category
-    ? `<div style="display: flex; align-items: center; gap: 12px;"><div style="display: flex; width: 9px; height: 9px; border-radius: 999px; background: ${accentColor};"></div><span style="font-family: 'Geist Mono'; font-size: 19px; letter-spacing: 0.22em; color: ${alpha(accentColor, 0.92)};">${category}</span></div>`
-    : '<div style="display: flex;"></div>';
 
   const markup = html([
     `<div style="width: 100%; height: 100%; display: flex; position: relative; overflow: hidden; background: #0a0a0b; color: #fafafa; font-family: 'Geist';">`,
-    // single subtle single-hue glow, top-right, fading to transparent
-    `<div style="display: flex; position: absolute; top: -260px; right: -180px; width: 760px; height: 760px; border-radius: 999px; background: radial-gradient(circle, ${alpha(accentColor, 0.22)} 0%, ${alpha(accentColor, 0)} 68%);"></div>`,
-    `<div style="position: relative; display: flex; flex-direction: column; justify-content: space-between; width: 100%; height: 100%; padding: 76px;">`,
-    // brand lockup — the single brand mark
-    `<div style="display: flex; align-items: center; gap: 20px;">`,
-    `<img src="${logoDataUri}" style="width: 60px; height: 60px; border-radius: 15px;" />`,
-    `<span style="font-family: 'Geist'; font-weight: 500; font-size: 37px; letter-spacing: -0.01em; color: #fafafa;">Maho</span>`,
+    // soft single-hue glow centered behind the brand, like a spotlight
+    `<div style="display: flex; position: absolute; top: -190px; left: 50%; margin-left: -470px; width: 940px; height: 940px; border-radius: 999px; background: radial-gradient(circle, ${alpha(accentColor, 0.24)} 0%, ${alpha(accentColor, 0)} 66%);"></div>`,
+    // brand-forward center stack: large logo + Maho wordmark, tagline as support
+    `<div style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 76px;">`,
+    `<div style="display: flex; align-items: center; gap: 36px;">`,
+    `<img src="${logoDataUri}" style="width: 152px; height: 152px; border-radius: 36px;" />`,
+    `<span style="font-family: 'Instrument Serif'; font-size: 176px; line-height: 1; letter-spacing: -0.03em; color: #fafafa;">${config.brand}</span>`,
     `</div>`,
-    // title only — kept short and large so it stays legible at feed/mobile preview sizes
-    `<div style="display: flex; flex-direction: column;">`,
-    `<h1 style="margin: 0; max-width: 1000px; font-family: 'Instrument Serif'; font-size: ${titleSize}px; line-height: 1.0; letter-spacing: -0.025em; color: #fafafa;">${config.title}</h1>`,
+    `<span style="margin-top: 40px; max-width: 860px; text-align: center; font-family: 'Geist'; font-weight: 500; font-size: 40px; line-height: 1.28; letter-spacing: -0.01em; color: #a6a6af;">${config.tagline}</span>`,
     `</div>`,
-    // footer: url + product category
-    `<div style="display: flex; align-items: center; justify-content: space-between;">`,
-    `<span style="font-family: 'Geist Mono'; font-size: 22px; letter-spacing: 0.01em; color: #63636b;">mahobrowser.com</span>`,
-    footerRight,
-    `</div>`,
+    // footer url, centered at the bottom
+    `<div style="position: absolute; bottom: 60px; left: 0; width: 100%; display: flex; align-items: center; justify-content: center;">`,
+    `<span style="font-family: 'Geist Mono'; font-size: 22px; letter-spacing: 0.14em; color: #5c5c64;">mahobrowser.com</span>`,
     `</div>`,
     `</div>`,
   ].join(''));
