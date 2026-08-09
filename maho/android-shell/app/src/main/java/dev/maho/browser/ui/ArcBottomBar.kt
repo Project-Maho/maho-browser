@@ -32,7 +32,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -338,25 +337,12 @@ fun ArcBottomBar(
                             containerColor = menuContainerColor,
                             borderColor = menuBorderColor,
                         ) {
-                            ArcMenuSectionLabel(
-                                label = "Spaces",
+                            ArcBottomBarSpacesSection(
+                                spaces = spaces,
                                 shellColors = shellColors,
+                                onDismissMenu = { spacesExpanded = false },
+                                onSelectSpace = onSelectSpace,
                             )
-                            spaces.forEach { space ->
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = space.name,
-                                            subtitle = "${space.tabCount} tab${if (space.tabCount == 1) "" else "s"}",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    onClick = {
-                                        spacesExpanded = false
-                                        onSelectSpace(space.id)
-                                    },
-                                )
-                            }
                         }
                     }
 
@@ -509,262 +495,33 @@ fun ArcBottomBar(
                             borderColor = menuBorderColor,
                         ) {
                             if (!isHomeMode) {
-                                ArcMenuSectionLabel(
-                                    label = "Page",
+                                ArcBottomBarPageSection(
                                     shellColors = shellColors,
+                                    onDismissMenu = { expanded = false },
+                                    onBrowseForMe = onBrowseForMe,
+                                    onFindInPage = onFindInPage,
+                                    onShare = onShare,
+                                    onReload = onReload,
                                 )
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Browse for Me",
-                                            subtitle = "Generate a quicker read of this page",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.SparklesAi.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onBrowseForMe()
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Find in page",
-                                            subtitle = "Jump to a word or phrase",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.Search.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onFindInPage()
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Share",
-                                            subtitle = "Send this page elsewhere",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.Share.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onShare()
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Reload",
-                                            subtitle = "Refresh the current page",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.ReloadSync.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onReload()
-                                    },
-                                )
-                                ArcMenuDivider(shellColors = shellColors)
                             }
-                            ArcMenuSectionLabel(
-                                label = "Browser",
+                            ArcBottomBarBrowserSection(
+                                isHomeMode = isHomeMode,
+                                isReaderMode = isReaderMode,
+                                isDesktopMode = isDesktopMode,
+                                isIncognito = isIncognito,
+                                zoomLabel = zoomLabel,
                                 shellColors = shellColors,
+                                onDismissMenu = { expanded = false },
+                                onArchive = onArchive,
+                                onToggleReaderMode = onToggleReaderMode,
+                                onReaderSettingsClick = onReaderSettingsClick,
+                                onToggleDesktopMode = onToggleDesktopMode,
+                                onZoomIn = onZoomIn,
+                                onZoomOut = onZoomOut,
+                                onToggleIncognito = onToggleIncognito,
+                                onOpenSettings = onOpenSettings,
+                                onPiP = onPiP,
                             )
-                            DropdownMenuItem(
-                                text = {
-                                    ArcMenuLabel(
-                                        title = "Archive",
-                                        subtitle = "Reopen archived tabs from this space",
-                                        shellColors = shellColors,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(painter = painterResource(id = MahoIcon.Archive.drawableRes), contentDescription = null)
-                                },
-                                onClick = {
-                                    expanded = false
-                                    onArchive()
-                                },
-                            )
-                            if (!isHomeMode) {
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = if (isReaderMode) "Hide Reader" else "Reader",
-                                            subtitle = if (isReaderMode) {
-                                                "Return to the original page"
-                                            } else {
-                                                "Simplify the page typography"
-                                            },
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.Book.drawableRes), contentDescription = null)
-                                    },
-                                    trailingIcon = {
-                                        ArcMenuStateLabel(
-                                            label = if (isReaderMode) "On" else "Off",
-                                            isEmphasized = isReaderMode,
-                                            shellColors = shellColors,
-                                            actionColor = if (isIncognito) shellColors.incognitoAccent else shellColors.accent,
-                                        )
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onToggleReaderMode()
-                                    },
-                                )
-                                if (isReaderMode) {
-                                    DropdownMenuItem(
-                                        text = {
-                                            ArcMenuLabel(
-                                                title = "Reader Settings",
-                                                subtitle = "Adjust font, size, and theme",
-                                                shellColors = shellColors,
-                                            )
-                                        },
-                                        leadingIcon = {
-                                            Icon(painter = painterResource(id = MahoIcon.Tune.drawableRes), contentDescription = null)
-                                        },
-                                        onClick = {
-                                            expanded = false
-                                            onReaderSettingsClick()
-                                        },
-                                    )
-                                }
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = if (isDesktopMode) "Mobile Site" else "Desktop Site",
-                                            subtitle = if (isDesktopMode) {
-                                                "Request the mobile version of sites"
-                                            } else {
-                                                "Request the desktop version of sites"
-                                            },
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.Monitor.drawableRes), contentDescription = null)
-                                    },
-                                    trailingIcon = {
-                                        ArcMenuStateLabel(
-                                            label = if (isDesktopMode) "On" else "Off",
-                                            isEmphasized = isDesktopMode,
-                                            shellColors = shellColors,
-                                            actionColor = if (isIncognito) shellColors.incognitoAccent else shellColors.accent,
-                                        )
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onToggleDesktopMode()
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Zoom In",
-                                            subtitle = "Increase page scale from $zoomLabel",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.ZoomIn.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onZoomIn()
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Zoom Out",
-                                            subtitle = "Reduce page scale from $zoomLabel",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.ZoomOut.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onZoomOut()
-                                    },
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = {
-                                    ArcMenuLabel(
-                                        title = "Private",
-                                        subtitle = "Browse without keeping local history",
-                                        shellColors = shellColors,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes), contentDescription = null)
-                                },
-                                trailingIcon = {
-                                    ArcMenuStateLabel(
-                                        label = if (isIncognito) "On" else "Off",
-                                        isEmphasized = isIncognito,
-                                        shellColors = shellColors,
-                                        actionColor = if (isIncognito) shellColors.incognitoAccent else shellColors.accent,
-                                    )
-                                },
-                                onClick = {
-                                    expanded = false
-                                    onToggleIncognito(!isIncognito)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    ArcMenuLabel(
-                                        title = "Settings",
-                                        subtitle = "Preferences, spaces, and app controls",
-                                        shellColors = shellColors,
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(painter = painterResource(id = MahoIcon.Settings.drawableRes), contentDescription = null)
-                                },
-                                onClick = {
-                                    expanded = false
-                                    onOpenSettings()
-                                },
-                            )
-                            if (!isHomeMode) {
-                                DropdownMenuItem(
-                                    text = {
-                                        ArcMenuLabel(
-                                            title = "Picture in picture",
-                                            subtitle = "Keep the page visible while multitasking",
-                                            shellColors = shellColors,
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.PictureInPicture.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onPiP()
-                                    },
-                                )
-                            }
                         }
 
                     }
@@ -1010,7 +767,7 @@ private fun ArcDropdownMenu(
 }
 
 @Composable
-private fun ArcMenuSectionLabel(
+internal fun ArcMenuSectionLabel(
     label: String,
     shellColors: dev.maho.browser.ui.theme.BrowserShellColors,
 ) {
@@ -1023,7 +780,7 @@ private fun ArcMenuSectionLabel(
 }
 
 @Composable
-private fun ArcMenuDivider(
+internal fun ArcMenuDivider(
     shellColors: dev.maho.browser.ui.theme.BrowserShellColors,
 ) {
     HorizontalDivider(
@@ -1034,7 +791,7 @@ private fun ArcMenuDivider(
 }
 
 @Composable
-private fun ArcMenuLabel(
+internal fun ArcMenuLabel(
     title: String,
     subtitle: String,
     shellColors: dev.maho.browser.ui.theme.BrowserShellColors,
@@ -1058,7 +815,7 @@ private fun ArcMenuLabel(
 }
 
 @Composable
-private fun ArcMenuStateLabel(
+internal fun ArcMenuStateLabel(
     label: String,
     isEmphasized: Boolean,
     shellColors: dev.maho.browser.ui.theme.BrowserShellColors,
