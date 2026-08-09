@@ -62,11 +62,6 @@ import dev.maho.browser.ui.summary.PinchSummaryView
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import dev.maho.browser.ui.theme.resolveBrowserChromeTheme
 
-private enum class ShellRoute {
-    Home,
-    Browsing,
-}
-
 @Composable
 fun MainBrowserScreen(externalUrl: String? = null) {
     val shellColors = BrowserShellTheme.colors
