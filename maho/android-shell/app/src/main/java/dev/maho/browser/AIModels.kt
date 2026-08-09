@@ -42,11 +42,3 @@ data class SpaceAIConfig(
     val preferredModel: String? = null,
     val memoryEnabled: Boolean = true,
 )
-
-@Serializable
-data class TabCluster(
-    val name: String = "",
-    val tabIds: List<String> = emptyList(),
-    val tab_ids: List<String> = emptyList(),
-    val group_name: String = "",
-)

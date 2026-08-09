@@ -46,12 +46,6 @@ private func ffiSetSpaceAIConfig(
     _ configJson: UnsafePointer<CChar>?
 ) -> Bool
 
-@_silgen_name("maho_core_cluster_tabs")
-private func ffiClusterTabs(
-    _ ptr: OpaquePointer?,
-    _ threshold: Double
-) -> UnsafeMutablePointer<CChar>?
-
 @_silgen_name("maho_core_managed_proxy_url")
 private func ffiManagedProxyUrl() -> UnsafeMutablePointer<CChar>?
 
@@ -118,14 +112,6 @@ extension MahoBridge {
                 }
             }
         } ?? false
-    }
-
-    // MARK: Tab Clustering
-
-    func clusterTabs(threshold: Double) -> [TabClusterResult] {
-        (withCore { ptr in
-            FFIString.consumeJSON(ffiClusterTabs(ptr, threshold), as: [TabClusterResult].self)
-        } ?? nil) ?? []
     }
 
     // MARK: Managed AI (free credits via relay session)

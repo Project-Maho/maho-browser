@@ -983,13 +983,6 @@ object MahoBridge {
     fun setSpaceAIConfig(spaceId: String, config: SpaceAIConfig): Boolean = true
     fun setSpaceAIConfig(spaceId: String, configJson: String): Boolean = true
 
-    // --- Tab Clustering ---
-    fun clusterTabs(threshold: Float): String? {
-        val ptr = corePtr
-        if (ptr == 0L) return null
-        return nativeClusterTabs(ptr, threshold.toDouble())
-    }
-
     // --- Offline Model ---
     @kotlinx.serialization.Serializable
     data class OfflineModelInfo(val status: String, val size: Long)
@@ -1005,7 +998,6 @@ object MahoBridge {
     private external fun nativeDestroy(ptr: Long)
     private external fun nativeHandleEvent(ptr: Long, eventJson: String): String?
     private external fun nativeTick(ptr: Long): String?
-    private external fun nativeClusterTabs(ptr: Long, threshold: Double): String?
     private external fun nativeSaveState(ptr: Long): Boolean
     private external fun nativeLoadState(ptr: Long): Boolean
     private external fun nativeGetTabViewModels(ptr: Long): String?

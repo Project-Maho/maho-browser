@@ -4022,21 +4022,6 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConve
     }
 }
 
-#[no_mangle]
-pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeClusterTabs<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    ptr: jlong,
-    threshold: jni::sys::jdouble,
-) -> jstring {
-    let core = match unsafe { get_core(ptr) } {
-        Some(c) => c,
-        None => return std::ptr::null_mut(),
-    };
-    let clusters = core.cluster_tabs(threshold);
-    to_json_jstring(&mut env, &clusters)
-}
-
 // ============================================================
 // Chat Session JNI Bindings
 // ============================================================

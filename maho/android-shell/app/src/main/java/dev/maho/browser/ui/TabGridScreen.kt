@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -39,10 +38,8 @@ import dev.maho.browser.models.SpaceId
 import dev.maho.browser.models.SpaceViewModel
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
-import dev.maho.browser.support.FeatureFlags
 import dev.maho.browser.ui.space.SpaceChipRow
 import dev.maho.browser.ui.space.SpaceSwitcherSheet
-import dev.maho.browser.ui.tab.TabGroupSuggestion
 import dev.maho.browser.ui.tab.TabGrid
 import dev.maho.browser.ui.tab.TabGridToolbar
 import dev.maho.browser.ui.theme.BrowserShellTheme
@@ -63,7 +60,6 @@ fun TabGridScreen(
     var tabs by remember { mutableStateOf<List<TabViewModel>>(emptyList()) }
     var spaces by remember { mutableStateOf<List<SpaceViewModel>>(emptyList()) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
-    var showClustering by remember { mutableStateOf(false) }
 
     fun refresh() {
         tabs = BridgeTabs.getTabViewModels()
@@ -183,20 +179,6 @@ fun TabGridScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            if (FeatureFlags.clusterTabsEnabled) {
-                                IconButton(
-                                    onClick = { showClustering = true },
-                                    modifier = Modifier.testTag("tabClusteringButton"),
-                                ) {
-                                    Icon(
-                                        painter = painterResource(id = MahoIcon.SparklesAi.drawableRes),
-                                        contentDescription = "Suggest tab groups",
-                                        tint = accentColor,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-
                             if (isIncognito) {
                                 Surface(
                                     modifier = Modifier.testTag("tabSwitcherStateChip"),
@@ -248,18 +230,6 @@ fun TabGridScreen(
                             refresh()
                         }
                     )
-                }
-
-                if (FeatureFlags.clusterTabsEnabled && showClustering) {
-                    activeSpaceId?.let { spaceId ->
-                        TabGroupSuggestion(
-                            spaceId = spaceId,
-                            activeSpaceName = activeSpaceName,
-                            tabs = visibleTabs,
-                            onDismiss = { showClustering = false },
-                            onFoldersCreated = { refresh() },
-                        )
-                    }
                 }
 
                 TabGrid(

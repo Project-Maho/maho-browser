@@ -25,17 +25,6 @@ public struct SpaceAIConfig: Codable, Equatable {
     }
 }
 
-/// Result of tab clustering AI operation.
-public struct TabClusterResult: Codable {
-    public let tab_ids: [String]
-    public let group_name: String
-
-    public init(tab_ids: [String] = [], group_name: String = "") {
-        self.tab_ids = tab_ids
-        self.group_name = group_name
-    }
-}
-
 struct OfflineModelInfo: Codable {
     let status: String
     let size: Int
