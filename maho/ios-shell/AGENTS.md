@@ -41,12 +41,11 @@ Project membership is generated from `project.yml` with XcodeGen.
 - Keep private state in `MainBrowserView`; pass explicit bindings and closures
   into presentation modifiers rather than recreating ownership elsewhere.
 - Archive restore must use typed `ShellEvent.restoreArchivedTab`, not raw JSON.
-- There must be exactly one `struct ArchiveView`; audit with
-  `git grep -n 'struct ArchiveView' HEAD -- maho/ios-shell`.
-- BYOK, conversations, and chat are web-ai surfaces. Do not reintroduce native
-  `BYOKSettingsView`, `ConversationListView`, or `ChatView` implementations;
-  audit deleted symbols with
-  `git grep -E 'BYOKSettingsView|ConversationListView|ChatView' HEAD -- maho/ios-shell`.
+- There must be exactly one Archive view type; run the plan F1 recursive count
+  audit against this directory.
+- BYOK, conversations, and chat are web-ai surfaces. Do not reintroduce the
+  deleted native AI screen types; run the plan F1 retired-screen audit against
+  this directory.
 - `isIncognito` remains local shell state.
 - `ShareExtension/**` stays excluded from the main app target.
 

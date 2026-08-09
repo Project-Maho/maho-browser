@@ -33,15 +33,14 @@ integration; web-ai owns the converged BYOK, conversations, and chat UI.
 - Keep `external fun native*` declarations in `MahoBridge.kt`; domain wrappers
   delegate to `bridge/` modules.
 - BYOK and conversations use `AiWebViewFactory.createHost`; web-ai source wires
-  conversation actions to the chat hash route. Do not recreate
-  `BYOKSettingsScreen`, `ConversationListScreen`, or `ChatScreen`; audit with
-  `git grep -E 'BYOKSettingsScreen|ConversationListScreen|ChatScreen' HEAD -- maho/android-shell`.
+  conversation actions to the chat hash route. Do not recreate the deleted
+  native AI screen types; run the plan F1 retired-screen audit against this
+  directory.
 - Reader remains native. Keep HTML generation in `ReaderRenderer.kt` and cover
   it with `ReaderRendererTest.kt`; do not move it into web-ai.
 - `isIncognito` remains local Compose state in `MainBrowserScreen`.
-- The deleted `clusterTabsEnabled` and `TabGroupSuggestion` symbols must not
-  return; audit with
-  `git grep -E 'clusterTabsEnabled|TabGroupSuggestion' HEAD -- maho/android-shell`.
+- The deleted tab-clustering flag and suggestion UI must not return; run the
+  plan F1 cluster-removal audit against this directory.
 - Keep `MainBrowserScreen.kt`, `MahoBridge.kt`, and `ArcBottomBar.kt` below
   1,000 pure LOC.
 
