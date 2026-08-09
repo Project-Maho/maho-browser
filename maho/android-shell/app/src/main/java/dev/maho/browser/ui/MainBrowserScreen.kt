@@ -69,6 +69,7 @@ import dev.maho.browser.models.SuggestionType
 import dev.maho.browser.models.SuggestionViewModel
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
+import dev.maho.browser.support.renderReaderHtml
 import dev.maho.browser.ui.find.FindInPageSheet
 import dev.maho.browser.ui.search.SearchSheet
 import dev.maho.browser.ui.summary.PinchSummaryView
@@ -312,88 +313,21 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                     content = content,
                     textContent = textContent,
                     byline = byline,
-                    dir = dir,
+                    textDirection = textDir,
                     excerpt = excerpt,
                     siteName = siteName,
                     length = length,
-                    publishedTime = publishedTime,
-                    textDirection = textDir
+                    publishedTime = publishedTime
                 )
 
                 val readerSettings = dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()?.reader
-                val bgHex: String
-                val fgHex: String
-                when (readerSettings?.theme) {
-                    dev.maho.browser.models.ReaderTheme.Sepia -> {
-                        bgHex = "#faf2df"
-                        fgHex = "#5a402a"
-                    }
-                    dev.maho.browser.models.ReaderTheme.Dark -> {
-                        bgHex = "#1e1e1e"
-                        fgHex = "#dcdcdc"
-                    }
-                    else -> {
-                        bgHex = "#ffffff"
-                        fgHex = "#000000"
-                    }
-                }
-                val fontStack = when (readerSettings?.fontFamily) {
-                    "Georgia" -> "Georgia, serif"
-                    "Courier New" -> "'Courier New', monospace"
-                    else -> "sans-serif"
-                }
-                val fontSize = readerSettings?.fontSize ?: 18.0
+                    ?: dev.maho.browser.models.ReaderSettings(
+                        fontFamily = "System",
+                        fontSize = 18.0,
+                        theme = dev.maho.browser.models.ReaderTheme.Light,
+                    )
+                val html = renderReaderHtml(article, readerSettings)
 
-                val html = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>
-                            body {
-                                background-color: $bgHex;
-                                color: $fgHex;
-                                font-family: $fontStack;
-                                font-size: ${fontSize}px;
-                                line-height: 1.6;
-                                margin: 0;
-                                padding: 16px;
-                            }
-                            .container {
-                                max-width: 600px;
-                                margin: 0 auto;
-                            }
-                            .title {
-                                font-size: 1.5em;
-                                margin-bottom: 8px;
-                                line-height: 1.2;
-                            }
-                            .byline {
-                                font-size: 0.9em;
-                                color: ${if (readerSettings?.theme == dev.maho.browser.models.ReaderTheme.Dark) "#888" else "#666"};
-                                margin-bottom: 24px;
-                                font-style: italic;
-                            }
-                            img {
-                                max-width: 100%;
-                                height: auto;
-                                border-radius: 8px;
-                                margin: 16px 0;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="container">
-                            <h1 class="title">${article.title}</h1>
-                            ${if (article.byline.isEmpty()) "" else "<p class=\"byline\">By ${article.byline}</p>"}
-                            <div class="content">
-                                ${article.content}
-                            </div>
-                        </div>
-                    </body>
-                    </html>
-                """.trimIndent()
-                
                 if (urlBeforeReaderMode == null) {
                     urlBeforeReaderMode = webView.url
                 }

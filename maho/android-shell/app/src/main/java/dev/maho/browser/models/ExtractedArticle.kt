@@ -14,10 +14,9 @@ data class ExtractedArticle(
     val content: String,
     val textContent: String,
     val byline: String,
-    val dir: String,
+    val textDirection: TextDirection,
     val excerpt: String? = null,
     val siteName: String? = null,
     val length: Int? = null,
-    val publishedTime: String? = null,
-    val textDirection: TextDirection? = null
+    val publishedTime: String? = null
 )
