@@ -15,17 +15,16 @@
  * 11. Agent (cloud-agent task chat)
  *
  * Navigation patterns:
- * - ChatScreen: Settings → "AI Chat" (or deep link maho://ask fallback)
- * - ConversationList: Settings → "Saved Conversations"
+ * - Chat: bottom-bar menu → "Conversations" → select/create a saved conversation → shared web-ai #chat
+ * - Conversations: bottom-bar menu → "Conversations" → shared web-ai #conversations
  * - SpaceAIConfig: bottom bar spaces dropdown → "AI personality"
  * - Agent: Settings → "Web Agent"
  * - BYOK settings: Settings → "API Keys" → shared web-ai #byok
  * - OfflineModel: Settings → "Offline Model"
  * - PrivacyDashboard: Settings → "Privacy Dashboard"
- * - CameraCapture, VisualSearch: child of ChatScreen (nested)
+ * - CameraCapture, VisualSearch: separate native screens; chat no longer owns their entry points
  *
- * testTags (exposed as resource-id via testTagsAsResourceId):
- *   aiScreenBYOK, aiScreenChat, aiScreenConversationList,
+ * testTags (exposed as resource-id via testTagsAsResourceId) remain for native screens:
  *   aiScreenVisualSearch, aiScreenCameraCapture, aiScreenSpaceAIConfig,
  *   aiScreenOfflineModel, aiScreenAgent, aiScreenPrivacyDashboard
  */
@@ -423,25 +422,27 @@ test('Home: visible after launch', async (driver) => {
   await ensureHomeSurface(driver);
 });
 
-test('AI: Chat View — open via deep link and verify rendered', async (driver) => {
+test('AI: Chat — open from the shared Conversations host', async (driver) => {
   try {
-    // Launch chat via deep link (maho://ask triggers ChatScreen)
-    await driver.execute('mobile: deepLink', {
-      url: 'maho://ask?q=hello',
-      package: APP_PACKAGE,
-    });
-    await driver.pause(2500);
+    await ensureHomeSurface(driver);
+    await openMenu(driver);
 
-    const chatOverlay = await waitForVisible(driver, [
-      resourceId('aiScreenChat'),
-      resourceId('browserChatOverlay'),
-      resourceId('chatShellScrim'),
+    const conversationsItem = await waitForVisible(driver, [
+      'android=new UiSelector().text("Conversations")',
+    ], 'Conversations menu item should be visible');
+    await conversationsItem.click();
+
+    const newChat = await waitForVisible(driver, [
+      'android=new UiSelector().text("+ New")',
+      'android=new UiSelector().text("New")',
+    ], 'web-ai Conversations should expose a new conversation action', 12000);
+    await newChat.click();
+
+    const chatInput = await waitForVisible(driver, [
       'android=new UiSelector().textContains("Type a message")',
-      'android=new UiSelector().textContains("Ask anything")',
-      'android=new UiSelector().descriptionContains("chat")',
-    ], 'Chat overlay should be visible after deep link', 10000);
-
-    assert.ok(chatOverlay, 'Chat View rendered');
+      'android=new UiSelector().description("Message")',
+    ], 'web-ai Chat should render after Conversations navigates to #chat', 10000);
+    assert.ok(chatInput, 'web-ai Chat rendered');
     await saveScreenshot(driver, 'chat-view');
   } finally {
     await dismissOverlay(driver);

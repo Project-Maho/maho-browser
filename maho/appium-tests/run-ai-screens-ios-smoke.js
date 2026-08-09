@@ -19,8 +19,8 @@
  * - SpaceAIConfigView: Settings → "AI Settings" section → "Space AI Configuration" (greyed without context)
  * - OfflineModelView: Settings → "AI Settings" section → "Offline Model"
  * - AgentView: Settings → "AI Settings" section → "Web Agent"
- * - ChatView: Settings → "AI Screens" section → "AI Chat (Test)" (sheet)
- * - ConversationListView: Settings → "AI Screens" section → "Saved Conversations" (sheet)
+ * - Chat: bottom-bar menu → "Conversations" → select/create a saved conversation → shared web-ai #chat
+ * - Conversations: bottom-bar menu → "Conversations" → shared web-ai #conversations
  * - VisualSearchView: Settings → "AI Screens" section → "Visual Search" (fullScreenCover)
  * - CameraCaptureView: Settings → "AI Screens" section → "Camera Capture" (fullScreenCover)
  * - PrivacySettingsView: Settings → "Privacy & Security"
@@ -533,29 +533,23 @@ test('Home: visible after launch', async (driver) => {
   await ensureHomeSurface(driver);
 });
 
-test('AI: Chat View — open from AI Screens section', async (driver) => {
+test('AI: Chat — open from the shared Conversations host', async (driver) => {
   try {
     await ensureHomeSurface(driver);
-    await openSettings(driver);
+    const menuOpened = await openPageMenu(driver);
+    assert.ok(menuOpened, 'Page menu should become visible');
 
-    await openLabeledScreen(
-      driver,
-      ['AI Chat (Test)', 'AI Chat'],
-      [
-        '~aiScreenChat',
-        '//*[@name="aiScreenChat"]',
-      ],
-      {
-        postTapPauseMs: 2000,
-        alternateSuccessLabels: ['Chats'],
-        missingRowMessage: '"AI Chat (Test)" button should be visible in AI Screens section',
-        missingScreenMessage: 'ChatView should render (aiScreenChat identifier)',
-      },
-    );
+    const conversationsSelectors = selectorsForLabels(['Conversations']);
+    await tapElementFresh(driver, conversationsSelectors, 'Conversations menu item');
+    await waitForAnyLabel(driver, ['Saved Conversations'], 8000);
+
+    const newChatSelectors = selectorsForLabels(['+ New', 'New']);
+    await tapElementFresh(driver, newChatSelectors, 'New conversation button');
+    const messageInput = await waitForAnyLabel(driver, ['Message', 'Type a message…'], 10000);
+    assert.ok(messageInput, 'web-ai Chat should render after Conversations navigates to #chat');
     await saveScreenshot(driver, 'chat-view');
   } finally {
     await dismissOverlay(driver);
-    await dismissSettings(driver);
     await returnToHome(driver);
   }
 });

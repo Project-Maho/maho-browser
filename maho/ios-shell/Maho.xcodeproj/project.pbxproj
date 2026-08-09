@@ -22,7 +22,6 @@
 		161EDC90361D487418E13CCC /* BridgeTabsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 038ED9EEA08AFAE19F7314E0 /* BridgeTabsTests.swift */; };
 		1760D2F03212CCF62E707078 /* BrowserState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E89A4B5E1894A89C3AF8459 /* BrowserState.swift */; };
 		185CA914F622E8ACE5786B99 /* JSON.swift in Sources */ = {isa = PBXBuildFile; fileRef = 329FF59E8F3D9FC8B074DE78 /* JSON.swift */; };
-		1948083139161E1F98CCDD08 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F310FBB4515D6B2657B0080D /* ChatView.swift */; };
 		19E4D95436151E2BB1F607A4 /* RelayAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F55268EE7090E2243829AF9 /* RelayAPIClient.swift */; };
 		1AC3B1BAF0C0AC396E946786 /* NotificationBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5059F95E9015A985D8917BB2 /* NotificationBannerView.swift */; };
 		1FDC77BA0686BD33B3B74ECF /* CoreUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8E768FB6F13D67D5866FB6 /* CoreUpdate.swift */; };
@@ -366,7 +365,6 @@
 		F1510781893C16E05CC4E6D6 /* ShellEvent+CommandBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ShellEvent+CommandBar.swift"; sourceTree = "<group>"; };
 		F302E99642B18ECC4E9ABC94 /* SettingsRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRootView.swift; sourceTree = "<group>"; };
 		F30915874373AD381E6FFD36 /* FolderCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderCardView.swift; sourceTree = "<group>"; };
-		F310FBB4515D6B2657B0080D /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F315D17DD3DF693C48E1C1A2 /* SpaceCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceCardView.swift; sourceTree = "<group>"; };
 		F8817F14BE9D7EF5EA677128 /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
 		FA4E99D7E4FC5911E00254AB /* SpaceChipRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceChipRow.swift; sourceTree = "<group>"; };
@@ -737,7 +735,6 @@
 				C793D0E167A6486F4022C931 /* ArcBottomBar.swift */,
 				A8AD61199BCF5A35615C3213 /* BrowserView.swift */,
 				0219014105293823592930DA /* CameraCaptureView.swift */,
-				F310FBB4515D6B2657B0080D /* ChatView.swift */,
 				978D91F104345020855752D1 /* ConversationsWebView.swift */,
 				BDB1132FEE41E2BDDA068420 /* HomeSearchView.swift */,
 				2B43101A63E11A25E35577F1 /* MainBrowserView.swift */,
@@ -1038,7 +1035,6 @@
 				3CC62775937CEA681BF37C50 /* CameraCaptureView.swift in Sources */,
 				70E1717D5C591BD3C364F0DE /* CameraManager.swift in Sources */,
 				A15060131BE84479D220911A /* ChatSessionRegistry.swift in Sources */,
-				1948083139161E1F98CCDD08 /* ChatView.swift in Sources */,
 				F1BA3656551E0CC469F9F01E /* CommandBarViewModel.swift in Sources */,
 				C4958A90E6A2D3F56B39004A /* CommonTypes.swift in Sources */,
 				862B29C9D42F7A3FF483D59F /* ContentBlockerView.swift in Sources */,
