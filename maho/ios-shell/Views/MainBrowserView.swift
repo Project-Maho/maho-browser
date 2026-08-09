@@ -22,10 +22,12 @@ struct MainBrowserView: View {
     }
 
     @StateObject private var browserVM = BrowserViewModel()
+    @StateObject private var browserState = BrowserState()
     @State private var showTabGrid = false
     @State private var showSettings = false
     @State private var showHistory = false
     @State private var showBookmarks = false
+    @State private var showArchive = false
     @State private var showReadingList = false
     @State private var showDownloads = false
     @State private var showNotes = false
@@ -179,6 +181,10 @@ struct MainBrowserView: View {
                     onShare: shareCurrentPage,
                     onReload: reloadCurrentPage,
                     onArchive: archiveCurrentTab,
+                    onOpenArchive: {
+                        browserState.loadArchivedTabs()
+                        showArchive = true
+                    },
                     onToggleReader: toggleReaderMode,
                     onZoomIn: {
                         adjustZoom(by: 0.1)
@@ -326,6 +332,9 @@ struct MainBrowserView: View {
                 showBookmarks = false
                 createTabAndNavigate(url)
             }
+        }
+        .sheet(isPresented: $showArchive) {
+            ArchiveView(state: browserState)
         }
         .sheet(isPresented: $showReadingList) {
             ReadingListView { url in

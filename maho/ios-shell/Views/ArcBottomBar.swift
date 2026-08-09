@@ -38,6 +38,7 @@ struct ArcBottomBar: View {
     let onShare: () -> Void
     let onReload: () -> Void
     let onArchive: () -> Void
+    let onOpenArchive: () -> Void
     let onToggleReader: () -> Void
     let onZoomIn: () -> Void
     let onZoomOut: () -> Void
@@ -347,6 +348,11 @@ struct ArcBottomBar: View {
                     Label { Text("Add to Archive") } icon: { Image(lucide: Lucide.archive) }
                 }
                 .disabled(!canReload)
+
+                Button(action: onOpenArchive) {
+                    Label { Text("Archive") } icon: { Image(lucide: Lucide.archive) }
+                }
+                .accessibilityIdentifier("openArchiveButton")
             }
 
             Section {
