@@ -36,7 +36,7 @@ struct OnboardingView: View {
         }
         .sheet(isPresented: $showBYOKSettings) {
             NavigationView {
-                BYOKSettingsView()
+                BYOKWebView()
                     .navigationBarItems(trailing: Button("Done") {
                         showBYOKSettings = false
                     })
