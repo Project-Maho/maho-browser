@@ -1,34 +1,67 @@
 # android-shell
 
 ## OVERVIEW
-Android shell project. Gradle-based native app boundary for the Maho browser on Android.
+
+Android shell project. Compose owns native browser chrome and Android system
+integration; web-ai owns the converged BYOK, conversations, and chat UI.
 
 ## STRUCTURE
-- `build.gradle.kts` — build logic
-- `settings.gradle.kts` — project wiring
-- `gradle/` — wrapper support
-- app sources and tests live under `app/`
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|------|----------|-------|
-| Build setup | `build.gradle.kts` | Module and dependency wiring |
-| Project wiring | `settings.gradle.kts` | Included modules |
-| JVM tests | `app/src/test/` | Fast unit tests |
-| Instrumentation tests | `app/src/androidTest/` | Device/emulator coverage |
+- `app/src/main/java/dev/maho/browser/MahoBridge.kt` — JNI declarations and
+  public facade
+- `app/src/main/java/dev/maho/browser/bridge/` — domain delegates; AI, agent,
+  chat, and conversations live in `BridgeAi.kt`, `BridgeAgent.kt`,
+  `BridgeChat.kt`, and `BridgeConversations.kt`
+- `app/src/main/java/dev/maho/browser/ui/MainBrowserScreen.kt` — native shell
+  state and composition; keep it below 1,000 pure LOC
+- `app/src/main/java/dev/maho/browser/ui/MainBrowserShellRoute.kt` — shell route
+  state type
+- `app/src/main/java/dev/maho/browser/ui/MainBrowserAccessibility.kt` — shell
+  accessibility descriptions
+- `app/src/main/java/dev/maho/browser/ui/theme/BrowserShellTheme.kt` — shell
+  color and metric decisions
+- `app/src/main/java/dev/maho/browser/ui/MainBrowserReader.kt` — Reader host
+- `app/src/main/java/dev/maho/browser/support/ReaderRenderer.kt` — pure Reader
+  HTML renderer
+- `app/src/main/java/dev/maho/browser/ui/webview/` — shared web-ai hosts and
+  RPC bridge, including `BYOKWebOverlay.kt` and `ConversationsWebOverlay.kt`
+- `app/src/main/java/dev/maho/browser/ui/ArcBottomBar*.kt` — entry composable
+  plus browser, page, and spaces sections
 
 ## CONVENTIONS
-- Follow the Gradle/Kotlin build already in place.
-- Keep Android shell changes local to `android-shell/`.
-- Use the test matrix in `docs/test-matrix.md` for canonical command ordering.
 
-## ANTI-PATTERNS
-- Do not treat Android shell work as part of the Swift shells.
-- Do not change test ordering without updating the docs.
-- Do not bury app-specific logic outside the Android shell tree.
+- Keep `external fun native*` declarations in `MahoBridge.kt`; domain wrappers
+  delegate to `bridge/` modules.
+- BYOK and conversations use `AiWebViewFactory.createHost`; web-ai source wires
+  conversation actions to the chat hash route. Do not recreate
+  `BYOKSettingsScreen`, `ConversationListScreen`, or `ChatScreen`; audit with
+  `git grep -E 'BYOKSettingsScreen|ConversationListScreen|ChatScreen' HEAD -- maho/android-shell`.
+- Reader remains native. Keep HTML generation in `ReaderRenderer.kt` and cover
+  it with `ReaderRendererTest.kt`; do not move it into web-ai.
+- `isIncognito` remains local Compose state in `MainBrowserScreen`.
+- The deleted `clusterTabsEnabled` and `TabGroupSuggestion` symbols must not
+  return; audit with
+  `git grep -E 'clusterTabsEnabled|TabGroupSuggestion' HEAD -- maho/android-shell`.
+- Keep `MainBrowserScreen.kt`, `MahoBridge.kt`, and `ArcBottomBar.kt` below
+  1,000 pure LOC.
+
+## WHERE TO LOOK
+
+| Task | Location |
+| --- | --- |
+| Native shell and overlays | `ui/MainBrowserScreen.kt`, `ui/MainBrowserOverlay.kt` |
+| Web-ai host factory and RPC | `ui/webview/AiWebViewFactory.kt`, `ui/webview/WebViewBridge.kt` |
+| Reader rendering | `support/ReaderRenderer.kt`, `ui/MainBrowserReader.kt` |
+| Bridge domain wrapper | `bridge/Bridge*.kt` |
+| Bottom-bar sections | `ui/ArcBottomBar*.kt` |
+| JVM tests | `app/src/test/` |
+| Instrumentation tests | `app/src/androidTest/` |
 
 ## COMMANDS
+
 ```bash
-cd android-shell && ./gradlew app:testDebugUnitTest
-cd android-shell && ./gradlew app:connectedDebugAndroidTest
+cd maho/android-shell
+./gradlew app:testDebugUnitTest
+./gradlew app:assembleDebug
+./gradlew app:connectedDebugAndroidTest
 ```
