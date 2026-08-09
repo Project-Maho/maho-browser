@@ -103,6 +103,7 @@ fun ArcBottomBar(
     onZoomOut: () -> Unit,
     onToggleDesktopMode: () -> Unit,
     onOpenAiChat: () -> Unit = {},
+    onOpenConversations: () -> Unit = {},
     onPiP: () -> Unit = {},
     onBrowseForMe: () -> Unit = {},
     canSwipeToPreviousTab: Boolean = false,
@@ -520,6 +521,7 @@ fun ArcBottomBar(
                                 onZoomOut = onZoomOut,
                                 onToggleIncognito = onToggleIncognito,
                                 onOpenSettings = onOpenSettings,
+                                onOpenConversations = onOpenConversations,
                                 onPiP = onPiP,
                             )
                         }

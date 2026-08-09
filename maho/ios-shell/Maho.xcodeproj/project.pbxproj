@@ -37,7 +37,6 @@
 		2FC38E34915D7AF107BF35B9 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */; };
 		3251F36A8C16E0569092BA2F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D68D55332912D1045D2DC3D /* ShareViewController.swift */; };
 		32BE1822EA70F413BEC07F24 /* MahoBridge+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB92C7C587E13D75B67734E7 /* MahoBridge+Lifecycle.swift */; };
-		3328E8CDC581F910E9392B63 /* ConversationListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 311B058C5C2DB34538E1EA05 /* ConversationListView.swift */; };
 		387FC361202A37B4249706C3 /* SyncStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE3C1133B24E39B1A0F7FAA5 /* SyncStatusIndicator.swift */; };
 		3B6DEC7634A1B5D0CCD793AD /* PiPManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F30AC70EE3AF3F796DDCB7 /* PiPManager.swift */; };
 		3CC62775937CEA681BF37C50 /* CameraCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0219014105293823592930DA /* CameraCaptureView.swift */; };
@@ -156,6 +155,7 @@
 		DC0B09F0485C4B2FEDE8DC21 /* VisualQAScreenshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451AC8C18FB86DCFA7E13573 /* VisualQAScreenshots.swift */; };
 		DD015684DA010CDB9BDAB393 /* TabGridTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7538F11240C5866FFB4942E7 /* TabGridTests.swift */; };
 		DE843462539E4B8457116994 /* ArcBottomBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C793D0E167A6486F4022C931 /* ArcBottomBar.swift */; };
+		DEEEA547F1CDE4322F11F3C2 /* ConversationsWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978D91F104345020855752D1 /* ConversationsWebView.swift */; };
 		E0A16EB8B7C11BB35200B59C /* SpaceSwitcherSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260E8E26E5275524FC5A01DE /* SpaceSwitcherSheet.swift */; };
 		E218A5BF03A22456BB8848C1 /* PrivateBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9BB224B7BB896A468B033C6 /* PrivateBanner.swift */; };
 		E344AF93D482AE2A37ACB91A /* ShellTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E221EB224C807F4A42D2406F /* ShellTheme.swift */; };
@@ -234,7 +234,6 @@
 		2CCD836DC0F18F95C8A80545 /* ReaderSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettingsSheet.swift; sourceTree = "<group>"; };
 		2DC00613B2B0890742D94D04 /* TabCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabCardView.swift; sourceTree = "<group>"; };
 		30D21A35900BEF3B44F9A93D /* GoogleRelaySignInFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleRelaySignInFlowTests.swift; sourceTree = "<group>"; };
-		311B058C5C2DB34538E1EA05 /* ConversationListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListView.swift; sourceTree = "<group>"; };
 		31CB92672B38BE4F8C80EE76 /* MahoBridge+Notes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Notes.swift"; sourceTree = "<group>"; };
 		329FF59E8F3D9FC8B074DE78 /* JSON.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSON.swift; sourceTree = "<group>"; };
 		34A7DC5B691AACB7AA319F90 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -298,6 +297,7 @@
 		8EBC5417819195E77362721C /* GoogleSignInCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInCoordinator.swift; sourceTree = "<group>"; };
 		9333C807210D3790979FCD6A /* BYOKWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKWebView.swift; sourceTree = "<group>"; };
 		95C5AB7D5319FBC2F2FD2884 /* Identifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identifiers.swift; sourceTree = "<group>"; };
+		978D91F104345020855752D1 /* ConversationsWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationsWebView.swift; sourceTree = "<group>"; };
 		97B4F0A8EB3B1E90022992DA /* MahoBridge+Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Agent.swift"; sourceTree = "<group>"; };
 		98291AB30F5FE8057ECAE731 /* BridgeSpacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeSpacesTests.swift; sourceTree = "<group>"; };
 		990D75F136CA79CD0FC6B6C6 /* WebViewCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewCoordinator.swift; sourceTree = "<group>"; };
@@ -738,7 +738,7 @@
 				A8AD61199BCF5A35615C3213 /* BrowserView.swift */,
 				0219014105293823592930DA /* CameraCaptureView.swift */,
 				F310FBB4515D6B2657B0080D /* ChatView.swift */,
-				311B058C5C2DB34538E1EA05 /* ConversationListView.swift */,
+				978D91F104345020855752D1 /* ConversationsWebView.swift */,
 				BDB1132FEE41E2BDDA068420 /* HomeSearchView.swift */,
 				2B43101A63E11A25E35577F1 /* MainBrowserView.swift */,
 				CF588754412F8DC2BA9012EF /* PinchSummaryView.swift */,
@@ -1042,7 +1042,7 @@
 				F1BA3656551E0CC469F9F01E /* CommandBarViewModel.swift in Sources */,
 				C4958A90E6A2D3F56B39004A /* CommonTypes.swift in Sources */,
 				862B29C9D42F7A3FF483D59F /* ContentBlockerView.swift in Sources */,
-				3328E8CDC581F910E9392B63 /* ConversationListView.swift in Sources */,
+				DEEEA547F1CDE4322F11F3C2 /* ConversationsWebView.swift in Sources */,
 				1FDC77BA0686BD33B3B74ECF /* CoreUpdate.swift in Sources */,
 				CFF4837355A6D1FC895B6BDC /* DeepLinkHandler.swift in Sources */,
 				05D29A8177F43428782028B7 /* DefaultBrowserManager.swift in Sources */,

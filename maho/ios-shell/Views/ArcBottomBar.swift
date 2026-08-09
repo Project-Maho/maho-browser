@@ -35,6 +35,7 @@ struct ArcBottomBar: View {
     let onFindInPage: () -> Void
     let onSettings: () -> Void
     let onOpenAiChat: () -> Void
+    let onOpenConversations: () -> Void
     let onShare: () -> Void
     let onReload: () -> Void
     let onArchive: () -> Void
@@ -397,6 +398,11 @@ struct ArcBottomBar: View {
             }
 
             Section {
+                Button(action: onOpenConversations) {
+                    Label { Text("Conversations") } icon: { Image(lucide: Lucide.messageCircle) }
+                }
+                .accessibilityIdentifier("openConversationsButton")
+
                 Button(action: onSettings) {
                     Label { Text("Settings") } icon: { Image(lucide: Lucide.settings) }
                 }

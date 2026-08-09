@@ -32,7 +32,7 @@ internal enum class BrowserOverlay {
     Settings, GeneralSettings, AppearanceSettings, PrivacySettings, ReaderSettings,
     AutofillSettings, NotificationSettings, MaxSettings, ApiKeys, AdvancedSettings, Profiles,
     Bookmarks, History, Archive, Downloads, Notes, ReadingList, AppIconPicker,
-    Feedback, LanguageSettings, SyncSettings, WebAgent,
+    Feedback, LanguageSettings, SyncSettings, WebAgent, Conversations,
 }
 
 @Composable
@@ -93,6 +93,7 @@ internal fun MainBrowserOverlay(
                 initialGoal = webAgentInitialGoal,
                 onExit = onPop,
             )
+            BrowserOverlay.Conversations -> dev.maho.browser.ui.webview.ConversationsWebOverlay(onExit = onPop)
             BrowserOverlay.AdvancedSettings -> AdvancedSettingsScreen(onBack = onPop)
             BrowserOverlay.Profiles -> ProfileSettingsScreen(onBack = onPop)
             BrowserOverlay.Bookmarks -> BookmarksScreen(

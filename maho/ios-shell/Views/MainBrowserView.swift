@@ -60,6 +60,7 @@ struct MainBrowserView: View {
     @State private var showVoiceAssistant = false
     @State private var voiceSearchManager = VoiceSearchManager()
     @State private var showAiChat = false
+    @State private var showConversations = false
     @State private var autoOpenAiChatOnAppear = false
     @State private var askAIQuery: String?
 
@@ -177,6 +178,9 @@ struct MainBrowserView: View {
                     },
                     onOpenAiChat: {
                         presentAiChat(query: "")
+                    },
+                    onOpenConversations: {
+                        showConversations = true
                     },
                     onShare: shareCurrentPage,
                     onReload: reloadCurrentPage,
@@ -363,6 +367,9 @@ struct MainBrowserView: View {
         }
         .sheet(isPresented: $showAiChat) {
             AgentWebView(query: askAIQuery ?? "")
+        }
+        .sheet(isPresented: $showConversations) {
+            ConversationsWebView()
         }
         .onAppear {
             loadBrowserState()

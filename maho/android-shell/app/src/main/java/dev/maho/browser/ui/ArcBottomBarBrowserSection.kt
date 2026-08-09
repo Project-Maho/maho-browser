@@ -24,6 +24,7 @@ internal fun ArcBottomBarBrowserSection(
     onZoomOut: () -> Unit,
     onToggleIncognito: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenConversations: () -> Unit,
     onPiP: () -> Unit,
 ) {
     ArcMenuSectionLabel(
@@ -176,6 +177,22 @@ internal fun ArcBottomBarBrowserSection(
         onClick = {
             onDismissMenu()
             onToggleIncognito(!isIncognito)
+        },
+    )
+    DropdownMenuItem(
+        text = {
+            ArcMenuLabel(
+                title = "Conversations",
+                subtitle = "View saved AI conversation history",
+                shellColors = shellColors,
+            )
+        },
+        leadingIcon = {
+            Icon(painter = painterResource(id = MahoIcon.History.drawableRes), contentDescription = null)
+        },
+        onClick = {
+            onDismissMenu()
+            onOpenConversations()
         },
     )
     DropdownMenuItem(

@@ -715,6 +715,10 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     pushOverlay(BrowserOverlay.Settings)
                                     showFindSheet = false
                                 },
+                                onOpenConversations = {
+                                    pushOverlay(BrowserOverlay.Conversations)
+                                    showFindSheet = false
+                                },
                                 onShare = { shareCurrentPage() },
                                 onReload = {
                                     activeTabId?.let { tabId ->
@@ -822,6 +826,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             },
                             onOpenAiChat = {
                                 presentWebAgent()
+                            },
+                            onOpenConversations = {
+                                pushOverlay(BrowserOverlay.Conversations)
                             },
                             onShare = {},
                             onReload = {},
