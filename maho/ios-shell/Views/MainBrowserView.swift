@@ -147,7 +147,7 @@ struct MainBrowserView: View {
                     isDesktopMode: isDesktopMode,
                     zoomLevel: zoomLevel,
                     pageTitle: browserVM.currentTitle,
-                    pageHost: displayHost(for: browserVM.currentUrl) ?? "",
+                    pageHost: MainBrowserPresentation.displayHost(for: browserVM.currentUrl) ?? "",
                     canGoBack: browserVM.canGoBack,
                     canGoForward: browserVM.canGoForward,
                     tabSwipeOffset: bottomBarTabSwipeOffset,
@@ -318,59 +318,25 @@ struct MainBrowserView: View {
                 .zIndex(100)
             }
         }
-        .sheet(isPresented: $showTabGrid, onDismiss: handleTabGridDismiss) {
-            TabGridSheet(isIncognito: $isIncognito)
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsRootView()
-        }
-        .sheet(isPresented: $showHistory) {
-            HistoryView { url in
-                showHistory = false
-                createTabAndNavigate(url)
-            }
-        }
-        .sheet(isPresented: $showBookmarks) {
-            BookmarksView { url in
-                showBookmarks = false
-                createTabAndNavigate(url)
-            }
-        }
-        .sheet(isPresented: $showArchive) {
-            ArchiveView(state: browserState)
-        }
-        .sheet(isPresented: $showReadingList) {
-            ReadingListView { url in
-                showReadingList = false
-                createTabAndNavigate(url)
-            }
-        }
-        .fullScreenCover(isPresented: Binding(
-            get: { isReaderMode && browserVM.extractedArticle != nil },
-            set: { newValue in
-                isReaderMode = newValue
-                if !newValue {
-                    browserVM.extractedArticle = nil
-                }
-            }
-        )) {
-            if let article = browserVM.extractedArticle {
-                ReaderView(article: article, isPresented: $isReaderMode)
-            }
-        }
-        .sheet(isPresented: $showDownloads) {
-            DownloadsView()
-        }
-        .sheet(isPresented: $showNotes) {
-            NotesView()
-        }
-        .sheet(isPresented: $showAiChat) {
-            AgentWebView(query: askAIQuery ?? "")
-        }
-        .sheet(isPresented: $showConversations) {
-            ConversationsWebView()
-        }
+        .mainBrowserSheets(
+            showTabGrid: $showTabGrid,
+            showSettings: $showSettings,
+            showHistory: $showHistory,
+            showBookmarks: $showBookmarks,
+            showArchive: $showArchive,
+            showReadingList: $showReadingList,
+            isReaderMode: $isReaderMode,
+            showDownloads: $showDownloads,
+            showNotes: $showNotes,
+            showAiChat: $showAiChat,
+            showConversations: $showConversations,
+            isIncognito: $isIncognito,
+            browserVM: browserVM,
+            browserState: browserState,
+            askAIQuery: askAIQuery,
+            onTabGridDismiss: handleTabGridDismiss,
+            onNavigate: createTabAndNavigate
+        )
         .onAppear {
             loadBrowserState()
             setupDeepLinkHandler()
@@ -682,7 +648,7 @@ struct MainBrowserView: View {
             browserVM.currentUrl = tab.url
             browserVM.isLoading = tab.isLoading
             browserVM.isSecure = tab.url.hasPrefix("https://")
-            tintColor = tintColorForTab(tab)
+            tintColor = MainBrowserPresentation.tintColor(for: tab)
             reapplyPageOptionsIfNeeded()
         } else {
             browserVM.tabId = ""
@@ -758,7 +724,7 @@ struct MainBrowserView: View {
         guard let targetSpaceId = activeSpaceId ?? spaces.first?.id else { return }
 
         homeQuery = ""
-        let destination = normalizedURL(from: trimmed)
+        let destination = MainBrowserPresentation.normalizedURL(from: trimmed)
         pendingNavigationUrl = destination
         browserVM.currentUrl = destination
         browserVM.currentTitle = ""
@@ -1045,7 +1011,7 @@ struct MainBrowserView: View {
                         defaultUserAgent = userAgent
                     }
                     if isDesktopMode {
-                        webView.customUserAgent = desktopUserAgent(from: userAgent)
+                        webView.customUserAgent = MainBrowserPresentation.desktopUserAgent(from: userAgent)
                         if reload {
                             browserVM.reload()
                         }
@@ -1056,7 +1022,7 @@ struct MainBrowserView: View {
         }
 
         if isDesktopMode {
-            webView.customUserAgent = desktopUserAgent(from: defaultUserAgent ?? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
+            webView.customUserAgent = MainBrowserPresentation.desktopUserAgent(from: defaultUserAgent ?? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
         } else {
             webView.customUserAgent = defaultUserAgent
         }
@@ -1083,12 +1049,6 @@ struct MainBrowserView: View {
         }
     }
 
-    private func desktopUserAgent(from userAgent: String) -> String {
-        userAgent
-            .replacingOccurrences(of: #"\s+Mobile/[^ ]+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+CriOS/[^ ]+"#, with: " Version/17.0", options: .regularExpression)
-    }
-
     private func setPrivate(_ on: Bool) {
         let targetSpaceId = activeSpaceId ?? spaces.first?.id ?? ""
         guard !targetSpaceId.isEmpty else { return }
@@ -1110,7 +1070,7 @@ struct MainBrowserView: View {
             let remainingTabs = bridge.getTabViewModels().filter { $0.spaceId == targetSpaceId && !$0.isPrivate }
             if let firstNormal = remainingTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first {
                 bridge.activateTab(id: firstNormal.id)
-                tintColor = tintColorForTab(firstNormal)
+                tintColor = MainBrowserPresentation.tintColor(for: firstNormal)
             } else {
                 transitionToHome()
                 tintColor = ShellTheme.Palette.accent
@@ -1149,38 +1109,4 @@ struct MainBrowserView: View {
 #endif
     }
 
-    private func normalizedURL(from input: String) -> String {
-        if input.contains(".") && !input.contains(" ") {
-            return input.hasPrefix("http://") || input.hasPrefix("https://") ? input : "https://\(input)"
-        }
-
-        let encoded = input.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? input
-        return "https://www.google.com/search?q=\(encoded)"
-    }
-
-    private func displayHost(for urlString: String) -> String? {
-        guard let components = URLComponents(string: urlString) else { return nil }
-        return components.host ?? urlString
-    }
-
-    private func tintColorForTab(_ tab: TabViewModel) -> Color {
-        if tab.isPinned {
-            return .orange
-        }
-        if tab.isFavorite {
-            return .yellow
-        }
-        if let host = displayHost(for: tab.url) {
-            return colorSeed(for: host)
-        }
-        return ShellTheme.Palette.accent
-    }
-
-    private func colorSeed(for string: String) -> Color {
-        let scalarSum = string.unicodeScalars.reduce(0) { partialResult, scalar in
-            partialResult + Int(scalar.value)
-        }
-        let hue = Double(scalarSum % 360) / 360.0
-        return Color(hue: hue, saturation: 0.56, brightness: 0.9)
-    }
 }
