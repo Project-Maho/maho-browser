@@ -521,6 +521,22 @@ struct MainBrowserView: View {
                     .accessibilityIdentifier("e2eVerifyResult")
                     .accessibilityLabel(E2ETestHooks.verifyResult.rawValue)
             }
+            if let status = E2ETestHooks.archiveFixtureStatus {
+                Text(status.rawValue)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("archiveFixtureStatus")
+                    .accessibilityLabel(status.rawValue)
+            }
+            if E2ETestHooks.archiveFixtureReady {
+                Text("Archive fixture ready")
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("archiveFixtureReady")
+                    .accessibilityLabel("Archive fixture ready")
+            }
         }
     }
 
@@ -766,8 +782,8 @@ struct MainBrowserView: View {
     }
 
     private func archiveCurrentTab() {
-        guard browsingTabId != nil else { return }
-        processUpdates(bridge.commandBarAction(action: .archiveTab))
+        guard let tabId = browsingTabId else { return }
+        bridge.archiveTab(id: tabId)
         refreshState()
     }
 

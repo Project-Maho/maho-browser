@@ -26,17 +26,21 @@ struct ArchiveView: View {
                             }) {
                                 VStack(alignment: .leading) {
                                     Text(tab.title)
+                                        .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text(tab.url)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
-                                    Text("Archived \(tab.lastActiveAt)")
+                                    Text(archivedDateLabel(tab.archivedAt))
                                         .font(.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
                             .accessibilityIdentifier("archiveRow_\(tab.id)")
                         }
                     }
@@ -59,5 +63,16 @@ struct ArchiveView: View {
                 isLoading = false
             }
         }
+    }
+
+    private func archivedDateLabel(_ timestamp: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: timestamp) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: timestamp)
+        }()
+        guard let date else { return "Archived" }
+        return "Archived \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 }

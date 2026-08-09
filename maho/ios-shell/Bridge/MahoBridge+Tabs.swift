@@ -23,6 +23,10 @@ extension MahoBridge {
         sendEvent(.closeTab(tabId: tabId))
     }
 
+    func archiveTab(id tabId: TabId) {
+        sendEvent(.archiveTabById(tabId: tabId))
+    }
+
     func activateTab(id tabId: TabId) {
         sendEvent(.activateTab(tabId: tabId))
     }

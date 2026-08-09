@@ -8,11 +8,26 @@ import Foundation
 enum E2ETestHooks {
     static let uiTestModeEnvKey = "MAHO_UITEST_MODE"
     static let seedEnvKey = "MAHO_E2E_SEED_CONVERSATION"
+    static let archivedTabSeedEnvKey = "MAHO_E2E_SEED_ARCHIVED_TAB"
     static let verifyEnvKey = "MAHO_E2E_VERIFY_CONVERSATION_TITLE"
     static let resultOutputEnvKey = "MAHO_E2E_VERIFY_RESULT"
 
     static var seededTitle: String?
+    static var archiveFixtureStatus: ArchiveFixtureStatus?
+    static var archiveFixtureReady = false
     static var verifyResult: VerifyResult = .notRun
+
+    enum ArchiveFixtureStatus: String {
+        case started
+        case bridgeUnavailable
+        case noActiveSpace
+        case fixtureTabMissing
+        case controlTabMissing
+        case archivedTabsDecodeFailed
+        case fixtureNotArchived
+        case wrongActiveTab
+        case ready
+    }
 
     enum VerifyResult: String {
         case notRun
@@ -32,6 +47,12 @@ enum E2ETestHooks {
 
         if let title = env[seedEnvKey], !title.isEmpty {
             seedConversation(title: title)
+        }
+
+        if isUITest, let title = env[archivedTabSeedEnvKey], !title.isEmpty {
+            archiveFixtureStatus = .started
+            seedArchivedTab(title: title)
+            archiveFixtureReady = archiveFixtureStatus == .ready
         }
 
         if let expected = env[verifyEnvKey], !expected.isEmpty {
@@ -56,6 +77,72 @@ enum E2ETestHooks {
         )
         MahoBridge.shared.saveState()
         seededTitle = title
+    }
+
+    private static func seedArchivedTab(title: String) {
+        let bridge = MahoBridge.shared
+        guard bridge.isInitialized else {
+            archiveFixtureStatus = .bridgeUnavailable
+            return
+        }
+        guard let spaceId = bridge.getActiveSpaceId() else {
+            archiveFixtureStatus = .noActiveSpace
+            return
+        }
+
+        if let archivedJson = bridge.getArchivedTabs(spaceId: spaceId),
+           let archivedData = archivedJson.data(using: .utf8),
+           let archivedTabs = try? JSONDecoder().decode([ArchivedTabViewModel].self, from: archivedData) {
+            for tab in archivedTabs where tab.title == title {
+                bridge.sendEvent(.restoreArchivedTab(tabId: tab.id))
+                bridge.closeTab(id: tab.id)
+            }
+        }
+        for tab in bridge.getTabViewModels() where tab.spaceId == spaceId && !tab.isPrivate {
+            bridge.closeTab(id: tab.id)
+        }
+
+        let fixtureUrl = Url("https://example.invalid/todo-6-archive-fixture")
+        let tabsBeforeFixture = Set(bridge.getTabViewModels().map(\.id))
+        bridge.createTab(url: fixtureUrl, inSpace: spaceId)
+        guard let fixtureTabId = bridge.getTabViewModels().first(where: {
+            !tabsBeforeFixture.contains($0.id)
+        })?.id else {
+            archiveFixtureStatus = .fixtureTabMissing
+            return
+        }
+        bridge.sendEvent(.tabTitleUpdated(tabId: fixtureTabId, title: title))
+        bridge.sendEvent(.tabUrlUpdated(tabId: fixtureTabId, url: fixtureUrl))
+
+        let tabsBeforeControl = Set(bridge.getTabViewModels().map(\.id))
+        bridge.createTab(url: Url("https://example.invalid/todo-6-archive-control"), inSpace: spaceId)
+        guard let controlTabId = bridge.getTabViewModels().first(where: {
+            !tabsBeforeControl.contains($0.id)
+        })?.id else {
+            archiveFixtureStatus = .controlTabMissing
+            return
+        }
+        bridge.sendEvent(.tabTitleUpdated(tabId: controlTabId, title: "Todo-6-Archive-Control"))
+
+        bridge.activateTab(id: fixtureTabId)
+        bridge.archiveTab(id: fixtureTabId)
+        bridge.activateTab(id: controlTabId)
+
+        guard let archivedJson = bridge.getArchivedTabs(spaceId: spaceId),
+              let archivedData = archivedJson.data(using: .utf8),
+              let archivedTabs = try? JSONDecoder().decode([ArchivedTabViewModel].self, from: archivedData) else {
+            archiveFixtureStatus = .archivedTabsDecodeFailed
+            return
+        }
+        guard archivedTabs.contains(where: { $0.id == fixtureTabId && $0.title == title }) else {
+            archiveFixtureStatus = .fixtureNotArchived
+            return
+        }
+        guard bridge.getActiveTabId() == controlTabId else {
+            archiveFixtureStatus = .wrongActiveTab
+            return
+        }
+        archiveFixtureStatus = .ready
     }
 
     private static func verify(expectedTitle: String) -> VerifyResult {

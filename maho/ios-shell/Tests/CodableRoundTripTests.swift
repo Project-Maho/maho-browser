@@ -55,6 +55,61 @@ final class CodableRoundTripTests: XCTestCase {
         XCTAssertEqual(originalJson["before_tab_id"] as? String, decodedJson["before_tab_id"] as? String)
     }
 
+    func testShellEventArchiveTabByIdUsesCoreWireContract() throws {
+        let event = ShellEvent.archiveTabById(tabId: "tab-archive")
+        let data = try MahoJSON.encoder.encode(event)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(json["kind"] as? String, "archive_tab_by_id")
+        XCTAssertEqual(json["tab_id"] as? String, "tab-archive")
+        XCTAssertNil(json["type"])
+        XCTAssertNil(json["tabId"])
+
+        let decoded = try JSONDecoder().decode(ShellEvent.self, from: data)
+        let decodedJson = try jsonDict(from: decoded)
+        XCTAssertEqual(decodedJson["kind"] as? String, "archive_tab_by_id")
+        XCTAssertEqual(decodedJson["tab_id"] as? String, "tab-archive")
+    }
+
+    func testShellEventRestoreArchivedTabUsesCoreWireContract() throws {
+        let event = ShellEvent.restoreArchivedTab(tabId: "tab-restore")
+        let data = try MahoJSON.encoder.encode(event)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(json["kind"] as? String, "restore_archived_tab")
+        XCTAssertEqual(json["tab_id"] as? String, "tab-restore")
+        XCTAssertNil(json["type"])
+        XCTAssertNil(json["tabId"])
+    }
+
+    func testDomainMonogramColorDoesNotOverflowForLongHost() {
+        let host = String(repeating: "a", count: 48) + ".example"
+
+        XCTAssertNoThrow(DomainMonogram.color(for: host))
+    }
+
+    func testArchivedTabViewModelDecodesCoreResponseShape() throws {
+        let json = """
+        {
+            "id": "tab-archived",
+            "spaceId": "space-1",
+            "title": "Archived Fixture",
+            "url": "https://example.invalid/archive",
+            "favicon": null,
+            "archivedAt": "2026-08-09T01:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let archived = try JSONDecoder().decode(ArchivedTabViewModel.self, from: json)
+        XCTAssertEqual(archived.id, "tab-archived")
+        XCTAssertEqual(archived.spaceId, "space-1")
+        XCTAssertEqual(archived.title, "Archived Fixture")
+        XCTAssertEqual(archived.url, "https://example.invalid/archive")
+        XCTAssertNil(archived.favicon)
+        XCTAssertEqual(archived.archivedAt, "2026-08-09T01:00:00Z")
+        XCTAssertThrowsError(try JSONDecoder().decode(TabViewModel.self, from: json))
+    }
+
     func testShellEventEncodedJsonContainsKind() throws {
         let event = ShellEvent.appLaunched
         let data = try MahoJSON.encoder.encode(event)

@@ -11,6 +11,91 @@ import XCTest
 ///
 /// The verify boot writes a hidden accessibility element with identifier
 /// "e2eVerifyResult" whose label is either "matched" or "missing".
+final class ArchiveE2ETests: XCTestCase {
+    private let fixtureTitle = "Todo-6-Archive-Fixture"
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    func testArchiveMenuRestoresBridgeBackedFixture() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MAHO_UITEST_MODE"] = "1"
+        app.launchEnvironment["MAHO_E2E_SEED_ARCHIVED_TAB"] = fixtureTitle
+        app.launch()
+
+        let fixtureStatus = app.staticTexts["archiveFixtureStatus"]
+        XCTAssertTrue(
+            fixtureStatus.waitForExistence(timeout: 10),
+            "Archive fixture status element never appeared"
+        )
+        guard fixtureStatus.label == "ready" else {
+            XCTFail("Archive fixture status: \(fixtureStatus.label)")
+            return
+        }
+        XCTAssertTrue(app.staticTexts["archiveFixtureReady"].exists)
+
+        let continueButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'continueTab_'")
+        ).firstMatch
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 5))
+        continueButton.tap()
+        XCTAssertTrue(app.otherElements["mainBrowserBottomBar"].waitForExistence(timeout: 5))
+
+        let menuButton = app.buttons["menuButton"]
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 5))
+        menuButton.tap()
+
+        let openArchiveButton = app.buttons["openArchiveButton"]
+        XCTAssertTrue(openArchiveButton.waitForExistence(timeout: 5))
+        try capture(app, name: "task-6-archive-menu-verified")
+        openArchiveButton.tap()
+
+        XCTAssertTrue(app.otherElements["archiveView"].waitForExistence(timeout: 5))
+        let archiveRow = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'archiveRow_'")
+        ).firstMatch
+        XCTAssertTrue(archiveRow.waitForExistence(timeout: 5), "Archive has no populated row")
+        XCTAssertTrue(archiveRow.label.contains(fixtureTitle))
+        try capture(app, name: "task-6-archive-populated-verified")
+        archiveRow.tap()
+
+        let tabsButton = app.buttons["tabsButton"]
+        XCTAssertTrue(tabsButton.waitForExistence(timeout: 5))
+        tabsButton.tap()
+        XCTAssertTrue(app.scrollViews["tabGridView"].waitForExistence(timeout: 5))
+
+        let restoredTab = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH 'tabCard_' AND label == %@ AND value == 'active'",
+                fixtureTitle
+            )
+        ).firstMatch
+        XCTAssertTrue(
+            restoredTab.waitForExistence(timeout: 5),
+            "Restored fixture was not the active tab in the tab grid"
+        )
+        try capture(app, name: "task-6-archive-restored-verified")
+    }
+
+    private func capture(_ app: XCUIApplication, name: String) throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let evidenceDirectory = repositoryRoot.appendingPathComponent(".omo/evidence", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: evidenceDirectory,
+            withIntermediateDirectories: true
+        )
+        try app.screenshot().pngRepresentation.write(
+            to: evidenceDirectory.appendingPathComponent("\(name).png"),
+            options: .atomic
+        )
+    }
+}
+
 final class ConversationE2ETests: XCTestCase {
 
     override func setUpWithError() throws {

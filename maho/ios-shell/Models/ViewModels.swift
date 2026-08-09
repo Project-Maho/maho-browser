@@ -87,6 +87,15 @@ struct TabViewModel: Codable, Identifiable {
     }
 }
 
+struct ArchivedTabViewModel: Codable, Identifiable {
+    let id: TabId
+    let spaceId: SpaceId
+    let title: String
+    let url: String
+    let favicon: ImageData?
+    let archivedAt: String
+}
+
 struct SpaceViewModel: Codable, Identifiable {
     let id: SpaceId
     let name: String

@@ -27,6 +27,7 @@ enum ShellEvent: Codable {
     case closeTabsToRight(spaceId: SpaceId, tabId: TabId)
     case closeTabsToLeft(spaceId: SpaceId, tabId: TabId)
     case reopenLastClosed
+    case archiveTabById(tabId: TabId)
     case restoreArchivedTab(tabId: TabId)
     case resetPinnedTab(tabId: TabId)
 
@@ -216,6 +217,7 @@ enum ShellEvent: Codable {
         case .closeTabsToRight: return "close_tabs_to_right"
         case .closeTabsToLeft: return "close_tabs_to_left"
         case .reopenLastClosed: return "reopen_last_closed"
+        case .archiveTabById: return "archive_tab_by_id"
         case .restoreArchivedTab: return "restore_archived_tab"
         case .resetPinnedTab: return "reset_pinned_tab"
         case .createSpace: return "create_space"

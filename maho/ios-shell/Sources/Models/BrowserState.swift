@@ -19,7 +19,7 @@ class BrowserState: ObservableObject {
     @Published var spaces: [SpaceViewModel] = []
     @Published var folders: [FolderViewModel] = []
     @Published var downloads: [DownloadViewModel] = []
-    @Published var archivedTabs: [TabViewModel] = []
+    @Published var archivedTabs: [ArchivedTabViewModel] = []
     @Published var contentRules: [ContentRule] = []
     @Published var enabledRuleIds: Set<String> = []
     @Published var contentBlockerEnabled: Bool = false
@@ -112,14 +112,14 @@ class BrowserState: ObservableObject {
     }
 
     func loadArchivedTabs() {
-        guard let spaceId = activeSpaceId() else { return }
+        guard let spaceId = bridge.getActiveSpaceId() else { return }
         guard let json = bridge.getArchivedTabs(spaceId: spaceId) else { return }
         guard let data = json.data(using: .utf8) else { return }
-        archivedTabs = (try? JSONDecoder().decode([TabViewModel].self, from: data)) ?? []
+        archivedTabs = (try? JSONDecoder().decode([ArchivedTabViewModel].self, from: data)) ?? []
     }
 
     func restoreArchivedTab(tabId: String) {
-        bridge.sendEvent(name: "restore_archived_tab", payload: ["tabId": tabId])
+        bridge.sendEvent(.restoreArchivedTab(tabId: tabId))
         refreshState()
         loadArchivedTabs()
     }
@@ -136,10 +136,6 @@ class BrowserState: ObservableObject {
         let payload: [String: Any] = ["key": key, "value": encodeAnyCodable(value)]
         bridge.sendEvent(name: "update_setting", payload: payload)
         refreshState()
-    }
-
-    private func activeSpaceId() -> String? {
-        spaces.first { $0.id == spaces.first?.id }?.id ?? spaces.first?.id
     }
 
     private func encodeAnyCodable(_ value: AnyCodable) -> Any {

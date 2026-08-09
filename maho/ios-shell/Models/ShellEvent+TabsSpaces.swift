@@ -63,6 +63,8 @@ extension ShellEvent {
             try container.encode(spaceId, forKey: DynamicCodingKey(stringValue: "space_id")!)
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .reopenLastClosed: break
+        case .archiveTabById(let tabId):
+            try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .restoreArchivedTab(let tabId):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .resetPinnedTab(let tabId):
@@ -207,6 +209,8 @@ extension ShellEvent {
                 tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "reopen_last_closed":
             return .reopenLastClosed
+        case "archive_tab_by_id":
+            return .archiveTabById(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "restore_archived_tab":
             return .restoreArchivedTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "reset_pinned_tab":
