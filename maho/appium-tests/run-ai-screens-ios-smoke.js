@@ -15,7 +15,7 @@
  * Navigation patterns on iOS (post-wiring):
  * - Settings sheet: menuButton → "Settings" → SettingsRootView
  * - MaxSettingsView: Settings → "AI Settings" section → "Max AI"
- * - BYOKSettingsView: Settings → "AI Settings" section → "API Keys (BYOK)"
+ * - BYOK settings: Settings → "AI" section → "API Keys" → shared web-ai #byok
  * - SpaceAIConfigView: Settings → "AI Settings" section → "Space AI Configuration" (greyed without context)
  * - OfflineModelView: Settings → "AI Settings" section → "Offline Model"
  * - AgentView: Settings → "AI Settings" section → "Web Agent"
@@ -733,7 +733,7 @@ test('AI: BYOK Settings — open from AI Settings section', async (driver) => {
       '~aiScreenBYOK',
       '//*[@name="aiScreenBYOK"]',
     ], 8000);
-    assert.ok(byokScreen, 'BYOKSettingsView should render (aiScreenBYOK identifier)');
+    assert.ok(byokScreen, 'Shared web-ai BYOK screen should render (aiScreenBYOK identifier)');
     await saveScreenshot(driver, 'byok-settings');
   } finally {
     await dismissOverlay(driver);

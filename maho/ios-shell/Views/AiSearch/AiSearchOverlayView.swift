@@ -151,10 +151,7 @@ struct AiSearchOverlayView: View {
                 SyncSettingsView()
                     .navigationBarItems(trailing: Button("Done") { activeSheet = nil })
             case .apiKeys:
-                BYOKSettingsView()
-                    .navigationTitle("API Keys")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .navigationBarItems(trailing: Button("Done") { activeSheet = nil })
+                BYOKWebView()
             }
         }
     }

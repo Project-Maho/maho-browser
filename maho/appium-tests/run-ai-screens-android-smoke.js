@@ -19,7 +19,7 @@
  * - ConversationList: Settings → "Saved Conversations"
  * - SpaceAIConfig: bottom bar spaces dropdown → "AI personality"
  * - Agent: Settings → "Web Agent"
- * - BYOKSettings: Settings → "BYOK API Keys"
+ * - BYOK settings: Settings → "API Keys" → shared web-ai #byok
  * - OfflineModel: Settings → "Offline Model"
  * - PrivacyDashboard: Settings → "Privacy Dashboard"
  * - CameraCapture, VisualSearch: child of ChatScreen (nested)
@@ -611,19 +611,18 @@ test('AI: Space AI Config — open from bottom bar spaces menu', async (driver) 
   }
 });
 
-test('AI: BYOK Settings — open from Settings → BYOK API Keys', async (driver) => {
+test('AI: BYOK Settings — open from Settings → API Keys', async (driver) => {
   try {
     await ensureHomeSurface(driver);
     await openSettings(driver);
 
-    const tapped = await scrollToAndTapSettingsItem(driver, 'BYOK API Keys');
-    assert.ok(tapped, 'Should find and tap "BYOK API Keys" in Settings');
+    const tapped = await scrollToAndTapSettingsItem(driver, 'API Keys');
+    assert.ok(tapped, 'Should find and tap "API Keys" in Settings');
 
     const byokScreen = await waitForVisible(driver, [
       resourceId('aiScreenBYOK'),
-      'android=new UiSelector().text("LLM API Keys")',
-      'android=new UiSelector().textContains("No API keys saved")',
-      'android=new UiSelector().textContains("Loading saved keys")',
+      'android=new UiSelector().text("AI Settings")',
+      'android=new UiSelector().textContains("Loading AI settings")',
       'android=new UiSelector().textContains("API Key")',
       'android=new UiSelector().textContains("BYOK")',
       'android=new UiSelector().textContains("key")',

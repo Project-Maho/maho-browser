@@ -61,7 +61,7 @@ struct SettingsRootView: View {
                     NavigationLink(destination: AgentView()) {
                         Label { Text("Web Agent") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("bot")) }
                     }
-                    NavigationLink(destination: BYOKSettingsView()) {
+                    NavigationLink(destination: BYOKWebView()) {
                         Label { Text("API Keys") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("key")) }
                     }
                     NavigationLink(destination: AdvancedSettingsView()) {

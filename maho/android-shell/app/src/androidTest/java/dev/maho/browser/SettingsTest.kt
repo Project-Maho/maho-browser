@@ -32,6 +32,7 @@ class SettingsTest {
         composeTestRule.onNodeWithText("Autofill & Passwords").assertIsDisplayed()
         composeTestRule.onNodeWithText("Notifications").assertIsDisplayed()
         composeTestRule.onNodeWithText("Max AI").assertIsDisplayed()
+        composeTestRule.onNodeWithText("API Keys").assertIsDisplayed()
         composeTestRule.onNodeWithText("Advanced").assertIsDisplayed()
         composeTestRule.onNodeWithText("Reset All Settings").assertIsDisplayed()
     }

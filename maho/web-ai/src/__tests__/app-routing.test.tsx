@@ -3,6 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockBridge = {
   byokGetKey: vi.fn().mockResolvedValue(null),
+  getAiSettings: vi.fn().mockResolvedValue({
+    provider: 'maho-managed',
+    model: '',
+    baseUrl: '',
+    hasApiKey: false,
+    hasByokOpenai: false,
+    hasByokAnthropic: false,
+  }),
   chatSessionStart: vi.fn().mockResolvedValue('session-1'),
   chatSessionResume: vi.fn().mockResolvedValue('resumed-session-1'),
   chatGetHistory: vi.fn().mockResolvedValue([]),
@@ -27,6 +35,13 @@ describe('App Router - Mobile Chat Launch Routing', () => {
     expect(screen.queryByText('Coming Soon')).toBeNull();
     expect(screen.getByTestId('chat-screen')).not.toBeNull();
     expect(screen.getByPlaceholderText('Type a message…')).not.toBeNull();
+  });
+
+  it('routes #byok to AiSettingsScreen (not ComingSoonScreen)', () => {
+    window.location.hash = '#byok';
+    render(<App />);
+    expect(screen.queryByText('Coming Soon')).toBeNull();
+    expect(screen.getByTestId('aiScreenBYOK')).not.toBeNull();
   });
 
   it('routes #conversations to ConversationListScreen (not ComingSoonScreen)', () => {

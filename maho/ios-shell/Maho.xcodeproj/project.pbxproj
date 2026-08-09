@@ -67,6 +67,7 @@
 		63123CAF5D5972665E4EE166 /* SummaryOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 755F67CDEA8011C1E7CA80B5 /* SummaryOverlayView.swift */; };
 		66FE188AFB65020D2B8201A6 /* E2ETestHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B87CC665ED374B1317D85F4 /* E2ETestHooks.swift */; };
 		6961F16ECC2CFD3C11A1E8BF /* SpaceChipRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4E99D7E4FC5911E00254AB /* SpaceChipRow.swift */; };
+		6A50B2B2DB3B5C76432841E6 /* BYOKWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9333C807210D3790979FCD6A /* BYOKWebView.swift */; };
 		6C3C94004CBC5EA3993D46DD /* PinchSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF588754412F8DC2BA9012EF /* PinchSummaryView.swift */; };
 		6D859FEF5A3C7EDF6308825D /* ShellEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0237396998E8B39141D8985A /* ShellEvent.swift */; };
 		6E0AC9ED1DDAC4E60EFDEA81 /* SuggestionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ED787AE8FFF992F8EF98D69 /* SuggestionsListView.swift */; };
@@ -115,7 +116,6 @@
 		AA22FDB0A4DDE63BDAC635F1 /* SyncTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0AE24A80DEF1E5C4B0C6F4 /* SyncTransportTests.swift */; };
 		AABAC1A80BB65BA3D0435872 /* WebViewCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990D75F136CA79CD0FC6B6C6 /* WebViewCoordinator.swift */; };
 		AC6399374D87514068568D9F /* FindInPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D637730AD74CDF9AE0EF81 /* FindInPageView.swift */; };
-		AC6B8C1F12A67EA85504E4C8 /* BYOKSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB99637F5F962026F6F463C /* BYOKSettingsView.swift */; };
 		AD2FBB9C4A78C7BEDB9C17C2 /* MaxSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0634630A0ECC83A7E66A3D10 /* MaxSettingsView.swift */; };
 		AD3816861F73B7543C4A4B13 /* MahoIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FD563F16DF5C7A1ADBAE606 /* MahoIcon.swift */; };
 		AD4A7427C9D3FCF0646A9DCF /* VoiceAssistantOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7A209869E6CBAEA63E5256 /* VoiceAssistantOverlayView.swift */; };
@@ -300,6 +300,7 @@
 		8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAuthResponseDecodingTests.swift; sourceTree = "<group>"; };
 		8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackView.swift; sourceTree = "<group>"; };
 		8EBC5417819195E77362721C /* GoogleSignInCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInCoordinator.swift; sourceTree = "<group>"; };
+		9333C807210D3790979FCD6A /* BYOKWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKWebView.swift; sourceTree = "<group>"; };
 		95C5AB7D5319FBC2F2FD2884 /* Identifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identifiers.swift; sourceTree = "<group>"; };
 		97B4F0A8EB3B1E90022992DA /* MahoBridge+Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Agent.swift"; sourceTree = "<group>"; };
 		98291AB30F5FE8057ECAE731 /* BridgeSpacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeSpacesTests.swift; sourceTree = "<group>"; };
@@ -326,7 +327,6 @@
 		BD3C7E058C7A6F59C649EDCA /* MahoBridge+Tabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Tabs.swift"; sourceTree = "<group>"; };
 		BDB1132FEE41E2BDDA068420 /* HomeSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeSearchView.swift; sourceTree = "<group>"; };
 		BF2FC3DB70BDD8881D41F8F3 /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
-		BFB99637F5F962026F6F463C /* BYOKSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKSettingsView.swift; sourceTree = "<group>"; };
 		C052916195F3FEBD6FDB4FB6 /* AiProviderResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AiProviderResolver.swift; sourceTree = "<group>"; };
 		C0CB44EDF24FCA46AE1A22B9 /* ShortcutsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsManager.swift; sourceTree = "<group>"; };
 		C0D637730AD74CDF9AE0EF81 /* FindInPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindInPageView.swift; sourceTree = "<group>"; };
@@ -655,7 +655,7 @@
 				C93214A716E35455EBA4DA28 /* AppearanceSettingsView.swift */,
 				FE8790BA8620C37615BAF953 /* AppIconPickerView.swift */,
 				84E7AB0CEF355222E4D8D053 /* AutofillSettingsView.swift */,
-				BFB99637F5F962026F6F463C /* BYOKSettingsView.swift */,
+				9333C807210D3790979FCD6A /* BYOKWebView.swift */,
 				8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */,
 				5B8DD1506E47B2059E3F15CE /* GeneralSettingsView.swift */,
 				FF8FF3CC8F3101B33A809CC4 /* LanguageSettingsView.swift */,
@@ -1036,7 +1036,7 @@
 				02D1B92A76F9DE088373C7CD /* ArchiveView.swift in Sources */,
 				A4899BF2A420ADD0CDAC35DA /* AutoArchiveBridge.swift in Sources */,
 				C1DB5006309DC01A68EAF70F /* AutofillSettingsView.swift in Sources */,
-				AC6B8C1F12A67EA85504E4C8 /* BYOKSettingsView.swift in Sources */,
+				6A50B2B2DB3B5C76432841E6 /* BYOKWebView.swift in Sources */,
 				CEE2C67ADA397CB10B994B5E /* BookmarksView.swift in Sources */,
 				EC2A73F6E4ECC11B3BDFB0F2 /* BottomBarView.swift in Sources */,
 				1760D2F03212CCF62E707078 /* BrowserState.swift in Sources */,

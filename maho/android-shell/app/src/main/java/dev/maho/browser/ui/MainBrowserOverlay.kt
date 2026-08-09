@@ -30,7 +30,7 @@ import dev.maho.browser.ui.theme.BrowserShellTheme
 
 internal enum class BrowserOverlay {
     Settings, GeneralSettings, AppearanceSettings, PrivacySettings, ReaderSettings,
-    AutofillSettings, NotificationSettings, MaxSettings, AdvancedSettings, Profiles,
+    AutofillSettings, NotificationSettings, MaxSettings, ApiKeys, AdvancedSettings, Profiles,
     Bookmarks, History, Archive, Downloads, Notes, ReadingList, AppIconPicker,
     Feedback, LanguageSettings, SyncSettings, WebAgent,
 }
@@ -63,6 +63,7 @@ internal fun MainBrowserOverlay(
                 onNavigateToNotifications = { onPush(BrowserOverlay.NotificationSettings) },
                 onNavigateToMax = { onPush(BrowserOverlay.MaxSettings) },
                 onNavigateToWebAgent = { onPush(BrowserOverlay.WebAgent) },
+                onNavigateToApiKeys = { onPush(BrowserOverlay.ApiKeys) },
                 onNavigateToAdvanced = { onPush(BrowserOverlay.AdvancedSettings) },
                 onNavigateToProfiles = { onPush(BrowserOverlay.Profiles) },
                 onNavigateToBookmarks = { onPush(BrowserOverlay.Bookmarks) },
@@ -87,6 +88,7 @@ internal fun MainBrowserOverlay(
             BrowserOverlay.AutofillSettings -> AutofillSettingsScreen(onBack = onPop)
             BrowserOverlay.NotificationSettings -> NotificationSettingsScreen(onBack = onPop)
             BrowserOverlay.MaxSettings -> MaxSettingsScreen(onBack = onPop)
+            BrowserOverlay.ApiKeys -> dev.maho.browser.ui.webview.BYOKWebOverlay(onExit = onPop)
             BrowserOverlay.WebAgent -> dev.maho.browser.ui.webview.WebAgentOverlay(
                 initialGoal = webAgentInitialGoal,
                 onExit = onPop,
