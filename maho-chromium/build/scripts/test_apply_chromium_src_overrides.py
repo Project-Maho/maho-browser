@@ -105,8 +105,123 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         self.assertIn("chrome::kChromeUINewTabHost", replacement.new)
         self.assertNotIn("tab_strip_model()->count() == 0", replacement.new)
         self.assertIn("SetMahoBackgroundOverride(std::nullopt)", replacement.new)
-        self.assertIn("SetPageBaseBackgroundColor(SK_ColorTRANSPARENT)",
+        self.assertNotIn("SK_ColorTRANSPARENT", replacement.new)
+
+    def test_shared_glass_patch_keeps_space_palette_out_of_external_web_contents(self):
+        replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+        replacement = next(
+            item for item in replacements
+            if item.description.startswith(
+                "Maho: define BrowserView content-surface palette projection")
+        )
+
+        self.assertIn("GetColorProvider()->GetColor(kColorWebContentsBackground)",
                       replacement.new)
+        self.assertIn("view->SetMahoBackgroundOverride(std::nullopt);",
+                      replacement.new)
+        self.assertIn(
+            "wc->SetPageBaseBackgroundColor(maho_web_content_base);",
+            replacement.new,
+        )
+        self.assertNotIn("view->SetMahoBackgroundOverride(solid);",
+                         replacement.new)
+        self.assertNotIn("wc->SetPageBaseBackgroundColor(solid);",
+                         replacement.new)
+
+    def test_active_navigation_refreshes_shared_glass_state(self):
+        rendered = "\n".join(
+            item.new for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+        )
+
+        self.assertIn(
+            "if (change_type == TabChangeType::kLoadingOnly &&\n"
+            "      contents == GetActiveWebContents()) {\n"
+            "    MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+            "  }\n",
+            rendered,
+        )
+
+    def test_shared_glass_scopes_transparency_to_each_visible_web_contents(self):
+        replacement = next(
+            item for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if item.description.startswith(
+                "Maho: define BrowserView content-surface palette projection"
+            )
+        )
+
+        self.assertIn(
+            "MahoShouldRevealSharedGlass(view->web_contents())",
+            replacement.new,
+        )
+        self.assertIn(
+            "view->SetVisible(!view_shows_native_ntp);",
+            replacement.new,
+        )
+        self.assertIn("view->SetBackgroundVisible(true);", replacement.new)
+        self.assertNotIn("SK_ColorTRANSPARENT", replacement.new)
+        self.assertIn(
+            "if (!GetColorProvider()) {\n"
+            "    return;\n"
+            "  }",
+            replacement.new,
+        )
+
+    def test_existing_space_tinted_web_contents_patch_migrates_to_neutral_base(self):
+        replacement = next(
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if item.description
+            == "Maho: isolate loaded WebContents from the active Space palette"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(replacement.old)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn(
+                "GetColorProvider()->GetColor(kColorWebContentsBackground)",
+                output,
+            )
+            self.assertIn("SetMahoBackgroundOverride(std::nullopt)", output)
+            self.assertIn(
+                "SetPageBaseBackgroundColor(maho_web_content_base)",
+                output,
+            )
+            self.assertNotIn("SetPageBaseBackgroundColor(solid)", output)
+
+    def test_legacy_tab_count_gradient_refresh_is_removed(self):
+        replacement = next(
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if item.description
+            == "Maho: remove legacy tab-count shared-glass refresh"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(replacement.old)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertNotIn("tab_strip_model->count() == 0", output)
+            self.assertEqual(
+                output.count("MaybeRefreshMahoContentSurfacesFromSidebar();"),
+                1,
+            )
 
     def test_shared_glass_view_is_browser_owned_and_spans_all_three_panes(self):
         replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
