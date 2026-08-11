@@ -9,7 +9,8 @@
 
 namespace maho::sidebar_layout {
 
-inline constexpr int kCollapsedRailWidthDp = 40;
+// A collapsed sidebar is fully hidden and must not reserve content width.
+inline constexpr int kCollapsedRailWidthDp = 0;
 // Library mode still spends width on root insets, the 64dp category rail, and
 // a 1dp divider before archive/download/media content, but the top-left shell
 // reservation now comes from the library structure itself rather than from an

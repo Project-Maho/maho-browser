@@ -136,6 +136,18 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       CollapsedSidebarReservesNoContentWidth) {
+  ASSERT_TRUE(container_);
+
+  SeedSidebarPrefs(/*layout_enabled=*/true, /*panel_expanded=*/false);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(container_->sidebar_view()->GetVisible());
+  EXPECT_EQ(0, container_->GetPreferredSize().width())
+      << "A collapsed sidebar must not leave an empty content rail";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                        FavoritesAddViaShellEvent) {
   SeedProfile(2);
   observer_.Clear();
