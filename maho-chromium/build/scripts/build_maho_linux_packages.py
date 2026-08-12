@@ -74,7 +74,7 @@ def copy_browser_files(dest_dir, src_dir):
     
     # Files to copy from build output
     files_to_copy = [
-        'chrome', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak',
+        'chrome', 'maho', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak',
         'icudtl.dat', 'v8_context_snapshot.bin', 'chrome_crashpad_handler'
     ]
     

@@ -94,6 +94,15 @@ Artifacts are placed in per-format output directories under `chromium/src/`:
 
 ## Per-Format Details
 
+### Bundled binaries
+
+Every format bundles the browser **and** the `maho` CLI next to it. The packager's
+`copy_browser_files` copies `chrome`, `maho` (CLI), the `.pak` resources,
+`icudtl.dat`, `v8_context_snapshot.bin`, `chrome_crashpad_handler`, and the
+`locales/` directory from `out/Default`. When reusing an existing build made in a
+different out dir (e.g. `out/Release`), populate `out/Default` with those runtime
+files first, or build without `--out-dir`.
+
 ### Tarball (.tar.gz)
 
 - Simplest format — just `tar -czf` the built binary

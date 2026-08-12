@@ -73,6 +73,7 @@ maho-chromium/
 - **Upstream overrides**: `chromium_src/` mirrors upstream paths; uses `#define` to rename original, then `#include` original, then add patches
 - **C++ style**: Chromium conventions — explicit includes, `DCHECK_CALLED_ON_VALID_SEQUENCE`, namespace-local helpers
 - **Shared build lock**: `build/scripts/build_maho.py` acquires the workspace root `.build.lock` once for the combined Rust + Chromium build flow; the Rust helper in `build/scripts/build_maho_core.py` still uses the same lock when run standalone, so this build flow can wait and print `Waiting for build lock: ...`
+- **Windows official-release sccache policy**: `is_official_build=true` and sccache are compatible, but sccache is active only when `out/Release/args.gn` explicitly sets `cc_wrapper` to the Windows `sccache.exe` path. Installing `sccache.exe` or placing it on `PATH` does **not** enable Chromium C++ caching. Do not claim a Windows release build used sccache until `sccache --show-stats` reports `Compile requests executed > 0` for that build. Preserve official release flags; enable or change `cc_wrapper` only between builds, regenerate GN, then run the canonical wrapper. Do not modify `args.gn` while a canonical build is running.
 - **Mojo handlers**: Keep thin; delegate heavy logic to `browser/ai/` or reusable helpers
 - **Page-context results**: Use structured objects with status/title/url/text/warnings, not single text blobs
 - **GN builds**: Each WebUI and Views subsystem has its own `BUILD.gn`

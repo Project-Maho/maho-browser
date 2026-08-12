@@ -137,6 +137,12 @@ def build_lock(build_class=None, timeout_seconds: float = _DEFAULT_TIMEOUT_SECON
     # assigns an out dir and bounds concurrency. A per-out-dir flock is the real
     # mutual-exclusion backstop, so daemon bugs/downtime can only affect ordering,
     # never corrupt an out dir. If the daemon is down, fall back to .build.lock.
+    if os.name == 'nt':
+        # Windows has neither fcntl.flock nor socket.AF_UNIX, so both the queue
+        # daemon and the flock backstop are unavailable. The Windows build box
+        # runs a single build at a time, so proceed without the lock.
+        yield 'out/Default' if build_class in ('full', 'narrow') else None
+        return
     if build_class in ('full', 'narrow'):
         granted = _queue_acquire(build_class, timeout_seconds)
         if granted is not None:
