@@ -143,6 +143,138 @@ async fn repl_help_prints_help() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn repl_lease_acquires_active_tab_permission() {
+    // Bare `lease` resolves the active tab, then acquires an exclusive lease on
+    // it so subsequent click/type mutations pass the active-tab lease gate.
+    let tabs_resp = json!({
+        "tabs": [
+            {"id": 7, "title": "App Store Connect", "url": "https://appstoreconnect.apple.com", "is_active": true}
+        ]
+    });
+    let lease_resp = json!({ "session_id": "test-lease" });
+    let (_dir, sock_path, server) = make_mock_server(vec![tabs_resp, lease_resp]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "lease\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Lease acquired."),
+        "expected lease confirmation in stdout, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_key_press_sends_key() {
+    // `key <name>` presses a keyboard key on the active tab — required to drive
+    // custom comboboxes (filter text + Enter) whose options carry no @ref.
+    let key_resp = json!({ "ok": true });
+    let (_dir, sock_path, server) = make_mock_server(vec![key_resp]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "key Enter\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected key-press confirmation in stdout, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_select_sends_value() {
+    // `select <ref> <value>` chooses a dropdown/combobox option by value.
+    let select_resp = json!({ "ok": true });
+    let (_dir, sock_path, server) = make_mock_server(vec![select_resp]).await;
+
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "select 58 com.maho.browser\n.quit\n",
+    );
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected select confirmation in stdout, got: {stdout}"
+    );
+}
+
+fn asc_like_tree() -> Value {
+    // Minimal accessibility snapshot: interactive nodes carry an integer `ref`.
+    json!({
+        "role": "WebArea",
+        "name": "App Store Connect",
+        "children": [
+            { "role": "button", "name": "New App", "ref": 8 },
+            { "role": "textbox", "name": "Name", "ref": 54, "value": "" },
+            { "role": "link", "name": "Contact Us", "ref": 50 }
+        ]
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_refs_lists_interactive() {
+    // `refs` prints ONE compact line per interactive element, never the full
+    // JSON tree, so an agent can read refs without re-dumping the snapshot.
+    let (_dir, sock_path, server) = make_mock_server(vec![asc_like_tree()]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "refs\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("New App") && stdout.contains('8'),
+        "expected compact ref line for New App, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"children\""),
+        "refs must not dump the raw JSON tree, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_click_by_name_resolves() {
+    // `click @<name>` resolves the current @ref from a fresh snapshot (so it
+    // never goes stale) then clicks it. Mock: snapshot first, then click.
+    let clicked = json!({ "clicked": true });
+    let (_dir, sock_path, server) =
+        make_mock_server(vec![asc_like_tree(), clicked]).await;
+
+    let output =
+        run_cli_with_stdin(&["browser", "repl"], &sock_path, "click @New App\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected click-by-name confirmation in stdout, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_type_by_name_resolves() {
+    // `type @<name>=<text>` resolves the ref from a fresh snapshot then types.
+    let typed = json!({ "ok": true });
+    let (_dir, sock_path, server) =
+        make_mock_server(vec![asc_like_tree(), typed]).await;
+
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "type @Name=Maho Browser\n.quit\n",
+    );
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected type-by-name confirmation in stdout, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn repl_unknown_command() {
     let (_dir, sock_path, server) = make_mock_server(vec![]).await;
 

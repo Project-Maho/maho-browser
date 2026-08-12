@@ -3265,20 +3265,30 @@ impl SpawnedBrowser {
     }
 
     fn terminate(&mut self) {
-        use nix::sys::signal::{kill, Signal};
-        use nix::unistd::Pid;
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
 
-        let pid = Pid::from_raw(self.child.id() as i32);
-        let _ = kill(pid, Signal::SIGTERM);
+            let pid = Pid::from_raw(self.child.id() as i32);
+            let _ = kill(pid, Signal::SIGTERM);
 
-        for _ in 0..50 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if let Ok(Some(_)) = self.child.try_wait() {
-                return;
+            for _ in 0..50 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if let Ok(Some(_)) = self.child.try_wait() {
+                    return;
+                }
             }
+            let _ = kill(pid, Signal::SIGKILL);
+            let _ = self.child.wait();
         }
-        let _ = kill(pid, Signal::SIGKILL);
-        let _ = self.child.wait();
+        #[cfg(not(unix))]
+        {
+            // Windows has no SIGTERM; request process termination via the OS
+            // (TerminateProcess) and reap the child to avoid a zombie handle.
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -3709,8 +3719,12 @@ Commands:
   text                  Get page text (truncated)
   screenshot            Save full-page screenshot to /tmp
   snapshot              Accessibility snapshot (JSON)
-  click <ref>           Click element by ref number
-  type <ref> <text>     Type text into element
+  click <ref>|@<name>   Click by ref, or by name (re-resolved live)
+  type <ref> <text>     Type text into element (also: type @<name>=<text>)
+  select <ref> <value>  Choose an option by value (also: select @<name>=<value>)
+  refs [filter]         List interactive elements: <ref> <role> <name>[=<value>]
+  key <name> [mods]     Press a key (e.g. Enter, ArrowDown; mods: shift,ctrl,alt,meta)
+  lease [tab_id]        Acquire active-tab lease (auto-acquired before mutations)
   help                  Show this help
   .quit / .exit         Exit REPL
 ";
@@ -3761,6 +3775,101 @@ fn dirs_path() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join(".maho")
+}
+
+/// Acquire an (auto-stealing) lease on the active tab so subsequent mutations
+/// pass the active-tab lease gate. Best-effort.
+async fn ensure_active_lease(
+    client: &maho_browser_mcp::client::BrowserClient,
+) -> Result<()> {
+    let result =
+        browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
+    if let Some(tabs) = result.get("tabs").and_then(|t| t.as_array()) {
+        if let Some(active) = tabs
+            .iter()
+            .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
+        {
+            if let Some(id) = active.get("id").and_then(|v| v.as_i64()) {
+                let _ = browser::send_tool_call(
+                    client,
+                    "browser_acquire_lease",
+                    serde_json::json!({ "tab_id": id, "ttl_seconds": 300 }),
+                )
+                .await;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Dispatch a mutating tool call, auto-acquiring the active-tab lease and
+/// retrying once when the browser reports the active-tab lease is required
+/// (e.g. after lease expiry). Acquisition auto-steals, so no user action is
+/// needed and "lease required" never surfaces during a session.
+async fn mutate(
+    client: &maho_browser_mcp::client::BrowserClient,
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value> {
+    match browser::send_tool_call(client, tool, args.clone()).await {
+        Ok(v) => Ok(v),
+        Err(e) if format!("{e}").contains("lease required") => {
+            ensure_active_lease(client).await?;
+            browser::send_tool_call(client, tool, args).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Resolve an element's current @ref by its accessible name against a FRESH
+/// accessibility snapshot, so name-addressed mutations never act on a stale
+/// ref after the DOM renumbers (e.g. a dialog opens). Exact case-insensitive
+/// name match wins; otherwise the first substring match. Only nodes carrying
+/// an integer `ref` (interactive elements) are considered.
+async fn resolve_ref_by_name(
+    client: &maho_browser_mcp::client::BrowserClient,
+    name: &str,
+) -> Result<Option<i64>> {
+    let needle = name.trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(None);
+    }
+    let snapshot = browser::send_tool_call(
+        client,
+        "browser_accessibility_snapshot",
+        serde_json::json!({}),
+    )
+    .await?;
+    let mut exact: Option<i64> = None;
+    let mut substring: Option<i64> = None;
+    let mut stack = vec![&snapshot];
+    while let Some(node) = stack.pop() {
+        match node {
+            serde_json::Value::Object(map) => {
+                if let (Some(r), Some(nm)) = (
+                    map.get("ref").and_then(|v| v.as_i64()),
+                    map.get("name").and_then(|v| v.as_str()),
+                ) {
+                    let hay = nm.to_lowercase();
+                    if hay == needle {
+                        exact.get_or_insert(r);
+                    } else if hay.contains(&needle) {
+                        substring.get_or_insert(r);
+                    }
+                }
+                for v in map.values() {
+                    stack.push(v);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    stack.push(v);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(exact.or(substring))
 }
 
 async fn handle_repl_line(
@@ -3829,7 +3938,7 @@ async fn handle_repl_line(
                 println!("Usage: navigate <url>");
                 return Ok(());
             }
-            browser::send_tool_call(
+            mutate(
                 client,
                 "browser_navigate",
                 serde_json::json!({ "url": *url }),
@@ -3871,36 +3980,209 @@ async fn handle_repl_line(
             .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        "click" => {
-            let ref_str = parts.get(1).unwrap_or(&"");
-            let ref_num: i64 = ref_str.parse().unwrap_or(-1);
-            if ref_num < 0 {
-                println!("Usage: click <ref>");
-                return Ok(());
-            }
-            browser::send_tool_call(
+        "refs" => {
+            let filter = line[cmd.len()..].trim().to_lowercase();
+            let snapshot = browser::send_tool_call(
                 client,
-                "browser_click",
-                serde_json::json!({ "ref": ref_num }),
+                "browser_accessibility_snapshot",
+                serde_json::json!({}),
             )
             .await?;
-            println!("ok");
+            let mut rows: Vec<(i64, String)> = Vec::new();
+            let mut stack = vec![&snapshot];
+            while let Some(node) = stack.pop() {
+                match node {
+                    serde_json::Value::Object(map) => {
+                        if let Some(r) = map.get("ref").and_then(|v| v.as_i64()) {
+                            let role = map.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                            let name = map.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let value = map.get("value").and_then(|v| v.as_str());
+                            let hay = format!("{role} {name}").to_lowercase();
+                            if filter.is_empty() || hay.contains(&filter) {
+                                let text = match value {
+                                    Some(v) if !v.is_empty() => {
+                                        format!("{r}\t{role}\t{name}={v}")
+                                    }
+                                    _ => format!("{r}\t{role}\t{name}"),
+                                };
+                                rows.push((r, text));
+                            }
+                        }
+                        for v in map.values() {
+                            stack.push(v);
+                        }
+                    }
+                    serde_json::Value::Array(arr) => {
+                        for v in arr {
+                            stack.push(v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            rows.sort_by_key(|(r, _)| *r);
+            for (_, line) in &rows {
+                println!("{line}");
+            }
+            if rows.is_empty() {
+                println!("(no interactive elements)");
+            }
+        }
+        "click" => {
+            let rest = line[cmd.len()..].trim_start();
+            let target: Option<i64> = if let Some(name) = rest.strip_prefix('@') {
+                match resolve_ref_by_name(client, name).await? {
+                    Some(r) => Some(r),
+                    None => {
+                        println!("no element matching: {}", name.trim());
+                        return Ok(());
+                    }
+                }
+            } else {
+                match rest.split_whitespace().next().and_then(|s| s.parse::<i64>().ok()) {
+                    Some(n) if n >= 0 => Some(n),
+                    _ => {
+                        println!("Usage: click <ref> | click @<name>");
+                        return Ok(());
+                    }
+                }
+            };
+            if let Some(n) = target {
+                mutate(client, "browser_click", serde_json::json!({ "ref": n })).await?;
+                println!("ok");
+            }
         }
         "type" => {
-            let ref_str = parts.get(1).unwrap_or(&"");
-            let text = parts.get(2).unwrap_or(&"");
-            let ref_num: i64 = ref_str.parse().unwrap_or(-1);
-            if ref_num < 0 || text.is_empty() {
-                println!("Usage: type <ref> <text>");
+            let rest = line[cmd.len()..].trim_start();
+            let (target, text): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@')
+            {
+                match sel.split_once('=') {
+                    Some((name, val)) => match resolve_ref_by_name(client, name).await? {
+                        Some(r) => (Some(r), val.to_string()),
+                        None => {
+                            println!("no element matching: {}", name.trim());
+                            return Ok(());
+                        }
+                    },
+                    None => {
+                        println!("Usage: type @<name>=<text>");
+                        return Ok(());
+                    }
+                }
+            } else {
+                let ref_num = parts.get(1).and_then(|s| s.parse::<i64>().ok()).filter(|n| *n >= 0);
+                (ref_num, parts.get(2).unwrap_or(&"").to_string())
+            };
+            match target {
+                Some(n) if !text.is_empty() => {
+                    mutate(
+                        client,
+                        "browser_type",
+                        serde_json::json!({ "ref": n, "text": text }),
+                    )
+                    .await?;
+                    println!("ok");
+                }
+                _ => println!("Usage: type <ref> <text> | type @<name>=<text>"),
+            }
+        }
+        "key" => {
+            let key_name = parts.get(1).map(|s| s.trim()).unwrap_or("");
+            if key_name.is_empty() {
+                println!("Usage: key <name> [modifiers]");
                 return Ok(());
             }
+            let mut args = serde_json::json!({ "key": key_name });
+            if let Some(mods) = parts.get(2).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let list: Vec<String> = mods
+                    .split(',')
+                    .map(|m| m.trim().to_string())
+                    .filter(|m| !m.is_empty())
+                    .collect();
+                args["modifiers"] = serde_json::Value::Array(
+                    list.into_iter().map(serde_json::Value::String).collect(),
+                );
+            }
+            mutate(client, "browser_key_press", args).await?;
+            println!("ok");
+        }
+        "select" => {
+            let rest = line[cmd.len()..].trim_start();
+            let (target, value): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@')
+            {
+                match sel.split_once('=') {
+                    Some((name, val)) => match resolve_ref_by_name(client, name).await? {
+                        Some(r) => (Some(r), val.to_string()),
+                        None => {
+                            println!("no element matching: {}", name.trim());
+                            return Ok(());
+                        }
+                    },
+                    None => {
+                        println!("Usage: select @<name>=<value>");
+                        return Ok(());
+                    }
+                }
+            } else {
+                let ref_num = parts.get(1).and_then(|s| s.parse::<i64>().ok()).filter(|n| *n >= 0);
+                (ref_num, parts.get(2).unwrap_or(&"").to_string())
+            };
+            match target {
+                Some(n) if !value.is_empty() => {
+                    mutate(
+                        client,
+                        "browser_select",
+                        serde_json::json!({ "ref": n, "value": value }),
+                    )
+                    .await?;
+                    println!("ok");
+                }
+                _ => println!("Usage: select <ref> <value> | select @<name>=<value>"),
+            }
+        }
+        "lease" => {
+            // Resolve the target tab: an explicit `lease <tab_id>`, otherwise the
+            // active tab. Acquisition auto-steals any existing lease, so no user
+            // confirmation is needed; the lease is held on this REPL session's
+            // connection and gates subsequent click/type mutations.
+            let tab_id = match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                Some(explicit) => match explicit.parse::<i64>() {
+                    Ok(id) => id,
+                    Err(_) => {
+                        println!("Usage: lease [tab_id]");
+                        return Ok(());
+                    }
+                },
+                None => {
+                    let result =
+                        browser::send_tool_call(client, "browser_tab_list", serde_json::json!({}))
+                            .await?;
+                    let active = result
+                        .get("tabs")
+                        .and_then(|t| t.as_array())
+                        .and_then(|arr| {
+                            arr.iter().find(|t| {
+                                t.get("is_active") == Some(&serde_json::Value::Bool(true))
+                            })
+                        })
+                        .and_then(|t| t.get("id"))
+                        .and_then(|v| v.as_i64());
+                    match active {
+                        Some(id) => id,
+                        None => {
+                            println!("No active tab to lease.");
+                            return Ok(());
+                        }
+                    }
+                }
+            };
             browser::send_tool_call(
                 client,
-                "browser_type",
-                serde_json::json!({ "ref": ref_num, "text": *text }),
+                "browser_acquire_lease",
+                serde_json::json!({ "tab_id": tab_id, "ttl_seconds": 300 }),
             )
             .await?;
-            println!("ok");
+            println!("Lease acquired.");
         }
         other => {
             println!("unknown command: {other}");
