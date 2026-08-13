@@ -13,43 +13,41 @@ declare function test(name: string, callback: () => void): void;
 declare function expect(value: unknown): Matcher;
 
 describe("HeroBrowserVisual component", () => {
-  test("renders only the product capture poster during SSR", () => {
-    // Given: the homepage hero is rendered before client policy resolution.
+  test("renders only the Spaces poster during SSR", () => {
+    // Given: the homepage hero is rendered before the browser evaluates motion policy.
     const html = renderToStaticMarkup(<HeroBrowserVisual />);
 
-    // Then: the native-size poster is the only initial media asset.
-    expect(html).toContain('src="/demo/hero/maho-hero-workflow-poster.png"');
-    expect(html).toContain('width="1040"');
-    expect(html).toContain('height="720"');
+    // Then: Spaces is the initial poster and no video network URL is emitted.
+    expect(html).toContain('src="/demo/hero/dom-hyperframes/maho-spaces-dom-poster.webp"');
+    expect(html).toContain('width="1920"');
+    expect(html).toContain('height="1080"');
     expect(html).not.toContain(".mp4");
     expect(html).not.toContain("<source");
   });
 
-  test("pins the single product capture media pair in source", () => {
+  test("pins only final independent scene media in source", () => {
     // Given: the component source that defines the runtime media request contract.
     const componentSource = readFileSync(new URL("../HeroBrowserVisual.tsx", import.meta.url), "utf8");
 
-    // Then: only the cookie-free workflow and poster paths are pinned.
-    expect(componentSource).toContain('"/demo/hero/maho-hero-workflow.mp4"');
-    expect(componentSource).toContain('"/demo/hero/maho-hero-workflow-poster.png"');
-    expect(componentSource).toContain("aspect-[4/5]");
-    expect(componentSource).toContain("sm:aspect-[1040/720]");
-    expect(componentSource).toContain("object-[32%_center]");
-    expect(componentSource).toContain("sm:object-center");
-    expect(componentSource).not.toContain("/demo/hero/dom-hyperframes/");
+    // Then: each selected scene uses a final DOM-rendered asset, never an aggregate master.
+    expect(componentSource).toContain('"/demo/hero/dom-hyperframes/maho-spaces-dom.mp4"');
+    expect(componentSource).toContain('"/demo/hero/dom-hyperframes/maho-split-view-dom.mp4"');
+    expect(componentSource).toContain('"/demo/hero/dom-hyperframes/maho-command-ai-dom.mp4"');
+    expect(componentSource).not.toContain("/demo/hero/hyperframes/");
+    expect(componentSource).not.toContain("master");
   });
 
-  test("exposes one labelled image without scene selector controls", () => {
+  test("exposes one labelled image and scene selector controls", () => {
     // Given: the server-rendered hero contract.
     const html = renderToStaticMarkup(<HeroBrowserVisual />);
 
-    // Then: one accessible image wraps decorative media without the retired scene buttons.
+    // Then: the hero describes its selected scene and exposes its selectable alternatives.
     expect(html.match(/role="img"/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="Maho Browser product demo"');
+    expect(html).toContain('aria-label="Maho Browser hero showing Spaces"');
     expect(html).toContain('aria-hidden="true"');
     expect(html).toContain('data-motion-surface="hero"');
-    expect(html).not.toContain(">Spaces</button>");
-    expect(html).not.toContain(">Split View</button>");
-    expect(html).not.toContain(">Command Bar + AI</button>");
+    expect(html).toContain(">Spaces</button>");
+    expect(html).toContain(">Split View</button>");
+    expect(html).toContain(">Command Bar + AI</button>");
   });
 });

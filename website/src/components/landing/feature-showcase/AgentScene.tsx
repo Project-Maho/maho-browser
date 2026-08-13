@@ -1,16 +1,18 @@
 import React from "react";
+import { AgentCapturePanel } from "./AgentCapturePanel";
 import { AgentPanelSurface } from "./AgentPanelSurface";
 import { TIMELINE_THRESHOLDS } from "./timeline";
 
 export interface AgentSceneProps {
   readonly captureProgress: number;
+  readonly staticCapture?: boolean;
 }
 
 function ratio(value: number, start: number, end: number): number {
   return Math.max(0, Math.min(1, (value - start) / (end - start)));
 }
 
-export const AgentScene: React.FC<AgentSceneProps> = ({ captureProgress }) => {
+export const AgentScene: React.FC<AgentSceneProps> = ({ captureProgress, staticCapture = false }) => {
   const { slideStart, slideEnd } = TIMELINE_THRESHOLDS.agent;
   const slideRatio = ratio(captureProgress, slideStart, slideEnd);
 
@@ -32,14 +34,18 @@ export const AgentScene: React.FC<AgentSceneProps> = ({ captureProgress }) => {
         aria-hidden="true"
         className="absolute inset-0 bg-[var(--maho-backdrop-scrim)]"
       />
-      <AgentPanelSurface
-        captureProgress={captureProgress}
-        position="right-docked"
-        className="absolute inset-y-0 right-0 z-20 w-[48%] border-l border-white/[0.1] shadow-[-1.2cqw_0_3cqw_rgba(0,0,0,0.24)] transition-transform duration-[350ms] ease-out"
-        style={{
-          transform: `translate3d(${(1 - slideRatio) * 100}%, 0, 0)`,
-        }}
-      />
+      {staticCapture ? (
+        <AgentCapturePanel />
+      ) : (
+        <AgentPanelSurface
+          captureProgress={captureProgress}
+          position="right-docked"
+          className="absolute inset-y-0 right-0 z-20 w-[48%] border-l border-white/[0.1] shadow-[-1.2cqw_0_3cqw_rgba(0,0,0,0.24)] transition-transform duration-[350ms] ease-out"
+          style={{
+            transform: `translate3d(${(1 - slideRatio) * 100}%, 0, 0)`,
+          }}
+        />
+      )}
     </div>
   );
 };

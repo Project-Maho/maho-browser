@@ -69,8 +69,8 @@ describe("Typed Scene Registry", () => {
 
     expect(holdProgress).toBeGreaterThanOrEqual(TIMELINE_THRESHOLDS.splitView.settleEnd);
     expect(html).toContain('data-split-phase="settled"');
-    expect(html).toContain('data-split-preview-duration-ms="720"');
-    expect(html).not.toContain('data-split-reveal-duration-ms');
+    expect(html).toContain('data-split-preview-duration-ms="170"');
+    expect(html).toContain('data-split-reveal-duration-ms="200"');
     expect(html).toContain('data-split-pane="left"');
     expect(html).toContain('data-split-pane="right"');
     expect(html).toContain('data-split-divider="true"');
@@ -112,8 +112,8 @@ describe("Typed Scene Registry", () => {
     );
 
     expect(html).toContain('data-split-phase="settled"');
-    expect(html).toContain('data-split-preview-duration-ms="720"');
-    expect(html).not.toContain('data-split-reveal-duration-ms');
+    expect(html).toContain('data-split-preview-duration-ms="170"');
+    expect(html).toContain('data-split-reveal-duration-ms="200"');
     expect(html).toContain('data-split-reveal-ratio="1"');
     expect(html).toContain('data-split-pane="left"');
     expect(html).toContain('data-split-pane="right"');

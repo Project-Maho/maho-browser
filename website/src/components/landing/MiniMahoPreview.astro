@@ -8,7 +8,7 @@ interface Props {
 <div data-mini-maho-preview="true" role="img" aria-label={Astro.props.alt} class="relative h-full w-full">
   <picture>
     <img
-      src="/demo/hero/maho-mini-maho-poster.png"
+      data-src="/demo/hero/maho-mini-maho-poster.png"
       width="1920"
       height="1080"
       alt=""
@@ -28,9 +28,18 @@ interface Props {
     aria-hidden="true"
     class="absolute inset-0 h-full w-full object-cover"
     data-progressive-marketing-video
-  >
-    <source data-src="/demo/hero/maho-mini-maho.mp4" type="video/mp4" />
-  </video>
+    data-video-path="/demo/hero/maho-mini-maho"
+  ></video>
+  <noscript>
+    <img
+      src="/demo/hero/maho-mini-maho-poster.png"
+      width="1920"
+      height="1080"
+      alt=""
+      aria-hidden="true"
+      class="absolute inset-0 h-full w-full object-cover"
+    />
+  </noscript>
 </div>
 
 <style>

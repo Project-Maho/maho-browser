@@ -5,6 +5,7 @@
 import ScrollReveal from '../../motion/ScrollReveal.astro';
 import { CtaButton } from '../../marketing/CtaButton';
 import type { HeroConfig } from '../HeroSection';
+import { HeroBrowserVisual } from './HeroBrowserVisual';
 
 export interface Props {
   config: HeroConfig;
@@ -51,43 +52,8 @@ const lines = config.headline.split('\n');
       </div>
 
       <ScrollReveal variant="fade" class="w-full">
-        <div class="relative mx-auto w-full max-w-[1180px]" data-motion-surface="hero">
-          <div class="relative aspect-video overflow-hidden rounded-xl border border-border bg-card shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
-            <picture>
-              <img
-                src="/demo/hero/maho-hero-capture-poster.png"
-                width="1920"
-                height="1080"
-                alt=""
-                aria-hidden="true"
-                decoding="async"
-                fetchpriority="high"
-                sizes="(max-width: 1180px) calc(100vw - 2rem), 1180px"
-                class="absolute inset-0 h-full w-full object-cover"
-              />
-            </picture>
-            <video
-              class="absolute inset-0 h-full w-full object-cover"
-              autoplay
-              muted
-              loop
-              playsinline
-              preload="none"
-              aria-label="Maho Browser demo showing the sidebar, Spaces, split view, command bar, and Agent workflow."
-              data-progressive-marketing-video
-              data-video-priority="hero"
-            >
-              <source data-src="/demo/hero/maho-hero-capture.mp4" type="video/mp4" />
-            </video>
-          </div>
-        </div>
+        <HeroBrowserVisual client:load className="mx-auto max-w-[1180px]" />
       </ScrollReveal>
     </div>
   </div>
 </section>
-
-<script>
-  import { initializeProgressiveMarketingVideos } from '../../../scripts/progressive-marketing-video';
-
-  initializeProgressiveMarketingVideos();
-</script>

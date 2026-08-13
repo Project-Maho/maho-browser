@@ -38,7 +38,7 @@ describe("Feature grid product surfaces", () => {
     expect(gridSource).toContain("<MiniMahoPreview");
     expect(gridSource).not.toContain("maho-browser-hero-full.png");
     expect(gridSource).toContain("@media (min-width: 900px)");
-    expect(previewSource).toContain("/demo/hero/maho-mini-maho.mp4");
+    expect(previewSource).toContain('data-video-path="/demo/hero/maho-mini-maho"');
     expect(previewSource).toContain("/demo/hero/maho-mini-maho-poster.png");
 
     await access(MINI_MAHO_VIDEO_URL);

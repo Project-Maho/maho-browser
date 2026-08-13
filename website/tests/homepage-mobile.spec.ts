@@ -162,18 +162,18 @@ test.describe("Maho homepage mobile contract", () => {
   });
 });
 
-test("desktop progressively loads its autoplay presentation", async ({
+test("desktop mounts the selected Hero scene and progressively loads Mini Maho", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "Desktop project only");
   await page.goto("/", { waitUntil: "load" });
 
-  const heroVideo = page.locator(
-    "[data-hero-browser-stage] video[data-progressive-marketing-video]",
-  );
+  const hero = page.locator("[data-motion-surface='hero']");
+  await expect(hero).toHaveAttribute("data-hero-policy", "motion");
+  const heroVideo = hero.locator("video");
   await expect
     .poll(() => heroVideo.evaluate((video) => (video as HTMLVideoElement).currentSrc))
-    .toContain("/demo/hero/maho-hero-capture.mp4");
+    .toContain("/demo/hero/dom-hyperframes/maho-spaces-dom.mp4");
   await expect
     .poll(() => heroVideo.evaluate((video) => (video as HTMLVideoElement).paused))
     .toBe(false);

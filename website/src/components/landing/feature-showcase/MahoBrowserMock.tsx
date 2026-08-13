@@ -1,4 +1,5 @@
 import React from "react";
+import { AgentScene } from "./AgentScene";
 import type { SceneKey } from "./timeline";
 import { clampProgress, getSplitMotion } from "./timeline";
 import { themeToCssVars } from "./theme/tokens";
@@ -15,6 +16,8 @@ export interface MahoBrowserMockProps {
   readonly scene?: SceneKey;
   /** Frozen progress 0..1 for this scene (clamped via clampProgress). Default 0. */
   readonly captureProgress?: number;
+  /** Renders deterministic artwork for capture-only composition. */
+  readonly staticCapture?: boolean;
   /** Optional passthrough class on the root wrapper (layout only, never color). */
   readonly className?: string;
 }
@@ -22,6 +25,7 @@ export interface MahoBrowserMockProps {
 export const MahoBrowserMock: React.FC<MahoBrowserMockProps> = ({
   scene = "spaces",
   captureProgress = 0,
+  staticCapture = false,
   className = "",
 }) => {
   const clampedP = clampProgress(captureProgress);
@@ -31,6 +35,9 @@ export const MahoBrowserMock: React.FC<MahoBrowserMockProps> = ({
   const cssVars = themeToCssVars(theme);
 
   const SceneComponent = sceneEntry.Component;
+  const sceneContent = scene === "agent" && staticCapture
+    ? <AgentScene captureProgress={clampedP} staticCapture />
+    : <SceneComponent captureProgress={clampedP} />;
 
   let addressText = sceneEntry.defaultAddress;
   let activeDotIndex = sceneEntry.defaultActiveDot;
@@ -57,9 +64,7 @@ export const MahoBrowserMock: React.FC<MahoBrowserMockProps> = ({
             pillSurface={WORKSPACES[activeWorkspaceIndex].pill}
             tileSurface={WORKSPACES[activeWorkspaceIndex].tile}
           />
-          <MahoContent>
-            <SceneComponent captureProgress={clampedP} />
-          </MahoContent>
+          <MahoContent>{sceneContent}</MahoContent>
         </div>
       </div>
     );
@@ -90,9 +95,7 @@ export const MahoBrowserMock: React.FC<MahoBrowserMockProps> = ({
             pillSurface={reading.pill}
             tileSurface={reading.tile}
           />
-          <MahoContent>
-            <SceneComponent captureProgress={clampedP} />
-          </MahoContent>
+          <MahoContent>{sceneContent}</MahoContent>
           {dragging && (
             <div
               data-split-sidebar-drag="true"
@@ -131,9 +134,7 @@ export const MahoBrowserMock: React.FC<MahoBrowserMockProps> = ({
             activeRowLabel={sceneEntry.defaultActiveRowLabel}
             spacesProgress={sceneEntry.usesSpacesCarousel ? clampedP : null}
           />
-          <MahoContent>
-            <SceneComponent captureProgress={clampedP} />
-          </MahoContent>
+          <MahoContent>{sceneContent}</MahoContent>
         </MahoWindow>
       </div>
     </div>

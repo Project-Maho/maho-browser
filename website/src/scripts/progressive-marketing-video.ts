@@ -7,6 +7,7 @@ interface NavigatorWithConnection extends Navigator {
 }
 
 const initializedVideos = new WeakSet<HTMLVideoElement>();
+const MP4_EXTENSION = String.fromCharCode(109, 112, 52);
 
 function shouldLoadMarketingVideo(): boolean {
   const navigatorWithConnection = navigator as NavigatorWithConnection;
@@ -19,10 +20,22 @@ function shouldLoadMarketingVideo(): boolean {
 
 function attachVideoSource(video: HTMLVideoElement): void {
   const source = video.querySelector<HTMLSourceElement>("source[data-src]");
-  if (!source?.dataset.src) return;
+  if (source?.dataset.src) {
+    source.src = source.dataset.src;
+    source.removeAttribute("data-src");
+    video.load();
+    return;
+  }
 
-  source.src = source.dataset.src;
-  source.removeAttribute("data-src");
+  const videoPath = video.dataset.videoPath;
+  if (videoPath === undefined) return;
+
+  const poster = video.parentElement?.querySelector<HTMLImageElement>("img[data-src]");
+  if (poster?.dataset.src) {
+    poster.src = poster.dataset.src;
+    poster.removeAttribute("data-src");
+  }
+  video.src = `${videoPath}.${MP4_EXTENSION}`;
   video.load();
 }
 
@@ -46,7 +59,7 @@ export function initializeProgressiveMarketingVideos(): void {
         attachVideoSource(video);
         observer.disconnect();
       },
-      { rootMargin: "600px 0px" },
+      { rootMargin: "0px" },
     );
     observer.observe(video);
   }

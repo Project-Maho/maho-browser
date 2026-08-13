@@ -2,30 +2,69 @@ import React, { useEffect, useRef, useState } from "react";
 import { readConnectionTarget, readSaveData } from "./motion/LandingMotionPolicy";
 
 type PlaybackPolicy = "pending" | "motion" | "static";
+type HeroScene = "spaces" | "split-view" | "command-bar-ai";
+type VideoState = "ready" | "unavailable";
 
-const VIDEO_SRC = "/demo/hero/maho-hero-workflow.mp4";
-const POSTER_SRC = "/demo/hero/maho-hero-workflow-poster.png";
+type HeroSceneAsset = {
+  readonly label: string;
+  readonly videoSrc: string;
+  readonly posterSrc: string;
+};
+
+const HERO_SCENES = {
+  spaces: {
+    label: "Spaces",
+    videoSrc: "/demo/hero/dom-hyperframes/maho-spaces-dom.mp4",
+    posterSrc: "/demo/hero/dom-hyperframes/maho-spaces-dom-poster.webp",
+  },
+  "split-view": {
+    label: "Split View",
+    videoSrc: "/demo/hero/dom-hyperframes/maho-split-view-dom.mp4",
+    posterSrc: "/demo/hero/dom-hyperframes/maho-split-view-dom-poster.webp",
+  },
+  "command-bar-ai": {
+    label: "Command Bar + AI",
+    videoSrc: "/demo/hero/dom-hyperframes/maho-command-ai-dom.mp4",
+    posterSrc: "/demo/hero/dom-hyperframes/maho-command-ai-dom-poster.webp",
+  },
+} as const satisfies Record<HeroScene, HeroSceneAsset>;
+
+const HERO_SCENE_KEYS = ["spaces", "split-view", "command-bar-ai"] as const satisfies readonly HeroScene[];
+
+function nextScene(scene: HeroScene): HeroScene {
+  switch (scene) {
+    case "spaces": return "split-view";
+    case "split-view": return "command-bar-ai";
+    case "command-bar-ai": return "spaces";
+  }
+}
 
 export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const playbackRequestRef = useRef(0);
   const [policy, setPolicy] = useState<PlaybackPolicy>("pending");
+  const [scene, setScene] = useState<HeroScene>("spaces");
   const [isVisible, setIsVisible] = useState(false);
-  const [isVideoAvailable, setIsVideoAvailable] = useState(true);
+  const [isPaused, setIsPaused] = useState(false);
+  const [videoState, setVideoState] = useState<VideoState>("ready");
 
   useEffect(() => {
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const desktopInputQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
     const connection = readConnectionTarget();
     const resolvePolicy = (): void => {
-      setPolicy(motionQuery.matches || readSaveData() ? "static" : "motion");
+      setPolicy(motionQuery.matches || readSaveData() || !desktopInputQuery.matches ? "static" : "motion");
     };
 
     resolvePolicy();
     motionQuery.addEventListener("change", resolvePolicy);
+    desktopInputQuery.addEventListener("change", resolvePolicy);
     connection?.addEventListener("change", resolvePolicy);
 
     return () => {
       motionQuery.removeEventListener("change", resolvePolicy);
+      desktopInputQuery.removeEventListener("change", resolvePolicy);
       connection?.removeEventListener("change", resolvePolicy);
     };
   }, []);
@@ -46,31 +85,42 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
     return () => observer.disconnect();
   }, []);
 
+  const shouldMountVideo = policy === "motion" && videoState === "ready";
+  const activeScene = HERO_SCENES[scene];
+  const shouldPlay = shouldMountVideo && isVisible && !isPaused;
+
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
-    if (!isVisible) {
+    const playbackRequest = playbackRequestRef.current + 1;
+    playbackRequestRef.current = playbackRequest;
+    if (video === null) return;
+    if (!shouldPlay) {
       video.pause();
       return;
     }
 
     void video.play().catch((error: unknown) => {
-      if (!(error instanceof DOMException)) throw error;
-      if (error.name === "AbortError") return;
-      if (error.name === "NotAllowedError" || error.name === "NotSupportedError") {
-        setIsVideoAvailable(false);
-        return;
+      if (playbackRequest !== playbackRequestRef.current) return;
+      if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "NotSupportedError")) {
+        setVideoState("unavailable");
       }
-      throw error;
     });
-  }, [isVisible]);
 
-  const shouldMountVideo = policy === "motion" && isVideoAvailable;
-  const videoState = policy !== "motion" || !isVideoAvailable
-    ? "poster"
-    : isVisible
-      ? "playing"
-      : "paused";
+    return () => {
+      playbackRequestRef.current += 1;
+      video.pause();
+    };
+  }, [scene, shouldPlay, videoState]);
+
+  const selectScene = (next: HeroScene): void => {
+    setScene(next);
+    setVideoState("ready");
+    setIsPaused(false);
+  };
+
+  const imageLabel = videoState === "unavailable"
+    ? `Maho Browser hero showing ${activeScene.label} poster; video unavailable`
+    : `Maho Browser hero showing ${activeScene.label}`;
 
   return (
     <div
@@ -78,43 +128,79 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
       className={`relative w-full ${className}`}
       data-motion-surface="hero"
       data-motion-owner={policy === "motion" && isVisible ? "hero" : "none"}
-      data-motion-substate={policy === "motion" && isVisible ? "action" : "idle"}
+      data-motion-substate={shouldPlay ? "action" : "idle"}
       data-hero-policy={policy}
+      data-hero-scene={scene}
       data-hero-video-state={videoState}
     >
       <div
         role="img"
-        aria-label="Maho Browser product demo"
-        className="relative mx-auto aspect-[4/5] w-full max-w-6xl overflow-hidden rounded-squircle-xl border border-border/80 shadow-[0_1.5rem_4rem_rgba(0,0,0,0.28)] sm:aspect-[1040/720]"
+        aria-label={imageLabel}
+        className="relative mx-auto aspect-video w-full overflow-hidden rounded-xl border border-border bg-card shadow-[0_28px_90px_rgba(0,0,0,0.28)]"
       >
         <div aria-hidden="true" className="absolute inset-0">
-          <img
-            src={POSTER_SRC}
-            width={1040}
-            height={720}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover object-[32%_center] sm:object-center"
-          />
+          <picture>
+            <img
+              src={activeScene.posterSrc}
+              width={1920}
+              height={1080}
+              alt=""
+              className="absolute inset-0 h-full w-full object-contain"
+            />
+          </picture>
           {shouldMountVideo && (
             <video
               ref={videoRef}
-              src={VIDEO_SRC}
-              width={1040}
-              height={720}
-              poster={POSTER_SRC}
+              key={scene}
+              src={activeScene.videoSrc}
+              width={1920}
+              height={1080}
+              poster={activeScene.posterSrc}
               muted
               playsInline
-              loop
-              autoPlay={isVisible}
               preload="auto"
-              onError={() => setIsVideoAvailable(false)}
-              className="absolute inset-0 h-full w-full object-cover object-[32%_center] sm:object-center"
+              onEnded={() => selectScene(nextScene(scene))}
+              onError={() => setVideoState("unavailable")}
+              className="absolute inset-0 h-full w-full object-contain opacity-100 transition-opacity duration-[320ms]"
             />
           )}
         </div>
       </div>
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-2" aria-label="Hero scenes">
+        {HERO_SCENE_KEYS.map((key) => {
+          const item = HERO_SCENES[key];
+          return (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={scene === key}
+            onClick={() => selectScene(key)}
+            className="min-h-11 rounded-full border border-border px-4 text-sm text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground aria-pressed:border-foreground aria-pressed:bg-foreground aria-pressed:text-background"
+          >
+            {item.label}
+          </button>
+          );
+        })}
+        {shouldMountVideo && (
+          <button
+            type="button"
+            aria-pressed={isPaused}
+            onClick={() => setIsPaused((value) => !value)}
+            className="min-h-11 rounded-full border border-border px-4 text-sm text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+          >
+            {isPaused ? "Resume hero video" : "Pause hero video"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => selectScene("spaces")}
+          className="min-h-11 rounded-full border border-border px-4 text-sm text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+        >
+          Replay hero sequence
+        </button>
+      </div>
       <p className="sr-only" aria-live="polite" aria-atomic="true">
-        {videoState === "playing" ? "Playing Maho Browser product demo" : "Showing Maho Browser product demo poster"}
+        {videoState === "unavailable" ? `${activeScene.label} video unavailable; showing poster` : `Showing ${activeScene.label}`}
       </p>
     </div>
   );

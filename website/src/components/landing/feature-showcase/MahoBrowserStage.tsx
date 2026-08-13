@@ -124,7 +124,12 @@ export const MahoBrowserStage = forwardRef<MahoBrowserStageHandle, MahoBrowserSt
         className={`w-full h-full relative overflow-hidden ${className}`} style={{ containerType: "inline-size" }}>
         <div ref={cameraRef} data-owner="camera-stage" className="w-full h-full relative">
           <div ref={actionRef} data-owner="scene-action" className="w-full h-full relative">
-            <MahoBrowserMock themeColor={themeColor} scene={scene} captureProgress={captureProgress} />
+            <MahoBrowserMock
+              themeColor={themeColor}
+              scene={scene}
+              captureProgress={captureProgress}
+              staticCapture={profile === "capture"}
+            />
             <div ref={pointerRef} data-owner="pointer-drag" className="absolute inset-0 pointer-events-none z-30" />
             <div ref={textRef} data-owner="text-track" className="absolute inset-0 pointer-events-none z-40" />
             {children}
