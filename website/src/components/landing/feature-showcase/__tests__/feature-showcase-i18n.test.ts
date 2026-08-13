@@ -83,7 +83,7 @@ describe("FeatureShowcase English-only guard", () => {
         sizes: "(min-width: 1024px) 50vw, 100vw",
       },
     });
-    expect(landingContent.mail.features.items[5]?.body).toContain("Optional AI subscription via OpenRouter");
+    expect(landingContent.mail.features.items[5]?.body).toContain("Optional managed AI via OpenRouter");
   });
 
   test("keeps fallback assets and copy out of homepage ownership", async () => {

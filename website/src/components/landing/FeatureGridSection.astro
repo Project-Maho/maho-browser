@@ -52,7 +52,7 @@ const frameShape = {
                     data-agent-card-media="full-height"
                     class={`rounded-squircle-lg squircle-enhanced overflow-hidden border border-border/70 bg-background ${frameShape[imageKey]}`}
                   >
-                    <AgentPanelPreview client:visible />
+                    <AgentPanelPreview client:only="react" />
                   </div>
                 ) : (
                   <div class={`rounded-squircle-lg squircle-enhanced overflow-hidden border border-border/70 bg-background ${frameShape[imageKey]}`}>
@@ -69,7 +69,7 @@ const frameShape = {
 </section>
 
 <style>
-  @media (min-width: 768px) {
+  @media (min-width: 900px) {
     .feature-bento {
       grid-template-columns: 0.85fr 2fr;
     }

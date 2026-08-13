@@ -1,8 +1,8 @@
 # Cloudflare Pages redirects — evaluated in order, first match wins.
 
-# D0.4: /waitlist route deleted, preserve inbound URLs via 301 to home.
-/waitlist  /  301
-/waitlist/ /  301
+# Legacy signup route: send old campaign links to the current download page.
+/waitlist  /download  301
+/waitlist/ /download  301
 
 # /compare/aside, /compare, /compare/ redirects removed (2026-07-12):
 # Astro pages now serve these routes directly (compare/aside.astro, compare/index.astro).

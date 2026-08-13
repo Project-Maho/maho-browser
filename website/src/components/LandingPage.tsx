@@ -88,7 +88,7 @@ const content = {
       subheadline: "Keep Spaces and Profiles separate, route URLs by rule, and use AI only when you ask.",
       primaryCta: { label: "Download Maho", href: browserDownloadUrl },
       secondaryCta: { label: "Join our Discord", href: discordUrl, variant: "discord" },
-      microCta: "Free. macOS, Windows, and Linux. Mobile in development.",
+      microCta: "Free. Available for macOS, Windows, and Linux.",
     },
     socialProof: {
       eyebrow: "By design",
@@ -262,7 +262,7 @@ const content = {
     },
     finalCta: {
       headline: "The browser tools you liked. Still yours.",
-      subheadline: "Download Maho for Spaces, split view, command bar, privacy by default, and AI only when asked. macOS, Windows, and Linux; mobile in development.",
+      subheadline: "Download Maho for Spaces, split view, command bar, privacy by default, and AI only when asked. Available for macOS, Windows, and Linux.",
       primaryCta: { label: "Download Maho", href: browserDownloadUrl },
       secondaryCta: { label: "Join our Discord", href: discordUrl, variant: "discord" },
     },

@@ -6,27 +6,31 @@ interface Props {
 ---
 
 <div data-mini-maho-preview="true" role="img" aria-label={Astro.props.alt} class="relative h-full w-full">
-  <img
-    src="/demo/hero/maho-mini-maho-poster.png"
-    width="1920"
-    height="1080"
-    alt=""
-    aria-hidden="true"
-    loading="lazy"
-    decoding="async"
-    class="absolute inset-0 h-full w-full object-cover"
-  />
+  <picture>
+    <img
+      src="/demo/hero/maho-mini-maho-poster.png"
+      width="1920"
+      height="1080"
+      alt=""
+      aria-hidden="true"
+      loading="lazy"
+      decoding="async"
+      sizes="(max-width: 768px) calc(100vw - 2rem), 720px"
+      class="absolute inset-0 h-full w-full object-cover"
+    />
+  </picture>
   <video
-    src="/demo/hero/maho-mini-maho.mp4"
-    poster="/demo/hero/maho-mini-maho-poster.png"
     muted
     autoplay
     loop
     playsinline
-    preload="metadata"
+    preload="none"
     aria-hidden="true"
     class="absolute inset-0 h-full w-full object-cover"
-  ></video>
+    data-progressive-marketing-video
+  >
+    <source data-src="/demo/hero/maho-mini-maho.mp4" type="video/mp4" />
+  </video>
 </div>
 
 <style>
@@ -36,3 +40,9 @@ interface Props {
     }
   }
 </style>
+
+<script>
+  import { initializeProgressiveMarketingVideos } from '../../scripts/progressive-marketing-video';
+
+  initializeProgressiveMarketingVideos();
+</script>

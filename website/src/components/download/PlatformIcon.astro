@@ -1,0 +1,63 @@
+---
+export type Platform = 'macos' | 'windows' | 'linux' | 'ios' | 'android';
+
+interface Props {
+  platform: Platform;
+}
+
+const { platform } = Astro.props;
+
+// Local copies of the actual Apple, Microsoft Windows, Linux, and Android
+// marks. Simple Icons assets are CC0; the Windows mark is the 2021 logo from
+// Wikimedia Commons. The marks remain their respective owners' trademarks.
+const brandAssets: Record<Platform, {
+  src: string;
+  alt: string;
+  sizeClass: string;
+  invertInDark: boolean;
+}> = {
+  macos: {
+    src: '/platform-icons/apple.svg',
+    alt: 'Apple logo',
+    sizeClass: 'size-9',
+    invertInDark: true,
+  },
+  windows: {
+    src: '/platform-icons/windows.svg',
+    alt: 'Windows logo',
+    sizeClass: 'size-9',
+    invertInDark: false,
+  },
+  linux: {
+    src: '/platform-icons/linux.svg',
+    alt: 'Tux, the Linux mascot',
+    sizeClass: 'size-10',
+    invertInDark: false,
+  },
+  ios: {
+    src: '/platform-icons/apple.svg',
+    alt: 'Apple logo',
+    sizeClass: 'size-9',
+    invertInDark: true,
+  },
+  android: {
+    src: '/platform-icons/android.svg',
+    alt: 'Android logo',
+    sizeClass: 'size-10',
+    invertInDark: false,
+  },
+};
+
+const brandAsset = brandAssets[platform];
+---
+
+<span data-platform-icon class="grid size-12 shrink-0 place-items-center">
+  <img
+    data-platform-brand-mark
+    src={brandAsset.src}
+    alt={brandAsset.alt}
+    width="40"
+    height="40"
+    class={brandAsset.sizeClass + (brandAsset.invertInDark ? ' dark:invert' : '')}
+  />
+</span>

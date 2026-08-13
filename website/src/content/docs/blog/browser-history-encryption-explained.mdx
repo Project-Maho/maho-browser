@@ -1,7 +1,7 @@
 ---
 title: "Browser history encryption: how Maho stores yours"
 description: "How browsing history is encrypted at rest in Maho on macOS. Keys, transport, recovery, and what you can verify yourself by inspecting the file system."
-date: 2026-09-18
+date: 2026-06-20
 tags:
   - browser
   - privacy
@@ -106,6 +106,6 @@ The design also does not pretend to defend against compelled disclosure. If you 
 
 The threat model in the [security overview](/security/) lists a few more cases (multi-user shared Macs, Time Machine backups, cloud-stored profile copies) and the answers we have for each. Short version: at-rest is encrypted, the key is keychain-resident, the relay never sees the plaintext, and you can verify the file boundary with one terminal command.
 
-## Get early access
+## Download Maho
 
-Maho ships with an encrypted-at-rest history store, a keychain-resident key bound to the signed binary, and a `file history.db` you can run yourself to confirm. The browser is in pre-release for macOS. [Get early access](/waitlist).
+Maho ships with an encrypted-at-rest history store, a keychain-resident key bound to the signed binary, and a `file history.db` you can run yourself to confirm. [Download Maho](/download).

@@ -21,6 +21,50 @@ export default defineConfig({
         deviceScaleFactor: 1,
       },
     },
+    {
+      name: "mobile-320",
+      testMatch: "**/homepage-mobile.spec.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 320, height: 568 },
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+    {
+      name: "mobile-390",
+      testMatch: "**/homepage-mobile.spec.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 390, height: 844 },
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+    {
+      name: "mobile-430",
+      testMatch: "**/homepage-mobile.spec.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 430, height: 932 },
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+    {
+      name: "touch-tablet-768",
+      testMatch: "**/homepage-mobile.spec.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 768, height: 1024 },
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
   ],
   webServer: process.env.BASE_URL
     ? undefined

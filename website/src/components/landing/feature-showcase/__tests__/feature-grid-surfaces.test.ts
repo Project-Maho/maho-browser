@@ -1,22 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 
 const FEATURE_GRID_URL = new URL("../../FeatureGridSection.astro", import.meta.url);
+const AGENT_PANEL_URL = new URL("../AgentPanelPreview.tsx", import.meta.url);
 const MINI_MAHO_URL = new URL("../../MiniMahoPreview.astro", import.meta.url);
+const MINI_MAHO_VIDEO_URL = new URL(
+  "../../../../../public/demo/hero/maho-mini-maho.mp4",
+  import.meta.url,
+);
+const MINI_MAHO_POSTER_URL = new URL(
+  "../../../../../public/demo/hero/maho-mini-maho-poster.png",
+  import.meta.url,
+);
 
 describe("Feature grid product surfaces", () => {
-  test("renders the Agent panel with its product description", async () => {
-    const source = await readFile(FEATURE_GRID_URL, "utf8");
+  test("mounts the looping Agent panel preview client-only", async () => {
+    const [gridSource, previewSource] = await Promise.all([
+      readFile(FEATURE_GRID_URL, "utf8"),
+      readFile(AGENT_PANEL_URL, "utf8"),
+    ]);
 
-    expect(source).toContain("AgentPanelPreview");
-    expect(source).toContain("<AgentPanelPreview");
-    expect(source).not.toContain('data-agent-card-title="true"');
-    expect(source).toContain('<p class="landing-body text-muted-foreground">{item.body}</p>');
-    expect(source).toContain('data-agent-card-media="full-height"');
-    expect(source).not.toContain('aspect-[3/4]');
-    expect(source).not.toContain("MahoBrowserMock");
-    expect(source).not.toContain('scene="agent"');
-    expect(source).not.toContain("maho-feature-agent.png");
+    expect(gridSource).toContain("feature-showcase/AgentPanelPreview");
+    expect(gridSource).toContain('<AgentPanelPreview client:only="react" />');
+    expect(gridSource).not.toContain("./AgentPanelPreview.astro");
+    expect(previewSource).toContain("AgentPanelSurface");
+    expect(previewSource).toContain('position="standalone"');
+    expect(previewSource).toContain("requestAnimationFrame");
   });
 
   test("renders the dedicated Mini Maho motion preview", async () => {
@@ -28,7 +37,11 @@ describe("Feature grid product surfaces", () => {
     expect(gridSource).toContain("MiniMahoPreview");
     expect(gridSource).toContain("<MiniMahoPreview");
     expect(gridSource).not.toContain("maho-browser-hero-full.png");
+    expect(gridSource).toContain("@media (min-width: 900px)");
     expect(previewSource).toContain("/demo/hero/maho-mini-maho.mp4");
     expect(previewSource).toContain("/demo/hero/maho-mini-maho-poster.png");
+
+    await access(MINI_MAHO_VIDEO_URL);
+    await access(MINI_MAHO_POSTER_URL);
   });
 });

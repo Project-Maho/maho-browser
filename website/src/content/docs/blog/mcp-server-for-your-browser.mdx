@@ -1,7 +1,7 @@
 ---
 title: "Run an MCP server for your browser"
 description: "Tutorial: set up a custom MCP server, register it with Maho, and let your AI panel call your own tools. A complete five-step walkthrough for developers."
-date: 2026-10-09
+date: 2026-06-20
 tags:
   - browser
   - how-to
@@ -22,7 +22,7 @@ This post walks through writing a small MCP server in TypeScript, defining one t
 
 ## What you need before you start
 
-You need Node.js 20 or newer, a package manager you trust (we use `bun` internally, but `npm` and `pnpm` work fine), and Maho on the waitlist build or later. You also need a clear idea of what your tool does. The single most common mistake is trying to ship a server that does ten things on day one. Pick one.
+You need Node.js 20 or newer, a package manager you trust (we use `bun` internally, but `npm` and `pnpm` work fine), and Maho 1.0.0 or later. You also need a clear idea of what your tool does. The single most common mistake is trying to ship a server that does ten things on day one. Pick one.
 
 Good first tools are the small, repetitive things you already do. Looking up a row in an internal database. Hitting a service that does not have a public API. Wrapping a shell script you run twice a day. The model can call them all eventually. For your first server, the goal is one tool that returns one shape of data, well-typed.
 
@@ -193,8 +193,8 @@ The grant prompts every call. You picked "allow once" by accident. Pick "allow f
 
 Maho refuses to load the server. Check the JSON syntax of `mcp.json`. Trailing commas are the most common cause.
 
-## Get early access
+## Download Maho
 
-If you want to write servers for your own workflows, the waitlist is open. Maho ships the host. You bring the tools.
+If you want to write servers for your own workflows, Maho ships the host. You bring the tools.
 
-[Get early access](/waitlist).
+[Download Maho](/download).
