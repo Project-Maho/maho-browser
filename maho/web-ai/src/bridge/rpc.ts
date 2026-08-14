@@ -1,5 +1,6 @@
 import { detectPlatform } from './platform-detect';
 import type { BridgeError } from './types';
+import { parseCredentialErrorCode, type CredentialErrorCode } from '../screens/credential-error';
 
 export { detectPlatform };
 
@@ -56,13 +57,33 @@ export function isBridgeRpcError(err: unknown): err is BridgeRpcError {
   _pending.delete(parsed.id);
 
   if (parsed.error) {
-    const err = new Error(`[maho-bridge] ${parsed.error.kind}`);
-    (err as unknown as { bridgeError: BridgeError }).bridgeError = parsed.error;
+    const reason = 'reason' in parsed.error ? parsed.error.reason : null;
+    const credentialCode = reason === null ? null : parseCredentialErrorCode(reason);
+    const genericMessage = `[maho-bridge] ${parsed.error.kind}`;
+    const safeReason = credentialCode === null ? genericMessage : credentialErrorEnvelope(credentialCode);
+    const err = new Error(safeReason);
+    const bridgeError = reason !== null && isCredentialEnvelopeCandidate(reason) && credentialCode === null
+      ? { ...parsed.error, reason: genericMessage }
+      : parsed.error;
+    (err as unknown as { bridgeError: BridgeError }).bridgeError = bridgeError;
     callObj.reject(err);
   } else {
     callObj.resolve(parsed.result);
   }
 };
+
+function credentialErrorEnvelope(code: CredentialErrorCode): string {
+  return JSON.stringify({ version: 1, kind: 'credential_error', code });
+}
+
+function isCredentialEnvelopeCandidate(value: string): boolean {
+  try {
+    const parsed = JSON.parse(value) as { kind?: unknown };
+    return parsed.kind === 'credential_error';
+  } catch {
+    return false;
+  }
+}
 
 function uuidv4(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {

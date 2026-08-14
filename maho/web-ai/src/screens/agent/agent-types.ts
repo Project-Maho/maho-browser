@@ -1,4 +1,5 @@
 import type { AgentHandle, ArtifactInfo } from '../../bridge/types';
+import type { CredentialErrorCode } from '../credential-error';
 
 export type AgentPhase = 'idle' | 'creating' | 'streaming' | 'complete' | 'cancelled' | 'error';
 
@@ -54,6 +55,7 @@ export interface AgentState {
   readonly activeAssistantId: string | null;
   readonly activeTurnId: string | null;
   readonly errorMessage: string | null;
+  readonly errorCredentialCode: CredentialErrorCode | null;
   readonly scrollRevision: number;
 }
 

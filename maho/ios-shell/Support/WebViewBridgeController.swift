@@ -38,9 +38,21 @@ import WebKit
  */
 final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
 
+    private static let managedAuthUnavailableEnvelope =
+        #"{"version":1,"kind":"credential_error","code":"managed_auth_unavailable"}"#
+
     private let bridge: MahoBridge
     private let onBack: (() -> Void)?
     private let onOpenSettings: (() -> Void)?
+    private let onCompleteOnboarding: (() -> Void)?
+    private let agentHandleResolver: (String) -> OpaquePointer?
+    private let agentArtifactLister: (OpaquePointer) -> [[String: Any]]
+    private let agentArtifactReader: (OpaquePointer, String) -> Data?
+    private let artifactShareCoordinator: ArtifactShareCoordinator
+    private let chatRPC: ChatSessionRPCDependencies
+    private let conversationRPC: ConversationRPCDependencies
+    private let browserToolExecutor: BrowserToolExecutor
+    private let maxBrowserToolResultBytes = 4_000
     private let dispatchQueue = DispatchQueue(
         label: "dev.maho.browser.WebViewBridgeController",
         qos: .userInitiated
@@ -52,11 +64,29 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     init(
         bridge: MahoBridge = .shared,
         onBack: (() -> Void)? = nil,
-        onOpenSettings: (() -> Void)? = nil
+        onOpenSettings: (() -> Void)? = nil,
+        onCompleteOnboarding: (() -> Void)? = nil,
+        agentHandleResolver: @escaping (String) -> OpaquePointer? = {
+            AgentHandleRegistry.shared.get(id: $0)
+        },
+        agentArtifactLister: ((OpaquePointer) -> [[String: Any]])? = nil,
+        agentArtifactReader: ((OpaquePointer, String) -> Data?)? = nil,
+        artifactShareCoordinator: ArtifactShareCoordinator = .shared,
+        chatRPC: ChatSessionRPCDependencies? = nil,
+        conversationRPC: ConversationRPCDependencies? = nil,
+        browserToolExecutor: BrowserToolExecutor? = nil
     ) {
         self.bridge = bridge
         self.onBack = onBack
         self.onOpenSettings = onOpenSettings
+        self.onCompleteOnboarding = onCompleteOnboarding
+        self.agentHandleResolver = agentHandleResolver
+        self.agentArtifactLister = agentArtifactLister ?? { bridge.agentListArtifacts($0) }
+        self.agentArtifactReader = agentArtifactReader ?? { bridge.agentReadArtifact($0, artifactId: $1) }
+        self.artifactShareCoordinator = artifactShareCoordinator
+        self.chatRPC = chatRPC ?? .live(bridge: bridge)
+        self.conversationRPC = conversationRPC ?? .live(bridge: bridge)
+        self.browserToolExecutor = browserToolExecutor ?? .live(bridge: bridge)
         super.init()
     }
 
@@ -119,6 +149,11 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     /// Attach to a webView after init. Called by the host view controller.
     func attach(to webView: WKWebView) {
         self.webView = webView
+#if DEBUG
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = true
+        }
+#endif
     }
 
     // MARK: - WKScriptMessageHandler
@@ -157,6 +192,10 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         }
     }
 
+    func dispatchRPCForTesting(_ requestJson: String) -> String {
+        dispatch(requestJson)
+    }
+
     private func dispatch(_ requestJson: String) -> String {
         guard
             let data = requestJson.data(using: .utf8),
@@ -172,6 +211,8 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         do {
             let result = try dispatchMethod(method, params: params)
             return successResponse(id: id, result: result)
+        } catch let error as BridgeError {
+            return errorResponse(id: id, message: error.rpcReason, kind: error.rpcKind)
         } catch {
             return errorResponse(id: id, message: error.localizedDescription)
         }
@@ -203,58 +244,75 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             let key = try stringParam(params, at: 1, name: "key")
             return bridge.byokValidateKey(provider: provider, key: key)
 
+        // ── AI provider settings (desktop parity) ───────────────────────────────
+        case "getAiSettings":
+            let defaults = UserDefaults.standard
+            return [
+                "provider": defaults.string(forKey: AiSettingsKeys.provider) ?? "",
+                "baseUrl": defaults.string(forKey: AiSettingsKeys.baseUrl) ?? "",
+                "model": defaults.string(forKey: AiSettingsKeys.model) ?? "",
+                "hasApiKey": !(BYOKKeychain.get(provider: AiSettingsKeys.customApiKeyAccount) ?? "").isEmpty,
+                "hasByokOpenai": !(bridge.byokGetKey(provider: "openai") ?? "").isEmpty,
+                "hasByokAnthropic": !(bridge.byokGetKey(provider: "anthropic") ?? "").isEmpty
+            ]
+
+        case "setAiProvider":
+            UserDefaults.standard.set(try stringParam(params, at: 0, name: "provider"), forKey: AiSettingsKeys.provider)
+            return nil
+
+        case "setAiBaseUrl":
+            UserDefaults.standard.set(try stringParam(params, at: 0, name: "url"), forKey: AiSettingsKeys.baseUrl)
+            return nil
+
+        case "setAiApiKey":
+            let key = try stringParam(params, at: 0, name: "key")
+            return BYOKKeychain.set(provider: AiSettingsKeys.customApiKeyAccount, key: key)
+
+        case "setAiModel":
+            UserDefaults.standard.set(try stringParam(params, at: 0, name: "model"), forKey: AiSettingsKeys.model)
+            return nil
+
         // ── Chat Session ──────────────────────────────────────────────────────
         case "chatSessionStart":
-            let optsVal = getParam(params, at: 0, name: "opts")
-            let opts = optsVal as? [String: Any] ?? [:]
-            let apiKey = opts["apiKey"] as? String ?? ""
-            let endpoint = opts["endpoint"] as? String ?? ""
-            let model = opts["model"] as? String ?? ""
-            let systemInstruction = opts["systemInstruction"] as? String ?? ""
-            guard let ptr = bridge.createChatSession(
-                apiKey: apiKey, endpoint: endpoint,
-                model: model, systemInstruction: systemInstruction
-            ) else {
+            let config = try resolveChatConfig(chatOptions(params, at: 0))
+            guard let ptr = chatRPC.create(config) else {
                 throw BridgeError.operationFailed("chatSessionStart returned nil")
             }
-            guard let handle = ChatSessionRegistry.shared.findHandle(for: ptr) else {
+            guard let handle = chatRPC.handleForPointer(ptr) else {
                 throw BridgeError.operationFailed("chatSessionStart registration failed")
             }
             return handle
 
         case "chatSessionResume":
-            let handle = try stringParam(params, at: 0, name: "handle")
-            if ChatSessionRegistry.shared.get(id: handle) != nil {
-                return nil
+            let conversationId = try resumeConversationId(params)
+            if chatRPC.hasSession(conversationId) {
+                return conversationId
             }
-            let conversations = bridge.listConversations()
-            guard let conversation = conversations.first(where: { $0.id == handle }) else {
-                throw BridgeError.operationFailed("Conversation session not found for handle: \(handle)")
+            guard let conversation = chatRPC.conversation(conversationId) else {
+                throw BridgeError.operationFailed("Conversation session not found for handle: \(conversationId)")
             }
-            let model = conversation.model ?? "gpt-4o"
-            let provider = model.contains("claude") ? "anthropic" : "openai"
-            let apiKey = bridge.byokGetKey(provider: provider) ?? ""
-            let systemInstruction = "You are Maho Assistant, a helpful AI built into the browser."
-            
-            guard let ptr = bridge.createChatSession(
-                apiKey: apiKey, endpoint: "",
-                model: model, systemInstruction: systemInstruction
-            ) else {
+            var options = chatOptions(params, at: 1)
+            if options.model.isEmpty {
+                options.model = conversation.model ?? ""
+            }
+            let config = try resolveChatConfig(options)
+            guard !config.endpoint.isEmpty else {
+                throw BridgeError.missingParam("endpoint")
+            }
+            guard let ptr = chatRPC.create(config) else {
                 throw BridgeError.operationFailed("chatSessionResume failed to create chat session")
             }
-            
-            ChatSessionRegistry.shared.unregisterWithoutFree(ptr)
-            ChatSessionRegistry.shared.register(id: handle, ptr: ptr)
-            
-            let turns = bridge.getConversationMessages(sessionId: handle)
-            for turn in turns {
+
+            chatRPC.bind(conversationId, ptr)
+
+            for turn in chatRPC.messages(conversationId) {
                 if turn.role == "user" {
-                    bridge.chatAppendUserMessage(ptr, content: turn.content)
+                    chatRPC.appendUser(ptr, turn.content)
                 } else if turn.role == "assistant" {
-                    bridge.chatAppendAssistantMessage(ptr, content: turn.content, toolCallsJson: "[]")
+                    chatRPC.appendAssistant(ptr, turn.content)
                 }
             }
-            return nil
+            return conversationId
 
 
         case "chatSessionFree":
@@ -314,6 +372,8 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         case "chatSendToolResult":
             let handle = try sessionParam(params, at: 0, name: "handle")
             let toolCallId = try stringParam(params, at: 1, name: "toolCallId")
+            let toolName = stringParamOpt(params, at: 3, name: "toolName") ?? ""
+            let trigger = (getParam(params, at: 4, name: "trigger") as? Bool) ?? true
             let resultVal = getParam(params, at: 2, name: "result")
             let result = resultVal as? [String: Any] ?? [:]
             let resultJson: String
@@ -323,12 +383,13 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             } else {
                 resultJson = "{}"
             }
-            return bridge.chatSendToolResult(handle, toolCallId: toolCallId, toolName: "", result: resultJson, trigger: true)
+            return chatRPC.sendToolResult(handle, toolCallId, toolName, resultJson, trigger)
 
         case "chatAppendAssistantMessage":
             let handle = try sessionParam(params, at: 0, name: "handle")
             let content = try stringParam(params, at: 1, name: "content")
-            bridge.chatAppendAssistantMessage(handle, content: content, toolCallsJson: "[]")
+            let toolCallsJson = stringParamOpt(params, at: 2, name: "toolCallsJson") ?? "[]"
+            bridge.chatAppendAssistantMessage(handle, content: content, toolCallsJson: toolCallsJson)
             return nil
 
         case "chatGetHistory":
@@ -344,6 +405,11 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             }
             return messages
 
+        case "browserToolInvoke":
+            let name = try stringParam(params, at: 0, name: "name")
+            let args = getParam(params, at: 1, name: "args") as? [String: Any] ?? [:]
+            return boundedBrowserToolResult(browserToolExecutor.invoke(name, args))
+
         // ── Conversations ─────────────────────────────────────────────────────
         case "conversationCreate":
             let metaVal = getParam(params, at: 0, name: "meta")
@@ -352,11 +418,20 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             let title = meta["title"] as? String
             let spaceId = meta["spaceId"] as? String
             let model = meta["model"] as? String
-            return bridge.createConversation(id: id, title: title, spaceId: spaceId, model: model)
+            guard bridge.createConversation(id: id, title: title, spaceId: spaceId, model: model) else {
+                throw BridgeError.operationFailed("conversationCreate failed")
+            }
+            return id
 
         case "conversationList":
-            let sessions = bridge.listConversations(limit: 100)
-            return try jsonArray(sessions)
+            let state = try conversationListState(params)
+            let limit = try conversationListLimit(params)
+            guard let payload = conversationRPC.listPayload(state, limit),
+                  let data = payload.data(using: .utf8),
+                  let result = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                throw BridgeError.operationFailed("conversationList returned invalid native payload")
+            }
+            return result
 
         case "conversationGet":
             let id = try stringParam(params, at: 0, name: "id")
@@ -373,10 +448,86 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             let title = try stringParam(params, at: 1, name: "title")
             return bridge.renameConversation(sessionId: id, title: title)
 
+        case "conversationArchive":
+            return conversationRPC.archive(try nonemptyStringParam(params, at: 0, name: "id"))
+
+        case "conversationUnarchive":
+            return conversationRPC.unarchive(try nonemptyStringParam(params, at: 0, name: "id"))
+
+        case "conversationBulk":
+            let operation = try conversationBulkOperation(params)
+            let ids = try conversationBulkIds(params)
+            guard let payload = conversationRPC.bulk(operation, ids),
+                  let data = payload.data(using: .utf8),
+                  let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  isConversationBulkResult(result) else {
+                throw BridgeError.operationFailed("conversationBulk returned invalid native payload")
+            }
+            return result
+
+        case "conversationGetAutoArchivePolicy":
+            return Int(conversationRPC.getPolicy())
+
+        case "conversationSetAutoArchivePolicy":
+            return conversationRPC.setPolicy(try conversationAutoArchiveDays(params))
+
         case "conversationGetMessages":
             let id = try stringParam(params, at: 0, name: "id")
             let turns = bridge.getConversationMessages(sessionId: id)
             return try jsonArray(turns)
+
+        case "conversationProjectList":
+            return try requiredJSONArrayPayload(bridge.listConversationProjectsPayload(), operation: "conversationProjectList")
+
+        case "conversationProjectCreate":
+            let name = try nonemptyStringParam(params, at: 0, name: "name")
+            return try requiredJSONObjectPayload(bridge.createConversationProjectPayload(name: name), operation: "conversationProjectCreate")
+
+        case "conversationProjectRename":
+            return bridge.renameConversationProject(
+                id: try nonemptyStringParam(params, at: 0, name: "id"),
+                name: try nonemptyStringParam(params, at: 1, name: "name")
+            )
+
+        case "conversationProjectDelete":
+            return bridge.deleteConversationProject(id: try nonemptyStringParam(params, at: 0, name: "id"))
+
+        case "conversationProjectMove":
+            let ids = try conversationProjectMoveIds(params)
+            let projectId = try nullableNonemptyStringParam(params, at: 1, name: "projectId")
+            return try requiredJSONObjectPayload(
+                bridge.moveConversationsToProjectPayload(ids: ids, projectId: projectId),
+                operation: "conversationProjectMove"
+            )
+
+        case "saveConversationMessage":
+            let sessionId = try stringParam(params, at: 0, name: "sessionId")
+            let role = try stringParam(params, at: 1, name: "role")
+            let content = try stringParam(params, at: 2, name: "content")
+            return bridge.saveConversationMessage(
+                sessionId: sessionId,
+                role: role,
+                content: content
+            )
+
+        // ── Composer drafts ───────────────────────────────────────────────────
+        case "composerDraftGet":
+            let scopeJson = try composerDraftScopeJson(params)
+            guard let payload = bridge.getComposerDraft(scopeJson: scopeJson),
+                  let data = payload.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return obj
+
+        case "composerDraftSet":
+            let scopeJson = try composerDraftScopeJson(params)
+            let text = try stringParam(params, at: 1, name: "text")
+            return bridge.setComposerDraft(scopeJson: scopeJson, text: text)
+
+        case "composerDraftDelete":
+            let scopeJson = try composerDraftScopeJson(params)
+            return bridge.deleteComposerDraft(scopeJson: scopeJson)
 
         // ── Space AI Config ───────────────────────────────────────────────────
         case "getSpaceAIConfig":
@@ -459,6 +610,25 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             }
             return tools
 
+        case "agentListArtifacts":
+            let ptr = try agentSessionParam(params, at: 0, name: "handle")
+            return agentArtifactLister(ptr)
+
+        case "artifactShare":
+            let ptr = try agentSessionParam(params, at: 0, name: "handle")
+            let artifactId = try stringParam(params, at: 1, name: "artifactId")
+            guard let metadata = agentArtifactLister(ptr).first(where: {
+                $0["artifactId"] as? String == artifactId
+            }) else {
+                throw BridgeError.operationFailed("Artifact not found: \(artifactId)")
+            }
+            guard let displayName = metadata["displayName"] as? String,
+                  let data = agentArtifactReader(ptr, artifactId) else {
+                throw BridgeError.operationFailed("Artifact could not be read: \(artifactId)")
+            }
+            try artifactShareCoordinator.share(data: data, displayName: displayName)
+            return true
+
         // ── Native-only actions ───────────────────────────────────────────────
         case "hapticFeedback":
             let style = stringParamOpt(params, at: 0, name: "style") ?? "medium"
@@ -472,6 +642,98 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             return nil
 
         case "capturePhoto", "captureScreenshot":
+            return nil
+
+        // ── Relay auth (gated onboarding) ──────────────────────────────────────
+        case "relaySignIn":
+            let email = try stringParam(params, at: 0, name: "email")
+            let password = try stringParam(params, at: 1, name: "password")
+            var apiResult: [String: Any] = [:]
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                do {
+                    let client = RelayAPIClient()
+                    let session = try await client.authenticate(mode: .login, email: email, password: password, displayName: nil)
+                    try await SyncTransport.shared.replaceRelaySession(session)
+                    apiResult = ["ok": true]
+                } catch {
+                    apiResult = ["ok": false, "error": error.localizedDescription]
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            return apiResult
+
+        case "relaySignUp":
+            let email = try stringParam(params, at: 0, name: "email")
+            let password = try stringParam(params, at: 1, name: "password")
+            let displayName = try stringParam(params, at: 2, name: "displayName")
+            var apiResult: [String: Any] = [:]
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                do {
+                    let client = RelayAPIClient()
+                    let session = try await client.authenticate(mode: .signup, email: email, password: password, displayName: displayName)
+                    try await SyncTransport.shared.replaceRelaySession(session)
+                    apiResult = ["ok": true]
+                } catch {
+                    apiResult = ["ok": false, "error": error.localizedDescription]
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            return apiResult
+
+        case "relaySignInWithGoogle":
+            var apiResult: [String: Any] = [:]
+            let semaphore = DispatchSemaphore(value: 0)
+            Task { @MainActor in
+                defer { semaphore.signal() }
+                do {
+                    guard let configuration = GoogleSignInConfiguration.fromBundle() else {
+                        throw GoogleSignInError.missingClientID
+                    }
+                    let flow = GoogleRelaySignInFlow(
+                        coordinatorProvider: { GoogleSignInCoordinator(configuration: configuration) },
+                        apiClient: RelayAPIClient(),
+                        authStore: RelayAuthStore.shared
+                    )
+                    let session = try await flow.signIn()
+                    try await SyncTransport.shared.replaceRelaySession(session)
+                    apiResult = ["ok": true]
+                } catch {
+                    if GoogleSignInError.isCancellation(error) {
+                        apiResult = ["ok": false, "cancelled": true]
+                    } else {
+                        apiResult = ["ok": false, "error": error.localizedDescription]
+                    }
+                }
+            }
+            semaphore.wait()
+            return apiResult
+
+        case "relayAccountStatus":
+            let session = RelayAuthStore.shared.loadSession()
+            let hasValidSession = session != nil && !session!.isRefreshTokenExpired
+            return [
+                "hasValidSession": hasValidSession,
+                "isReauth": false
+            ]
+
+        // ── Default browser ───────────────────────────────────────────────────
+        case "openDefaultBrowserSettings":
+            DispatchQueue.main.async {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            return nil
+
+        // ── Onboarding completion ──────────────────────────────────────────────
+        case "completeOnboarding":
+            DispatchQueue.main.async { [weak self] in
+                self?.onCompleteOnboarding?()
+            }
             return nil
 
         default:
@@ -518,12 +780,12 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         return str
     }
 
-    private func errorResponse(id: Any, message: String) -> String {
+    private func errorResponse(id: Any, message: String, kind: String = "internal") -> String {
         let obj: [String: Any] = [
             "jsonrpc": "2.0",
             "id": id,
             "error": [
-                "kind": "internal",
+                "kind": kind,
                 "reason": message
             ]
         ]
@@ -554,8 +816,215 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         return value
     }
 
+    private func chatOptions(_ params: Any, at index: Int) -> ChatSessionRPCOptions {
+        let value: Any?
+        if let array = params as? [Any] {
+            value = index < array.count ? array[index] : nil
+        } else if let dict = params as? [String: Any] {
+            value = dict["opts"] ?? dict
+        } else {
+            value = nil
+        }
+        return ChatSessionRPCOptions(value as? [String: Any] ?? [:])
+    }
+
+    private func resolveChatConfig(_ options: ChatSessionRPCOptions) throws -> ChatSessionRPCConfig {
+        if options.credentialProvider == AiProvider.managed.rawValue {
+            guard let managed = chatRPC.resolveManagedProvider() else {
+                throw BridgeError.operationFailed(Self.managedAuthUnavailableEnvelope)
+            }
+            return ChatSessionRPCConfig(
+                apiKey: managed.apiKey,
+                endpoint: managed.endpoint,
+                model: managed.model,
+                systemInstruction: options.systemInstruction
+            )
+        }
+
+        var apiKey = options.apiKey
+        if apiKey.isEmpty, options.credentialProvider == AiSettingsKeys.customApiKeyAccount {
+            apiKey = chatRPC.resolveSecret(AiSettingsKeys.customApiKeyAccount) ?? ""
+        }
+        return ChatSessionRPCConfig(
+            apiKey: apiKey,
+            endpoint: options.endpoint,
+            model: options.model,
+            systemInstruction: options.systemInstruction
+        )
+    }
+
+    private func resumeConversationId(_ params: Any) throws -> String {
+        if let array = params as? [Any], let value = array.first as? String {
+            return value
+        }
+        if let dict = params as? [String: Any],
+           let value = (dict["conversationId"] ?? dict["handle"]) as? String {
+            return value
+        }
+        throw BridgeError.missingParam("conversationId")
+    }
+
     private func stringParamOpt(_ params: Any, at index: Int, name: String) -> String? {
         return getParam(params, at: index, name: name) as? String
+    }
+
+    private func nonemptyStringParam(_ params: Any, at index: Int, name: String) throws -> String {
+        let value = try stringParam(params, at: index, name: name)
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BridgeError.invalidParam("\(name) must be nonempty")
+        }
+        return value
+    }
+
+    private func conversationListState(_ params: Any) throws -> String {
+        guard let raw = getParam(params, at: 0, name: "state") else { return "active" }
+        guard let state = raw as? String, ["active", "archived", "all"].contains(state) else {
+            throw BridgeError.invalidParam("state must be active, archived, or all")
+        }
+        return state
+    }
+
+    private func conversationListLimit(_ params: Any) throws -> Int {
+        guard let raw = getParam(params, at: 1, name: "limit") else { return 100 }
+        guard let limit = integralInt(raw), (1...500).contains(limit) else {
+            throw BridgeError.invalidParam("limit must be an integer from 1 through 500")
+        }
+        return limit
+    }
+
+    private func conversationBulkOperation(_ params: Any) throws -> String {
+        let operation = try stringParam(params, at: 0, name: "op")
+        guard ["archive", "unarchive", "delete"].contains(operation) else {
+            throw BridgeError.invalidParam("op must be archive, unarchive, or delete")
+        }
+        return operation
+    }
+
+    private func conversationBulkIds(_ params: Any) throws -> [String] {
+        let ids = try stringArrayParam(params, at: 1, name: "ids")
+        guard (1...500).contains(ids.count) else {
+            throw BridgeError.invalidParam("ids must contain from 1 through 500 values")
+        }
+        guard ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw BridgeError.invalidParam("ids must contain only nonempty values")
+        }
+        guard Set(ids).count == ids.count else {
+            throw BridgeError.invalidParam("ids must be unique")
+        }
+        return ids
+    }
+
+    private func isConversationBulkResult(_ value: [String: Any]) -> Bool {
+        if let error = value["error"] as? String,
+           !error.isEmpty,
+           let ids = value["ids"] as? [Any],
+           ids.allSatisfy({ $0 is String }) {
+            return true
+        }
+        guard let requestedCount = value["requestedCount"], integralInt(requestedCount) != nil else {
+            return false
+        }
+        return ["affectedIds", "unchangedIds", "missingIds"].allSatisfy { key in
+            guard let ids = value[key] as? [Any] else { return false }
+            return ids.allSatisfy { $0 is String }
+        }
+    }
+
+    private func conversationProjectMoveIds(_ params: Any) throws -> [String] {
+        let ids = try stringArrayParam(params, at: 0, name: "ids")
+        guard (1...500).contains(ids.count) else {
+            throw BridgeError.invalidParam("ids must contain from 1 through 500 values")
+        }
+        guard ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw BridgeError.invalidParam("ids must contain only nonempty values")
+        }
+        guard Set(ids).count == ids.count else {
+            throw BridgeError.invalidParam("ids must be unique")
+        }
+        return ids
+    }
+
+    private func nullableNonemptyStringParam(_ params: Any, at index: Int, name: String) throws -> String? {
+        guard let raw = getParam(params, at: index, name: name) else { throw BridgeError.missingParam(name) }
+        if raw is NSNull { return nil }
+        guard let value = raw as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BridgeError.invalidParam("\(name) must be null or a nonempty string")
+        }
+        return value
+    }
+
+    private func requiredJSONArrayPayload(_ payload: String?, operation: String) throws -> [Any] {
+        guard let payload, let data = payload.data(using: .utf8),
+              let result = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+            throw BridgeError.operationFailed("\(operation) returned invalid native payload")
+        }
+        return result
+    }
+
+    private func requiredJSONObjectPayload(_ payload: String?, operation: String) throws -> [String: Any] {
+        guard let payload, let data = payload.data(using: .utf8),
+              let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw BridgeError.operationFailed("\(operation) returned invalid native payload")
+        }
+        return result
+    }
+
+    private func conversationAutoArchiveDays(_ params: Any) throws -> Int32 {
+        guard let raw = getParam(params, at: 0, name: "afterDays") else {
+            throw BridgeError.invalidParam("afterDays is required")
+        }
+        if raw is NSNull { return -1 }
+        guard let days = integralInt(raw), [-1, 3, 7, 30].contains(days) else {
+            throw BridgeError.invalidParam("afterDays must be null, -1, 3, 7, or 30")
+        }
+        return Int32(days)
+    }
+
+    private func integralInt(_ value: Any) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            return nil
+        }
+        let double = number.doubleValue
+        guard double.isFinite, double.rounded(.towardZero) == double,
+              double >= Double(Int.min), double <= Double(Int.max) else { return nil }
+        return Int(double)
+    }
+
+    private func stringArrayParam(_ params: Any, at index: Int, name: String) throws -> [String] {
+        guard let values = getParam(params, at: index, name: name) as? [Any],
+              values.allSatisfy({ $0 is String }) else {
+            throw BridgeError.invalidParam("\(name) must be an array of strings")
+        }
+        return values.compactMap { $0 as? String }
+    }
+
+    /// Normalizes the `scope` RPC parameter into the exact JSON core expects:
+    /// `{"kind":"new_task"}` or `{"kind":"conversation","conversationId":"<id>"}`.
+    /// Anything else is rejected here so a malformed scope can never be written.
+    private func composerDraftScopeJson(_ params: Any) throws -> String {
+        let raw = getParam(params, at: 0, name: "scope")
+        guard let scope = raw as? [String: Any], let kind = scope["kind"] as? String else {
+            throw BridgeError.missingParam("scope")
+        }
+
+        let normalized: [String: Any]
+        switch kind {
+        case "new_task":
+            normalized = ["kind": "new_task"]
+        case "conversation":
+            guard let conversationId = scope["conversationId"] as? String, !conversationId.isEmpty else {
+                throw BridgeError.missingParam("scope.conversationId")
+            }
+            normalized = ["kind": "conversation", "conversationId": conversationId]
+        default:
+            throw BridgeError.invalidParam("scope.kind must be new_task or conversation")
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: normalized),
+              let json = String(data: data, encoding: .utf8) else {
+            throw BridgeError.encodingFailed
+        }
+        return json
     }
 
     private func ptrParam(_ params: Any, at index: Int, name: String) throws -> OpaquePointer {
@@ -567,7 +1036,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
 
     private func sessionParam(_ params: Any, at index: Int, name: String) throws -> OpaquePointer {
         let handle = try stringParam(params, at: index, name: name)
-        guard let ptr = ChatSessionRegistry.shared.get(id: handle) else {
+        guard let ptr = chatRPC.pointerForHandle(handle) else {
             throw BridgeError.operationFailed("Session handle not found: \(handle)")
         }
         return ptr
@@ -575,7 +1044,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
 
     private func agentSessionParam(_ params: Any, at index: Int, name: String) throws -> OpaquePointer {
         let handle = try stringParam(params, at: index, name: name)
-        guard let ptr = AgentHandleRegistry.shared.get(id: handle) else {
+        guard let ptr = agentHandleResolver(handle) else {
             throw BridgeError.operationFailed("Agent handle not found: \(handle)")
         }
         return ptr
@@ -607,12 +1076,314 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         return arr
     }
 
+    private func boundedBrowserToolResult(_ result: [String: Any]) -> [String: Any] {
+        guard let data = try? JSONSerialization.data(withJSONObject: result),
+              data.count > maxBrowserToolResultBytes,
+              let entries = result["result"] as? [Any] else {
+            return result
+        }
+
+        var bounded = result
+        var kept: [Any] = []
+        for entry in entries {
+            bounded["result"] = kept + [entry]
+            bounded["truncated"] = true
+            guard let candidateData = try? JSONSerialization.data(withJSONObject: bounded),
+                  candidateData.count <= maxBrowserToolResultBytes else {
+                break
+            }
+            kept.append(entry)
+        }
+        bounded["result"] = kept
+        bounded["truncated"] = true
+        return bounded
+    }
+
     private func jsonObject<T: Encodable>(_ value: T) throws -> [String: Any] {
         let data = try JSONEncoder().encode(value)
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw BridgeError.encodingFailed
         }
         return obj
+    }
+}
+
+// MARK: - Conversation RPC dependencies
+
+struct ConversationRPCDependencies {
+    let listPayload: (_ state: String, _ limit: Int) -> String?
+    let archive: (_ id: String) -> Bool
+    let unarchive: (_ id: String) -> Bool
+    let bulk: (_ operation: String, _ ids: [String]) -> String?
+    let getPolicy: () -> Int32
+    let setPolicy: (_ days: Int32) -> Bool
+
+    static func live(bridge: MahoBridge) -> ConversationRPCDependencies {
+        ConversationRPCDependencies(
+            listPayload: { bridge.listConversationsPayload(state: $0, limit: $1) },
+            archive: { bridge.archiveConversation(id: $0) },
+            unarchive: { bridge.unarchiveConversation(id: $0) },
+            bulk: { bridge.applyConversationBulkOperation(operation: $0, ids: $1) },
+            getPolicy: { bridge.getConversationAutoArchivePolicy() },
+            setPolicy: { bridge.setConversationAutoArchivePolicy(days: $0) }
+        )
+    }
+}
+
+// MARK: - Chat RPC dependencies
+
+struct ChatSessionRPCOptions {
+    var apiKey: String
+    var endpoint: String
+    var model: String
+    var systemInstruction: String
+    var credentialProvider: String?
+
+    init(_ value: [String: Any]) {
+        apiKey = value["apiKey"] as? String ?? ""
+        endpoint = value["endpoint"] as? String ?? ""
+        model = value["model"] as? String ?? ""
+        systemInstruction = value["systemInstruction"] as? String ?? ""
+        credentialProvider = value["credentialProvider"] as? String
+    }
+}
+
+struct ChatSessionRPCConfig: Equatable {
+    let apiKey: String
+    let endpoint: String
+    let model: String
+    let systemInstruction: String
+}
+
+struct ChatSessionRPCConversation {
+    let model: String?
+}
+
+struct ChatSessionRPCMessage {
+    let role: String
+    let content: String
+}
+
+struct ChatSessionRPCDependencies {
+    let create: (ChatSessionRPCConfig) -> OpaquePointer?
+    let handleForPointer: (OpaquePointer) -> String?
+    let pointerForHandle: (String) -> OpaquePointer?
+    let hasSession: (String) -> Bool
+    let conversation: (String) -> ChatSessionRPCConversation?
+    let bind: (String, OpaquePointer) -> Void
+    let messages: (String) -> [ChatSessionRPCMessage]
+    let appendUser: (OpaquePointer, String) -> Void
+    let appendAssistant: (OpaquePointer, String) -> Void
+    let sendToolResult: (OpaquePointer, String, String, String, Bool) -> Bool
+    let resolveSecret: (String) -> String?
+    let resolveManagedProvider: () -> AiProviderConfig?
+
+    static func live(bridge: MahoBridge) -> ChatSessionRPCDependencies {
+        ChatSessionRPCDependencies(
+            create: { config in
+                bridge.createChatSession(
+                    apiKey: config.apiKey,
+                    endpoint: config.endpoint,
+                    model: config.model,
+                    systemInstruction: config.systemInstruction
+                )
+            },
+            handleForPointer: { ChatSessionRegistry.shared.findHandle(for: $0) },
+            pointerForHandle: { ChatSessionRegistry.shared.get(id: $0) },
+            hasSession: { ChatSessionRegistry.shared.get(id: $0) != nil },
+            conversation: { conversationId in
+                bridge.listConversations().first(where: { $0.id == conversationId }).map {
+                    ChatSessionRPCConversation(model: $0.model)
+                }
+            },
+            bind: { conversationId, ptr in
+                ChatSessionRegistry.shared.unregisterWithoutFree(ptr)
+                ChatSessionRegistry.shared.register(id: conversationId, ptr: ptr)
+            },
+            messages: { conversationId in
+                bridge.getConversationMessages(sessionId: conversationId).map {
+                    ChatSessionRPCMessage(role: $0.role, content: $0.content)
+                }
+            },
+            appendUser: { bridge.chatAppendUserMessage($0, content: $1) },
+            appendAssistant: { bridge.chatAppendAssistantMessage($0, content: $1, toolCallsJson: "[]") },
+            sendToolResult: { bridge.chatSendToolResult($0, toolCallId: $1, toolName: $2, result: $3, trigger: $4) },
+            resolveSecret: { BYOKKeychain.get(provider: $0) },
+            resolveManagedProvider: { AiProviderResolver.resolveManaged(bridge: bridge) }
+        )
+    }
+}
+
+struct BrowserToolExecutor {
+    let invoke: (_ name: String, _ args: [String: Any]) -> [String: Any]
+
+    static func live(bridge: MahoBridge) -> BrowserToolExecutor {
+        BrowserToolExecutor { name, args in
+            switch name {
+            case "list_tabs":
+                return ["ok": true, "result": bridge.getTabViewModels().filter { !$0.isPrivate }.map { tab in
+                    ["id": tab.id, "spaceId": tab.spaceId, "url": tab.url, "title": tab.title]
+                }]
+            case "get_page_info":
+                guard
+                    let activeTabId = bridge.getActiveTabId(),
+                    let tab = bridge.getTabViewModels().first(where: { $0.id == activeTabId })
+                else {
+                    return ["ok": false, "error": "no_active_tab"]
+                }
+                return ["ok": true, "result": ["id": tab.id, "url": tab.url, "title": tab.title]]
+            case "search_bookmarks":
+                let query = args["query"] as? String ?? ""
+                return ["ok": true, "result": bridge.searchBookmarks(query: query).map { bookmark in
+                    ["id": bookmark.id, "url": bookmark.url, "title": bookmark.title]
+                }]
+            case "search_history":
+                let query = args["query"] as? String ?? ""
+                let limit = args["limit"] as? Int ?? 20
+                return ["ok": true, "result": bridge.searchHistory(query: query, limit: limit).map { entry in
+                    ["id": entry.id, "url": entry.url, "title": entry.title]
+                }]
+            case "open_tab":
+                guard let url = args["url"] as? String, let spaceId = bridge.getActiveSpaceId() else {
+                    return ["ok": false, "error": "missing_url"]
+                }
+                bridge.createTab(url: Url(url), inSpace: spaceId)
+                return ["ok": true, "result": ["url": url]]
+            case "navigate":
+                guard let tabId = bridge.getActiveTabId(), let url = args["url"] as? String else {
+                    return ["ok": false, "error": "missing_tab_id_or_url"]
+                }
+                bridge.navigate(tabId: tabId, url: Url(url))
+                return ["ok": true, "result": ["tab_id": tabId, "url": url]]
+            case "close_tab":
+                guard let tabId = args["tab_id"] as? String else {
+                    return ["ok": false, "error": "missing_tab_id"]
+                }
+                bridge.closeTab(id: tabId)
+                return ["ok": true, "result": ["tab_id": tabId]]
+            case "create_bookmark":
+                guard let url = args["url"] as? String else {
+                    return ["ok": false, "error": "missing_url"]
+                }
+                bridge.addBookmark(url: url, title: args["title"] as? String ?? url, folderId: args["folder_id"] as? String)
+                return ["ok": true, "result": ["url": url]]
+            default:
+                return ["ok": false, "error": "unknown_tool"]
+            }
+        }
+    }
+}
+
+// MARK: - Native artifact sharing
+
+final class ArtifactShareCoordinator {
+    typealias Presenter = (URL, @escaping () -> Void) -> Bool
+
+    static let shared = ArtifactShareCoordinator()
+
+    private let fileManager: FileManager
+    private let tempRoot: URL
+    private let presenter: Presenter
+
+    init(
+        fileManager: FileManager = .default,
+        tempRoot: URL? = nil,
+        presenter: Presenter? = nil
+    ) {
+        self.fileManager = fileManager
+        self.tempRoot = tempRoot ?? fileManager.temporaryDirectory
+            .appendingPathComponent("MahoArtifactShares", isDirectory: true)
+        self.presenter = presenter ?? { fileURL, completion in
+            NativeArtifactSharePresenter.present(fileURL: fileURL, completion: completion)
+        }
+        cleanupStaleExports()
+    }
+
+    func share(data: Data, displayName: String) throws {
+        let exportDirectory = tempRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let exportURL = exportDirectory.appendingPathComponent(Self.sanitizedDisplayName(displayName))
+        do {
+            try fileManager.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+            try data.write(to: exportURL, options: [.atomic, .completeFileProtection])
+        } catch {
+            try? fileManager.removeItem(at: exportDirectory)
+            throw BridgeError.operationFailed("Artifact export failed")
+        }
+
+        DispatchQueue.main.async { [fileManager, presenter] in
+            let cleanup: () -> Void = {
+                try? fileManager.removeItem(at: exportDirectory)
+            }
+            if !presenter(exportURL, cleanup) {
+                cleanup()
+            }
+        }
+    }
+
+    static func sanitizedDisplayName(_ displayName: String) -> String {
+        let pathParts = displayName
+            .split(whereSeparator: { $0 == "/" || $0 == "\\" })
+            .map(String.init)
+            .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+        let joined = pathParts.joined(separator: " ")
+        let invalid = CharacterSet(charactersIn: "/\\:\0?%*|\"<>").union(.controlCharacters)
+        let sanitizedScalars = joined.unicodeScalars.map { invalid.contains($0) ? "_" : String($0) }
+        let collapsed = sanitizedScalars.joined()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return collapsed.isEmpty ? "Maho Artifact" : String(collapsed.prefix(180))
+    }
+
+    private func cleanupStaleExports() {
+        try? fileManager.removeItem(at: tempRoot)
+        try? fileManager.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    }
+}
+
+enum NativeArtifactSharePresenter {
+    static func present(
+        fileURL: URL,
+        rootViewController: UIViewController? = nil,
+        activityFactory: ([Any]) -> UIActivityViewController = {
+            UIActivityViewController(activityItems: $0, applicationActivities: nil)
+        },
+        completion: @escaping () -> Void
+    ) -> Bool {
+        precondition(Thread.isMainThread)
+        let root = rootViewController ?? UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .windows.first(where: \.isKeyWindow)?.rootViewController
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first?.windows.first?.rootViewController
+        guard let root else { return false }
+
+        let presenter = topPresenter(from: root)
+
+        let activity = activityFactory([fileURL])
+        activity.completionWithItemsHandler = { _, _, _, _ in completion() }
+        if let popover = activity.popoverPresentationController {
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(
+                x: presenter.view.bounds.midX,
+                y: presenter.view.bounds.maxY - ShellTheme.Size.bottomBarMinHeight,
+                width: 1,
+                height: 1
+            )
+            popover.permittedArrowDirections = []
+        }
+        presenter.present(activity, animated: true)
+        return true
+    }
+
+    static func topPresenter(from root: UIViewController) -> UIViewController {
+        var presenter = root
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        return presenter
     }
 }
 
@@ -625,6 +1396,15 @@ private enum BridgeError: LocalizedError {
     case operationFailed(String)
     case encodingFailed
 
+    var rpcKind: String {
+        switch self {
+        case .missingParam, .invalidParam: return "params_invalid"
+        case .operationFailed: return "operation_failed"
+        case .unknownMethod: return "method_not_found"
+        case .encodingFailed: return "internal"
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .missingParam(let n):    return "Missing or invalid parameter: \(n)"
@@ -632,6 +1412,13 @@ private enum BridgeError: LocalizedError {
         case .unknownMethod(let m):   return "Unknown bridge method: \(m)"
         case .operationFailed(let m): return "Operation failed: \(m)"
         case .encodingFailed:         return "Failed to encode response to JSON"
+        }
+    }
+
+    var rpcReason: String {
+        switch self {
+        case .operationFailed(let reason): return reason
+        default: return localizedDescription
         }
     }
 }
@@ -645,12 +1432,14 @@ extension WebViewBridgeController {
     static func makeWebView(
         bridge: MahoBridge = .shared,
         onBack: (() -> Void)? = nil,
-        onOpenSettings: (() -> Void)? = nil
+        onOpenSettings: (() -> Void)? = nil,
+        onCompleteOnboarding: (() -> Void)? = nil
     ) -> (webView: WKWebView, controller: WebViewBridgeController) {
         let controller = WebViewBridgeController(
             bridge: bridge,
             onBack: onBack,
-            onOpenSettings: onOpenSettings
+            onOpenSettings: onOpenSettings,
+            onCompleteOnboarding: onCompleteOnboarding
         )
         let ucc = WKUserContentController()
         ucc.add(controller, name: "mahoBridge")
@@ -855,4 +1644,3 @@ private final class StreamSession {
         }
     }
 }
-

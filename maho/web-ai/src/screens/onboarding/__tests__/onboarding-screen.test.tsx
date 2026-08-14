@@ -5,6 +5,7 @@ import { OnboardingScreen } from '../onboarding-screen';
 const mockBridge = {
   relaySignIn: vi.fn(),
   relaySignUp: vi.fn(),
+  relaySignInWithGoogle: vi.fn(),
   relayAccountStatus: vi.fn(),
   openDefaultBrowserSettings: vi.fn(),
   completeOnboarding: vi.fn(),
@@ -18,7 +19,7 @@ const { mockRouteParams } = vi.hoisted(() => ({
   mockRouteParams: {
     safeAreaTop: '20',
     safeAreaBottom: '40',
-  },
+  } as { safeAreaTop: string; safeAreaBottom: string; step?: string },
 }));
 
 vi.mock('../../../hooks/use-bridge', () => ({
@@ -34,10 +35,12 @@ vi.mock('../../../hooks/use-hash-route', () => ({
 }));
 
 beforeEach(() => {
+  delete mockRouteParams.step;
   mockRouteParams.safeAreaTop = '20';
   mockRouteParams.safeAreaBottom = '40';
   mockBridge.relaySignIn.mockResolvedValue({ ok: true });
   mockBridge.relaySignUp.mockResolvedValue({ ok: true });
+  mockBridge.relaySignInWithGoogle.mockResolvedValue({ ok: true });
   mockBridge.relayAccountStatus.mockResolvedValue({ hasValidSession: false, isReauth: false });
   mockBridge.openDefaultBrowserSettings.mockResolvedValue(undefined);
   mockBridge.completeOnboarding.mockResolvedValue(undefined);
@@ -55,6 +58,15 @@ afterEach(() => {
 });
 
 describe('OnboardingScreen', () => {
+  it('opens directly at authentication for account recovery', () => {
+    mockRouteParams.step = 'auth';
+
+    render(<OnboardingScreen />);
+
+    expect(screen.getByRole('heading', { name: /sign in to maho/i })).toBeTruthy();
+    expect(screen.queryByText('Built for people who')).toBeNull();
+  });
+
   it('preserves native safe-area variables when route insets are zero', () => {
     // Given
     document.documentElement.style.setProperty('--safe-area-top', '62px');
@@ -91,6 +103,18 @@ describe('OnboardingScreen', () => {
 
     expect(await screen.findByRole('heading', { name: /sign in to maho/i })).toBeTruthy();
     expect(screen.queryByTestId('maho-logo')).toBeNull();
+  });
+
+  it('continues onboarding after Google Relay sign-in', async () => {
+    render(<OnboardingScreen />);
+
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue with google/i }));
+
+    await waitFor(() => {
+      expect(mockBridge.relaySignInWithGoogle).toHaveBeenCalledOnce();
+    });
+    expect(await screen.findByRole('heading', { name: /set as default browser/i })).toBeTruthy();
   });
 
   it('displays validation error if email or password is empty in auth step', async () => {

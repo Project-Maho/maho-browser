@@ -1,5 +1,5 @@
 use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{jboolean, jlong, jstring};
+use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 use maho_core::maho_core::MahoCore;
 use std::ffi::{c_char, c_void, CStr};
@@ -1189,6 +1189,125 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSyncStatus<'loc
 
 #[no_mangle]
 #[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSyncRoomId<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jstring {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return std::ptr::null_mut(),
+    };
+    match core.get_sync_room_id() {
+        Some(room_id) => env
+            .new_string(room_id)
+            .map_or(std::ptr::null_mut(), |value| value.into_raw()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+#[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeLeaseSyncOutgoingEnvelopes<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jstring {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return std::ptr::null_mut(),
+    };
+    match core.drain_sync_outgoing_envelopes() {
+        Ok(envelopes) => to_json_jstring(&mut env, &envelopes),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+#[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAcknowledgeSyncEnvelope<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    ack_json: JString<'local>,
+) -> jboolean {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return 0,
+    };
+    let ack_json = match get_rust_string(&mut env, &ack_json) {
+        Some(value) => value,
+        None => return 0,
+    };
+    core.accept_sync_ack(&ack_json)
+        .is_ok_and(|acknowledged| acknowledged) as jboolean
+}
+
+#[no_mangle]
+#[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSyncReceiveCursor<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    room_id: JString<'local>,
+) -> jlong {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return 0,
+    };
+    let room_id = match get_rust_string(&mut env, &room_id) {
+        Some(value) => value,
+        None => return 0,
+    };
+    core.get_sync_receive_cursor(&room_id).unwrap_or(0) as jlong
+}
+
+#[no_mangle]
+#[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplySyncEnvelopeAndAdvanceCursor<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    room_id: JString<'local>,
+    envelope_json: JString<'local>,
+) -> jboolean {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return 0,
+    };
+    let room_id = match get_rust_string(&mut env, &room_id) {
+        Some(value) => value,
+        None => return 0,
+    };
+    let envelope_json = match get_rust_string(&mut env, &envelope_json) {
+        Some(value) => value,
+        None => return 0,
+    };
+    core.apply_sync_envelope_and_advance_cursor(&room_id, &envelope_json)
+        .is_ok() as jboolean
+}
+
+#[no_mangle]
+#[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeReportSyncTransportState<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    report_json: JString<'local>,
+) {
+    let Some(core) = (unsafe { get_core(ptr) }) else {
+        return;
+    };
+    let Some(report_json) = get_rust_string(&mut env, &report_json) else {
+        return;
+    };
+    let _ = core.report_sync_transport_state(&report_json);
+}
+
+#[no_mangle]
+#[allow(unused_mut)]
 pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConnectedDevices<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -1252,6 +1371,21 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGenerateSyncKey<'l
 }
 
 #[no_mangle]
+#[allow(unused_mut)]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGenerateSyncBootstrap<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jstring {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return std::ptr::null_mut(),
+    };
+    env.new_string(core.generate_sync_bootstrap())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+#[no_mangle]
 pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeJoinSync<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -1271,6 +1405,34 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeJoinSync<'local>(
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeConfigureSyncBootstrap<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    server_url: JString<'local>,
+    bootstrap_seed: JString<'local>,
+) -> jstring {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return std::ptr::null_mut(),
+    };
+    let server_url = match get_rust_string(&mut env, &server_url) {
+        Some(value) => value,
+        None => return std::ptr::null_mut(),
+    };
+    let bootstrap_seed = match get_rust_string(&mut env, &bootstrap_seed) {
+        Some(value) => value,
+        None => return std::ptr::null_mut(),
+    };
+    let result = match core.configure_sync_encryption_from_bootstrap(&server_url, &bootstrap_seed) {
+        Ok(room_id) => serde_json::json!({ "success": true, "roomId": room_id }),
+        Err(error) => serde_json::json!({ "success": false, "error": error }),
+    };
+    env.new_string(result.to_string())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
 #[no_mangle]
@@ -3109,15 +3271,17 @@ fn parse_android_secure_storage_response(
     let (key, base_url, model) = match parsed {
         Ok(bundle) => (bundle.key, bundle.base_url, bundle.model),
         Err(_) if response.trim_start().starts_with('{') => {
-            return Err(AgentError::ExecutionError(
-                "Invalid secure storage response".to_string(),
+            // Stored secure-storage blob is present but unreadable: treat as an
+            // unusable credential, not a generic execution failure.
+            return Err(AgentError::Credential(
+                maho_agent::CredentialError::CredentialUnusable,
             ));
         }
         Err(_) => (response.to_string(), None, None),
     };
     if key.is_empty() {
-        return Err(AgentError::ExecutionError(
-            "Secure key not found".to_string(),
+        return Err(AgentError::Credential(
+            maho_agent::CredentialError::SecureStoreUnavailable,
         ));
     }
 
@@ -3141,9 +3305,29 @@ fn jni_permission_handler(
 }
 
 fn jni_secure_storage_handler(provider: &str) -> Result<maho_agent::SecureKeyBundle, AgentError> {
-    let response = call_android_secure_storage_callback(provider)
-        .ok_or_else(|| AgentError::ExecutionError("Secure key not found".to_string()))?;
+    let response = call_android_secure_storage_callback(provider).ok_or_else(|| {
+        AgentError::Credential(maho_agent::CredentialError::SecureStoreUnavailable)
+    })?;
     parse_android_secure_storage_response(&response)
+}
+
+/// Convert a turn error into the text pushed to the agent event queue.
+///
+/// Typed credential errors become the same structured envelope the desktop and
+/// iOS FFI layers emit (`{"version":1,"kind":"credential_error","code":...}`),
+/// so the Android WebView UI can render an actionable credential card instead of
+/// leaking the raw diagnostic string. All other errors keep the plain display
+/// string.
+fn agent_error_event_text(error: &AgentError) -> String {
+    match error {
+        AgentError::Credential(credential_error) => serde_json::json!({
+            "version": 1,
+            "kind": "credential_error",
+            "code": credential_error.code(),
+        })
+        .to_string(),
+        _ => error.to_string(),
+    }
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -3183,7 +3367,12 @@ fn enqueue_agent_stream_event(
                 serde_json::json!({ "id": id, "name": name, "args": args }),
             );
         }
-        maho_agent::AgentStreamEvent::ToolResult { id, name, result, succeeded } => {
+        maho_agent::AgentStreamEvent::ToolResult {
+            id,
+            name,
+            result,
+            succeeded,
+        } => {
             enqueue_event(
                 queue,
                 "tool_result",
@@ -3501,7 +3690,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
                 }
             }
             Err(e) => {
-                let err_msg = e.to_string();
+                let err_msg = agent_error_event_text(&e);
                 enqueue_event(&q_clone, "error", serde_json::json!(err_msg));
                 let (generation, completed) = &*completion_generation;
                 if let Ok(mut generation) = generation.lock() {
@@ -3888,7 +4077,10 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     };
     let conversations = if let Some(storage) = core.storage_ref() {
         storage
-            .list_conversations(limit as usize)
+            .list_conversations(
+                maho_types::chat::ConversationListState::Active,
+                limit as usize,
+            )
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -3897,6 +4089,161 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     match env.new_string(&json_str) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConversationsV2<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    query_json: JString<'local>,
+) -> jstring {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let query = match get_rust_string(&mut env, &query_json)
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+    {
+        Some(query) => query,
+        None => return std::ptr::null_mut(),
+    };
+    let state = match query
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("active")
+    {
+        "active" => maho_types::chat::ConversationListState::Active,
+        "archived" => maho_types::chat::ConversationListState::Archived,
+        "all" => maho_types::chat::ConversationListState::All,
+        _ => return std::ptr::null_mut(),
+    };
+    let limit = query
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(100) as usize;
+    if limit == 0 {
+        return std::ptr::null_mut();
+    }
+    let rows = core.list_conversations(state, limit).unwrap_or_default();
+    let json = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string());
+    env.new_string(json)
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeArchiveConversation<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+) -> jboolean {
+    let Some(core) = get_core(ptr) else { return 0 };
+    let Some(id) = get_rust_string(&mut env, &id) else {
+        return 0;
+    };
+    core.archive_conversation_persisted(&id) as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUnarchiveConversation<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+) -> jboolean {
+    let Some(core) = get_core(ptr) else { return 0 };
+    let Some(id) = get_rust_string(&mut env, &id) else {
+        return 0;
+    };
+    core.unarchive_conversation_persisted(&id) as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyConversationBulkOperation<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    request_json: JString<'local>,
+) -> jstring {
+    let Some(core) = get_core(ptr) else {
+        return std::ptr::null_mut();
+    };
+    let Some(request) = get_rust_string(&mut env, &request_json)
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+    else {
+        return std::ptr::null_mut();
+    };
+    let operation = match request.get("op").and_then(serde_json::Value::as_str) {
+        Some("archive") => maho_types::chat::ConversationBulkOperation::Archive,
+        Some("unarchive") => maho_types::chat::ConversationBulkOperation::Unarchive,
+        Some("delete") => maho_types::chat::ConversationBulkOperation::Delete,
+        _ => return std::ptr::null_mut(),
+    };
+    let Some(ids) = request
+        .get("ids")
+        .and_then(serde_json::Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+    else {
+        return std::ptr::null_mut();
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let value = match core.apply_conversation_bulk_operation(operation, ids, &now) {
+        Ok(result) => serde_json::to_value(result).unwrap_or_default(),
+        Err(error) => error,
+    };
+    env.new_string(value.to_string())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversationAutoArchivePolicy<
+    'local,
+>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jint {
+    get_core(ptr)
+        .and_then(|core| core.get_conversation_auto_archive_policy().ok())
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetConversationAutoArchivePolicy<
+    'local,
+>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    days: jint,
+) -> jboolean {
+    get_core(ptr).is_some_and(|core| core.set_conversation_auto_archive_policy(days)) as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAutoArchiveConversations<
+    'local,
+>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    now_seconds: jlong,
+) -> jint {
+    match get_core(ptr).map(|core| core.auto_archive_conversations(now_seconds)) {
+        Some(Ok(Some(count))) => i32::try_from(count).unwrap_or(i32::MAX),
+        Some(Ok(None)) => -2,
+        Some(Err(_)) | None => -1,
     }
 }
 
@@ -3996,6 +4343,125 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConve
 }
 
 #[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConversationProjects<
+    'local,
+>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jstring {
+    let Some(core) = get_core(ptr) else {
+        return std::ptr::null_mut();
+    };
+    let json = serde_json::to_string(&core.list_conversation_projects())
+        .unwrap_or_else(|_| "[]".to_string());
+    env.new_string(json)
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConversationProject<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    name: JString<'local>,
+) -> jstring {
+    let Some(core) = get_core(ptr) else {
+        return std::ptr::null_mut();
+    };
+    let Some(name) = get_rust_string(&mut env, &name) else {
+        return std::ptr::null_mut();
+    };
+    let Some(project) = core.create_conversation_project_persisted(&name) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(json) = serde_json::to_string(&project) else {
+        return std::ptr::null_mut();
+    };
+    env.new_string(json)
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConversationProject<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+    name: JString<'local>,
+) -> jboolean {
+    let Some(core) = get_core(ptr) else { return 0 };
+    let Some(id) = get_rust_string(&mut env, &id) else {
+        return 0;
+    };
+    let Some(name) = get_rust_string(&mut env, &name) else {
+        return 0;
+    };
+    core.rename_conversation_project_persisted(&id, &name) as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConversationProject<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+) -> jboolean {
+    let Some(core) = get_core(ptr) else { return 0 };
+    let Some(id) = get_rust_string(&mut env, &id) else {
+        return 0;
+    };
+    core.delete_conversation_project_persisted(&id) as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeMoveConversationsToProject<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    request_json: JString<'local>,
+) -> jstring {
+    let Some(core) = get_core(ptr) else {
+        return std::ptr::null_mut();
+    };
+    let Some(request) = get_rust_string(&mut env, &request_json)
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+    else {
+        return std::ptr::null_mut();
+    };
+    let Some(ids) = request
+        .get("ids")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+    else {
+        return std::ptr::null_mut();
+    };
+    let project_id = request.get("projectId").and_then(serde_json::Value::as_str);
+    let Ok(result) = core.move_conversations_to_project_persisted(ids, project_id) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(json) = serde_json::to_string(&result) else {
+        return std::ptr::null_mut();
+    };
+    env.new_string(json)
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+#[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConversation<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -4016,6 +4482,99 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConve
         None => return 0,
     };
     if core.rename_conversation_persisted(&id_str, &title_str) {
+        1
+    } else {
+        0
+    }
+}
+
+// ============================================================
+// Composer Draft JNI Bindings
+// ============================================================
+//
+// These forward to the same `MahoCore` composer-draft methods that maho-ffi
+// exposes to the Swift/iOS shell, so both mobile platforms share one storage
+// contract (settings table, device/profile-local, never synced). `scope_json`
+// is passed through verbatim: core owns scope parsing, key mapping,
+// empty-string deletes and orphan reaping.
+
+/// # Safety
+/// `ptr` must have been created by `nativeCreate` and not yet freed.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetComposerDraft<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    scope_json: JString<'local>,
+) -> jstring {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let scope_str = match get_rust_string(&mut env, &scope_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    // A missing draft, an orphaned scope and a malformed scope all surface as
+    // null, which Kotlin reads as "no draft".
+    let Some(draft_json) = core.get_composer_draft(&scope_str) else {
+        return std::ptr::null_mut();
+    };
+    match env.new_string(&draft_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `ptr` must have been created by `nativeCreate` and not yet freed.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetComposerDraft<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    scope_json: JString<'local>,
+    text: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let scope_str = match get_rust_string(&mut env, &scope_json) {
+        Some(s) => s,
+        None => return 0,
+    };
+    // Text is stored verbatim and is never trimmed; an empty string deletes the
+    // row, so it must NOT be filtered out here.
+    let text_str = match get_rust_string(&mut env, &text) {
+        Some(s) => s,
+        None => return 0,
+    };
+    if core.set_composer_draft(&scope_str, &text_str) {
+        1
+    } else {
+        0
+    }
+}
+
+/// # Safety
+/// `ptr` must have been created by `nativeCreate` and not yet freed.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteComposerDraft<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    scope_json: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let scope_str = match get_rust_string(&mut env, &scope_json) {
+        Some(s) => s,
+        None => return 0,
+    };
+    if core.delete_composer_draft(&scope_str) {
         1
     } else {
         0
@@ -4109,6 +4668,20 @@ unsafe extern "C" fn chat_on_complete(
 }
 
 /// # Safety
+/// `user_data` must point to a live `ChatEventQueue`. `thinking`, when non-null,
+/// must be a valid C string.
+unsafe extern "C" fn chat_on_thinking(user_data: *mut c_void, thinking: *const c_char) {
+    if user_data.is_null() || thinking.is_null() {
+        return;
+    }
+    let queue = &*(user_data as *const ChatEventQueue);
+    let Ok(thinking_str) = CStr::from_ptr(thinking).to_str() else {
+        return;
+    };
+    push_chat_event(queue, "thinking", serde_json::json!(thinking_str));
+}
+
+/// # Safety
 /// `user_data` must point to a live `ChatEventQueue`. `error`, when non-null,
 /// must be a valid C string.
 unsafe extern "C" fn chat_on_error(user_data: *mut c_void, error: *const c_char) {
@@ -4131,6 +4704,7 @@ fn build_chat_session(config: maho_core::chat_session::ChatConfig) -> Box<MahoCh
     let queue: Arc<ChatEventQueue> = Arc::new(Mutex::new(Vec::new()));
     let sink = maho_core::chat_session::MahoChatEventSink {
         on_token: Some(chat_on_token),
+        on_thinking: Some(chat_on_thinking),
         on_complete: Some(chat_on_complete),
         on_error: Some(chat_on_error),
         user_data: Arc::as_ptr(&queue) as *mut c_void,
@@ -4328,7 +4902,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSendToolResult
     tool_call_id: JString<'local>,
     name: JString<'local>,
     output: JString<'local>,
-    _is_success: jboolean,
+    trigger: jboolean,
 ) -> jboolean {
     let session = match unsafe { get_chat_session(session_ptr) } {
         Some(s) => s,
@@ -4346,14 +4920,12 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatSendToolResult
         Some(s) => s,
         None => return jni::sys::JNI_FALSE,
     };
-    // A tool result always continues the function-calling loop (trigger=true), so
-    // the model can react to the output. `_is_success` is part of the Kotlin
-    // contract but core carries no separate success flag; the outcome belongs in
-    // `output`.
-    if session
-        .session
-        .send_tool_result(&tool_call_id, &name, &output, true)
-    {
+    if session.session.send_tool_result(
+        &tool_call_id,
+        &name,
+        &output,
+        trigger != jni::sys::JNI_FALSE,
+    ) {
         jni::sys::JNI_TRUE
     } else {
         jni::sys::JNI_FALSE
@@ -4892,5 +5464,45 @@ mod tests {
         };
         core.update_tab_preview(&tab_id, image_data);
         assert!(core.get_tab_preview(&tab_id).is_some());
+    }
+
+    #[test]
+    fn agent_error_event_text_emits_typed_credential_envelope() {
+        // A typed credential error must surface as the structured envelope so the
+        // WebView UI can render an actionable credential card (never raw text).
+        let error = AgentError::Credential(maho_agent::CredentialError::SecureStoreUnavailable);
+        let text = agent_error_event_text(&error);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).expect("credential error text must be JSON envelope");
+        assert_eq!(parsed["kind"], "credential_error");
+        assert_eq!(parsed["code"], "secure_store_unavailable");
+        assert!(
+            !text.contains("Secure storage callback"),
+            "must not leak raw diagnostic text, got: {text}"
+        );
+    }
+
+    #[test]
+    fn agent_error_event_text_keeps_other_errors_as_plain_string() {
+        let error = AgentError::Cancelled;
+        let text = agent_error_event_text(&error);
+        assert_eq!(text, "Cancelled");
+    }
+
+    #[test]
+    fn secure_storage_parse_failures_are_typed_credential_errors() {
+        // Malformed JSON secure-storage response is a KEY problem, not a raw
+        // execution error: it must surface as a typed CredentialError so the
+        // event envelope can carry a code.
+        let bad = parse_android_secure_storage_response("{\"key\": unquoted}");
+        assert!(
+            matches!(bad, Err(AgentError::Credential(_))),
+            "malformed secure-storage JSON must be typed"
+        );
+        let empty = parse_android_secure_storage_response(r#"{"key":""}"#);
+        assert!(
+            matches!(empty, Err(AgentError::Credential(_))),
+            "empty secure key must be typed"
+        );
     }
 }

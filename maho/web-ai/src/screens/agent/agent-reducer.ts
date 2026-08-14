@@ -1,5 +1,6 @@
 import type { AgentAction, AgentBlock, AgentMessage, AgentState } from './agent-types';
 import type { ArtifactInfo } from '../../bridge/types';
+import { parseCredentialErrorCode } from '../credential-error';
 
 export function initialAgentState(): AgentState {
   return {
@@ -7,6 +8,7 @@ export function initialAgentState(): AgentState {
     activeTurnId: null,
     draft: '',
     errorMessage: null,
+    errorCredentialCode: null,
     handle: null,
     messages: [],
     phase: 'idle',
@@ -25,6 +27,7 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         activeTurnId: action.turnId,
         draft: '',
         errorMessage: null,
+        errorCredentialCode: null,
         messages: [
           ...state.messages,
           { createdAt: action.createdAt, id: action.messageId, role: 'user', text: action.prompt },
@@ -52,6 +55,7 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         activeAssistantId: null,
         activeTurnId: null,
         errorMessage: action.message,
+        errorCredentialCode: parseCredentialErrorCode(action.message),
         phase: 'error',
         scrollRevision: state.scrollRevision + 1,
       };

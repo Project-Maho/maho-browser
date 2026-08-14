@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from 'preact/hooks';
-import type { AgentEvent, AgentHandle, MahoBridge } from '../../bridge/types';
+import type { AgentEvent, AgentHandle, ComposerDraftScope, MahoBridge } from '../../bridge/types';
+import { useComposerDraft } from '../../storage/use-composer-draft';
 import { useAgentSession } from '../../hooks/use-agent-session';
 import { useBridge } from '../../hooks/use-bridge';
 import { agentReducer, initialAgentState } from './agent-reducer';
@@ -11,6 +12,8 @@ import { ConversationThread } from './conversation-thread';
 import { freeSessionAfterTeardown, freeSessionForReset } from './session-cleanup';
 import { isRunActive } from './agent-types';
 import { useAgentAutoScroll } from './use-agent-auto-scroll';
+
+const AGENT_DRAFT_SCOPE: ComposerDraftScope = { kind: 'new_task' };
 
 export interface AgentScreenProps {
   onBack?: () => void;
@@ -25,9 +28,39 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
   const handleRef = useRef<AgentHandle | null>(null);
   const submittedGoalRef = useRef(false);
   const cancelledTurnIdsRef = useRef<Set<string>>(new Set());
+  const draftRef = useRef(state.draft);
   const { forceBottom, onScroll, scrollRef } = useAgentAutoScroll(state.scrollRevision);
 
   handleRef.current = state.handle;
+  draftRef.current = state.draft;
+
+  // The agent composer has no persisted conversation of its own, so its draft
+  // always lives under the new_task scope.
+  const hasGoal = Boolean(goal?.trim());
+  const restoreDraft = useCallback((text: string) => {
+    dispatch({ type: 'SET_DRAFT', value: text });
+  }, []);
+  const drafts = useComposerDraft({
+    bridge,
+    onRestore: restoreDraft,
+    scope: AGENT_DRAFT_SCOPE,
+    suppressRestore: hasGoal,
+  });
+
+  const setDraft = useCallback(
+    (value: string) => {
+      dispatch({ type: 'SET_DRAFT', value });
+      drafts.handleDraftChange(value);
+    },
+    [drafts],
+  );
+
+  // A failed send returns the text to the composer, but only when the user has
+  // not already typed a replacement while the send was in flight.
+  const restoreUnsentDraft = useCallback((prompt: string) => {
+    if (draftRef.current.trim().length > 0) return;
+    dispatch({ type: 'SET_DRAFT', value: prompt });
+  }, []);
 
   const submitPrompt = useCallback(
     async (rawPrompt: string) => {
@@ -36,6 +69,8 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
 
       const turnId = createId('turn');
       dispatch({ type: 'SUBMIT_PROMPT', createdAt: new Date(), messageId: createId('user'), prompt, turnId });
+      // The optimistic clear only empties the in-memory composer; the persisted
+      // draft survives until the native send is accepted.
       forceBottom();
 
       try {
@@ -47,13 +82,17 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
         if (cancelledTurnIdsRef.current.has(turnId)) return;
         const sent = await bridge.agentSendMessage(handle, prompt);
         if (!sent) {
+          restoreUnsentDraft(prompt);
           dispatch({ type: 'AGENT_ERROR', message: 'Agent did not accept the message.' });
+          return;
         }
+        void drafts.clear();
       } catch (error) {
+        restoreUnsentDraft(prompt);
         dispatch({ type: 'AGENT_ERROR', message: messageFromError(error, 'Failed to start agent session') });
       }
     },
-    [bridge, forceBottom],
+    [bridge, drafts, forceBottom, restoreUnsentDraft],
   );
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
@@ -161,8 +200,9 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
       handleRef.current = null;
     }
     cancelledTurnIdsRef.current.clear();
+    await drafts.clear();
     dispatch({ type: 'RESET' });
-  }, [bridge, state.phase]);
+  }, [bridge, drafts, state.phase]);
 
   const handleOpenSettings = useCallback(() => {
     window.location.hash = 'byok';
@@ -189,6 +229,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
       {showThread ? (
         <ConversationThread
           errorMessage={state.errorMessage}
+          errorCredentialCode={state.errorCredentialCode}
           messages={state.messages}
           onScroll={onScroll}
           onShareArtifact={handleShareArtifact}
@@ -202,7 +243,8 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
         draft={state.draft}
         hasMessages={showThread}
         phase={state.phase}
-        onDraftChange={(value) => dispatch({ type: 'SET_DRAFT', value })}
+        onBlur={drafts.flush}
+        onDraftChange={setDraft}
         onStop={() => void handleStop()}
         onSubmit={handleSubmit}
       />

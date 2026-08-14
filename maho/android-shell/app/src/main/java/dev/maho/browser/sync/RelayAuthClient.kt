@@ -21,10 +21,12 @@ class RelayAuthClient(
     companion object {
         private const val AUTH_SIGNUP = "auth/signup"
         private const val AUTH_LOGIN = "auth/login"
+        private const val AUTH_OAUTH_GOOGLE = "auth/oauth/google"
         private const val AUTH_REFRESH = "auth/refresh"
         private const val AUTH_LOGOUT = "auth/logout"
         private const val SYNC_PUSH = "sync/push"
         private const val SYNC_PULL = "sync/pull"
+        private const val SYNC_BOOTSTRAP = "sync/bootstrap"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
@@ -35,6 +37,10 @@ class RelayAuthClient(
             .build()
     }
 
+    fun cancelActiveCalls() {
+        client.dispatcher.cancelAll()
+    }
+
     private val json = MahoJson.instance
 
     fun signUp(serverUrl: String, email: String, password: String): RelaySession {
@@ -43,6 +49,26 @@ class RelayAuthClient(
 
     fun logIn(serverUrl: String, email: String, password: String): RelaySession {
         return authenticate(AUTH_LOGIN, serverUrl, email, password)
+    }
+
+    fun signInWithGoogle(
+        serverUrl: String,
+        idToken: String,
+        nonce: String,
+        fallbackEmail: String = "",
+    ): RelaySession {
+        val body = json.encodeToString(
+            RelayGoogleOAuthRequest.serializer(),
+            RelayGoogleOAuthRequest(idToken = idToken, nonce = nonce),
+        ).toRequestBody(JSON_MEDIA_TYPE)
+        val responseBody = execute(
+            method = "POST",
+            serverUrl = serverUrl,
+            path = AUTH_OAUTH_GOOGLE,
+            bearerToken = null,
+            body = body,
+        )
+        return parseSession(responseBody, fallbackEmail, normalizeRelayBaseUrl(serverUrl))
     }
 
     fun refresh(serverUrl: String, refreshToken: String, fallbackEmail: String? = null): RelaySession {
@@ -69,20 +95,37 @@ class RelayAuthClient(
         )
     }
 
-    fun pushSync(serverUrl: String, accessToken: String, blobs: List<String>): String? {
-        val body = json.encodeToString(RelaySyncPushRequest.serializer(), RelaySyncPushRequest(blobs))
+    fun pushSync(
+        serverUrl: String,
+        accessToken: String,
+        roomId: String,
+        envelopes: List<SyncEnvelopeV2>,
+    ): RelaySyncPushResponse {
+        val body = json.encodeToString(
+            RelaySyncPushRequest.serializer(),
+            RelaySyncPushRequest(roomId, envelopes),
+        )
             .toRequestBody(JSON_MEDIA_TYPE)
         val request = Request.Builder()
             .url(buildUrl(serverUrl, SYNC_PUSH))
             .addHeader("Authorization", "Bearer $accessToken")
             .post(body)
             .build()
-        return executeRequest(request)
+        val responseBody = executeRequest(request)
+            ?: throw IOException("Relay sync push response was empty")
+        return json.decodeFromString(RelaySyncPushResponse.serializer(), responseBody)
     }
 
-    fun pullSync(serverUrl: String, accessToken: String, sinceSeq: Long, limit: Int): RelaySyncPullResponse {
+    fun pullSync(
+        serverUrl: String,
+        accessToken: String,
+        roomId: String,
+        afterSeq: Long,
+        limit: Int,
+    ): RelaySyncPullResponse {
         val requestUrl = buildUrl(serverUrl, SYNC_PULL).newBuilder()
-            .addQueryParameter("since_seq", sinceSeq.toString())
+            .addQueryParameter("room_id", roomId)
+            .addQueryParameter("after_seq", afterSeq.toString())
             .addQueryParameter("limit", limit.toString())
             .build()
         val request = Request.Builder()
@@ -92,6 +135,41 @@ class RelayAuthClient(
             .build()
         val responseBody = executeRequest(request)
         return decodePullResponse(responseBody)
+    }
+
+    fun getSyncBootstrap(serverUrl: String, accessToken: String): RelaySyncBootstrap {
+        val body = execute(
+            method = "GET",
+            serverUrl = serverUrl,
+            path = SYNC_BOOTSTRAP,
+            bearerToken = accessToken,
+            body = null,
+        ) ?: throw IOException("Relay Sync bootstrap response was empty")
+        return json.decodeFromString(RelaySyncBootstrap.serializer(), body)
+    }
+
+    fun putSyncBootstrap(
+        serverUrl: String,
+        accessToken: String,
+        bootstrap: RelaySyncBootstrap,
+    ): RelaySyncBootstrap {
+        val body = json.encodeToString(
+            RelaySyncBootstrapRequest.serializer(),
+            RelaySyncBootstrapRequest(
+                version = bootstrap.version,
+                roomId = bootstrap.roomId,
+                seed = bootstrap.seed,
+            ),
+        )
+            .toRequestBody(JSON_MEDIA_TYPE)
+        val response = execute(
+            method = "PUT",
+            serverUrl = serverUrl,
+            path = SYNC_BOOTSTRAP,
+            bearerToken = accessToken,
+            body = body,
+        ) ?: throw IOException("Relay Sync bootstrap response was empty")
+        return json.decodeFromString(RelaySyncBootstrap.serializer(), response)
     }
 
     private fun authenticate(path: String, serverUrl: String, email: String, password: String): RelaySession {
@@ -141,18 +219,23 @@ class RelayAuthClient(
             ?: throw IOException("Relay auth response missing access token")
         val refreshToken = obj.stringValue("refresh_token", "refreshToken")
             ?: throw IOException("Relay auth response missing refresh token")
+        val expiresAt = obj.longValue("expires_at", "expiresAt")
         val email = obj.stringValue("email") ?: obj.nestedStringValue("account", "email") ?: fallbackEmail
-        val account = obj.nestedAccount()
+        val parsedAccount = obj.nestedAccount()
+        val account = parsedAccount?.account
         val device = obj.nestedDevice()
         val session = obj.nestedSession()
         return RelaySession(
             email = email,
             accessToken = accessToken,
             refreshToken = refreshToken,
+            expiresAt = expiresAt,
             serverUrl = serverUrl,
             account = account ?: RelayAccount(email = email),
             device = device,
             session = session,
+            identityMetadataState = parsedAccount?.identityMetadataState
+                ?: RelayIdentityMetadataState.ABSENT,
         )
     }
 
@@ -184,12 +267,40 @@ class RelayAuthClient(
         return container.stringValue(*keys)
     }
 
-    private fun JsonObject.nestedAccount(): RelayAccount? {
+    private fun JsonObject.longValue(vararg keys: String): Long? {
+        for (key in keys) {
+            val value = this[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            if (value != null) return value
+        }
+        return null
+    }
+
+    private data class ParsedRelayAccount(
+        val account: RelayAccount,
+        val identityMetadataState: RelayIdentityMetadataState,
+    )
+
+    private fun JsonObject.nestedAccount(): ParsedRelayAccount? {
         val container = this["account"]?.jsonObject ?: return null
-        return RelayAccount(
-            id = container.stringValue("id"),
-            email = container.stringValue("email") ?: return null,
-            displayName = container.stringValue("display_name", "displayName"),
+        val email = container.stringValue("email") ?: return null
+        val providerElement = container["oauth_provider"] ?: container["oauthProvider"]
+        val providerSubElement = container["oauth_provider_sub"] ?: container["oauthProviderSub"]
+        val provider = providerElement?.jsonPrimitive?.contentOrNull?.trim()
+        val providerSub = providerSubElement?.jsonPrimitive?.contentOrNull?.trim()
+        val identityMetadataState = when {
+            providerElement == null && providerSubElement == null -> RelayIdentityMetadataState.ABSENT
+            provider == "google" && !providerSub.isNullOrEmpty() -> RelayIdentityMetadataState.VALID_GOOGLE
+            else -> RelayIdentityMetadataState.INVALID
+        }
+        return ParsedRelayAccount(
+            account = RelayAccount(
+                id = container.stringValue("id"),
+                email = email,
+                displayName = container.stringValue("display_name", "displayName"),
+                oauthProvider = provider.takeIf { identityMetadataState == RelayIdentityMetadataState.VALID_GOOGLE },
+                oauthProviderSub = providerSub.takeIf { identityMetadataState == RelayIdentityMetadataState.VALID_GOOGLE },
+            ),
+            identityMetadataState = identityMetadataState,
         )
     }
 

@@ -48,7 +48,22 @@ function makeMockBridge() {
     conversationGet: vi.fn<MahoBridge['conversationGet']>().mockResolvedValue(null),
     conversationDelete: vi.fn<MahoBridge['conversationDelete']>().mockResolvedValue(true),
     conversationRename: vi.fn<MahoBridge['conversationRename']>().mockResolvedValue(true),
+    conversationArchive: vi.fn<MahoBridge['conversationArchive']>().mockResolvedValue(true),
+    conversationUnarchive: vi.fn<MahoBridge['conversationUnarchive']>().mockResolvedValue(true),
+    conversationBulk: vi.fn<MahoBridge['conversationBulk']>().mockResolvedValue({
+      requestedCount: 0,
+      affectedIds: [],
+      unchangedIds: [],
+      missingIds: [],
+    }),
+    conversationGetAutoArchivePolicy: vi.fn<MahoBridge['conversationGetAutoArchivePolicy']>().mockResolvedValue(null),
+    conversationSetAutoArchivePolicy: vi.fn<MahoBridge['conversationSetAutoArchivePolicy']>().mockResolvedValue(true),
     conversationGetMessages: vi.fn<MahoBridge['conversationGetMessages']>().mockResolvedValue([]),
+    conversationProjectList: vi.fn<MahoBridge['conversationProjectList']>().mockResolvedValue([]),
+    conversationProjectCreate: vi.fn<MahoBridge['conversationProjectCreate']>().mockResolvedValue({ id: 'project-1', name: 'Project', createdAt: '', updatedAt: '' }),
+    conversationProjectRename: vi.fn<MahoBridge['conversationProjectRename']>().mockResolvedValue(true),
+    conversationProjectDelete: vi.fn<MahoBridge['conversationProjectDelete']>().mockResolvedValue(true),
+    conversationProjectMove: vi.fn<MahoBridge['conversationProjectMove']>().mockResolvedValue({ requestedCount: 0, affectedIds: [], missingIds: [] }),
     getSpaceAIConfig: vi.fn<MahoBridge['getSpaceAIConfig']>().mockResolvedValue(null),
     setSpaceAIConfig: vi.fn<MahoBridge['setSpaceAIConfig']>().mockResolvedValue(undefined),
     pinchEstimateCost: vi.fn<MahoBridge['pinchEstimateCost']>().mockResolvedValue({
@@ -71,6 +86,7 @@ function makeMockBridge() {
     hapticFeedback: vi.fn<MahoBridge['hapticFeedback']>().mockResolvedValue(undefined),
     relaySignIn: vi.fn<MahoBridge['relaySignIn']>().mockResolvedValue({ ok: true }),
     relaySignUp: vi.fn<MahoBridge['relaySignUp']>().mockResolvedValue({ ok: true }),
+    relaySignInWithGoogle: vi.fn<MahoBridge['relaySignInWithGoogle']>().mockResolvedValue({ ok: true }),
     relayAccountStatus: vi.fn<MahoBridge['relayAccountStatus']>().mockResolvedValue({ hasValidSession: true, isReauth: false }),
     openDefaultBrowserSettings: vi.fn<MahoBridge['openDefaultBrowserSettings']>().mockResolvedValue(undefined),
     completeOnboarding: vi.fn<MahoBridge['completeOnboarding']>().mockResolvedValue(undefined),
@@ -192,6 +208,30 @@ describe('AgentScreen CompactShell contract', () => {
     act(() => mockCtx.enqueueEvent('error', 'Execution error: network timeout'));
 
     await waitFor(() => expect(screen.getByTestId('agent-error-banner')).toHaveTextContent('Execution error: network timeout'));
+  });
+
+  it('renders a typed credential error as an actionable card, not the raw diagnostic', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Go');
+
+    const envelope = JSON.stringify({
+      version: 1,
+      kind: 'credential_error',
+      code: 'secure_store_unavailable',
+    });
+    act(() => mockCtx.enqueueEvent('error', envelope));
+
+    await waitFor(() => expect(screen.getByTestId('credential-error-card')).toBeTruthy());
+    const card = screen.getByTestId('credential-error-card');
+    expect(card).toHaveTextContent('AI credentials are unavailable');
+    expect(screen.getByTestId('credential-error-action')).toHaveTextContent('Open AI settings');
+    expect(card).not.toHaveTextContent('credential_error');
+    expect(card).not.toHaveTextContent('Secure storage callback');
+    expect(screen.queryByTestId('agent-error-banner')).toBeNull();
+    const userBubble = within(screen.getByTestId('agent-thread')).getByText('Go');
+    expect(
+      card.compareDocumentPosition(userBubble) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
   });
 
   it('stops the current run and resets through the single topbar new-session action', async () => {

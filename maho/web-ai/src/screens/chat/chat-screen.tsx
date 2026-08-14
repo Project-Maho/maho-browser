@@ -1,9 +1,13 @@
 import { type JSX } from 'preact';
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'preact/hooks';
-import type { ChatContent, ChatMessage as BridgeChatMessage, MahoBridge, ToolDefinition, ToolResult } from '../../bridge';
-import { subscribeStream, type ImageDelta, type ToolCallDelta } from '../../bridge';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import type { ChatContent, ChatMessage as BridgeChatMessage, ChatSessionOpts, ChatToolCall, ComposerDraftScope, ImageDelta, MahoBridge, ToolCallDelta, ToolDefinition, ToolResult } from '../../bridge';
 import { useBridge } from '../../hooks/use-bridge';
+import { useStreaming } from '../../hooks/use-streaming';
+import { useComposerDraft } from '../../storage/use-composer-draft';
 import { Icon } from '../../ui/icon';
+import { parseCredentialErrorCode, type CredentialErrorCode } from '../credential-error';
+import { CredentialErrorCard } from '../credential-error-card';
+import './chat.css';
 
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 const DEFAULT_OPENAI_ENDPOINT = 'https://api.openai.com/v1';
@@ -113,11 +117,12 @@ interface ChatScreenProps {
 }
 
 interface ProviderConfig {
-  apiKey: string;
-  endpoint: string;
+  apiKey?: string;
+  credentialProvider?: string;
+  endpoint?: string;
   id: string;
   label: string;
-  model: string;
+  model?: string;
 }
 
 interface RenderedImage {
@@ -150,6 +155,7 @@ interface ToolRequestMessageItem {
   toolName: string;
   rawArguments: string;
   argsText: string;
+  autoRun: boolean;
   status: 'pending' | 'approved' | 'denied' | 'unsupported';
 }
 
@@ -167,56 +173,88 @@ interface SystemMessageItem {
   content: string;
 }
 
+interface ThinkingMessageItem {
+  kind: 'thinking';
+  id: string;
+  thinking: string;
+  isStreaming: boolean;
+}
+
+interface CompleteToolBatch {
+  calls: ChatToolCall[];
+  nextIndex: number;
+}
+
 type MessageItem =
   | UserMessageItem
   | AssistantMessageItem
   | ToolRequestMessageItem
   | ToolResultMessageItem
+  | ThinkingMessageItem
   | SystemMessageItem;
 
 interface ChatScreenState {
   booting: boolean;
   conversationId: string | null;
+  /**
+   * True once the conversation row exists in core. A brand-new chat holds an
+   * ephemeral session handle long before any row is written, and core reaps a
+   * draft whose conversation does not exist, so drafts stay in the `new_task`
+   * scope until this flips after the first successful send.
+   */
+  conversationPersisted: boolean;
   draft: string;
   errorMessage: string | null;
+  credentialErrorCode: CredentialErrorCode | null;
   isStreaming: boolean;
   messages: MessageItem[];
   missingApiKey: boolean;
+  pollReadyHandle: string | null;
   provider: ProviderConfig | null;
   sessionHandle: string | null;
   toolActionId: string | null;
+  toolBatchPending: boolean;
 }
 
 type Action =
   | { type: 'BOOT_START' }
-  | { type: 'BOOT_SUCCESS'; conversationId: string; messages: MessageItem[]; provider: ProviderConfig; sessionHandle: string }
+  | { type: 'BOOT_SUCCESS'; conversationId: string; conversationPersisted: boolean; messages: MessageItem[]; provider: ProviderConfig; sessionHandle: string }
+  | { type: 'CONVERSATION_PERSISTED'; conversationId: string }
   | { type: 'BOOT_ERROR'; message: string }
   | { type: 'BYOK_MISSING' }
+  | { type: 'POLL_READY'; handle: string }
   | { type: 'SET_DRAFT'; value: string }
   | { type: 'SEND_TURN_START'; message: ChatContent }
   | { type: 'SEND_TURN_FAILURE'; message: string }
   | { type: 'STREAM_APPEND'; text: string }
+  | { type: 'STREAM_THINKING'; text: string }
   | { type: 'STREAM_COMPLETE'; finalMessage: string }
   | { type: 'STREAM_ERROR'; message: string }
   | { type: 'STREAM_IMAGE'; delta: ImageDelta }
-  | { type: 'TOOL_DELTA'; delta: ToolCallDelta }
+  | { type: 'TOOL_DELTA'; autoRun?: boolean; delta: ToolCallDelta }
   | { type: 'TOOL_RESPONSE_START'; toolCallId: string }
   | { type: 'TOOL_RESPONSE_DONE'; result: unknown; status: 'approved' | 'denied' | 'unsupported'; toolCallId: string; toolName: string }
   | { type: 'TOOL_RESPONSE_ERROR'; message: string; toolCallId: string }
+  | { type: 'TOOL_BATCH_PENDING' }
+  | { type: 'TOOL_BATCH_RESOLVED' }
   | { type: 'TURN_CANCELLED' };
 
 function initialState(): ChatScreenState {
   return {
     booting: true,
     conversationId: null,
+    conversationPersisted: false,
     draft: '',
     errorMessage: null,
+    credentialErrorCode: null,
     isStreaming: false,
     messages: [],
     missingApiKey: false,
+    pollReadyHandle: null,
     provider: null,
     sessionHandle: null,
     toolActionId: null,
+    toolBatchPending: false,
   };
 }
 
@@ -227,50 +265,82 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
         ...state,
         booting: true,
         conversationId: null,
+        conversationPersisted: false,
         errorMessage: null,
+        credentialErrorCode: null,
         isStreaming: false,
         messages: [],
         missingApiKey: false,
+        pollReadyHandle: null,
         provider: null,
         sessionHandle: null,
         toolActionId: null,
+        toolBatchPending: false,
       };
     case 'BOOT_SUCCESS':
       return {
         ...state,
         booting: false,
         conversationId: action.conversationId,
+        conversationPersisted: action.conversationPersisted,
         errorMessage: null,
         isStreaming: false,
         messages: action.messages,
         missingApiKey: false,
+        pollReadyHandle: null,
         provider: action.provider,
         sessionHandle: action.sessionHandle,
         toolActionId: null,
+        toolBatchPending: false,
+        credentialErrorCode: null,
+      };
+    case 'CONVERSATION_PERSISTED':
+      if (state.conversationId !== action.conversationId || state.conversationPersisted) {
+        return state;
+      }
+      return {
+        ...state,
+        conversationPersisted: true,
       };
     case 'BOOT_ERROR':
       return {
         ...state,
         booting: false,
         conversationId: null,
+        conversationPersisted: false,
         errorMessage: action.message,
+        credentialErrorCode: parseCredentialErrorCode(action.message),
         isStreaming: false,
+        pollReadyHandle: null,
         provider: null,
         sessionHandle: null,
         toolActionId: null,
+        toolBatchPending: false,
       };
     case 'BYOK_MISSING':
       return {
         ...state,
         booting: false,
         conversationId: null,
+        conversationPersisted: false,
         errorMessage: null,
+        credentialErrorCode: null,
         isStreaming: false,
         messages: [],
         missingApiKey: true,
+        pollReadyHandle: null,
         provider: null,
         sessionHandle: null,
         toolActionId: null,
+        toolBatchPending: false,
+      };
+    case 'POLL_READY':
+      if (state.sessionHandle !== action.handle) {
+        return state;
+      }
+      return {
+        ...state,
+        pollReadyHandle: action.handle,
       };
     case 'SET_DRAFT':
       return {
@@ -282,6 +352,7 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
         ...state,
         draft: '',
         errorMessage: null,
+        credentialErrorCode: null,
         isStreaming: true,
         messages: [
           ...state.messages,
@@ -293,6 +364,7 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
       return {
         ...state,
         errorMessage: action.message,
+        credentialErrorCode: parseCredentialErrorCode(action.message),
         isStreaming: false,
         messages: removeEmptyStreamingAssistant(state.messages),
       };
@@ -300,8 +372,17 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
       return {
         ...state,
         errorMessage: null,
+        credentialErrorCode: null,
         isStreaming: true,
-        messages: appendAssistantTokens(state.messages, action.text),
+        messages: appendAssistantTokens(closeStreamingThinking(state.messages), action.text),
+      };
+    case 'STREAM_THINKING':
+      return {
+        ...state,
+        errorMessage: null,
+        credentialErrorCode: null,
+        isStreaming: true,
+        messages: appendThinkingTokens(removeEmptyStreamingAssistant(state.messages), action.text),
       };
     case 'STREAM_COMPLETE':
       return {
@@ -313,6 +394,7 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
       return {
         ...state,
         errorMessage: action.message,
+        credentialErrorCode: parseCredentialErrorCode(action.message),
         isStreaming: false,
         messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
       };
@@ -324,12 +406,13 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
     case 'TOOL_DELTA':
       return {
         ...state,
-        messages: upsertToolRequest(state.messages, action.delta),
+        messages: upsertToolRequest(state.messages, action.delta, action.autoRun ?? false),
       };
     case 'TOOL_RESPONSE_START':
       return {
         ...state,
         errorMessage: null,
+        credentialErrorCode: null,
         toolActionId: action.toolCallId,
       };
     case 'TOOL_RESPONSE_DONE':
@@ -342,8 +425,19 @@ function reducer(state: ChatScreenState, action: Action): ChatScreenState {
       return {
         ...state,
         errorMessage: action.message,
+        credentialErrorCode: parseCredentialErrorCode(action.message),
         toolActionId: null,
         messages: updateToolStatus(state.messages, action.toolCallId, 'pending'),
+      };
+    case 'TOOL_BATCH_PENDING':
+      return {
+        ...state,
+        toolBatchPending: true,
+      };
+    case 'TOOL_BATCH_RESOLVED':
+      return {
+        ...state,
+        toolBatchPending: false,
       };
     case 'TURN_CANCELLED':
       return {
@@ -372,9 +466,11 @@ export function ChatScreen({
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const draftRef = useRef('');
   const stickToBottomRef = useRef(true);
   const activeHandleRef = useRef<string | null>(null);
   const bootstrapGenerationRef = useRef(0);
+  const completeToolBatchesRef = useRef(new Map<string, CompleteToolBatch>());
 
   const routeSessionId = sessionId?.trim() || null;
 
@@ -400,22 +496,26 @@ export function ChatScreen({
       }
 
       let nextHandle: string | null = null;
+      const sessionOptions: ChatSessionOpts = {
+        ...(provider.apiKey === undefined ? {} : { apiKey: provider.apiKey }),
+        ...(provider.credentialProvider === undefined
+          ? {}
+          : { credentialProvider: provider.credentialProvider }),
+        ...(provider.endpoint === undefined ? {} : { endpoint: provider.endpoint }),
+        ...(provider.model === undefined ? {} : { model: provider.model }),
+        systemInstruction: buildSystemInstruction({
+          pageText,
+          pageTitle,
+          pageUrl,
+          systemInstruction,
+        }),
+      };
 
       try {
         if (requestedSessionId) {
-          nextHandle = await bridge.chatSessionResume(requestedSessionId);
+          nextHandle = await bridge.chatSessionResume(requestedSessionId, sessionOptions);
         } else {
-          nextHandle = await bridge.chatSessionStart({
-            apiKey: provider.apiKey,
-            endpoint: provider.endpoint,
-            model: provider.model,
-            systemInstruction: buildSystemInstruction({
-              pageText,
-              pageTitle,
-              pageUrl,
-              systemInstruction,
-            }),
-          });
+          nextHandle = await bridge.chatSessionStart(sessionOptions);
         }
 
         await registerDefaultTools(bridge, nextHandle);
@@ -433,6 +533,8 @@ export function ChatScreen({
         dispatch({
           type: 'BOOT_SUCCESS',
           conversationId,
+          // A resumed conversation already has a row; a fresh session does not.
+          conversationPersisted: requestedSessionId !== null,
           messages: historyToMessages(history),
           provider,
           sessionHandle: nextHandle,
@@ -464,6 +566,41 @@ export function ChatScreen({
     void bootstrapSession(routeSessionId);
   }, [bootstrapSession, routeSessionId]);
 
+  draftRef.current = state.draft;
+
+  const draftScope = useMemo<ComposerDraftScope | null>(() => {
+    if (state.booting || state.missingApiKey) return null;
+    if (state.conversationPersisted && state.conversationId !== null) {
+      return { kind: 'conversation', conversationId: state.conversationId };
+    }
+    return { kind: 'new_task' };
+  }, [state.booting, state.conversationId, state.conversationPersisted, state.missingApiKey]);
+
+  const restoreDraft = useCallback((text: string) => {
+    dispatch({ type: 'SET_DRAFT', value: text });
+  }, []);
+
+  const drafts = useComposerDraft({
+    bridge,
+    onRestore: restoreDraft,
+    scope: draftScope,
+  });
+
+  const setDraft = useCallback(
+    (value: string) => {
+      dispatch({ type: 'SET_DRAFT', value });
+      drafts.handleDraftChange(value);
+    },
+    [drafts],
+  );
+
+  // A failed send returns the text to the composer unless the user already typed
+  // a replacement while the send was in flight.
+  const restoreUnsentDraft = useCallback((text: string) => {
+    if (draftRef.current.trim().length > 0) return;
+    dispatch({ type: 'SET_DRAFT', value: text });
+  }, []);
+
   useEffect(() => {
     return () => {
       bootstrapGenerationRef.current += 1;
@@ -475,32 +612,148 @@ export function ChatScreen({
     };
   }, [bridge]);
 
-  useEffect(() => {
-    if (!state.sessionHandle) {
-      return undefined;
-    }
+  const executeTool = useCallback(
+    async (toolCallId: string, toolName: string, rawArguments: string, trigger = true) => {
+      const handle = state.sessionHandle;
+      if (!handle) {
+        return false;
+      }
 
-    return subscribeStream(state.sessionHandle, {
-      onToken: (token) => {
-        dispatch({ type: 'STREAM_APPEND', text: token });
-      },
-      onComplete: (finalMessage) => {
-        dispatch({ type: 'STREAM_COMPLETE', finalMessage });
-        if (state.conversationId) {
-          void bridge.saveConversationMessage?.(state.conversationId, 'assistant', finalMessage).catch(() => undefined);
+      dispatch({ type: 'TOOL_RESPONSE_START', toolCallId });
+
+      try {
+        const args = parseToolArgumentsForExecution(rawArguments);
+        const result: ToolResult = args === null
+          ? { error: 'invalid_arguments' }
+          : bridge.browserToolInvoke
+            ? { output: JSON.stringify(await bridge.browserToolInvoke(toolName, args)) }
+            : { error: 'tool_execution_unsupported' };
+        await bridge.chatSendToolResult(handle, toolCallId, result, { toolName, trigger });
+        dispatch({
+          type: 'TOOL_RESPONSE_DONE',
+          result,
+          status: result.error === 'tool_execution_unsupported' ? 'unsupported' : 'approved',
+          toolCallId,
+          toolName,
+        });
+        return true;
+      } catch (error) {
+        dispatch({
+          type: 'TOOL_RESPONSE_ERROR',
+          message: toErrorMessage(error, 'Unable to respond to this tool call.'),
+          toolCallId,
+        });
+        return false;
+      }
+    },
+    [bridge, state.sessionHandle],
+  );
+
+  const executeCompletedReadTools = useCallback(
+    async (batch: CompleteToolBatch) => {
+      while (batch.nextIndex < batch.calls.length) {
+        const toolCall = batch.calls[batch.nextIndex];
+        if (!isReadTool(toolCall.name)) {
+          return;
         }
-      },
-      onError: (error) => {
-        dispatch({ type: 'STREAM_ERROR', message: error });
-      },
-      onToolDelta: (delta) => {
-        dispatch({ type: 'TOOL_DELTA', delta });
-      },
-      onImageDelta: (delta) => {
-        dispatch({ type: 'STREAM_IMAGE', delta });
-      },
-    });
-  }, [bridge, state.conversationId, state.sessionHandle]);
+        const didExecute = await executeTool(
+          toolCall.id,
+          toolCall.name,
+          formatStructuredValue(toolCall.args),
+          batch.nextIndex === batch.calls.length - 1,
+        );
+        if (!didExecute) {
+          return;
+        }
+        batch.nextIndex += 1;
+      }
+      for (const toolCall of batch.calls) {
+        completeToolBatchesRef.current.delete(toolCall.id);
+      }
+      dispatch({ type: 'TOOL_BATCH_RESOLVED' });
+    },
+    [executeTool],
+  );
+
+  useStreaming({
+    bridge,
+    sessionId: state.sessionHandle,
+    onReady: (handle) => {
+      dispatch({ type: 'POLL_READY', handle });
+    },
+    onEvents: (events) => {
+      for (const event of events) {
+        switch (event.kind) {
+          case 'token':
+            dispatch({ type: 'STREAM_APPEND', text: event.token });
+            break;
+          case 'thinking':
+            dispatch({ type: 'STREAM_THINKING', text: event.thinking });
+            break;
+          case 'complete':
+            dispatch({ type: 'STREAM_COMPLETE', finalMessage: event.content });
+            const toolCalls = event.toolCalls ?? [];
+            const completeToolBatch: CompleteToolBatch = { calls: toolCalls, nextIndex: 0 };
+            if (toolCalls.length > 0) {
+              dispatch({ type: 'TOOL_BATCH_PENDING' });
+            }
+            for (const toolCall of toolCalls) {
+              const autoRun = isReadTool(toolCall.name);
+              completeToolBatchesRef.current.set(toolCall.id, completeToolBatch);
+              dispatch({
+                type: 'TOOL_DELTA',
+                autoRun,
+                delta: {
+                  args: toolCall.args,
+                  id: toolCall.id,
+                  name: toolCall.name,
+                },
+              });
+            }
+            if (toolCalls.length > 0 && state.sessionHandle) {
+              const toolCallsJson = event.toolCallsJson ?? JSON.stringify(toolCalls.map((toolCall) => ({
+                arguments_json: formatStructuredValue(toolCall.args),
+                id: toolCall.id,
+                name: toolCall.name,
+              })));
+              void (async () => {
+                try {
+                  await bridge.chatAppendAssistantMessage(state.sessionHandle!, event.content, toolCallsJson);
+                  await executeCompletedReadTools(completeToolBatch);
+                } catch (error) {
+                  dispatch({
+                    type: 'TOOL_RESPONSE_ERROR',
+                    message: toErrorMessage(error, 'Unable to record this tool call.'),
+                    toolCallId: toolCalls[completeToolBatch.nextIndex]?.id ?? toolCalls[0].id,
+                  });
+                }
+              })();
+            }
+            if (state.conversationId) {
+              void bridge.saveConversationMessage?.(state.conversationId, 'assistant', event.content).catch(() => undefined);
+            }
+            break;
+          case 'error':
+            dispatch({ type: 'STREAM_ERROR', message: event.message });
+            break;
+          case 'tool_call':
+            dispatch({
+              type: 'TOOL_DELTA',
+              delta: {
+                args: event.args,
+                id: event.toolCallId,
+                name: event.name,
+              },
+            });
+            break;
+        }
+      }
+    },
+    onPollError: (message) => {
+      dispatch({ type: 'STREAM_ERROR', message });
+    },
+  });
+
 
   const handleScroll = useCallback(() => {
     const node = logRef.current;
@@ -529,25 +782,43 @@ export function ChatScreen({
   const sendTextTurn = useCallback(async () => {
     const handle = state.sessionHandle;
     const text = state.draft.trim();
-    if (!handle || !text || state.isStreaming || state.booting || state.missingApiKey) {
+    if (
+      !handle ||
+      state.pollReadyHandle !== handle ||
+      !text ||
+      state.isStreaming ||
+      state.booting ||
+      state.missingApiKey
+      || state.toolBatchPending
+    ) {
       return;
     }
 
     const content: ChatContent = { kind: 'text', text };
+    const sendScope = draftScope;
+    // SEND_TURN_START only clears the in-memory composer; the persisted draft is
+    // deleted below, after the native send is accepted.
     dispatch({ type: 'SEND_TURN_START', message: content });
 
     try {
       await bridge.chatSendMessage(handle, content);
       if (state.conversationId) {
         void bridge.saveConversationMessage?.(state.conversationId, 'user', text).catch(() => undefined);
+        // The message write creates the conversation row, so the draft scope can
+        // now be promoted from new_task to this conversation.
+        dispatch({ type: 'CONVERSATION_PERSISTED', conversationId: state.conversationId });
+      }
+      if (sendScope !== null) {
+        void drafts.clearScope(sendScope);
       }
     } catch (error) {
+      restoreUnsentDraft(text);
       dispatch({
         type: 'SEND_TURN_FAILURE',
         message: toErrorMessage(error, 'Unable to send this message.'),
       });
     }
-  }, [bridge, state.booting, state.conversationId, state.draft, state.isStreaming, state.missingApiKey, state.sessionHandle]);
+  }, [bridge, draftScope, drafts, restoreUnsentDraft, state.booting, state.conversationId, state.draft, state.isStreaming, state.missingApiKey, state.pollReadyHandle, state.sessionHandle, state.toolBatchPending]);
 
   const handleCancelTurn = useCallback(async () => {
     const handle = state.sessionHandle;
@@ -563,27 +834,49 @@ export function ChatScreen({
   }, [bridge, state.isStreaming, state.sessionHandle]);
 
   const handleApproveTool = useCallback(
-    async (toolCallId: string, toolName: string, approved: boolean) => {
-      const handle = state.sessionHandle;
-      if (!handle) {
+    async (toolCallId: string, toolName: string, rawArguments: string, approved: boolean) => {
+      if (approved) {
+        const batch = completeToolBatchesRef.current.get(toolCallId);
+        if (batch !== undefined && batch.calls[batch.nextIndex]?.id !== toolCallId) {
+          return;
+        }
+        const trigger = batch !== undefined && batch.calls[batch.nextIndex]?.id === toolCallId
+          ? batch.nextIndex === batch.calls.length - 1
+          : true;
+        const didExecute = await executeTool(toolCallId, toolName, rawArguments, trigger);
+        if (didExecute && batch !== undefined && batch.calls[batch.nextIndex]?.id === toolCallId) {
+          batch.nextIndex += 1;
+          await executeCompletedReadTools(batch);
+        }
         return;
       }
 
-      dispatch({ type: 'TOOL_RESPONSE_START', toolCallId });
+      const handle = state.sessionHandle;
+      if (!handle) return;
 
-      const result: ToolResult = approved
-        ? { error: 'tool_execution_unsupported' }
-        : { error: 'user_denied' };
+      dispatch({ type: 'TOOL_RESPONSE_START', toolCallId });
+      const result: ToolResult = { error: 'user_denied' };
 
       try {
-        await bridge.chatSendToolResult(handle, toolCallId, result);
+        const batch = completeToolBatchesRef.current.get(toolCallId);
+        if (batch !== undefined && batch.calls[batch.nextIndex]?.id !== toolCallId) {
+          return;
+        }
+        const trigger = batch !== undefined && batch.calls[batch.nextIndex]?.id === toolCallId
+          ? batch.nextIndex === batch.calls.length - 1
+          : true;
+        await bridge.chatSendToolResult(handle, toolCallId, result, { toolName, trigger });
         dispatch({
           type: 'TOOL_RESPONSE_DONE',
           result,
-          status: approved ? 'unsupported' : 'denied',
+          status: 'denied',
           toolCallId,
           toolName,
         });
+        if (batch !== undefined && batch.calls[batch.nextIndex]?.id === toolCallId) {
+          batch.nextIndex += 1;
+          await executeCompletedReadTools(batch);
+        }
       } catch (error) {
         dispatch({
           type: 'TOOL_RESPONSE_ERROR',
@@ -592,7 +885,7 @@ export function ChatScreen({
         });
       }
     },
-    [bridge, state.sessionHandle],
+    [bridge, executeCompletedReadTools, executeTool, state.sessionHandle],
   );
 
   const handleNewSession = useCallback(async () => {
@@ -607,7 +900,14 @@ export function ChatScreen({
   const handleImageUpload = useCallback(
     async (event: Event) => {
       const handle = state.sessionHandle;
-      if (!handle || state.booting || state.missingApiKey || state.isStreaming) {
+      if (
+        !handle ||
+        state.pollReadyHandle !== handle ||
+        state.booting ||
+        state.missingApiKey ||
+        state.isStreaming ||
+        state.toolBatchPending
+      ) {
         return;
       }
 
@@ -634,16 +934,24 @@ export function ChatScreen({
           ? { kind: 'image', mime: parsed.mime, base64: parsed.base64, text }
           : { kind: 'image', mime: parsed.mime, base64: parsed.base64 };
 
+        const sendScope = draftScope;
         dispatch({ type: 'SEND_TURN_START', message: content });
         await bridge.chatSendMessage(handle, content);
+        if (state.conversationId) {
+          dispatch({ type: 'CONVERSATION_PERSISTED', conversationId: state.conversationId });
+        }
+        if (sendScope !== null) {
+          void drafts.clearScope(sendScope);
+        }
       } catch (error) {
+        restoreUnsentDraft(state.draft.trim());
         dispatch({
           type: 'SEND_TURN_FAILURE',
           message: toErrorMessage(error, 'Unable to attach this image.'),
         });
       }
     },
-    [bridge, state.booting, state.draft, state.isStreaming, state.missingApiKey, state.sessionHandle],
+    [bridge, draftScope, drafts, restoreUnsentDraft, state.booting, state.conversationId, state.draft, state.isStreaming, state.missingApiKey, state.pollReadyHandle, state.sessionHandle, state.toolBatchPending],
   );
 
   const showEmptyState =
@@ -666,7 +974,9 @@ export function ChatScreen({
             <h1 class="chat-title">{conversationTitle}</h1>
             <p class="chat-subtitle">
               {state.provider
-                ? `${state.provider.label} · ${state.provider.model}`
+                ? state.provider.model
+                  ? `${state.provider.label} · ${state.provider.model}`
+                  : state.provider.label
                 : 'Bring your own API key to continue.'}
             </p>
           </div>
@@ -684,7 +994,7 @@ export function ChatScreen({
       </header>
 
       <main class="chat-messages">
-        {state.errorMessage && (
+        {state.errorMessage && !state.credentialErrorCode && (
           <div class="chat-error-banner" role="alert">
             {state.errorMessage}
           </div>
@@ -696,7 +1006,7 @@ export function ChatScreen({
             <span>Loading conversation…</span>
           </div>
         ) : state.missingApiKey ? (
-          <section class="chat-empty-state chat-empty-state--cta">
+          <section class="chat-empty-state">
             <div class="chat-empty-icon" aria-hidden="true">
               <span>🔑</span>
             </div>
@@ -739,7 +1049,7 @@ export function ChatScreen({
                     activeToolCallId={state.toolActionId}
                     message={message}
                     onApprove={(approved) =>
-                      void handleApproveTool(message.toolCallId, message.toolName, approved)
+                      void handleApproveTool(message.toolCallId, message.toolName, message.rawArguments, approved)
                     }
                   />
                 );
@@ -757,8 +1067,15 @@ export function ChatScreen({
                 );
               }
 
+              if (message.kind === 'thinking') {
+                return <ThinkingBubble key={message.id} message={message} />;
+              }
+
               return <ChatBubble key={message.id} message={message} />;
             })}
+            {state.credentialErrorCode && (
+              <CredentialErrorCard code={state.credentialErrorCode} />
+            )}
           </div>
         )}
       </main>
@@ -783,7 +1100,14 @@ export function ChatScreen({
           type="button"
           class="chat-attach-button"
           aria-label="Attach image"
-          disabled={state.booting || state.missingApiKey || state.isStreaming || !state.sessionHandle}
+          disabled={
+            state.booting ||
+            state.missingApiKey ||
+            state.isStreaming ||
+            state.toolBatchPending ||
+            !state.sessionHandle ||
+            state.pollReadyHandle !== state.sessionHandle
+          }
           onClick={() => fileInputRef.current?.click()}
         >
           📎
@@ -795,12 +1119,16 @@ export function ChatScreen({
             placeholder="Type a message…"
             rows={1}
             value={state.draft}
-            disabled={state.booting || state.missingApiKey || !state.sessionHandle}
+            disabled={
+              state.booting ||
+              state.missingApiKey ||
+              state.toolBatchPending ||
+              !state.sessionHandle ||
+              state.pollReadyHandle !== state.sessionHandle
+            }
+            onBlur={() => drafts.flush()}
             onInput={(event) => {
-              dispatch({
-                type: 'SET_DRAFT',
-                value: (event.target as HTMLTextAreaElement).value,
-              });
+              setDraft((event.target as HTMLTextAreaElement).value);
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -828,7 +1156,9 @@ export function ChatScreen({
             state.booting ||
             state.missingApiKey ||
             state.isStreaming ||
+            state.toolBatchPending ||
             !state.sessionHandle ||
+            state.pollReadyHandle !== state.sessionHandle ||
             !state.draft.trim()
           }
         >
@@ -906,6 +1236,7 @@ function ToolRequestCard(
 ) {
   const pending = message.status === 'pending';
   const busy = activeToolCallId === message.toolCallId;
+  const autoRunState = message.autoRun && (busy ? 'Running…' : message.status === 'approved' ? 'Ran automatically' : null);
 
   return (
     <article class="chat-tool-row">
@@ -916,7 +1247,9 @@ function ToolRequestCard(
         </div>
         <pre class="chat-tool-code">{message.argsText}</pre>
         <div class="chat-tool-actions">
-          {pending ? (
+          {autoRunState ? (
+            <span class="chat-tool-state chat-tool-state--approved">{autoRunState}</span>
+          ) : pending ? (
             <>
               <button
                 type="button"
@@ -960,8 +1293,38 @@ function ToolResultCard({ message }: { message: ToolResultMessageItem }) {
           <span class="chat-tool-label">Result</span>
           <strong class="chat-tool-name">{message.toolName}</strong>
         </div>
-        <pre class="chat-tool-code">{formatStructuredValue(message.result)}</pre>
+        <pre class="chat-tool-code">{formatStructuredValue(toolResultDisplayValue(message.result))}</pre>
       </div>
+    </article>
+  );
+}
+
+function ThinkingBubble({ message }: { message: ThinkingMessageItem }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <article class="chat-thinking" data-testid="chat-thinking-bubble">
+      <button
+        type="button"
+        class="chat-thinking-header-btn"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+      >
+        <Icon
+          name="chevron-down"
+          size={14}
+          class={expanded ? 'chat-thinking-chevron chat-thinking-chevron-expanded' : 'chat-thinking-chevron'}
+          aria-hidden
+        />
+        <span class="chat-thinking-header-title">
+          {message.isStreaming ? 'Thinking…' : 'Thought'}
+        </span>
+      </button>
+      {expanded && (
+        <div class="chat-thinking-content">
+          <div class="chat-thinking-text">{message.thinking}</div>
+        </div>
+      )}
     </article>
   );
 }
@@ -1219,7 +1582,7 @@ function upsertAssistantImage(images: RenderedImage[], delta: ImageDelta): Rende
   return images.map((image, index) => (index === existingIndex ? nextImage : image));
 }
 
-function upsertToolRequest(messages: MessageItem[], delta: ToolCallDelta): MessageItem[] {
+function upsertToolRequest(messages: MessageItem[], delta: ToolCallDelta, autoRun: boolean): MessageItem[] {
   const toolCallId = getToolCallId(delta);
   const toolName = delta.name?.trim() || delta.tool?.trim() || 'Unknown tool';
   const existingIndex = messages.findIndex(
@@ -1230,6 +1593,7 @@ function upsertToolRequest(messages: MessageItem[], delta: ToolCallDelta): Messa
   const argsText = formatToolArguments(rawArguments, delta.args ?? delta.arguments);
   const nextMessage: ToolRequestMessageItem = {
     argsText,
+    autoRun: existing?.autoRun ?? autoRun,
     id: existing?.id ?? createLocalId('tool-request'),
     kind: 'tool-request',
     rawArguments,
@@ -1346,6 +1710,7 @@ function historyToMessages(history: BridgeChatMessage[]): MessageItem[] {
         : JSON.stringify(toolCall.args ?? {});
       messages.push({
         argsText: formatToolArguments(rawArgsStr, typeof toolCall.args !== 'string' ? toolCall.args : undefined),
+        autoRun: false,
         id: `${message.id}:${toolCall.id}`,
         kind: 'tool-request',
         rawArguments: rawArgsStr,
@@ -1409,6 +1774,30 @@ function createAssistantMessage(
   };
 }
 
+function appendThinkingTokens(messages: MessageItem[], text: string): MessageItem[] {
+  const last = messages[messages.length - 1];
+  if (last && last.kind === 'thinking' && last.isStreaming) {
+    return messages.map((message, index) =>
+      index === messages.length - 1 && message.kind === 'thinking'
+        ? { ...message, thinking: `${message.thinking}${text}` }
+        : message,
+    );
+  }
+
+  return [
+    ...messages,
+    { id: createLocalId('thinking'), isStreaming: true, kind: 'thinking', thinking: text },
+  ];
+}
+
+function closeStreamingThinking(messages: MessageItem[]): MessageItem[] {
+  return messages.map((message) =>
+    message.kind === 'thinking' && message.isStreaming
+      ? { ...message, isStreaming: false }
+      : message,
+  );
+}
+
 function findLastStreamingAssistantIndex(messages: MessageItem[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -1463,6 +1852,20 @@ function formatToolArguments(rawArguments: string, argsValue?: unknown): string 
   return formatStructuredValue(safeParseJson(rawArguments));
 }
 
+function parseToolArgumentsForExecution(rawArguments: string): Record<string, unknown> | null {
+  const parsed = safeParseJson(rawArguments);
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null;
+}
+
+function isReadTool(toolName: string): boolean {
+  return toolName === 'search_bookmarks' ||
+    toolName === 'list_tabs' ||
+    toolName === 'get_page_info' ||
+    toolName === 'search_history';
+}
+
 function createImageFromDelta(delta: ImageDelta): RenderedImage {
   const parsed = delta.url ? parseDataUrl(delta.url) : null;
   const mime = delta.mime ?? parsed?.mime ?? 'image/png';
@@ -1490,6 +1893,18 @@ function formatStructuredValue(value: unknown): string {
   }
 
   return JSON.stringify(value, null, 2) ?? String(value);
+}
+
+function toolResultDisplayValue(result: unknown): unknown {
+  if (
+    typeof result === 'object' &&
+    result !== null &&
+    !Array.isArray(result) &&
+    typeof (result as Record<string, unknown>).output === 'string'
+  ) {
+    return safeParseJson((result as Record<string, string>).output);
+  }
+  return result;
 }
 
 function safeParseJson(value: string): unknown {
@@ -1542,42 +1957,63 @@ async function registerDefaultTools(bridge: MahoBridge, handle: string): Promise
 
 async function resolveProviderConfig(
   bridge: MahoBridge,
-  preferredProviderId?: string,
+  _preferredProviderId?: string,
   preferredModel?: string,
 ): Promise<ProviderConfig | null> {
-  const requestedProvider = preferredProviderId?.trim();
-  const requestedModel = preferredModel?.trim();
+  const settings = await bridge.getAiSettings();
+  const providerId = settings.provider.trim();
+  const configuredModel = settings.model.trim() || preferredModel?.trim();
 
-  const providerOrder = requestedProvider
-    ? [requestedProvider, requestedProvider === 'openai' ? 'anthropic' : 'openai']
-    : ['openai', 'anthropic'];
-
-  for (const providerId of providerOrder) {
-    const key = (await bridge.byokGetKey(providerId))?.trim() ?? '';
-    if (!key) {
-      continue;
-    }
-
-    if (providerId === 'anthropic') {
+  switch (providerId) {
+    case 'openai': {
+      const apiKey = (await bridge.byokGetKey('openai'))?.trim() ?? '';
+      if (!apiKey) return null;
       return {
-        apiKey: key,
-        endpoint: DEFAULT_ANTHROPIC_ENDPOINT,
-        id: 'anthropic',
-        label: 'Anthropic',
-        model: requestedModel || DEFAULT_ANTHROPIC_MODEL,
+        apiKey,
+        endpoint: normalizeChatCompletionsEndpoint(DEFAULT_OPENAI_ENDPOINT),
+        id: providerId,
+        label: 'OpenAI',
+        model: configuredModel || DEFAULT_OPENAI_MODEL,
       };
     }
-
-    return {
-      apiKey: key,
-      endpoint: DEFAULT_OPENAI_ENDPOINT,
-      id: 'openai',
-      label: 'OpenAI',
-      model: requestedModel || DEFAULT_OPENAI_MODEL,
-    };
+    case 'anthropic': {
+      const apiKey = (await bridge.byokGetKey('anthropic'))?.trim() ?? '';
+      if (!apiKey) return null;
+      return {
+        apiKey,
+        endpoint: DEFAULT_ANTHROPIC_ENDPOINT,
+        id: providerId,
+        label: 'Anthropic',
+        model: configuredModel || DEFAULT_ANTHROPIC_MODEL,
+      };
+    }
+    case 'openai-compatible': {
+      const baseUrl = settings.baseUrl.trim();
+      if (!baseUrl || !configuredModel) return null;
+      return {
+        credentialProvider: providerId,
+        endpoint: normalizeChatCompletionsEndpoint(baseUrl),
+        id: providerId,
+        label: 'OpenAI-compatible',
+        model: configuredModel,
+      };
+    }
+    case 'maho-managed':
+      return {
+        credentialProvider: providerId,
+        id: providerId,
+        label: 'Maho AI',
+      };
+    default:
+      return null;
   }
+}
 
-  return null;
+function normalizeChatCompletionsEndpoint(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/u, '');
+  return trimmed.endsWith('/chat/completions')
+    ? trimmed
+    : `${trimmed}/chat/completions`;
 }
 
 function parseDataUrl(value: string): { base64: string; mime: string } | null {

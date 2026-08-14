@@ -17,6 +17,61 @@ export interface ConversationMeta {
   model?: string | null;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string | null;
+  projectId?: string | null;
+}
+
+export interface ConversationProject {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationProjectMoveResult {
+  requestedCount: number;
+  affectedIds: string[];
+  missingIds: string[];
+}
+
+export type ConversationListState = 'active' | 'archived' | 'all';
+
+export interface ConversationListOptions {
+  state?: ConversationListState;
+  limit?: number;
+}
+
+export interface ConversationBulkResult {
+  requestedCount: number;
+  affectedIds: string[];
+  unchangedIds: string[];
+  missingIds: string[];
+}
+
+export interface ConversationActiveSessionsError {
+  error: 'active_sessions';
+  ids: string[];
+}
+
+export type ConversationBulkResponse = ConversationBulkResult | ConversationActiveSessionsError;
+
+/**
+ * Scope of a persisted composer draft.
+ *
+ * `new_task` is the draft scope for any composer whose conversation row does not
+ * exist in core yet — including a brand-new chat that already holds an ephemeral
+ * session handle. Naming a conversation that core does not know about makes core
+ * reap the draft as an orphan on read, so promotion to `conversation` scope must
+ * wait until the row is persisted (first successful send).
+ */
+export type ComposerDraftScope =
+  | { kind: 'new_task' }
+  | { kind: 'conversation'; conversationId: string };
+
+export interface ComposerDraft {
+  version: 1;
+  text: string;
+  updatedAt: string;
 }
 
 export interface ConversationTurn {
@@ -74,13 +129,25 @@ export type BridgeError =
   | { kind: 'session_invalid'; id: string }
   | { kind: 'method_unknown'; method: string }
   | { kind: 'params_invalid'; method: string; reason: string }
+  | { kind: 'operation_failed'; reason: string }
   | { kind: 'native_error'; method: string; reason: string };
 
 export type ChatEvent =
   | { kind: 'token'; token: string }
+  | { kind: 'thinking'; thinking: string }
   | { kind: 'tool_call'; toolCallId: string; name: string; args: Record<string, unknown> }
-  | { kind: 'complete'; content: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'complete'; content: string; toolCalls?: ChatToolCall[]; toolCallsJson?: string }
+  | { kind: 'error'; message: string; credentialErrorCode?: string | null };
+
+export interface ChatToolCall {
+  id: string;
+  name: string;
+  args: unknown;
+}
+
+export type BrowserToolInvokeResult =
+  | { ok: true; result: unknown }
+  | { ok: false; error: string };
 
 /**
  * Normalized event from the native agent kernel.
@@ -99,7 +166,7 @@ export type AgentEvent =
   | { kind: 'tool_result'; id: string; name: string; result: string }
   | { kind: 'artifact_created'; artifact: ArtifactInfo }
   | { kind: 'complete'; fullText: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string; credentialErrorCode?: string | null };
 
 /**
  * Metadata for an agent output artifact. Paths never cross this boundary;
@@ -158,6 +225,7 @@ export interface ToolCallRecord {
 
 export interface ChatSessionOpts {
   apiKey?: string;
+  credentialProvider?: string;
   endpoint?: string;
   model?: string;
   systemInstruction?: string;
@@ -189,6 +257,11 @@ export interface ToolDefinition {
 }
 
 export type ToolResult = Record<string, unknown>;
+
+export interface ChatToolResultOptions {
+  toolName: string;
+  trigger: boolean;
+}
 
 export interface RpcRequest {
   jsonrpc: '2.0';
@@ -225,24 +298,53 @@ export interface MahoBridge {
 
   // --- Chat Session ---
   chatSessionStart(opts: ChatSessionOpts): Promise<SessionHandle>;
-  chatSessionResume(conversationId: string): Promise<SessionHandle>;
+  chatSessionResume(conversationId: string, opts: ChatSessionOpts): Promise<SessionHandle>;
   chatSessionFree(handle: SessionHandle): Promise<void>;
   chatSendMessage(handle: SessionHandle, content: ChatContent): Promise<void>;
   chatCancelTurn(handle: SessionHandle): Promise<void>;
-  chatPollEvents(handle: SessionHandle): Promise<ChatEvent[]>;
+  chatPollEvents(handle: SessionHandle): Promise<unknown[]>;
   chatRegisterTool(handle: SessionHandle, tool: ToolDefinition): Promise<void>;
-  chatSendToolResult(handle: SessionHandle, toolCallId: string, result: ToolResult): Promise<void>;
-  chatAppendAssistantMessage(handle: SessionHandle, content: string): Promise<void>;
+  chatSendToolResult(
+    handle: SessionHandle,
+    toolCallId: string,
+    result: ToolResult,
+    options: ChatToolResultOptions,
+  ): Promise<void>;
+  browserToolInvoke?(name: string, args: Record<string, unknown>): Promise<BrowserToolInvokeResult>;
+  chatAppendAssistantMessage(
+    handle: SessionHandle,
+    content: string,
+    toolCallsJson?: string,
+  ): Promise<void>;
   chatGetHistory(handle: SessionHandle): Promise<ChatMessage[]>;
 
   // --- Conversations ---
   conversationCreate(meta: ConversationMeta): Promise<string>;
-  conversationList(): Promise<ConversationMeta[]>;
+  conversationList(options?: ConversationListOptions): Promise<ConversationMeta[]>;
   conversationGet(sessionId: string): Promise<ConversationMeta | null>;
   conversationDelete(sessionId: string): Promise<boolean>;
   conversationRename(sessionId: string, title: string): Promise<boolean>;
+  conversationArchive(sessionId: string): Promise<boolean>;
+  conversationUnarchive(sessionId: string): Promise<boolean>;
+  conversationBulk(
+    op: 'archive' | 'unarchive' | 'delete',
+    ids: string[],
+  ): Promise<ConversationBulkResponse>;
+  conversationGetAutoArchivePolicy(): Promise<number | null>;
+  conversationSetAutoArchivePolicy(afterDays: number | null): Promise<boolean>;
   conversationGetMessages(sessionId: string): Promise<ChatMessage[]>;
+  conversationProjectList(): Promise<ConversationProject[]>;
+  conversationProjectCreate(name: string): Promise<ConversationProject>;
+  conversationProjectRename(id: string, name: string): Promise<boolean>;
+  conversationProjectDelete(id: string): Promise<boolean>;
+  conversationProjectMove(ids: string[], projectId: string | null): Promise<ConversationProjectMoveResult>;
   saveConversationMessage?(sessionId: string, role: string, content: string): Promise<boolean>;
+
+  // --- Composer drafts (device/profile-local; never synced) ---
+  // Optional: a host without draft support simply keeps drafts in memory.
+  composerDraftGet?(scope: ComposerDraftScope): Promise<ComposerDraft | null>;
+  composerDraftSet?(scope: ComposerDraftScope, text: string): Promise<boolean>;
+  composerDraftDelete?(scope: ComposerDraftScope): Promise<boolean>;
 
   // --- Space AI Config ---
   getSpaceAIConfig(spaceId: string): Promise<SpaceAIConfig | null>;
@@ -276,6 +378,7 @@ export interface MahoBridge {
   // --- Relay auth (gated onboarding) ---
   relaySignIn(email: string, password: string): Promise<{ ok: boolean; error?: string }>;
   relaySignUp(email: string, password: string, displayName: string): Promise<{ ok: boolean; error?: string }>;
+  relaySignInWithGoogle(): Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
   relayAccountStatus(): Promise<{ hasValidSession: boolean; isReauth: boolean }>;
 
   // --- Default browser ---

@@ -7,6 +7,7 @@ type WindowWithBridge = Window & {
   __mahoBridgeResponse: (responseJson: string) => void;
   MahoBridgeAndroid?: { rpc: (json: string) => void };
   webkit?: { messageHandlers?: { mahoBridge?: { postMessage: (msg: string) => void } } };
+  __mahoChromePageHandler?: (json: string) => void;
 };
 
 function bridgeWindow(): WindowWithBridge {
@@ -81,6 +82,61 @@ describe('RPC via Android transport', () => {
 
     respondTo(sent.id, undefined);
     await promise;
+  });
+
+  it('exposes browserToolInvoke through the mobile bridge', async () => {
+    const { result } = renderHook(() => useBridge());
+
+    const promise = result.current.browserToolInvoke?.('list_tabs', {});
+    expect(promise).toBeDefined();
+    const request = JSON.parse(rpcSpy.mock.calls[0]![0]) as {
+      id: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request.method).toBe('browserToolInvoke');
+    expect(request.params).toEqual({ name: 'list_tabs', args: {} });
+    respondTo(request.id, { ok: true, result: [] });
+    await expect(promise).resolves.toEqual({ ok: true, result: [] });
+  });
+
+  it('maps project CRUD and move to exact RPC methods and params', async () => {
+    const { result } = renderHook(() => useBridge());
+
+    const listPromise = result.current.conversationProjectList();
+    const listRequest = JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string; method: string; params?: unknown };
+    expect(listRequest.method).toBe('conversationProjectList');
+    expect(listRequest.params).toEqual([]);
+    respondTo(listRequest.id, []);
+    await expect(listPromise).resolves.toEqual([]);
+
+    const createPromise = result.current.conversationProjectCreate('Research');
+    const createRequest = JSON.parse(rpcSpy.mock.calls[1]![0]) as { id: string; method: string; params: Record<string, unknown> };
+    expect(createRequest.method).toBe('conversationProjectCreate');
+    expect(createRequest.params).toEqual({ name: 'Research' });
+    respondTo(createRequest.id, { id: 'p1', name: 'Research', createdAt: 'now', updatedAt: 'now' });
+    await createPromise;
+
+    const renamePromise = result.current.conversationProjectRename('p1', 'Renamed');
+    const renameRequest = JSON.parse(rpcSpy.mock.calls[2]![0]) as { id: string; method: string; params: Record<string, unknown> };
+    expect(renameRequest.method).toBe('conversationProjectRename');
+    expect(renameRequest.params).toEqual({ id: 'p1', name: 'Renamed' });
+    respondTo(renameRequest.id, true);
+    await renamePromise;
+
+    const deletePromise = result.current.conversationProjectDelete('p1');
+    const deleteRequest = JSON.parse(rpcSpy.mock.calls[3]![0]) as { id: string; method: string; params: Record<string, unknown> };
+    expect(deleteRequest.method).toBe('conversationProjectDelete');
+    expect(deleteRequest.params).toEqual({ id: 'p1' });
+    respondTo(deleteRequest.id, true);
+    await deletePromise;
+
+    const movePromise = result.current.conversationProjectMove(['c1', 'c2'], null);
+    const moveRequest = JSON.parse(rpcSpy.mock.calls[4]![0]) as { id: string; method: string; params: Record<string, unknown> };
+    expect(moveRequest.method).toBe('conversationProjectMove');
+    expect(moveRequest.params).toEqual({ ids: ['c1', 'c2'], projectId: null });
+    respondTo(moveRequest.id, { requestedCount: 2, affectedIds: ['c1', 'c2'], missingIds: [] });
+    await movePromise;
   });
 
   it('maps artifact list and share to exact path-free RPC methods and params', async () => {
@@ -208,6 +264,64 @@ describe('RPC via Android transport', () => {
       }
     }
   });
+
+  it('preserves a native credential envelope as the RPC error message', async () => {
+    const { call } = await import('../rpc');
+    const envelope = JSON.stringify({
+      version: 1,
+      kind: 'credential_error',
+      code: 'managed_auth_unavailable',
+    });
+    const promise = call<void>('chatSessionStart', { credentialProvider: 'maho-managed' });
+    const request = JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string };
+    respondError(request.id, {
+      kind: 'native_error',
+      method: 'chatSessionStart',
+      reason: envelope,
+    });
+
+    await expect(promise).rejects.toMatchObject({ message: envelope });
+  });
+
+  it('does not expose an unknown credential envelope as an RPC error message', async () => {
+    const { call } = await import('../rpc');
+    const envelope = JSON.stringify({
+      version: 1,
+      kind: 'credential_error',
+      code: 'unrecognized_credential_state',
+    });
+    const promise = call<void>('chatSessionStart', { credentialProvider: 'maho-managed' });
+    const request = JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string };
+    respondError(request.id, {
+      kind: 'native_error',
+      method: 'chatSessionStart',
+      reason: envelope,
+    });
+
+    await expect(promise).rejects.toMatchObject({ message: '[maho-bridge] native_error' });
+  });
+
+  it('redacts noncanonical credential envelope details from the RPC error', async () => {
+    const { call } = await import('../rpc');
+    const envelope = JSON.stringify({
+      version: 1,
+      kind: 'credential_error',
+      code: 'managed_auth_unavailable',
+      diagnostic: 'sensitive native detail',
+    });
+    const promise = call<void>('chatSessionStart', { credentialProvider: 'maho-managed' });
+    const request = JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string };
+    respondError(request.id, {
+      kind: 'native_error',
+      method: 'chatSessionStart',
+      reason: envelope,
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      message: '[maho-bridge] native_error',
+      bridgeError: { reason: '[maho-bridge] native_error' },
+    });
+  });
 });
 
 // ─── iOS transport tests ────────────────────────────────────────────────────
@@ -247,6 +361,31 @@ describe('RPC via iOS transport', () => {
 
     respondTo(sent.id, ['openai']);
     await expect(promise).resolves.toEqual(['openai']);
+  });
+});
+
+describe('RPC via desktop transport', () => {
+  const pageHandlerSpy = vi.fn<(json: string) => void>();
+
+  beforeEach(() => {
+    _resetBridgeStateForTest();
+    Object.defineProperty(window, '__mahoChromePageHandler', {
+      value: pageHandlerSpy,
+      writable: true,
+      configurable: true,
+    });
+    pageHandlerSpy.mockClear();
+  });
+
+  afterEach(() => {
+    delete bridgeWindow().__mahoChromePageHandler;
+  });
+
+  it('does not expose browserToolInvoke before desktop implements that RPC', () => {
+    const { result } = renderHook(() => useBridge());
+
+    expect(result.current.browserToolInvoke).toBeUndefined();
+    expect(pageHandlerSpy).not.toHaveBeenCalled();
   });
 });
 

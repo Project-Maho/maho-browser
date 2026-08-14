@@ -1,6 +1,8 @@
 package dev.maho.browser.bridge
 
 import dev.maho.browser.MahoBridge
+import dev.maho.browser.sync.RelaySessionStore
+import dev.maho.browser.ui.webview.ManagedChatConfig
 import org.json.JSONObject
 
 object BridgeAi {
@@ -12,6 +14,10 @@ object BridgeAi {
     private const val AI_BASE_URL_KEY = "base_url"
     private const val AI_API_KEY = "api_key"
     private const val AI_MODEL_KEY = "model"
+
+    // Mirrors the authoritative maho-agent managed defaults for Android's native bridge.
+    private const val MANAGED_PROXY_BASE_URL = "https://proxy.maho.co/v1"
+    private const val MANAGED_DEFAULT_MODEL = "google/gemini-3-flash-lite:free"
 
     private object SecureStorageHelper {
         private const val KEY_PROVIDER = "AndroidKeyStore"
@@ -138,6 +144,22 @@ object BridgeAi {
         val encrypted = context.getSharedPreferences(AI_SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
             .getString(AI_API_KEY, null) ?: return null
         return SecureStorageHelper.decrypt(encrypted)
+    }
+
+    fun resolveChatCredential(provider: String): String? = when (provider) {
+        "openai-compatible" -> getCustomAiApiKey()?.takeIf { it.isNotEmpty() }
+        else -> null
+    }
+
+    fun resolveManagedChatConfig(): ManagedChatConfig? {
+        val session = RelaySessionStore.load() ?: return null
+        if (session.expiresAt?.let { it <= System.currentTimeMillis() / 1000 } == true) return null
+        val accessToken = session.accessToken.takeIf { it.isNotBlank() } ?: return null
+        return ManagedChatConfig(
+            apiKey = accessToken,
+            endpoint = "$MANAGED_PROXY_BASE_URL/chat/completions",
+            model = MANAGED_DEFAULT_MODEL,
+        )
     }
 
     internal fun getOrCreateSqlcipherKeyHex(): String? {

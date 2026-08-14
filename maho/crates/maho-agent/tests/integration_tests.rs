@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use maho_agent::{AgentError, AgentRuntime, AgentStorage, PermissionDecision, SwiftideBackend};
+use maho_agent::{
+    AgentError, AgentRuntime, AgentStorage, CredentialError, PermissionDecision, SwiftideBackend,
+};
 use maho_types::chat::{ChatContent, ChatMessage};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -404,8 +406,17 @@ async fn test_agent_fails_without_byok_key() {
     let res = backend.run_turn("session-123", user_msg, None, None).await;
 
     assert!(res.is_err());
-    let err_str = res.unwrap_err().to_string();
-    assert!(err_str.contains("Secure storage callback is missing or returned no keys"));
+    let err = res.unwrap_err();
+    // The credential/secure-storage failure must be a TYPED credential error so
+    // the FFI/UI layers can present an actionable "open settings" card instead
+    // of leaking the raw diagnostic string.
+    assert!(
+        matches!(
+            err,
+            AgentError::Credential(CredentialError::SecureStoreUnavailable)
+        ),
+        "expected typed AgentError::Credential(SecureStoreUnavailable), got: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -540,10 +551,13 @@ async fn test_secure_storage_callback_failure_fails_closed() {
         res.is_err(),
         "Agent must fail-closed when secure storage returns error"
     );
-    let err_str = res.unwrap_err().to_string();
+    let err = res.unwrap_err();
+    // When secure storage errors and no key is usable, the failure surfaces as a
+    // typed credential error so the FFI/UI layers can present an actionable
+    // credential card instead of the raw diagnostic string.
     assert!(
-        err_str.contains("Secure storage callback") || err_str.contains("No BYOK API key"),
-        "Error must indicate secure storage / BYOK problem; got: {err_str}",
+        matches!(err, AgentError::Credential(_)),
+        "expected typed AgentError::Credential(_), got: {err:?}"
     );
 }
 
@@ -1741,7 +1755,9 @@ async fn test_agent_event_order() {
                 assert!(args.contains("nonexistent"));
                 tool_call_seen = true;
             }
-            maho_agent::AgentStreamEvent::ToolResult { id, name, result, .. } => {
+            maho_agent::AgentStreamEvent::ToolResult {
+                id, name, result, ..
+            } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "fs_read");
                 assert!(

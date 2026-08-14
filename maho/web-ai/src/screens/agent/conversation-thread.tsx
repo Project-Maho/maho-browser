@@ -6,11 +6,14 @@ import type { AgentMessage, AgentPhase } from './agent-types';
 import type { ArtifactInfo } from '../../bridge/types';
 import { isRunActive } from './agent-types';
 import { MarkdownRenderer } from './markdown-renderer';
+import type { CredentialErrorCode } from '../credential-error';
+import { CredentialErrorCard } from '../credential-error-card';
 
 interface ConversationThreadProps {
   messages: readonly AgentMessage[];
   phase: AgentPhase;
   errorMessage: string | null;
+  errorCredentialCode: CredentialErrorCode | null;
   scrollRef: RefObject<HTMLDivElement>;
   onScroll: () => void;
   onShareArtifact: (artifactId: string) => Promise<boolean>;
@@ -20,6 +23,7 @@ export function ConversationThread({
   messages,
   phase,
   errorMessage,
+  errorCredentialCode,
   scrollRef,
   onScroll,
   onShareArtifact,
@@ -34,10 +38,12 @@ export function ConversationThread({
         aria-live="polite"
         onScroll={onScroll}
       >
-        {errorMessage && <ErrorBanner message={errorMessage} />}
         {messages.map((message) => (
           <ConversationMessage key={message.id} message={message} onShareArtifact={onShareArtifact} />
         ))}
+        {errorCredentialCode
+          ? <CredentialErrorCard code={errorCredentialCode} />
+          : errorMessage && <ErrorBanner message={errorMessage} />}
         {isRunActive(phase) && <PendingThought />}
       </div>
     </main>

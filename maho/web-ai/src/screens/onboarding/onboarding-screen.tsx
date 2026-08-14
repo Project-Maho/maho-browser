@@ -8,10 +8,14 @@ import './onboarding.css';
 
 type OnboardingStep = 'splash' | 'auth' | 'default_browser' | 'byok' | 'completion';
 
+function initialStep(step: string | undefined): OnboardingStep {
+  return step === 'auth' ? 'auth' : 'splash';
+}
+
 export function OnboardingScreen() {
   const bridge = useBridge();
   const route = useHashRoute();
-  const [step, setStep] = useState<OnboardingStep>('splash');
+  const [step, setStep] = useState<OnboardingStep>(() => initialStep(route.params.step));
   
   // Safe area insets from native shell parameters or properties
   const safeAreaTop = route.params.safeAreaTop ? parseFloat(route.params.safeAreaTop) : 0;
@@ -134,6 +138,24 @@ export function OnboardingScreen() {
         } else {
           setAuthError(res.error || 'Failed to sign up.');
         }
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'A network error occurred.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+
+    try {
+      const res = await bridge.relaySignInWithGoogle();
+      if (res.ok) {
+        setStep('default_browser');
+      } else if (!res.cancelled) {
+        setAuthError(res.error || 'Failed to sign in with Google.');
       }
     } catch (err: any) {
       setAuthError(err.message || 'A network error occurred.');
@@ -304,6 +326,26 @@ export function OnboardingScreen() {
                 )}
               </button>
             </form>
+
+            <div class="onboarding-auth-divider" aria-hidden="true">
+              <span />
+              <span>or</span>
+              <span />
+            </div>
+
+            <button
+              type="button"
+              class="onboarding-btn-google"
+              disabled={authLoading}
+              onClick={handleGoogleSignIn}
+            >
+              {authLoading ? (
+                <Icon name="loader" class="animate-spin" size={18} />
+              ) : (
+                <GoogleMark />
+              )}
+              <span>Continue with Google</span>
+            </button>
           </div>
         )}
 
@@ -467,5 +509,33 @@ export function OnboardingScreen() {
         </div>
       </footer>
     </div>
+  );
+}
+
+function GoogleMark() {
+  return (
+    <svg
+      class="onboarding-google-mark"
+      viewBox="0 0 18 18"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        fill="#EA4335"
+        d="M17.64 9.205c0-.639-.057-1.253-.164-1.841H9v3.484h4.844a4.14 4.14 0 0 1-1.797 2.714v2.259h2.909c1.702-1.567 2.684-3.875 2.684-6.616Z"
+      />
+      <path
+        fill="#4285F4"
+        d="M9 18c2.43 0 4.467-.806 5.956-2.179l-2.909-2.259c-.806.54-1.837.858-3.047.858-2.344 0-4.328-1.584-5.037-3.71H.956v2.332A9 9 0 0 0 9 18Z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M3.963 10.71A5.409 5.409 0 0 1 3.681 9c0-.594.102-1.171.282-1.71V4.959H.956A9 9 0 0 0 0 9c0 1.452.348 2.827.956 4.041l3.007-2.332Z"
+      />
+      <path
+        fill="#34A853"
+        d="M9 3.58c1.322 0 2.508.455 3.44 1.348l2.581-2.581C13.463.896 11.426 0 9 0A9 9 0 0 0 .956 4.959L3.963 7.29C4.672 5.164 6.656 3.58 9 3.58Z"
+      />
+    </svg>
   );
 }

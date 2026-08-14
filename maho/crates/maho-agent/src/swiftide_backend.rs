@@ -20,9 +20,10 @@ use crate::approval::{
     ToolSensitivityDowngrade, ToolSensitivityResolution,
 };
 
+#[cfg(test)]
+use crate::browser_action_contract::canonical_browser_action_contracts;
 use crate::browser_action_contract::{
-    canonical_browser_action_contracts, BrowserActionContract, BrowserToolKind,
-    BrowserToolSensitivity,
+    BrowserActionContract, BrowserToolKind, BrowserToolSensitivity,
 };
 
 use crate::fallback_ladder::{FallbackLadderError, FallbackLadderState};
@@ -30,7 +31,7 @@ use crate::fallback_ladder::{FallbackLadderError, FallbackLadderState};
 use crate::fallback_ladder_browser::browser_tool_fallback_request;
 
 use crate::{
-    AgentError, AgentRuntime, AgentStorage, AgentStreamEvent, PermissionCallback,
+    AgentError, AgentRuntime, AgentStorage, AgentStreamEvent, CredentialError, PermissionCallback,
     PermissionDecision, PermissionRequest, ToolDefinition,
 };
 
@@ -136,23 +137,12 @@ fn should_attempt_mcp_connect(server: &maho_types::ai::AiMcpServer) -> bool {
 }
 
 /// Decide whether a registered MCP tool must be gated by the permission callback.
-
-///
-
-/// FIX-9a (#3): a dogfood (`AutoApprove`) tool auto-runs (`sensitive == false`)
-
-/// ONLY when it is READ-ONLY; genuinely sensitive browser *actions* keep
-
-/// `sensitive == true` so the CLI's `deny-sensitive` default still gates them.
-
-/// Explicit server trust (`server.trusted` + `trusted_tools`) is an independent,
-
-/// user-opted-in path and is preserved for any tool. `raw_name` is the tool name
-
-/// with any `mcp:<server>/` prefix stripped.
-
+/// Browser-authoritative discovery already resolved `discovered_sensitive`,
+/// including fail-closed handling for missing or malformed policy metadata.
+/// Explicit server trust (`server.trusted` + `trusted_tools`) remains an
+/// independent, user-opted-in path.
 fn mcp_tool_is_sensitive(
-    tool_permission: ToolPermission,
+    discovered_sensitive: bool,
 
     raw_name: &str,
 
@@ -162,9 +152,6 @@ fn mcp_tool_is_sensitive(
 
     trusted_tools: Option<&Vec<String>>,
 ) -> bool {
-    let dogfood_readonly = tool_permission == ToolPermission::AutoApprove
-        && crate::mcp_client::is_readonly_dogfood_tool(raw_name);
-
     let explicitly_trusted = server_trusted
         && match trusted_tools {
             Option::None => true,
@@ -172,7 +159,7 @@ fn mcp_tool_is_sensitive(
             Some(list) => list.iter().any(|n| n == raw_name || n == tool_name),
         };
 
-    !(dogfood_readonly || explicitly_trusted)
+    discovered_sensitive && !explicitly_trusted
 }
 
 #[derive(Clone)]
@@ -470,46 +457,106 @@ impl Tool for PermissionGatedTool {
             return Err(permission_error("prior tool denial in this turn"));
         }
 
-        if let Some(metadata) = policy.immediate_decision(&tool_name, self.sensitivity) {
-            match metadata.decision {
-                PermissionDecision::Allow => {
-                    audit_decision(
-                        ApprovalAuditEventKind::PermissionAllow,
-                        &self.session_id,
-                        &tool_name,
-                        self.sensitivity,
-                        metadata,
-                    );
+        let mail_requires_typed_approval = crate::classify_mail_tool(&tool_name).is_some()
+            && self.sensitivity == ToolSensitivity::Sensitive;
+        let action_approval = crate::authorize_action_consequence(
+            &tool_name,
+            tool_call.args().unwrap_or("{}"),
+            policy,
+        );
+        if action_approval == crate::ConsequenceApprovalAction::Deny {
+            let metadata = ApprovalDecisionMetadata::new(
+                PermissionDecision::Deny,
+                policy,
+                ApprovalDecisionSource::Policy,
+                ApprovalDecisionReason::PolicyDenySensitive,
+            );
+            audit_decision(
+                ApprovalAuditEventKind::PermissionDeny,
+                &self.session_id,
+                &tool_name,
+                self.sensitivity,
+                metadata,
+            );
+            *self.denied_flag.lock_unpoison() = true;
+            cancel_guard.complete();
+            return Err(permission_error("approval policy denied the tool"));
+        }
+        let consequence_requires_approval =
+            action_approval == crate::ConsequenceApprovalAction::RequireApproval;
+        if !mail_requires_typed_approval
+            && action_approval == crate::ConsequenceApprovalAction::Allow
+        {
+            let metadata = ApprovalDecisionMetadata::new(
+                PermissionDecision::Allow,
+                policy,
+                ApprovalDecisionSource::Policy,
+                ApprovalDecisionReason::PolicyReadOnlyAutoAllow,
+            );
+            audit_decision(
+                ApprovalAuditEventKind::PermissionAllow,
+                &self.session_id,
+                &tool_name,
+                self.sensitivity,
+                metadata,
+            );
+            let result = self.inner_tool.invoke(agent_context, tool_call).await;
+            audit_execution_result(
+                &self.session_id,
+                &tool_name,
+                self.sensitivity,
+                policy,
+                &result,
+            );
+            cancel_guard.complete();
+            return result;
+        }
 
-                    let result = self.inner_tool.invoke(agent_context, tool_call).await;
+        if !mail_requires_typed_approval
+            && action_approval != crate::ConsequenceApprovalAction::Allow
+            && !consequence_requires_approval
+        {
+            if let Some(metadata) = policy.immediate_decision(&tool_name, self.sensitivity) {
+                match metadata.decision {
+                    PermissionDecision::Allow => {
+                        audit_decision(
+                            ApprovalAuditEventKind::PermissionAllow,
+                            &self.session_id,
+                            &tool_name,
+                            self.sensitivity,
+                            metadata,
+                        );
 
-                    audit_execution_result(
-                        &self.session_id,
-                        &tool_name,
-                        self.sensitivity,
-                        policy,
-                        &result,
-                    );
+                        let result = self.inner_tool.invoke(agent_context, tool_call).await;
 
-                    cancel_guard.complete();
+                        audit_execution_result(
+                            &self.session_id,
+                            &tool_name,
+                            self.sensitivity,
+                            policy,
+                            &result,
+                        );
 
-                    return result;
-                }
+                        cancel_guard.complete();
 
-                PermissionDecision::Deny => {
-                    audit_decision(
-                        ApprovalAuditEventKind::PermissionDeny,
-                        &self.session_id,
-                        &tool_name,
-                        self.sensitivity,
-                        metadata,
-                    );
+                        return result;
+                    }
 
-                    *self.denied_flag.lock_unpoison() = true;
+                    PermissionDecision::Deny => {
+                        audit_decision(
+                            ApprovalAuditEventKind::PermissionDeny,
+                            &self.session_id,
+                            &tool_name,
+                            self.sensitivity,
+                            metadata,
+                        );
 
-                    cancel_guard.complete();
+                        *self.denied_flag.lock_unpoison() = true;
 
-                    return Err(permission_error("approval policy denied the tool"));
+                        cancel_guard.complete();
+
+                        return Err(permission_error("approval policy denied the tool"));
+                    }
                 }
             }
         }
@@ -679,7 +726,7 @@ impl Tool for FsReadTool {
             Err(e) => {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     anyhow::anyhow!("Invalid path or file does not exist: {e}"),
-                ))
+                ));
             }
         };
 
@@ -1057,18 +1104,18 @@ impl Tool for ShellExecTool {
             if sub == "diff" {
                 if parts.len() == 2 {
                     return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-
-                        anyhow::anyhow!("Security violation: bare 'git diff' is not allowed (would expose uncommitted working-tree content)")
-
+                        anyhow::anyhow!(
+                            "Security violation: bare 'git diff' is not allowed (would expose uncommitted working-tree content)"
+                        ),
                     ));
                 }
 
                 for arg in &parts[2..] {
                     if !arg.starts_with('-') {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-
-                            anyhow::anyhow!("Security violation: git diff with positional refs is not allowed (would enable committed-content exfiltration)")
-
+                            anyhow::anyhow!(
+                                "Security violation: git diff with positional refs is not allowed (would enable committed-content exfiltration)"
+                            ),
                         ));
                     }
                 }
@@ -1092,9 +1139,9 @@ impl Tool for ShellExecTool {
                         c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '/'
                     }) {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
-
-                            anyhow::anyhow!(format!("Security violation: git argument '{arg}' contains invalid characters"))
-
+                            anyhow::anyhow!(format!(
+                                "Security violation: git argument '{arg}' contains invalid characters"
+                            )),
                         ));
                     }
                 }
@@ -1143,13 +1190,13 @@ impl Tool for ShellExecTool {
             Ok(Err(e)) => {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     e,
-                ))
+                ));
             }
 
             Err(_) => {
                 return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                     anyhow::anyhow!("Command execution timed out after 5 seconds"),
-                ))
+                ));
             }
         };
 
@@ -1384,13 +1431,17 @@ impl Default for BrowserActionToolsState {
 
 #[derive(Clone)]
 struct BrowserToolShim {
-    name: &'static str,
+    capability_id: String,
 
-    description: &'static str,
+    name: String,
+
+    description: String,
 
     parameters_schema: serde_json::Value,
 
     sensitivity: ToolSensitivity,
+
+    permission: ToolPermission,
 
     bridge: Arc<dyn BrowserToolBridge>,
 
@@ -1405,10 +1456,14 @@ struct BrowserToolShimContext {
     approval_policy: Arc<Mutex<ApprovalPolicy>>,
     fallback_ladder: Option<Arc<Mutex<FallbackLadderState>>>,
     opened_tab_id: Arc<Mutex<Option<i64>>>,
+    mail_authorization_state: Arc<Mutex<crate::MailAuthorizationState>>,
 }
 
 impl BrowserToolShimContext {
-    fn discovery(approval_policy: Arc<Mutex<ApprovalPolicy>>) -> Self {
+    fn discovery(
+        approval_policy: Arc<Mutex<ApprovalPolicy>>,
+        mail_authorization_state: Arc<Mutex<crate::MailAuthorizationState>>,
+    ) -> Self {
         Self {
             session_id: "browser-tool-discovery".to_string(),
 
@@ -1417,6 +1472,7 @@ impl BrowserToolShimContext {
             fallback_ladder: Option::None,
 
             opened_tab_id: Arc::new(Mutex::new(None)),
+            mail_authorization_state,
         }
     }
 
@@ -1426,6 +1482,7 @@ impl BrowserToolShimContext {
         approval_policy: Arc<Mutex<ApprovalPolicy>>,
 
         fallback_ladder: Arc<Mutex<FallbackLadderState>>,
+        mail_authorization_state: Arc<Mutex<crate::MailAuthorizationState>>,
     ) -> Self {
         Self {
             session_id: session_id.to_string(),
@@ -1435,6 +1492,7 @@ impl BrowserToolShimContext {
             fallback_ladder: Some(fallback_ladder),
 
             opened_tab_id: Arc::new(Mutex::new(None)),
+            mail_authorization_state,
         }
     }
 }
@@ -1449,6 +1507,20 @@ impl Tool for BrowserToolShim {
 
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+        if crate::classify_mail_tool(&self.name).is_some() {
+            match crate::authorize_mail_tool(
+                &self.name,
+                *self.context.mail_authorization_state.lock_unpoison(),
+                *self.context.approval_policy.lock_unpoison(),
+            ) {
+                crate::MailAuthorizationAction::Allow => {}
+                crate::MailAuthorizationAction::RequireApproval => {}
+                crate::MailAuthorizationAction::Deny(reason) => {
+                    return Err(permission_error(reason));
+                }
+            }
+        }
+
         let args = if self.name == "browser_type" {
             match serde_json::from_str::<serde_json::Value>(tool_call.args().unwrap_or("{}")) {
                 Ok(serde_json::Value::Object(mut m)) => {
@@ -1463,7 +1535,8 @@ impl Tool for BrowserToolShim {
 
         self.enforce_fallback_ladder(&args)?;
 
-        let name = self.name.to_string();
+        let name = self.name.clone();
+        let capability_id = self.capability_id.clone();
 
         let bridge = Arc::clone(&self.bridge);
 
@@ -1474,20 +1547,7 @@ impl Tool for BrowserToolShim {
 
             let grant_args = serde_json::json!({ "origin": origin }).to_string();
 
-            tokio::task::spawn_blocking(move || {
-                grant_bridge.invoke("browser_grant_exact_origin", &grant_args)
-            })
-            .await
-            .map_err(|e| {
-                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                    "spawn_blocking join failed during origin grant: {e}"
-                ))
-            })?
-            .map_err(|msg| {
-                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                    "failed: {msg}"
-                ))
-            })?;
+            Self::execute_bridge(grant_bridge, "browser_grant_exact_origin", &grant_args).await?;
         }
 
         // Acquire a non-stealing lease before any mutation.
@@ -1501,20 +1561,7 @@ impl Tool for BrowserToolShim {
 
                 let lease_args = serde_json::json!({ "tab_id": tab_id }).to_string();
 
-                tokio::task::spawn_blocking(move || {
-                    lease_bridge.invoke("browser_acquire_lease", &lease_args)
-                })
-                .await
-                .map_err(|e| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "spawn_blocking join failed during lease: {e}"
-                    ))
-                })?
-                .map_err(|msg| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "failed: {msg}"
-                    ))
-                })?;
+                Self::execute_bridge(lease_bridge, "browser_acquire_lease", &lease_args).await?;
                 let args_with_tab = match serde_json::from_str::<serde_json::Value>(&args) {
                     Ok(serde_json::Value::Object(mut m)) => {
                         m.insert("tab_id".to_string(), serde_json::json!(tab_id));
@@ -1525,17 +1572,10 @@ impl Tool for BrowserToolShim {
 
                 let dispatch_bridge = Arc::clone(&bridge);
 
-                let dispatch_name = name.to_string();
-
-                let result = tokio::task::spawn_blocking(move || {
-                    dispatch_bridge.invoke(&dispatch_name, &args_with_tab)
-                })
-                .await
-                .map_err(|e| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "spawn_blocking join failed: {e}"
-                    ))
-                })?;
+                let result = dispatch_bridge
+                    .execute_tool(&capability_id, &args_with_tab)
+                    .await
+                    .map(|execution| execution.output_json);
 
                 return match result {
                     Ok(mut json) => {
@@ -1547,52 +1587,44 @@ impl Tool for BrowserToolShim {
                         Ok(ToolOutput::Text(json))
                     }
 
-                    Err(msg) if Self::should_open_tab_instead(&name, &msg) => {
+                    Err(error) if Self::should_open_tab_instead(&name, &error.message) => {
                         let fallback_bridge = Arc::clone(&bridge);
 
-                        let fallback = tokio::task::spawn_blocking(move || {
-                            fallback_bridge.invoke("browser_tab_new", &args)
-                        })
-                        .await
-                        .map_err(|e| {
-                            swiftide_core::chat_completion::errors::ToolError::unknown(
-                                anyhow::anyhow!("spawn_blocking join failed during fallback: {e}"),
-                            )
-                        })?
-                        .map_err(|msg| {
-                            swiftide_core::chat_completion::errors::ToolError::unknown(
-                                anyhow::anyhow!("failed: {msg}"),
-                            )
-                        })?;
+                        let fallback =
+                            Self::execute_bridge(fallback_bridge, "browser_tab_new", &args).await?;
 
                         self.remember_opened_tab(&fallback);
 
                         Ok(ToolOutput::Text(fallback))
                     }
 
-                    Err(msg) => Ok(ToolOutput::Text(Self::error_observation(&self.name, &msg))),
+                    Err(error) => Ok(ToolOutput::Text(Self::error_observation(
+                        &self.name, &error,
+                    ))),
                 };
             }
         }
 
         let dispatch_bridge = Arc::clone(&bridge);
 
-        let dispatch_name = name.clone();
-
         let dispatch_args = args.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
-            dispatch_bridge.invoke(&dispatch_name, &dispatch_args)
-        })
-        .await
-        .map_err(|e| {
-            swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                "spawn_blocking join failed: {e}"
-            ))
-        })?;
+        let result = dispatch_bridge
+            .execute_tool(&capability_id, &dispatch_args)
+            .await
+            .map(|execution| execution.output_json);
 
         match result {
             Ok(mut json) => {
+                if crate::classify_mail_tool(&self.name).is_some() {
+                    if let crate::MailAuthorizationAction::Deny(reason) = crate::authorize_mail_tool(
+                        &self.name,
+                        *self.context.mail_authorization_state.lock_unpoison(),
+                        *self.context.approval_policy.lock_unpoison(),
+                    ) {
+                        return Err(permission_error(reason));
+                    }
+                }
                 Self::cap_browser_result(&mut json);
                 self.remember_opened_tab(&json);
                 if Self::is_navigation_tool(&name) {
@@ -1601,35 +1633,25 @@ impl Tool for BrowserToolShim {
                 Ok(ToolOutput::Text(json))
             }
 
-            Err(msg) if Self::should_open_tab_instead(&name, &msg) => {
+            Err(error) if Self::should_open_tab_instead(&name, &error.message) => {
                 let fallback_bridge = Arc::clone(&bridge);
 
-                let fallback = tokio::task::spawn_blocking(move || {
-                    fallback_bridge.invoke("browser_tab_new", &args)
-                })
-                .await
-                .map_err(|e| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "spawn_blocking join failed during fallback: {e}"
-                    ))
-                })?
-                .map_err(|msg| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "failed: {msg}"
-                    ))
-                })?;
+                let fallback =
+                    Self::execute_bridge(fallback_bridge, "browser_tab_new", &args).await?;
 
                 self.remember_opened_tab(&fallback);
 
                 Ok(ToolOutput::Text(fallback))
             }
 
-            Err(msg) => Ok(ToolOutput::Text(Self::error_observation(&self.name, &msg))),
+            Err(error) => Ok(ToolOutput::Text(Self::error_observation(
+                &self.name, &error,
+            ))),
         }
     }
 
     fn name(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.name)
+        Cow::Borrowed(&self.name)
     }
 
     fn tool_spec(&self) -> ToolSpec {
@@ -1654,9 +1676,9 @@ impl Tool for BrowserToolShim {
         };
 
         ToolSpec {
-            name: self.name.to_string(),
+            name: self.name.clone(),
 
-            description: self.description.to_string(),
+            description: self.description.clone(),
 
             parameters_schema,
         }
@@ -1664,6 +1686,22 @@ impl Tool for BrowserToolShim {
 }
 
 impl BrowserToolShim {
+    async fn execute_bridge(
+        bridge: Arc<dyn BrowserToolBridge>,
+        capability_id: &str,
+        args_json: &str,
+    ) -> Result<String, swiftide_core::chat_completion::errors::ToolError> {
+        bridge
+            .execute_tool(capability_id, args_json)
+            .await
+            .map(|execution| execution.output_json)
+            .map_err(|error| {
+                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                    error.to_string()
+                ))
+            })
+    }
+
     /// Extracts the exact origin (scheme+host+effective_port) from the
     /// `url` field of a tool argument. Returns None when parsing fails or
     /// no URL field is present.
@@ -1722,20 +1760,7 @@ impl BrowserToolShim {
         if let Some(tab_id) = *remembered.lock_unpoison() {
             return Ok(Some(tab_id));
         }
-        let listing_bridge = Arc::clone(bridge);
-        let listing =
-            tokio::task::spawn_blocking(move || listing_bridge.invoke("browser_tab_list", "{}"))
-                .await
-                .map_err(|e| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "spawn_blocking join failed during tab list: {e}"
-                    ))
-                })?
-                .map_err(|msg| {
-                    swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
-                        "failed: {msg}"
-                    ))
-                })?;
+        let listing = Self::execute_bridge(Arc::clone(bridge), "browser_tab_list", "{}").await?;
         let tabs = serde_json::from_str::<serde_json::Value>(&listing)
             .ok()
             .and_then(|v| v.get("tabs").cloned())
@@ -1785,10 +1810,9 @@ impl BrowserToolShim {
     /// instead of a blank pre-load document. Bounded so a slow page cannot hang.
     async fn settle_after_navigation(bridge: Arc<dyn BrowserToolBridge>) {
         for _ in 0..16 {
-            let b = Arc::clone(&bridge);
             let probe =
-                tokio::task::spawn_blocking(move || b.invoke("browser_page_content", "{}")).await;
-            if let Ok(Ok(json)) = probe {
+                Self::execute_bridge(Arc::clone(&bridge), "browser_page_content", "{}").await;
+            if let Ok(json) = probe {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
                     let url_ready = v
                         .get("url")
@@ -1811,11 +1835,19 @@ impl BrowserToolShim {
 
     /// Render a failed browser tool call as a structured observation the model
     /// can read and self-correct from, instead of aborting the whole run.
-    fn error_observation(tool: &str, msg: &str) -> String {
+    fn error_observation(tool: &str, error: &crate::BrowserToolBridgeError) -> String {
         serde_json::json!({
-            "error": msg,
+            "error": {
+                "code": error.code,
+                "message": error.message,
+                "retryable": error.retryable,
+            },
             "tool": tool,
-            "hint": "The tool call failed. Fix the arguments or try a different approach, then continue."
+            "hint": if error.retryable {
+                "The browser transport failed temporarily. Retry the tool call."
+            } else {
+                "The browser rejected this tool call permanently. Do not retry it unchanged."
+            }
         })
         .to_string()
     }
@@ -1850,7 +1882,7 @@ impl BrowserToolShim {
             return Ok(());
         };
 
-        let request = browser_tool_fallback_request(self.name, args, self.sensitivity);
+        let request = browser_tool_fallback_request(&self.name, args, self.sensitivity);
 
         let policy = *self.context.approval_policy.lock_unpoison();
 
@@ -1860,7 +1892,7 @@ impl BrowserToolShim {
             Ok(decision) => {
                 audit_fallback_decision(
                     &self.context.session_id,
-                    self.name,
+                    &self.name,
                     self.sensitivity,
                     policy,
                     &decision,
@@ -1872,7 +1904,7 @@ impl BrowserToolShim {
             Err(error) => {
                 audit_fallback_decision(
                     &self.context.session_id,
-                    self.name,
+                    &self.name,
                     self.sensitivity,
                     policy,
                     error.decision(),
@@ -1897,11 +1929,7 @@ impl BrowserToolShim {
 
             sensitive,
 
-            permission: if sensitive {
-                ToolPermission::AlwaysAsk
-            } else {
-                ToolPermission::AutoApprove
-            },
+            permission: self.permission,
         }
     }
 }
@@ -1914,9 +1942,7 @@ struct BrowserActionToolMetadata {
 
 fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
     match tool_name {
-
         "mail_list_accounts" => Some(BrowserActionToolMetadata {
-
             description: "List mail accounts available to the mail read broker.",
 
             parameters_schema: serde_json::json!({
@@ -1930,11 +1956,9 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
                 "required": []
 
             }),
-
         }),
 
         "mail_list_folders" => Some(BrowserActionToolMetadata {
-
             description: "List folders for a mail account. Args: account_id (string).",
 
             parameters_schema: serde_json::json!({
@@ -1952,11 +1976,9 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
                 "required": ["account_id"]
 
             }),
-
         }),
 
         "mail_list_emails" => Some(BrowserActionToolMetadata {
-
             description: "List emails in a folder. Args: account_id (string), folder_id (string), limit (int, optional, default 50), offset (int, optional, default 0).",
 
             parameters_schema: serde_json::json!({
@@ -1980,11 +2002,9 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
                 "required": ["account_id", "folder_id"]
 
             }),
-
         }),
 
         "mail_get_email" => Some(BrowserActionToolMetadata {
-
             description: "Get a single email by id. Args: email_id (string).",
 
             parameters_schema: serde_json::json!({
@@ -2002,11 +2022,9 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
                 "required": ["email_id"]
 
             }),
-
         }),
 
         "mail_search_emails" => Some(BrowserActionToolMetadata {
-
             description: "Search emails. Args: query (string), account_id (string, optional), folder_id (string, optional), limit (int, optional, default 50), offset (int, optional, default 0).",
 
             parameters_schema: serde_json::json!({
@@ -2024,11 +2042,9 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
                 "required": ["query_json"]
 
             }),
-
         }),
 
         "mail_list_thread" => Some(BrowserActionToolMetadata {
-
             description: "List a mail thread. Args: account_id (string), message_id (string).",
 
             parameters_schema: serde_json::json!({
@@ -2048,11 +2064,9 @@ fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata>
                 "required": ["account_id", "message_id"]
 
             }),
-
         }),
 
         _ => None,
-
     }
 }
 
@@ -2117,13 +2131,11 @@ fn mail_write_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata
     }
 }
 
-fn tool_sensitivity_from_browser_contract(_sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
-    // Browser tools are Not gated by the outer permission policy.
-    // The capability sandbox (exact-origin registry + tab ownership + lease)
-    // is the security boundary — like Aside's sandbox, it contains what
-    // the agent can do Without per-action user prompts.
-
-    ToolSensitivity::ReadOnly
+fn tool_sensitivity_from_browser_contract(sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
+    match sensitivity {
+        BrowserToolSensitivity::Low => ToolSensitivity::ReadOnly,
+        BrowserToolSensitivity::Sensitive => ToolSensitivity::Sensitive,
+    }
 }
 
 fn browser_action_tool_metadata(tool_name: &str) -> BrowserActionToolMetadata {
@@ -2321,13 +2333,20 @@ fn browser_action_shim(
     let metadata = browser_action_tool_metadata(contract.tool_name);
 
     BrowserToolShim {
-        name: contract.tool_name,
+        capability_id: contract.tool_name.to_string(),
 
-        description: metadata.description,
+        name: contract.tool_name.to_string(),
+
+        description: metadata.description.to_string(),
 
         parameters_schema: metadata.parameters_schema,
 
         sensitivity: tool_sensitivity_from_browser_contract(contract.sensitivity),
+
+        permission: match contract.kind {
+            BrowserToolKind::Read => ToolPermission::AutoApprove,
+            BrowserToolKind::Action => ToolPermission::AlwaysAsk,
+        },
 
         bridge,
 
@@ -2351,306 +2370,64 @@ fn truncate_at_char_boundary(s: &mut String, max_bytes: usize) {
 
 fn browser_tool_shims(
     bridge: Arc<dyn BrowserToolBridge>,
-
+    descriptors: Vec<crate::BrowserToolDescriptor>,
     action_state: BrowserActionToolsState,
-
     context: BrowserToolShimContext,
 ) -> Vec<BrowserToolShim> {
-    let no_args = serde_json::json!({
-
-        "type": "object",
-
-        "additionalProperties": false,
-
-        "properties": {},
-
-        "required": []
-
-    });
-
-    let search_args = serde_json::json!({
-
-        "type": "object",
-
-        "additionalProperties": false,
-
-        "properties": {
-
-            "query": {"type": "string", "description": "Text to search for in the active page."},
-
-            "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum number of excerpts to return."}
-
-        },
-
-        "required": ["query"]
-
-    });
-
-    let mut shims = vec![
-
-        BrowserToolShim {
-
-            name: "list_browser_tabs",
-
-            description: "List every open browser tab and return each tab's id, title, url, and whether it is active, as structured JSON. Use this to enumerate all tabs.",
-
-            parameters_schema: no_args.clone(),
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "read_current_page",
-
-            description: "Read the currently active browser tab and return its main content (title, url, text) as structured JSON.",
-
-            parameters_schema: no_args.clone(),
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "get_selected_text",
-
-            description: "Return the current text selection from the active browser tab.",
-
-            parameters_schema: no_args.clone(),
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "get_active_tab",
-
-            description: "Return metadata (title, url, id) for the currently active browser tab.",
-
-            parameters_schema: no_args.clone(),
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "search_in_page",
-
-            description: "Search the active page content for a query string and return matching excerpts.",
-
-            parameters_schema: search_args,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "extract_structured_page_context",
-
-            description: "Extract a rich structured context object from the active page (headings, links, main text).",
-
-            parameters_schema: no_args,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "mail_list_accounts",
-
-            description: mail_read_tool_metadata("mail_list_accounts").expect("mail metadata exists").description,
-
-            parameters_schema: mail_read_tool_metadata("mail_list_accounts").expect("mail metadata exists").parameters_schema,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "mail_list_folders",
-
-            description: mail_read_tool_metadata("mail_list_folders").expect("mail metadata exists").description,
-
-            parameters_schema: mail_read_tool_metadata("mail_list_folders").expect("mail metadata exists").parameters_schema,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "mail_list_emails",
-
-            description: mail_read_tool_metadata("mail_list_emails").expect("mail metadata exists").description,
-
-            parameters_schema: mail_read_tool_metadata("mail_list_emails").expect("mail metadata exists").parameters_schema,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "mail_get_email",
-
-            description: mail_read_tool_metadata("mail_get_email").expect("mail metadata exists").description,
-
-            parameters_schema: mail_read_tool_metadata("mail_get_email").expect("mail metadata exists").parameters_schema,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "mail_search_emails",
-
-            description: mail_read_tool_metadata("mail_search_emails").expect("mail metadata exists").description,
-
-            parameters_schema: mail_read_tool_metadata("mail_search_emails").expect("mail metadata exists").parameters_schema,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-
-            name: "mail_list_thread",
-
-            description: mail_read_tool_metadata("mail_list_thread").expect("mail metadata exists").description,
-
-            parameters_schema: mail_read_tool_metadata("mail_list_thread").expect("mail metadata exists").parameters_schema,
-
-            sensitivity: ToolSensitivity::ReadOnly,
-
-            bridge: Arc::clone(&bridge),
-
-            context: context.clone(),
-
-        },
-
-        BrowserToolShim {
-            name: "mail_send",
-            description: mail_write_tool_metadata("mail_send").expect("mail metadata exists").description,
-            parameters_schema: mail_write_tool_metadata("mail_send").expect("mail metadata exists").parameters_schema,
-            sensitivity: ToolSensitivity::ReadOnly,
-            bridge: Arc::clone(&bridge),
-            context: context.clone(),
-        },
-        BrowserToolShim {
-            name: "mail_save_draft",
-            description: mail_write_tool_metadata("mail_save_draft").expect("mail metadata exists").description,
-            parameters_schema: mail_write_tool_metadata("mail_save_draft").expect("mail metadata exists").parameters_schema,
-            sensitivity: ToolSensitivity::ReadOnly,
-            bridge: Arc::clone(&bridge),
-            context: context.clone(),
-        },
-        BrowserToolShim {
-            name: "mail_update_draft",
-            description: mail_write_tool_metadata("mail_update_draft").expect("mail metadata exists").description,
-            parameters_schema: mail_write_tool_metadata("mail_update_draft").expect("mail metadata exists").parameters_schema,
-            sensitivity: ToolSensitivity::ReadOnly,
-            bridge: Arc::clone(&bridge),
-            context: context.clone(),
-        },
-    ];
-
-    if action_state.is_enabled() {
-        // The accessibility snapshot yields the @ref labels that browser_click,
-        // browser_type, and browser_select consume, so it is exposed alongside
-        // the action tools rather than as an always-on read tool.
-        shims.push(BrowserToolShim {
-            name: "browser_accessibility_snapshot",
-            description: "Return the active tab's accessibility tree as structured JSON, including the @ref labels that browser_click, browser_type, and browser_select use to target elements.",
-            parameters_schema: serde_json::json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {},
-                "required": []
-            }),
-            sensitivity: ToolSensitivity::ReadOnly,
-            bridge: Arc::clone(&bridge),
-            context: context.clone(),
-        });
-
-        match canonical_browser_action_contracts() {
-            Ok(contracts) => {
-                shims.extend(
-                    contracts
-                        .into_iter()
-                        .filter(|contract| contract.kind == BrowserToolKind::Action)
-                        .map(|contract| {
-                            browser_action_shim(contract, Arc::clone(&bridge), context.clone())
-                        }),
+    let mut seen_capability_ids = std::collections::HashSet::new();
+    let mut seen_names = std::collections::HashSet::new();
+    descriptors
+        .into_iter()
+        .filter_map(|descriptor| {
+            let schema_valid = descriptor.input_schema.as_object().is_some_and(|schema| {
+                schema.get("type").and_then(serde_json::Value::as_str) == Some("object")
+            });
+            let identity_valid = !descriptor.capability_id.trim().is_empty()
+                && !descriptor.name.trim().is_empty()
+                && descriptor.schema_version > 0;
+            let unique = seen_capability_ids.insert(descriptor.capability_id.clone())
+                && seen_names.insert(descriptor.name.clone());
+            let action_allowed = action_state.is_enabled()
+                || !matches!(
+                    descriptor.name.as_str(),
+                    "browser_navigate"
+                        | "browser_click"
+                        | "browser_type"
+                        | "browser_select"
+                        | "browser_scroll"
+                        | "browser_hover"
+                        | "browser_key_press"
+                        | "browser_accessibility_snapshot"
                 );
-            }
-
-            Err(error) => {
-                tracing::error!(
-
+            if !schema_valid || !identity_valid || !unique || !action_allowed {
+                tracing::warn!(
                     target: "maho_agent::swiftide_backend",
-
-                    error = %error,
-
-                    "browser action contract parse failed; action shims disabled"
-
+                    capability_id = %descriptor.capability_id,
+                    tool = %descriptor.name,
+                    schema_valid,
+                    identity_valid,
+                    unique,
+                    action_allowed,
+                    "browser tool descriptor rejected"
                 );
+                return None;
             }
-        }
-    }
-
-    shims
+            Some(BrowserToolShim {
+                capability_id: descriptor.capability_id,
+                name: descriptor.name,
+                description: descriptor.description,
+                parameters_schema: descriptor.input_schema,
+                sensitivity: if descriptor.policy.sensitive {
+                    ToolSensitivity::Sensitive
+                } else {
+                    ToolSensitivity::ReadOnly
+                },
+                permission: descriptor.policy.permission,
+                bridge: Arc::clone(&bridge),
+                context: context.clone(),
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2734,15 +2511,7 @@ where
 
         Option::None => {
             return Err(last_err.unwrap_or_else(|| {
-
-                AgentError::ExecutionError(
-
-                    "Secure storage callback is missing or returned no keys for the requested provider"
-
-                        .to_string(),
-
-                )
-
+                AgentError::Credential(CredentialError::SecureStoreUnavailable)
             }));
         }
     };
@@ -2850,6 +2619,8 @@ pub struct SwiftideBackend {
 
     browser_action_tools_state: Arc<Mutex<BrowserActionToolsState>>,
 
+    mail_authorization_state: Arc<Mutex<crate::MailAuthorizationState>>,
+
     preferred_provider: Arc<Mutex<Option<String>>>,
 
     allowed_tools: Arc<Mutex<Option<Vec<String>>>>,
@@ -2885,6 +2656,8 @@ impl Clone for SwiftideBackend {
             approval_policy: Arc::clone(&self.approval_policy),
 
             browser_action_tools_state: Arc::clone(&self.browser_action_tools_state),
+
+            mail_authorization_state: Arc::clone(&self.mail_authorization_state),
 
             preferred_provider: Arc::clone(&self.preferred_provider),
 
@@ -2933,6 +2706,10 @@ impl SwiftideBackend {
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::default())),
 
             browser_action_tools_state: Arc::new(Mutex::new(BrowserActionToolsState::default())),
+
+            mail_authorization_state: Arc::new(
+                Mutex::new(crate::MailAuthorizationState::default()),
+            ),
 
             preferred_provider: Arc::new(Mutex::new(None)),
 
@@ -2988,6 +2765,10 @@ impl SwiftideBackend {
         self.set_browser_action_tools_state(BrowserActionToolsState::from_enabled(enabled));
     }
 
+    pub fn set_mail_authorization_state(&self, state: crate::MailAuthorizationState) {
+        *self.mail_authorization_state.lock_unpoison() = state;
+    }
+
     fn browser_action_tools_state(&self) -> BrowserActionToolsState {
         *self.browser_action_tools_state.lock_unpoison()
     }
@@ -2998,13 +2779,20 @@ impl SwiftideBackend {
 
     pub async fn run_prompt(&self, prompt: &str) -> Result<String, AgentError> {
         let session_id = format!("run-{}", uuid::Uuid::new_v4());
+        self.run_prompt_in_session(&session_id, prompt).await
+    }
 
+    pub async fn run_prompt_in_session(
+        &self,
+        session_id: &str,
+        prompt: &str,
+    ) -> Result<String, AgentError> {
         let denied_flag = Arc::new(Mutex::new(false));
 
         let message = MahoChatMessage::user(ChatContent::text(prompt.to_string()));
 
         let result = self
-            .run_turn_internal(&session_id, message, denied_flag, None, None)
+            .run_turn_internal(session_id, message, denied_flag, None, None)
             .await?;
 
         match result.content {
@@ -3073,12 +2861,10 @@ impl SwiftideBackend {
     }
 
     // Gate a tool using an explicit effective sensitivity, WITHOUT re-resolving
-    // it from the shared browser-action contract. The CLI agent runs the
-    // Aside-parity model: browser exploration/actions are auto-approved at the
-    // agent layer (the shim reports ReadOnly), while the browser capability
-    // sandbox (origin grant + tab lease) remains the enforcement boundary. The
-    // shared contract keeps its Sensitive/approval semantics for the in-browser
-    // AI executor, which is a separate surface and is intentionally left gated.
+    // it from the shared browser-action contract. Consequence classification in
+    // PermissionGatedTool decides whether an otherwise ordinary browser action
+    // may proceed without a prompt. The browser remains authoritative for
+    // target, exact-origin, lease, gesture, Vault, and Mail boundaries.
     fn build_gated_tool_with_sensitivity(
         &self,
         tool: Arc<dyn Tool>,
@@ -3352,7 +3138,9 @@ impl SwiftideBackend {
                 client
             } else {
                 if !self.allow_insecure_key_storage {
-                    return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
+                    return Err(AgentError::Credential(
+                        CredentialError::SecureStoreUnavailable,
+                    ));
                 }
 
                 let (provider, bundle) =
@@ -3693,7 +3481,7 @@ impl SwiftideBackend {
                                 .unwrap_or(&tool.name);
 
                             let sensitive = mcp_tool_is_sensitive(
-                                tool.permission,
+                                tool.sensitive,
                                 raw_name,
                                 &tool.name,
                                 server.trusted,
@@ -3779,17 +3567,30 @@ impl SwiftideBackend {
         };
 
         if let Some(bridge) = browser_bridge_opt {
+            let descriptors = match bridge.list_tool_descriptors().await {
+                Ok(descriptors) => descriptors,
+                Err(error) => {
+                    tracing::warn!(target: "maho_agent::swiftide_backend", %error, "browser tool discovery unavailable; browser tools disabled");
+                    Vec::new()
+                }
+            };
             let fallback_ladder = Arc::new(Mutex::new(FallbackLadderState::new(session_id)));
 
             let shim_context = BrowserToolShimContext::turn(
                 session_id,
                 Arc::clone(&self.approval_policy),
                 fallback_ladder,
+                Arc::clone(&self.mail_authorization_state),
             );
 
-            let shims = browser_tool_shims(bridge, self.browser_action_tools_state(), shim_context);
+            let shims = browser_tool_shims(
+                bridge,
+                descriptors,
+                self.browser_action_tools_state(),
+                shim_context,
+            );
 
-            let names: Vec<_> = shims.iter().map(|s| s.name).collect();
+            let names: Vec<_> = shims.iter().map(|s| s.name.clone()).collect();
 
             dbg_log(&format!(
                 "[swiftide_backend] Registering {} browser tools: {:?}",
@@ -4197,11 +3998,26 @@ impl SwiftideBackend {
             });
         }
 
-        if let Some(bridge) = self.browser_tool_bridge.lock_unpoison().clone() {
-            let shim_context = BrowserToolShimContext::discovery(Arc::clone(&self.approval_policy));
+        let browser_bridge = self.browser_tool_bridge.lock_unpoison().clone();
+        if let Some(bridge) = browser_bridge {
+            let descriptors = match bridge.list_tool_descriptors().await {
+                Ok(descriptors) => descriptors,
+                Err(error) => {
+                    tracing::warn!(target: "maho_agent::swiftide_backend", %error, "browser tool discovery unavailable; browser tools disabled");
+                    Vec::new()
+                }
+            };
+            let shim_context = BrowserToolShimContext::discovery(
+                Arc::clone(&self.approval_policy),
+                Arc::clone(&self.mail_authorization_state),
+            );
 
-            for shim in browser_tool_shims(bridge, self.browser_action_tools_state(), shim_context)
-            {
+            for shim in browser_tool_shims(
+                bridge,
+                descriptors,
+                self.browser_action_tools_state(),
+                shim_context,
+            ) {
                 platform_tools.push(shim.tool_definition());
             }
         }
@@ -4377,7 +4193,9 @@ impl SwiftideBackend {
                 res
             } else {
                 if !self.allow_insecure_key_storage {
-                    return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
+                    return Err(AgentError::Credential(
+                        CredentialError::SecureStoreUnavailable,
+                    ));
                 }
 
                 if let Some(key) = self.storage.get_byok_key("openai").await? {
@@ -4836,6 +4654,10 @@ impl AgentRuntime for SwiftideBackend {
         SwiftideBackend::set_browser_action_tools_state(self, state);
     }
 
+    fn set_mail_authorization_state(&self, state: crate::MailAuthorizationState) {
+        SwiftideBackend::set_mail_authorization_state(self, state);
+    }
+
     fn set_system_prompt(&self, prompt: &str) {
         *self.system_prompt.lock_unpoison() = prompt.to_string();
     }
@@ -5179,16 +5001,60 @@ mod tests {
         calls: Mutex<Vec<(String, String)>>,
     }
 
+    #[async_trait]
     impl BrowserToolBridge for RecordingBrowserBridge {
-        fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
+        async fn execute_tool(
+            &self,
+            capability_id: &str,
+            args_json: &str,
+        ) -> Result<crate::BrowserToolExecution, crate::BrowserToolBridgeError> {
             self.invocations.fetch_add(1, Ordering::SeqCst);
 
             self.calls
                 .lock_unpoison()
-                .push((tool_name.to_string(), args_json.to_string()));
+                .push((capability_id.to_string(), args_json.to_string()));
 
-            Ok(r#"{"ok":true}"#.to_string())
+            Ok(crate::BrowserToolExecution {
+                output_json: r#"{"ok":true}"#.to_string(),
+                receipt: crate::BrowserToolExecutionReceipt {
+                    capability_id: capability_id.to_string(),
+                    execution_id: "test-execution".to_string(),
+                    metadata: serde_json::json!({}),
+                },
+            })
         }
+    }
+
+    #[test]
+    fn browser_tool_error_observation_preserves_permanence_and_retryability() {
+        let denied = crate::BrowserToolBridgeError::new(
+            "policy_denied",
+            "Browser action denied by approval policy",
+            false,
+        );
+        let transport = crate::BrowserToolBridgeError::new(
+            "transport_unavailable",
+            "Browser callback transport is unavailable",
+            true,
+        );
+
+        let denied_observation: serde_json::Value = serde_json::from_str(
+            &BrowserToolShim::error_observation("browser_click", &denied),
+        )
+        .expect("denial observation is JSON");
+        let transport_observation: serde_json::Value = serde_json::from_str(
+            &BrowserToolShim::error_observation("browser_click", &transport),
+        )
+        .expect("transport observation is JSON");
+
+        assert_eq!(denied_observation["error"]["code"], "policy_denied");
+        assert_eq!(denied_observation["error"]["retryable"], false);
+        assert_eq!(
+            transport_observation["error"]["code"],
+            "transport_unavailable"
+        );
+        assert_eq!(transport_observation["error"]["retryable"], true);
+        assert_ne!(denied_observation["hint"], transport_observation["hint"]);
     }
 
     #[test]
@@ -5198,15 +5064,50 @@ mod tests {
 
         let approval_policy = Arc::new(Mutex::new(ApprovalPolicy::Prompt));
 
-        let context = BrowserToolShimContext::discovery(approval_policy);
+        let context = BrowserToolShimContext::discovery(
+            approval_policy,
+            Arc::new(Mutex::new(crate::MailAuthorizationState {
+                feature_enabled: true,
+                helper_ready: true,
+                helper_starting: false,
+                read_allowed: true,
+            })),
+        );
 
+        let descriptors = [
+            "mail_list_accounts",
+            "mail_list_folders",
+            "mail_list_emails",
+            "mail_get_email",
+            "mail_search_emails",
+            "mail_list_thread",
+        ]
+        .into_iter()
+        .filter_map(|name| {
+            mail_read_tool_metadata(name).map(|metadata| crate::BrowserToolDescriptor {
+                capability_id: name.to_string(),
+                name: name.to_string(),
+                description: metadata.description.to_string(),
+                input_schema: metadata.parameters_schema,
+                schema_version: 1,
+                policy: crate::BrowserToolPolicy {
+                    sensitive: false,
+                    permission: ToolPermission::AutoApprove,
+                },
+            })
+        })
+        .collect();
         let shims = browser_tool_shims(
             Arc::clone(&bridge) as Arc<dyn BrowserToolBridge>,
+            descriptors,
             BrowserActionToolsState::Disabled,
             context,
         );
 
-        let names = shims.iter().map(|shim| shim.name).collect::<Vec<_>>();
+        let names = shims
+            .iter()
+            .map(|shim| shim.name.as_str())
+            .collect::<Vec<_>>();
 
         for expected in [
             "mail_list_accounts",
@@ -5377,15 +5278,19 @@ mod tests {
         let bridge = Arc::new(RecordingBrowserBridge::default());
 
         let shim = BrowserToolShim {
-            name: "mail_search_emails",
+            capability_id: "mail_search_emails".to_string(),
 
-            description: "Search emails.",
+            name: "mail_search_emails".to_string(),
+
+            description: "Search emails.".to_string(),
 
             parameters_schema: mail_read_tool_metadata("mail_search_emails")
                 .expect("mail metadata exists")
                 .parameters_schema,
 
             sensitivity: ToolSensitivity::ReadOnly,
+
+            permission: ToolPermission::AutoApprove,
 
             bridge: Arc::clone(&bridge) as Arc<dyn BrowserToolBridge>,
 
@@ -5395,6 +5300,12 @@ mod tests {
                 Arc::new(Mutex::new(FallbackLadderState::new(
                     "session-mail-bridge-forward",
                 ))),
+                Arc::new(Mutex::new(crate::MailAuthorizationState {
+                    feature_enabled: true,
+                    helper_ready: true,
+                    helper_starting: false,
+                    read_allowed: true,
+                })),
             ),
         };
 
@@ -5423,6 +5334,98 @@ mod tests {
         );
     }
 
+    struct RevokingMailBridge {
+        state: Arc<Mutex<crate::MailAuthorizationState>>,
+    }
+
+    #[async_trait]
+    impl BrowserToolBridge for RevokingMailBridge {
+        async fn execute_tool(
+            &self,
+            capability_id: &str,
+            _args_json: &str,
+        ) -> Result<crate::BrowserToolExecution, crate::BrowserToolBridgeError> {
+            self.state.lock_unpoison().read_allowed = false;
+            Ok(crate::BrowserToolExecution {
+                output_json: r#"{"subject":"must-not-leak"}"#.to_string(),
+                receipt: crate::BrowserToolExecutionReceipt {
+                    capability_id: capability_id.to_string(),
+                    execution_id: "revoked-read".to_string(),
+                    metadata: serde_json::json!({}),
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn mail_read_revocation_during_dispatch_discards_backend_result() {
+        let state = Arc::new(Mutex::new(crate::MailAuthorizationState {
+            feature_enabled: true,
+            helper_ready: true,
+            helper_starting: false,
+            read_allowed: true,
+        }));
+        let shim = BrowserToolShim {
+            capability_id: "mail_get_email".to_string(),
+            name: "mail_get_email".to_string(),
+            description: "Get email".to_string(),
+            parameters_schema: serde_json::json!({"type":"object"}),
+            sensitivity: ToolSensitivity::ReadOnly,
+            permission: ToolPermission::AutoApprove,
+            bridge: Arc::new(RevokingMailBridge {
+                state: Arc::clone(&state),
+            }),
+            context: BrowserToolShimContext::turn(
+                "mail-revocation",
+                Arc::new(Mutex::new(ApprovalPolicy::AllowAll)),
+                Arc::new(Mutex::new(FallbackLadderState::new("mail-revocation"))),
+                state,
+            ),
+        };
+        let result = shim
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("mail_get_email", r#"{"email_id":"e1"}"#.to_string()),
+            )
+            .await;
+        let error = result.expect_err("revoked read must be denied").to_string();
+        assert!(error.contains("mail_read_consent_required"));
+        assert!(!error.contains("must-not-leak"));
+    }
+
+    #[tokio::test]
+    async fn mail_write_global_allow_still_emits_typed_approval_request() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let approvals = Arc::new(AtomicUsize::new(0));
+        let approval_count = Arc::clone(&approvals);
+        let callback: PermissionCallback = Box::new(move |request| {
+            assert_eq!(request.tool_name, "mail_send");
+            assert_eq!(request.sensitivity, ToolSensitivity::Sensitive);
+            assert_eq!(request.arguments, r#""[REDACTED]""#);
+            approval_count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { PermissionDecision::Allow })
+        });
+        let tool = gated_counting_tool(
+            "mail_send",
+            ToolSensitivity::Sensitive,
+            ApprovalPolicy::AllowAll,
+            Some(callback),
+            Arc::clone(&invocations),
+        );
+        let result = tool
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call(
+                    "mail_send",
+                    r#"{"body_text":"private message"}"#.to_string(),
+                ),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(approvals.load(Ordering::SeqCst), 1);
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
     #[tokio::test]
 
     async fn browser_action_shims_audit_records_action_sensitivity() {
@@ -5445,6 +5448,7 @@ mod tests {
             session_id,
             Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
             Arc::new(Mutex::new(FallbackLadderState::new(session_id))),
+            Arc::new(Mutex::new(crate::MailAuthorizationState::default())),
         );
 
         let shim = browser_action_shim(
@@ -5883,7 +5887,7 @@ mod tests {
     fn dogfood_readonly_tool_auto_runs() {
         assert!(
             !mcp_tool_is_sensitive(
-                ToolPermission::AutoApprove,
+                false,
                 "browser_tab_list",
                 "mcp:browser/browser_tab_list",
                 false,
@@ -5903,13 +5907,7 @@ mod tests {
             "browser_tab_new",
         ] {
             assert!(
-                mcp_tool_is_sensitive(
-                    ToolPermission::AutoApprove,
-                    name,
-                    &format!("mcp:browser/{name}"),
-                    false,
-                    None,
-                ),
+                mcp_tool_is_sensitive(true, name, &format!("mcp:browser/{name}"), false, None,),
                 "{name}: a sensitive dogfood action must stay sensitive so the callback gates it"
             );
         }
@@ -5920,7 +5918,7 @@ mod tests {
     fn explicit_server_trust_still_trusts_any_tool() {
         assert!(
             !mcp_tool_is_sensitive(
-                ToolPermission::AlwaysAsk,
+                true,
                 "browser_click",
                 "mcp:browser/browser_click",
                 true,
@@ -5931,7 +5929,7 @@ mod tests {
 
         assert!(
             !mcp_tool_is_sensitive(
-                ToolPermission::AlwaysAsk,
+                true,
                 "custom_tool",
                 "mcp:ext/custom_tool",
                 true,
@@ -5942,7 +5940,7 @@ mod tests {
 
         assert!(
             mcp_tool_is_sensitive(
-                ToolPermission::AlwaysAsk,
+                true,
                 "other_tool",
                 "mcp:ext/other_tool",
                 true,
@@ -5957,7 +5955,7 @@ mod tests {
     fn non_dogfood_sensitive_tool_is_gated() {
         assert!(
             mcp_tool_is_sensitive(
-                ToolPermission::AlwaysAsk,
+                true,
                 "browser_tab_list",
                 "mcp:ext/browser_tab_list",
                 false,
