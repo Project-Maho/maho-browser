@@ -23,10 +23,10 @@ impl ApprovalPolicy {
     pub fn from_legacy_pref(policy: &str) -> Self {
         match policy.trim().to_ascii_lowercase().as_str() {
             "prompt" | "ask" | "default" => Self::Prompt,
-            "allow" | "allow-all" | "yolo" => Self::AllowAll,
-            "allow-mcp" => Self::AllowMcp,
-            "deny-sensitive" => Self::DenySensitive,
-            "deny" | "deny-all" => Self::DenyAll,
+            "allow" | "allow-all" | "allow_all" | "yolo" => Self::AllowAll,
+            "allow-mcp" | "allow_mcp" => Self::AllowMcp,
+            "deny-sensitive" | "deny_sensitive" => Self::DenySensitive,
+            "deny" | "deny-all" | "deny_all" => Self::DenyAll,
             _ => Self::DenyAll,
         }
     }

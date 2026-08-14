@@ -3,6 +3,29 @@ use std::os::unix::net::UnixListener;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+fn catalog_discovery() -> serde_json::Value {
+    serde_json::json!({
+        "catalogDiagnostics": {
+            "catalogVersion": 1,
+            "schemaVersion": 1,
+            "resultVersion": 1,
+            "canonicalCount": 75,
+            "gates": {"mailBeta": true, "routines": true, "vault": true},
+            "surfaces": {"publicMcp": {"count": 1, "ids": ["page.content"]}},
+            "intentionalExclusions": ["control_plane_authority"]
+        },
+        "tools": [{
+            "capabilityId": "page.content",
+            "name": "browser_page_content",
+            "description": "Get redacted page content.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "schemaVersion": 1,
+            "resultVersion": 1,
+            "policy": {"mutability": "read_only"}
+        }]
+    })
+}
+
 fn run_cli(args: &[&str]) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_maho");
     let mut cmd = Command::new(bin);
@@ -79,6 +102,11 @@ impl MockBrowser {
                                 "capabilities": {"tools": {}}
                             }
                         }),
+                        "tools/list" => serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": catalog_discovery()
+                        }),
                         "tools/call" => {
                             if let Some(name) = req
                                 .get("params")
@@ -132,7 +160,7 @@ impl MockBrowser {
 fn test_tool_call_stateful_without_session() {
     // A session-binding tool is rejected pre-execution even with no browser
     // reachable (dead socket): the rejection does not depend on connectivity.
-    let output = run_cli(&["tool", "call", "browser_acquire_lease", "--args", "{}"]);
+    let output = run_cli(&["tool", "run", "browser_acquire_lease", "--args", "{}"]);
     if output.status.code() != Some(2) {
         println!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
         println!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
@@ -142,7 +170,7 @@ fn test_tool_call_stateful_without_session() {
 
 #[test]
 fn test_tool_call_stateless_without_session() {
-    let output = run_cli(&["tool", "call", "browser_ping", "--args", "{}"]);
+    let output = run_cli(&["tool", "run", "page.content", "--args", "{}"]);
     if output.status.code() != Some(1) {
         println!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
         println!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
@@ -159,11 +187,9 @@ fn test_tool_call_stateless_without_session() {
 #[test]
 fn stateful_oneshot_rejected_even_when_browser_reachable() {
     let mock = MockBrowser::spawn();
-    // Give the listener thread a beat to start accepting.
-    std::thread::sleep(std::time::Duration::from_millis(50));
 
     let output = run_cli_with_socket(
-        &["tool", "call", "browser_acquire_lease", "--args", "{}"],
+        &["tool", "run", "browser_acquire_lease", "--args", "{}"],
         mock.socket(),
     );
 
@@ -192,10 +218,9 @@ fn stateful_oneshot_rejected_even_when_browser_reachable() {
 #[test]
 fn stateless_oneshot_forwarded_when_browser_reachable() {
     let mock = MockBrowser::spawn();
-    std::thread::sleep(std::time::Duration::from_millis(50));
 
     let output = run_cli_with_socket(
-        &["tool", "call", "browser_ping", "--args", "{}"],
+        &["tool", "run", "page.content", "--args", "{}"],
         mock.socket(),
     );
 
@@ -207,13 +232,132 @@ fn stateless_oneshot_forwarded_when_browser_reachable() {
     let calls = mock.recorded_calls();
     assert_eq!(
         calls,
-        vec!["browser_ping".to_string()],
+        vec!["browser_page_content".to_string()],
         "stateless tool should be forwarded to the browser exactly once"
     );
 }
 
 /// The stateful set must be EXACTLY these 6 session-binding tool names, and the
 /// bogus `browser_refresh_lease` (never a real tool) must be absent.
+#[test]
+fn tool_list_json_uses_packaged_catalog_without_browser() {
+    let output = run_cli(&["--json", "tool", "list"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source"], "packaged_snapshot");
+    assert_eq!(value["runtimeAvailable"], false);
+    assert_eq!(value["catalogDiagnostics"]["catalogVersion"], 1);
+    assert_eq!(value["catalogDiagnostics"]["schemaVersion"], 1);
+    assert_eq!(value["catalogDiagnostics"]["resultVersion"], 1);
+    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 75);
+    let tools = value["tools"].as_array().unwrap();
+    let tool_ids = tools
+        .iter()
+        .map(|tool| tool["capabilityId"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(tool_ids.len(), 49);
+    assert_eq!(tool_ids[0], "tab.list");
+    assert_eq!(tool_ids[48], "input.key_press");
+
+    let diagnostic_ids = value["catalogDiagnostics"]["surfaces"]["publicMcp"]["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap())
+        .collect::<Vec<_>>();
+    let mut sorted_tool_ids = tool_ids.clone();
+    sorted_tool_ids.sort_unstable();
+    assert_eq!(diagnostic_ids, sorted_tool_ids);
+    assert_eq!(
+        value["catalogDiagnostics"]["surfaces"]["publicMcp"]["count"],
+        tool_ids.len()
+    );
+    assert!(tools.iter().all(|tool| tool.get("surface").is_none()));
+    assert!(value.to_string().find("maho/control").is_none());
+    let public_names = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for control_only in [
+        "browser_acquire_lease",
+        "mail_add_account",
+        "mail_delete_account",
+        "mail_start_oauth",
+        "mail_import_migration_archive",
+        "vault_request_credential_use",
+        "vault_fill_credential",
+        "vault_fill_totp",
+    ] {
+        assert!(!public_names.contains(control_only));
+    }
+}
+
+#[test]
+fn packaged_snapshot_tracks_every_canonical_count_and_id() {
+    let snapshot: serde_json::Value =
+        serde_json::from_str(include_str!("../src/tool_catalog_snapshot.json")).unwrap();
+    let canonical_source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../maho-chromium/browser/ai/maho_browser_capability_catalog.def"),
+    )
+    .unwrap();
+    let canonical_ids = canonical_source
+        .lines()
+        .filter(|line| {
+            line.starts_with("MAHO_BROWSER_CAPABILITY(")
+                || line.starts_with("MAHO_BROWSER_ACTION_CAPABILITY(")
+        })
+        .map(|line| {
+            line.split('"')
+                .nth(1)
+                .expect("canonical catalog row must contain an ID")
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(
+        snapshot["catalogDiagnostics"]["canonicalCount"],
+        canonical_ids.len()
+    );
+    let projected_ids = snapshot["catalogDiagnostics"]["surfaces"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|surface| surface["ids"].as_array().unwrap())
+        .map(|id| id.as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(projected_ids, canonical_ids);
+}
+
+#[test]
+fn tool_describe_resolves_packaged_canonical_id_offline() {
+    let output = run_cli(&["--json", "tool", "describe", "page.content"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source"], "packaged_snapshot");
+    assert_eq!(value["runtimeAvailable"], false);
+    assert_eq!(value["tool"]["capabilityId"], "page.content");
+}
+
+#[test]
+fn tool_run_json_returns_typed_offline_error() {
+    let output = run_cli(&["--json", "tool", "run", "page.content"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["status"], "runtime_unavailable");
+    assert_eq!(value["error"]["data"]["capabilityId"], "page.content");
+    assert_eq!(value["error"]["data"]["runtimeAvailable"], false);
+}
+
 #[test]
 fn stateful_list_is_exact_six() {
     let mut actual: Vec<&str> = maho_cli::STATEFUL_TOOLS.to_vec();

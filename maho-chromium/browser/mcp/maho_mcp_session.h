@@ -21,14 +21,16 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
+#include "maho/browser/ai/maho_browser_tool_registry.h"
+#include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
+#include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
-#include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "ui/accessibility/ax_node_id_forward.h"
-#include "base/memory/ref_counted.h"
 
 class GURL;
 
@@ -49,6 +51,7 @@ inline constexpr int kMahoMcpErrorNoEligibleActiveBrowser = -32006;
 // Todo 6: an input/navigation mutation was attempted without an active tab
 // lease held by this session. Uniform, non-revealing.
 inline constexpr int kMahoMcpErrorLeaseRequired = -32007;
+inline constexpr int kMahoMcpErrorApprovalDenied = -32008;
 
 inline constexpr char kMahoMcpMessageTabNotFound[] = "tab not found";
 inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
@@ -79,6 +82,14 @@ struct MahoMcpTargetResolution {
   MahoMcpTargetError error = MahoMcpTargetError::kNone;
 };
 
+enum class MahoMcpActivityPhase {
+  kReading,
+  kActing,
+  kCompleted,
+  kFailed,
+  kDisconnected,
+};
+
 // Trusted, browser/AX-derived classification metadata for one input field,
 // resolved from the accessibility tree — never from field-name strings the
 // model supplies in tool-call arguments. browser_type consults it to refuse
@@ -97,7 +108,8 @@ struct MahoMcpFieldMetadata {
   std::string accessible_name;
 };
 
-class MahoMcpNetworkCaptureState : public base::RefCountedThreadSafe<MahoMcpNetworkCaptureState> {
+class MahoMcpNetworkCaptureState
+    : public base::RefCountedThreadSafe<MahoMcpNetworkCaptureState> {
  public:
   MahoMcpNetworkCaptureState();
 
@@ -114,11 +126,22 @@ class MahoMcpNetworkCaptureState : public base::RefCountedThreadSafe<MahoMcpNetw
   ~MahoMcpNetworkCaptureState();
 };
 
+class MahoMcpControllerState;
+
 #if BUILDFLAG(IS_WIN)
 class MahoMcpSessionToken;
 #endif
 
 class MahoMcpBrowserDelegate;
+
+// Browser-validated identity class for a transport connection. Known Maho
+// labels are selected only when the authenticated peer executable matches.
+enum class MahoMcpControllerKind {
+  kMahoCli,
+  kMahoCliRepl,
+  kMahoBrowserMcp,
+  kThirdParty,
+};
 
 // Per-connection MCP session state machine.
 //
@@ -140,6 +163,7 @@ class MahoMcpSession {
   static void SetLeaseRegistryForBrowserActions(
       MahoMcpLeaseRegistry* lease_registry);
   static MahoMcpLeaseRegistry* GetLeaseRegistryForBrowserActions();
+  static void RevokeControllerSession(std::string_view session_id);
 
   // Returns true when |meta| identifies a credential-class field (password,
   // current-password, one-time-code/TOTP, or recovery) per trusted AX signals.
@@ -157,12 +181,16 @@ class MahoMcpSession {
   // against |session_token| during the initialize handshake. |lease_registry|
   // may be nullptr for testing; otherwise it must outlive this session.
   explicit MahoMcpSession(MahoMcpSessionToken* session_token,
-                          MahoMcpLeaseRegistry* lease_registry = nullptr);
+                          MahoMcpLeaseRegistry* lease_registry = nullptr,
+                          std::string peer_executable = std::string(),
+                          bool peer_is_trusted_maho = false);
 #else
   // |peer_uid| is the UID of the connected client. |lease_registry| may be
   // nullptr for testing; otherwise it must outlive this session.
   explicit MahoMcpSession(uid_t peer_uid,
-                          MahoMcpLeaseRegistry* lease_registry = nullptr);
+                          MahoMcpLeaseRegistry* lease_registry = nullptr,
+                          std::string peer_executable = std::string(),
+                          bool peer_is_trusted_maho = false);
 #endif
   ~MahoMcpSession();
 
@@ -189,6 +217,10 @@ class MahoMcpSession {
   // socket/pipe server can notify the lease registry when this connection
   // drops (OnSessionDropped), keeping disconnect semantics truthful.
   const std::string& session_id() const { return session_id_; }
+  const std::string& controller_display_label() const {
+    return controller_display_label_;
+  }
+  MahoMcpControllerKind controller_kind() const { return controller_kind_; }
 
   struct ConsoleMessage {
     ConsoleMessage();
@@ -243,8 +275,13 @@ class MahoMcpSession {
                         std::vector<std::string>& responses);
   void HandleActiveMethod(const McpJsonRpcMessage& msg,
                           std::vector<std::string>& responses);
+  void HandleControlList(const McpJsonRpcMessage& msg,
+                         std::vector<std::string>& responses);
+  void HandleControlCall(const McpJsonRpcMessage& msg,
+                         std::vector<std::string>& responses);
   void HandleToolCall(const McpJsonRpcMessage& msg,
-                      std::vector<std::string>& responses);
+                      std::vector<std::string>& responses,
+                      bool control_plane = false);
 
   bool IsHostBlocked(std::string_view host) const;
 
@@ -266,6 +303,11 @@ class MahoMcpSession {
 #endif
   raw_ptr<MahoMcpLeaseRegistry> lease_registry_;
   std::string session_id_;
+  scoped_refptr<MahoMcpControllerState> controller_state_;
+  std::string peer_executable_;
+  bool peer_is_trusted_maho_ = false;
+  MahoMcpControllerKind controller_kind_ = MahoMcpControllerKind::kThirdParty;
+  std::string controller_display_label_ = "External MCP";
   MahoMcpJsonRpc framer_;
 
   std::unique_ptr<MahoMcpCapabilityRegistry> capability_registry_;
@@ -273,6 +315,7 @@ class MahoMcpSession {
 
   // Per-session ref table for accessibility interactions.
   RefTable ref_to_ax_id_;
+  ResolvedMahoMcpTarget ref_table_target_;
 
   // Per-session network capture observer (Wave 4.4).
   std::unique_ptr<MahoMcpNetworkObserver> network_observer_;
@@ -295,19 +338,39 @@ class MahoMcpSession {
   // R-8: target resolved for the in-flight tool call. Capture binds a copy of
   // it and revalidates (generation + kMCP) before success serialization.
   ResolvedMahoMcpTarget last_resolved_target_;
+  uint64_t activity_revision_ = 0;
 
   DeferredResponseSender deferred_response_sender_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };
 
+struct MahoMcpFeatureGates {
+  bool mail_enabled = false;
+  bool routines_enabled = false;
+  bool vault_enabled = false;
+};
+
 class MahoMcpBrowserDelegate {
  public:
+  using ExportArtifactCallback =
+      base::OnceCallback<void(bool success, std::string error)>;
   virtual ~MahoMcpBrowserDelegate() = default;
+  virtual void PublishControlActivity(
+      const std::string& activity_id,
+      const std::string& controller_session_id,
+      const std::string& controller_label,
+      const ResolvedMahoMcpTarget& target,
+      MahoBrowserToolRegistry::Category category,
+      MahoBrowserToolRegistry::Sensitivity sensitivity,
+      MahoMcpActivityPhase phase,
+      uint64_t revision) {}
   virtual std::vector<MahoMcpSession::TabInfo> GetTabList() = 0;
-  virtual std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(int tab_id) = 0;
+  virtual std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(
+      int tab_id) = 0;
   virtual std::vector<MahoMcpSession::NavigationEvent> GetNavigationEvents(
-      int tab_id, int64_t since_ms) = 0;
+      int tab_id,
+      int64_t since_ms) = 0;
   virtual std::string GetPageText(int tab_id) = 0;
   virtual base::Value GetAccessibilitySnapshot(
       int tab_id,
@@ -337,11 +400,16 @@ class MahoMcpBrowserDelegate {
     std::string ref_id;
     std::string tag;
   };
-  virtual QuerySelectorResult QuerySelector(int tab_id, const std::string& selector) = 0;
+  virtual QuerySelectorResult QuerySelector(int tab_id,
+                                            const std::string& selector) = 0;
 
   virtual std::string GetElementText(int tab_id, const std::string& ref_id) = 0;
-  virtual std::string GetElementAttribute(int tab_id, const std::string& ref_id, const std::string& attribute) = 0;
-  virtual bool WaitForSelector(int tab_id, const std::string& selector, int timeout_ms) = 0;
+  virtual std::string GetElementAttribute(int tab_id,
+                                          const std::string& ref_id,
+                                          const std::string& attribute) = 0;
+  virtual bool WaitForSelector(int tab_id,
+                               const std::string& selector,
+                               int timeout_ms) = 0;
 
   struct SameOriginFetchResult {
     SameOriginFetchResult();
@@ -384,8 +452,11 @@ class MahoMcpBrowserDelegate {
     std::string url;
     std::string folder;
   };
-  virtual std::vector<BookmarkInfo> SearchBookmarks(const std::string& query) = 0;
-  virtual BookmarkInfo CreateBookmark(const std::string& title, const GURL& url, const std::string& folder) = 0;
+  virtual std::vector<BookmarkInfo> SearchBookmarks(
+      const std::string& query) = 0;
+  virtual BookmarkInfo CreateBookmark(const std::string& title,
+                                      const GURL& url,
+                                      const std::string& folder) = 0;
 
   struct HistoryEntry {
     std::string url;
@@ -407,11 +478,13 @@ class MahoMcpBrowserDelegate {
       base::OnceCallback<void(std::string)> callback) = 0;
 
   virtual bool Scroll(int tab_id,
-                       const std::string& direction,
-                       int pixels,
-                       std::optional<ui::AXNodeID> ax_id) = 0;
+                      const std::string& direction,
+                      int pixels,
+                      std::optional<ui::AXNodeID> ax_id) = 0;
   virtual bool Click(int tab_id, ui::AXNodeID ax_id) = 0;
-  virtual bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) = 0;
+  virtual bool Type(int tab_id,
+                    ui::AXNodeID ax_id,
+                    const std::string& text) = 0;
   virtual bool Select(int tab_id,
                       ui::AXNodeID ax_id,
                       const std::string& value) = 0;
@@ -443,29 +516,49 @@ class MahoMcpBrowserDelegate {
 
   struct StartNetworkCaptureResult {
     bool success = false;
+    bool target_valid = true;
     int tab_id = 0;
+  };
+  struct StopNetworkCaptureResult {
+    StopNetworkCaptureResult();
+    StopNetworkCaptureResult(const StopNetworkCaptureResult&) = delete;
+    StopNetworkCaptureResult& operator=(const StopNetworkCaptureResult&) =
+        delete;
+    StopNetworkCaptureResult(StopNetworkCaptureResult&&) noexcept;
+    StopNetworkCaptureResult& operator=(StopNetworkCaptureResult&&) noexcept;
+    ~StopNetworkCaptureResult();
+
+    bool target_valid = true;
+    std::optional<Redacted<base::DictValue>> har;
   };
   using StartNetworkCaptureCallback =
       base::OnceCallback<void(StartNetworkCaptureResult)>;
   using StopNetworkCaptureCallback =
-      base::OnceCallback<void(std::optional<Redacted<base::DictValue>>)>;
+      base::OnceCallback<void(StopNetworkCaptureResult)>;
 
-  virtual void StartNetworkCapture(
-      const std::string& capture_id,
-      int tab_id,
-      StartNetworkCaptureCallback callback) = 0;
-  virtual void StopNetworkCapture(
-      const std::string& capture_id,
-      StopNetworkCaptureCallback callback) = 0;
+  virtual void StartNetworkCapture(const std::string& capture_id,
+                                   int tab_id,
+                                   const ResolvedMahoMcpTarget& target,
+                                   StartNetworkCaptureCallback callback) = 0;
+  virtual void StopNetworkCapture(const std::string& capture_id,
+                                  const ResolvedMahoMcpTarget& target,
+                                  StopNetworkCaptureCallback callback) = 0;
   virtual void CancelNetworkCapture(const std::string& capture_id) = 0;
 
   // Routines (FIX-4-browser): bridge the SAME maho_core routines engine over
   // MCP. `ListRoutines` returns a JSON array of built-in + custom routines.
-  // `RunRoutine` runs by id asynchronously; the callback receives success plus
-  // the engine result JSON, or a clean error string on failure (including the
-  // Max-tier gate). Default impls keep these optional for test delegates.
+  // `RunRoutine` runs by id asynchronously. The error enum is the stable
+  // machine contract; `content_or_error` is presentation text or result JSON.
+  // Default impls keep these optional for test delegates.
+  enum class RoutineRunError {
+    kNone,
+    kTierLocked,
+    kUnavailable,
+    kExecutionFailed,
+  };
   using RunRoutineCallback =
-      base::OnceCallback<void(bool success, std::string content_or_error)>;
+      base::OnceCallback<void(RoutineRunError error,
+                              std::string content_or_error)>;
   virtual std::string ListRoutines();
   virtual void RunRoutine(const std::string& id, RunRoutineCallback callback);
 
@@ -527,6 +620,24 @@ class MahoMcpBrowserDelegate {
                                MailReadCallback callback);
   virtual void MailQueueEmail(const std::string& request_json,
                               MailReadCallback callback);
+  virtual void MailFlag(const std::string& request_json,
+                        MailReadCallback callback);
+
+  // Live Mail authorization inputs for both direct MCP and the desktop-agent
+  // executor. Production derives these from the active profile pref/service;
+  // tests supply deterministic table states. Approval is intentionally a
+  // separate typed operation and is never implied by global allow.
+  virtual ai::MailAuthorizationContext GetMailAuthorizationContext();
+  virtual bool ConfirmMailToolApproval(std::string_view tool_name,
+                                       std::string_view redacted_arguments);
+  virtual bool ConfirmBrowserActionApproval(
+      std::string_view tool_name,
+      const ResolvedMahoMcpTarget& target);
+  virtual MahoMcpFeatureGates GetFeatureGates();
+  virtual std::string ListArtifacts(std::string_view session_id);
+  virtual void ExportArtifact(std::string artifact_id,
+                              base::FilePath destination,
+                              ExportArtifactCallback callback);
 
   // R-8 non-revealing target resolution. |requested_tab_id| == 0 means the
   // caller omitted the id / passed 0 (active-tab request). Production

@@ -8,6 +8,7 @@
 
 #include "base/time/time.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -148,12 +149,20 @@ bool MahoMcpInputSynthesizer::Hover(content::WebContents* wc, ui::AXNodeID ax_id
 }
 
 // static
-bool MahoMcpInputSynthesizer::HoverAt(content::WebContents* wc, int x_css, int y_css) {
+bool MahoMcpInputSynthesizer::HoverAt(content::WebContents* wc,
+                                      int x_css,
+                                      int y_css,
+                                      bool sensitive) {
+  if (!wc) return false;
   content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
   if (!view) return false;
   content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
   if (!rwh) return false;
+  content::RenderFrameHost* primary = wc->GetPrimaryMainFrame();
+  if (!primary) return false;
 
+  const content::GlobalRenderFrameHostId primary_frame_id =
+      primary->GetGlobalId();
   gfx::Point widget_point(x_css, y_css);
   gfx::Point screen_point = widget_point + view->GetViewBounds().origin().OffsetFromOrigin();
 
@@ -165,6 +174,120 @@ bool MahoMcpInputSynthesizer::HoverAt(content::WebContents* wc, int x_css, int y
   mouse_event.SetPositionInScreen(screen_point.x(), screen_point.y());
   
   rwh->ForwardMouseEvent(mouse_event);
+  MahoActionMarkerService::ShowForRevalidatedTarget(
+      wc, {.viewport_point = gfx::PointF(x_css, y_css),
+           .kind = MahoActionMarkerService::Kind::kHover,
+           .sensitive = sensitive,
+           .primary_frame_id = primary_frame_id});
+  return true;
+}
+
+// static
+bool MahoMcpInputSynthesizer::ClickAt(
+    content::WebContents* wc,
+    int x_css,
+    int y_css,
+    const std::vector<std::string>& modifiers,
+    bool sensitive,
+    MahoActionMarkerService::Kind marker_kind) {
+  if (!wc) return false;
+  content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+  if (!view) return false;
+  content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
+  if (!rwh) return false;
+  content::RenderFrameHost* primary = wc->GetPrimaryMainFrame();
+  if (!primary) return false;
+
+  const content::GlobalRenderFrameHostId primary_frame_id =
+      primary->GetGlobalId();
+  const int base_modifiers = ModifierListToWebModifiers(modifiers);
+  gfx::Point widget_point(x_css, y_css);
+  gfx::Point screen_point =
+      widget_point + view->GetViewBounds().origin().OffsetFromOrigin();
+
+  auto build = [&](blink::WebInputEvent::Type type, int modifiers_mask,
+                   blink::WebMouseEvent::Button button, int click_count) {
+    blink::WebMouseEvent event(type, modifiers_mask, base::TimeTicks::Now());
+    event.button = button;
+    event.click_count = click_count;
+    event.SetPositionInWidget(widget_point.x(), widget_point.y());
+    event.SetPositionInScreen(screen_point.x(), screen_point.y());
+    return event;
+  };
+
+  // Move the pointer over the target first so hover/pointer state is correct,
+  // then a trusted press + release. Blink expands this into the full
+  // pointerdown -> mousedown -> pointerup -> mouseup -> click sequence.
+  rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseMove,
+                               base_modifiers,
+                               blink::WebMouseEvent::Button::kNoButton, 0));
+  rwh->ForwardMouseEvent(build(
+      blink::WebInputEvent::Type::kMouseDown,
+      base_modifiers | blink::WebInputEvent::kLeftButtonDown,
+      blink::WebMouseEvent::Button::kLeft, 1));
+  rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseUp,
+                               base_modifiers,
+                               blink::WebMouseEvent::Button::kLeft, 1));
+  MahoActionMarkerService::ShowForRevalidatedTarget(
+      wc, {.viewport_point = gfx::PointF(x_css, y_css),
+           .kind = marker_kind,
+           .sensitive = sensitive,
+           .primary_frame_id = primary_frame_id});
+  return true;
+}
+
+// static
+bool MahoMcpInputSynthesizer::TypeText(content::WebContents* wc,
+                                       const std::string& text) {
+  content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+  if (!view) return false;
+  content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
+  if (!rwh) return false;
+
+  for (char c : text) {
+    ui::KeyboardCode key_code = ui::VKEY_UNKNOWN;
+    const char upper = static_cast<char>(std::toupper(
+        static_cast<unsigned char>(c)));
+    if (upper >= 'A' && upper <= 'Z') {
+      key_code = static_cast<ui::KeyboardCode>(ui::VKEY_A + (upper - 'A'));
+    } else if (c >= '0' && c <= '9') {
+      key_code = static_cast<ui::KeyboardCode>(ui::VKEY_0 + (c - '0'));
+    } else if (c == ' ') {
+      key_code = ui::VKEY_SPACE;
+    }
+    const ui::DomCode dom_code = ui::UsLayoutKeyboardCodeToDomCode(key_code);
+    const int dom_key =
+        static_cast<int>(ui::DomKey::FromCharacter(static_cast<char16_t>(c)));
+
+    blink::WebKeyboardEvent key_down(blink::WebInputEvent::Type::kRawKeyDown,
+                                     blink::WebInputEvent::kNoModifiers,
+                                     base::TimeTicks::Now());
+    key_down.windows_key_code = key_code;
+    key_down.dom_code = static_cast<int>(dom_code);
+    key_down.dom_key = dom_key;
+    rwh->ForwardKeyboardEvent(
+        input::NativeWebKeyboardEvent(key_down, wc->GetNativeView()));
+
+    blink::WebKeyboardEvent key_char(blink::WebInputEvent::Type::kChar,
+                                     blink::WebInputEvent::kNoModifiers,
+                                     base::TimeTicks::Now());
+    key_char.windows_key_code = key_code;
+    key_char.dom_code = static_cast<int>(dom_code);
+    key_char.dom_key = dom_key;
+    key_char.text[0] = static_cast<char16_t>(c);
+    key_char.unmodified_text[0] = static_cast<char16_t>(c);
+    rwh->ForwardKeyboardEvent(
+        input::NativeWebKeyboardEvent(key_char, wc->GetNativeView()));
+
+    blink::WebKeyboardEvent key_up(blink::WebInputEvent::Type::kKeyUp,
+                                   blink::WebInputEvent::kNoModifiers,
+                                   base::TimeTicks::Now());
+    key_up.windows_key_code = key_code;
+    key_up.dom_code = static_cast<int>(dom_code);
+    key_up.dom_key = dom_key;
+    rwh->ForwardKeyboardEvent(
+        input::NativeWebKeyboardEvent(key_up, wc->GetNativeView()));
+  }
   return true;
 }
 

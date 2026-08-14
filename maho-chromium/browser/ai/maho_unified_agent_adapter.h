@@ -78,6 +78,7 @@ struct PermissionCallState {
   std::string approval_policy = "prompt";
   std::string sensitivity = "sensitive";
   bool page_derived_justification = false;
+  std::string consequence = "unknown";
 };
 
 struct BrowserToolCallState {
@@ -93,6 +94,26 @@ struct BrowserToolCallState {
   std::atomic<bool> cancelled{false};
   std::string result_json;
   std::string result_error;
+  std::string result_error_code;
+  bool result_error_retryable = false;
+};
+
+struct BrowserToolPreflightState {
+  BrowserToolPreflightState();
+  ~BrowserToolPreflightState();
+  BrowserToolPreflightState(const BrowserToolPreflightState&) = delete;
+  BrowserToolPreflightState& operator=(const BrowserToolPreflightState&) =
+      delete;
+
+  base::WaitableEvent done{base::WaitableEvent::ResetPolicy::AUTOMATIC,
+                           base::WaitableEvent::InitialState::NOT_SIGNALED};
+  std::atomic<bool> cancelled{false};
+  std::string result_json;
+  std::string executor_tool_name;
+  std::string error;
+  std::string error_code;
+  bool error_retryable = false;
+  bool requires_approval = false;
 };
 
 // Injectable table of the maho-agent C FFI entry points the adapter calls.
@@ -115,6 +136,11 @@ struct MahoAgentFfi {
       MahoAgentReleaseCallback on_session_release,
       void* session_release_user_data);
    void (*set_approval_policy)(MahoAgentSession* session, const char* policy);
+   void (*set_mail_authorization_state)(MahoAgentSession* session,
+                                        bool feature_enabled,
+                                        bool helper_ready,
+                                        bool helper_starting,
+                                        bool read_allowed);
    bool (*set_preferred_provider)(MahoAgentSession* session,
                                   const char* provider);
    bool (*send_message_leased)(MahoAgentSession* session,
@@ -156,7 +182,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   MahoUnifiedAgentAdapter& operator=(const MahoUnifiedAgentAdapter&) = delete;
 
   static void ClearActiveBYOKKeys(const std::string& provider);
+  static void NotifyMailReadConsentChanged(PrefService* prefs);
   static std::set<MahoUnifiedAgentAdapter*>& GetActiveAdapters();
+  bool IsMailReadAllowedForTesting() const { return mail_read_allowed_; }
 
   // MahoAiRuntimeAdapter:
   std::string GetAdapterName() const override;
@@ -271,6 +299,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   static MahoAgentPermissionDecision OnAgentPermission(void* user_data,
                                                         const char* tool_name,
                                                         const char* arguments);
+  static std::string ClassifyActionConsequenceForTesting(
+      const std::string& tool_name,
+      const std::string& arguments);
   static MahoAgentSecureKey OnAgentSecureStorage(void* user_data,
                                                   const char* provider);
   static void RecordSecureStorageOutcome(
@@ -338,7 +369,8 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
       uint64_t generation,
       std::string tool,
       std::shared_ptr<PermissionCallState> state,
-      bool page_derived_justification);
+      bool page_derived_justification,
+      std::string consequence);
   static base::OnceClosure CreateBrowserToolTask(
       base::WeakPtr<MahoUnifiedAgentAdapter> adapter,
       uint64_t generation,
@@ -346,11 +378,17 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
       std::string args_json,
       std::shared_ptr<BrowserToolCallState> state,
       bool browser_action_preapproved);
+  static base::OnceClosure CreateBrowserToolPreflightTask(
+      base::WeakPtr<MahoUnifiedAgentAdapter> adapter,
+      uint64_t generation,
+      std::string capability_id,
+      std::shared_ptr<BrowserToolPreflightState> state);
   base::OnceClosure CreatePermissionDecisionTaskForTesting(
       void* user_data,
       const std::string& tool,
       std::shared_ptr<PermissionCallState> state,
-      bool page_derived_justification = false);
+      bool page_derived_justification = false,
+      std::string consequence = "unknown");
   base::OnceClosure CreateBrowserToolTaskForTesting(
       void* user_data,
       const std::string& tool_name,
@@ -373,6 +411,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   SEQUENCE_CHECKER(sequence_checker_);
 
   raw_ptr<PrefService> prefs_;
+  bool mail_read_allowed_ = false;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
   // R-9: fail-closed kAI gate and the token-bound browser resolver. A denying
@@ -394,6 +433,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   std::shared_ptr<SessionFfiResources> session_ffi_resources_;
   std::unique_ptr<ActiveTurn> active_turn_;
   uint64_t next_generation_ = 0;
+  uint64_t next_activity_id_ = 0;
 
   // Tool executor with deterministic lifetime (C2). nullptr until a
   // Browser* is available (adapter may be constructed before Browser).
@@ -417,12 +457,14 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   // reads PrefService. Returns nullopt when a user dialog is required.
   std::optional<PromptDecision> EvaluatePermissionSync(
       const std::string& tool,
-      const std::string& extension_id);
+      const std::string& extension_id,
+      const std::string& consequence);
   void DecidePermissionOnUiThread(uint64_t generation,
                                   const std::string& tool,
                                   const std::string& extension_id,
                                   std::shared_ptr<PermissionCallState> state,
-                                  bool page_derived_justification = false);
+                                  bool page_derived_justification = false,
+                                  std::string consequence = "unknown");
   // Test-only: drives DecidePermissionOnUiThread synchronously (paired with
   // permission_prompt_override_for_testing_) and returns the resolved decision.
   MahoAgentPermissionDecision RunPermissionDialogForTest(

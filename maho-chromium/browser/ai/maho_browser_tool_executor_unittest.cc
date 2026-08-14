@@ -1,5 +1,6 @@
 #include "maho/browser/ai/maho_browser_tool_executor.h"
 
+#include <array>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -31,7 +32,25 @@ ApprovalDecision ApproveAction(const Authorization&) {
 
 class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
  public:
+  maho::ai::MailAuthorizationContext mail_authorization_context{
+      true, true, false, true, maho::ai::MailGlobalPolicy::kPrompt, 1};
+  int mail_approval_count = 0;
+  bool defer_mail_reads = false;
+  MailReadCallback pending_mail_read;
+
+  maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
+    return mail_authorization_context;
+  }
+
+  bool ConfirmMailToolApproval(std::string_view,
+                               std::string_view) override {
+    ++mail_approval_count;
+    return true;
+  }
+
   int active_tab_id = 7;
+  int64_t target_generation = 1;
+  bool advance_generation_on_approval = false;
   std::string active_url = "https://example.com/page";
   std::unordered_map<int, ui::AXNodeID> snapshot_refs;
   std::unordered_map<ui::AXNodeID, maho::MahoMcpFieldMetadata> field_metadata;
@@ -63,8 +82,14 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
     resolution.target.valid = true;
     resolution.target.tab_id = active_tab_id;
     resolution.target.browser_id = 1;
-    resolution.target.generation = 1;
+    resolution.target.generation = target_generation;
     return resolution;
+  }
+
+  bool RevalidateTarget(
+      const maho::ResolvedMahoMcpTarget& target) override {
+    return target.valid && target.tab_id == active_tab_id &&
+           target.generation == target_generation;
   }
 
   std::vector<maho::MahoMcpSession::TabInfo> GetTabList() override {
@@ -217,21 +242,33 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
 
   void StartNetworkCapture(const std::string& capture_id,
                            int tab_id,
+                           const maho::ResolvedMahoMcpTarget& target,
                            StartNetworkCaptureCallback callback) override {
     StartNetworkCaptureResult result;
     std::move(callback).Run(result);
   }
 
   void StopNetworkCapture(const std::string& capture_id,
+                          const maho::ResolvedMahoMcpTarget& target,
                           StopNetworkCaptureCallback callback) override {
-    std::move(callback).Run(std::nullopt);
+    std::move(callback).Run(StopNetworkCaptureResult{});
   }
 
   void CancelNetworkCapture(const std::string& capture_id) override {}
 
   void MailListAccounts(MailReadCallback callback) override {
     ++mail_list_accounts_count;
+    if (defer_mail_reads) {
+      pending_mail_read = std::move(callback);
+      return;
+    }
     std::move(callback).Run(true, R"([{"id":"account-1"}])");
+  }
+
+  void CompleteMailRead(bool ok = true,
+                        std::string result = R"([{"id":"account-1"}])") {
+    ASSERT_TRUE(pending_mail_read);
+    std::move(pending_mail_read).Run(ok, std::move(result));
   }
 
   int mail_send_count = 0;
@@ -310,6 +347,23 @@ class MahoBrowserToolExecutorTest : public testing::Test {
     return result;
   }
 
+  base::OnceClosure ExecuteDeferredMailRead(
+      MahoBrowserToolExecutor& executor,
+      base::DictValue* result,
+      bool* fired) {
+    delegate_.defer_mail_reads = true;
+    executor.Execute(
+        "mail_list_accounts", base::DictValue(),
+        base::BindLambdaForTesting(
+            [result, fired](base::DictValue tool_result) {
+              *fired = true;
+              *result = std::move(tool_result);
+            }));
+    EXPECT_FALSE(*fired);
+    EXPECT_TRUE(delegate_.pending_mail_read);
+    return base::BindLambdaForTesting([this] { delegate_.CompleteMailRead(); });
+  }
+
   void PopulateRef(MahoBrowserToolExecutor& executor,
                    int ref,
                    ui::AXNodeID ax_id) {
@@ -352,6 +406,27 @@ TEST_F(MahoBrowserToolExecutorTest, ApprovalDenialBlocksLeaseAndDispatch) {
   EXPECT_NE(result.FindString("error")->find("denied by test approval"),
             std::string::npos);
   EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
+  EXPECT_EQ(delegate_.click_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       TargetGenerationChangeBeforeDispatchFailsClosed) {
+  auto executor = MakeExecutor(base::BindRepeating(
+      [](FakeBrowserActionDelegate* delegate, const Authorization& metadata) {
+        ++delegate->target_generation;
+        return ApproveAction(metadata);
+      },
+      &delegate_));
+  PopulateRef(executor, 1, 101);
+
+  base::DictValue arguments;
+  arguments.Set("ref", 1);
+  base::DictValue result =
+      Execute(executor, "browser_click", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_NE(result.FindString("error")->find("target changed"),
+            std::string::npos);
   EXPECT_EQ(delegate_.click_count, 0);
 }
 
@@ -619,19 +694,187 @@ TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {
             std::string::npos);
 }
 
-TEST_F(MahoBrowserToolExecutorTest, MailListAccountsUsesSharedMailBroker) {
+TEST_F(MahoBrowserToolExecutorTest,
+       MailListAccountsFailsClosedWithoutBrowser) {
   auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  delegate_.mail_authorization_context.feature_enabled = false;
 
   base::DictValue result = Execute(executor, "mail_list_accounts");
 
-  EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  const base::ListValue* accounts = result.FindList("result");
-  ASSERT_TRUE(accounts);
-  ASSERT_EQ(accounts->size(), 1u);
-  const std::string* account_id = (*accounts)[0].GetDict().FindString("id");
-  ASSERT_TRUE(account_id);
-  EXPECT_EQ(*account_id, "account-1");
-  EXPECT_EQ(delegate_.mail_list_accounts_count, 1);
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  ASSERT_TRUE(result.FindString("error"));
+  EXPECT_EQ(*result.FindString("reason_code"), "mail_feature_disabled");
+  EXPECT_EQ(delegate_.mail_list_accounts_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, MailAuthorizationDecisionCoversExactToolTables) {
+  struct GateCase {
+    maho::ai::MailAuthorizationContext context;
+    std::string_view read_reason;
+    std::string_view write_reason;
+  };
+  const std::array gate_cases = {
+      GateCase{{false, false, false, false,
+                maho::ai::MailGlobalPolicy::kPrompt, 0},
+               "mail_feature_disabled", "mail_feature_disabled"},
+      GateCase{{true, false, true, false,
+                maho::ai::MailGlobalPolicy::kPrompt, 1},
+               "mail_helper_starting", "mail_helper_starting"},
+      GateCase{{true, false, false, false,
+                maho::ai::MailGlobalPolicy::kPrompt, 1},
+               "mail_helper_unavailable", "mail_helper_unavailable"},
+      GateCase{{true, true, false, false,
+                maho::ai::MailGlobalPolicy::kAllow, 1},
+               "mail_read_consent_required", "mail_typed_approval_required"},
+      GateCase{{true, true, false, true,
+                maho::ai::MailGlobalPolicy::kPrompt, 1},
+               "mail_read_allowed", "mail_typed_approval_required"},
+  };
+  for (const GateCase& gate_case : gate_cases) {
+    for (std::string_view tool : maho::ai::kMailReadTools) {
+      EXPECT_EQ(maho::ai::ClassifyMailTool(tool),
+                maho::ai::MailToolClass::kRead)
+          << tool;
+      EXPECT_EQ(maho::ai::AuthorizeMailTool(tool, gate_case.context).reason_code,
+                gate_case.read_reason)
+          << tool;
+    }
+    for (std::string_view tool : maho::ai::kMailWriteAccountTools) {
+      EXPECT_EQ(maho::ai::ClassifyMailTool(tool),
+                maho::ai::MailToolClass::kWriteAccount)
+          << tool;
+      EXPECT_EQ(maho::ai::AuthorizeMailTool(tool, gate_case.context).reason_code,
+                gate_case.write_reason)
+          << tool;
+    }
+  }
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       EveryDeniedMailToolStopsBeforeDelegateDispatch) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  const std::array denied_states = {
+      maho::ai::MailAuthorizationContext{
+          false, false, false, false, maho::ai::MailGlobalPolicy::kPrompt, 0},
+      maho::ai::MailAuthorizationContext{
+          true, false, true, false, maho::ai::MailGlobalPolicy::kPrompt, 1},
+      maho::ai::MailAuthorizationContext{
+          true, false, false, false, maho::ai::MailGlobalPolicy::kPrompt, 1},
+  };
+  for (const auto& state : denied_states) {
+    delegate_.mail_authorization_context = state;
+    for (std::string_view tool : maho::ai::kMailReadTools) {
+      base::DictValue result = Execute(executor, std::string(tool));
+      EXPECT_FALSE(result.FindBool("ok").value_or(true)) << tool;
+      EXPECT_EQ(delegate_.mail_list_accounts_count, 0) << tool;
+    }
+    for (std::string_view tool : maho::ai::kMailWriteAccountTools) {
+      base::DictValue result = Execute(executor, std::string(tool));
+      EXPECT_FALSE(result.FindBool("ok").value_or(true)) << tool;
+      EXPECT_EQ(delegate_.mail_send_count, 0) << tool;
+      EXPECT_EQ(delegate_.mail_save_draft_count, 0) << tool;
+      EXPECT_EQ(delegate_.mail_update_draft_count, 0) << tool;
+    }
+  }
+  delegate_.mail_authorization_context = {
+      true, true, false, false, maho::ai::MailGlobalPolicy::kAllow, 1};
+  for (std::string_view tool : maho::ai::kMailReadTools) {
+    base::DictValue result = Execute(executor, std::string(tool));
+    EXPECT_EQ(*result.FindString("reason_code"),
+              "mail_read_consent_required")
+        << tool;
+    EXPECT_EQ(delegate_.mail_list_accounts_count, 0) << tool;
+  }
+}
+
+TEST_F(MahoBrowserToolExecutorTest, DeniedMailArgumentsAreRedacted) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  delegate_.mail_authorization_context.read_allowed = false;
+  delegate_.mail_authorization_context.global_policy =
+      maho::ai::MailGlobalPolicy::kAllow;
+  base::DictValue arguments;
+  arguments.Set("email_id", "S3NTINEL-mail-secret");
+  base::DictValue result =
+      Execute(executor, "mail_get_email", std::move(arguments));
+  EXPECT_EQ(*result.FindString("reason_code"), "mail_read_consent_required");
+  EXPECT_EQ(*result.FindString("arguments"), "[REDACTED]");
+  EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       InFlightMailReadFailsClosedAfterConsentRevocation) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  bool fired = false;
+  base::DictValue result;
+  base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
+
+  delegate_.mail_authorization_context.read_allowed = false;
+  std::move(release).Run();
+
+  ASSERT_TRUE(fired);
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(*result.FindString("reason_code"),
+            "mail_read_consent_required");
+  EXPECT_EQ(result.DebugString().find("account-1"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       InFlightMailReadFailsClosedAfterFeatureDisable) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  bool fired = false;
+  base::DictValue result;
+  base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
+
+  delegate_.mail_authorization_context.feature_enabled = false;
+  std::move(release).Run();
+
+  ASSERT_TRUE(fired);
+  EXPECT_EQ(*result.FindString("reason_code"), "mail_feature_disabled");
+  EXPECT_EQ(result.DebugString().find("account-1"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       InFlightMailReadFailsClosedAfterHelperGenerationChange) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  bool fired = false;
+  base::DictValue result;
+  base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
+
+  ++delegate_.mail_authorization_context.helper_generation;
+  std::move(release).Run();
+
+  ASSERT_TRUE(fired);
+  EXPECT_EQ(*result.FindString("reason_code"),
+            "mail_helper_generation_changed");
+  EXPECT_EQ(result.DebugString().find("account-1"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       InFlightMailReadFailsClosedAfterGlobalPolicyRevocation) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  bool fired = false;
+  base::DictValue result;
+  base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
+
+  delegate_.mail_authorization_context.global_policy =
+      maho::ai::MailGlobalPolicy::kDeny;
+  std::move(release).Run();
+
+  ASSERT_TRUE(fired);
+  EXPECT_EQ(*result.FindString("reason_code"), "mail_global_policy_denied");
+  EXPECT_EQ(result.DebugString().find("account-1"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       MailCompletionRecheckInventoryIsReadOnly) {
+  for (std::string_view tool : maho::ai::kMailReadTools) {
+    EXPECT_TRUE(MahoBrowserToolExecutor::RequiresMailCompletionAuthorization(
+        tool)) << tool;
+  }
+  for (std::string_view tool : maho::ai::kMailWriteAccountTools) {
+    EXPECT_FALSE(MahoBrowserToolExecutor::RequiresMailCompletionAuthorization(
+        tool)) << tool;
+  }
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailSendRequiresApprovalAndDispatches) {

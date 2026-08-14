@@ -12,17 +12,23 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/mcp/maho_mcp_browser_action_handler.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -204,6 +210,16 @@ void MahoBrowserToolExecutor::Execute(const std::string& tool_name,
     return;
   }
 
+  // Apply the canonical Mail authorization boundary before filtering by the
+  // desktop-agent registry surface. Some Mail capabilities intentionally live
+  // on other surfaces, but they must still fail closed with the Mail denial
+  // reason rather than bypassing authorization as an unknown browser tool.
+  if (maho::ai::ClassifyMailTool(tool_name) !=
+      maho::ai::MailToolClass::kNotMail) {
+    ExecuteMailTool(tool_name, arguments, std::move(callback));
+    return;
+  }
+
   const MahoBrowserToolRegistry::ToolSchema* schema =
       MahoBrowserToolRegistry::FindToolSchema(tool_name);
   if (!schema) {
@@ -238,11 +254,6 @@ void MahoBrowserToolExecutor::Execute(const std::string& tool_name,
     ExecuteExtractStructuredPageContext(std::move(callback));
     return;
   }
-  if (base::StartsWith(tool_name, "mail_")) {
-    ExecuteMailTool(tool_name, arguments, std::move(callback));
-    return;
-  }
-
   std::move(callback).Run(
       BuildErrorResult(tool_name, "Browser tool is registered but not implemented."));
 }
@@ -304,7 +315,33 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
     return;
   }
 
-  if (IsMailWriteTool(tool_name)) {
+  const maho::ai::MailAuthorizationContext context =
+      GetMailAuthorizationContext();
+  const maho::ai::MailAuthorizationDecision authorization =
+      maho::ai::AuthorizeMailTool(tool_name, context);
+  if (authorization.action == maho::ai::MailAuthorizationAction::kDeny) {
+    base::DictValue denied =
+        BuildErrorResult(tool_name, std::string(authorization.reason_code));
+    denied.Set("reason_code", authorization.reason_code);
+    denied.Set("arguments", "[REDACTED]");
+    std::move(callback).Run(std::move(denied));
+    return;
+  }
+
+  if (authorization.action ==
+      maho::ai::MailAuthorizationAction::kRequireApproval) {
+    // The desktop-agent surface currently has typed schemas only for compose
+    // writes. Account mutations and other Mail writes remain direct-MCP tools
+    // and are rejected here rather than falling through to read dispatch.
+    if (tool_name != "mail_send" && tool_name != "mail_save_draft" &&
+        tool_name != "mail_update_draft") {
+      base::DictValue denied =
+          BuildErrorResult(tool_name, "mail_tool_not_available_on_agent");
+      denied.Set("reason_code", "mail_tool_not_available_on_agent");
+      denied.Set("arguments", "[REDACTED]");
+      std::move(callback).Run(std::move(denied));
+      return;
+    }
     std::string error;
     if (!ApproveMailWrite(tool_name, &error)) {
       std::move(callback).Run(BuildErrorResult(tool_name, error));
@@ -327,7 +364,8 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
     }
     auto write_completion = base::BindOnce(
         &MahoBrowserToolExecutor::OnMailToolResult,
-        weak_factory_.GetWeakPtr(), tool_name, std::move(callback));
+        weak_factory_.GetWeakPtr(), tool_name, std::nullopt,
+        std::move(callback));
     if (tool_name == "mail_send") {
       delegate->MailSendEmail(*request_json, /*already_authorized=*/true,
                               std::move(write_completion));
@@ -346,7 +384,8 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
 
   auto completion = base::BindOnce(
       &MahoBrowserToolExecutor::OnMailToolResult,
-      weak_factory_.GetWeakPtr(), tool_name, std::move(callback));
+      weak_factory_.GetWeakPtr(), tool_name, context.helper_generation,
+      std::move(callback));
   if (tool_name == "mail_list_accounts") {
     delegate->MailListAccounts(std::move(completion));
     return;
@@ -386,8 +425,44 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
 
 // static
 bool MahoBrowserToolExecutor::IsMailWriteTool(std::string_view tool_name) {
-  return tool_name == "mail_send" || tool_name == "mail_save_draft" ||
-         tool_name == "mail_update_draft";
+  return maho::ai::ClassifyMailTool(tool_name) ==
+         maho::ai::MailToolClass::kWriteAccount;
+}
+
+// static
+bool MahoBrowserToolExecutor::RequiresMailCompletionAuthorization(
+    std::string_view tool_name) {
+  return maho::ai::ClassifyMailTool(tool_name) ==
+         maho::ai::MailToolClass::kRead;
+}
+
+maho::ai::MailAuthorizationContext
+MahoBrowserToolExecutor::GetMailAuthorizationContext() const {
+  maho::ai::MailAuthorizationContext context;
+  if (!browser_) {
+    maho::MahoMcpBrowserDelegate* delegate = GetBrowserActionDelegate();
+    return delegate ? delegate->GetMailAuthorizationContext() : context;
+  }
+
+  PrefService* prefs = browser_->profile()->GetPrefs();
+  context.feature_enabled = maho::sidebar_prefs::IsMahoMailEnabled(prefs);
+  context.read_allowed = prefs->GetBoolean(maho::ai_prefs::kMailReadAllowed);
+  const std::string policy = prefs->GetString(maho::ai_prefs::kApprovalPolicy);
+  context.global_policy =
+      policy == "deny" ? maho::ai::MailGlobalPolicy::kDeny
+      : policy == "allow" ? maho::ai::MailGlobalPolicy::kAllow
+                          : maho::ai::MailGlobalPolicy::kPrompt;
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(browser_->profile());
+  if (service) {
+    const auto helper_state = service->lifecycle_state();
+    context.helper_ready =
+        helper_state == maho::MahoMailService::LifecycleState::kReady;
+    context.helper_starting =
+        helper_state == maho::MahoMailService::LifecycleState::kStarting;
+    context.helper_generation = service->generation();
+  }
+  return context;
 }
 
 bool MahoBrowserToolExecutor::ApproveMailWrite(const std::string& tool_name,
@@ -508,10 +583,32 @@ std::optional<std::string> MahoBrowserToolExecutor::BuildComposeRequestJson(
 
 void MahoBrowserToolExecutor::OnMailToolResult(
     const std::string& tool_name,
+    std::optional<uint64_t> helper_generation,
     ToolResultCallback callback,
     bool ok,
     std::string result_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (RequiresMailCompletionAuthorization(tool_name)) {
+    const maho::ai::MailAuthorizationContext context =
+        GetMailAuthorizationContext();
+    const maho::ai::MailAuthorizationDecision authorization =
+        maho::ai::AuthorizeMailTool(tool_name, context);
+    std::string_view reason_code = authorization.reason_code;
+    if (authorization.action == maho::ai::MailAuthorizationAction::kAllow &&
+        (!helper_generation.has_value() ||
+         *helper_generation != context.helper_generation)) {
+      reason_code = "mail_helper_generation_changed";
+    }
+    if (authorization.action != maho::ai::MailAuthorizationAction::kAllow ||
+        reason_code == "mail_helper_generation_changed") {
+      base::DictValue denied =
+          BuildErrorResult(tool_name, std::string(reason_code));
+      denied.Set("reason_code", std::string(reason_code));
+      denied.Set("arguments", "[REDACTED]");
+      std::move(callback).Run(std::move(denied));
+      return;
+    }
+  }
   if (!ok) {
     std::move(callback).Run(BuildErrorResult(
         tool_name, result_json.empty() ? "Mail broker request failed."
@@ -546,8 +643,28 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
   }
 
   std::string resolve_error;
-  std::optional<int> maybe_tab_id =
-      ResolveBrowserActionTabId(delegate, arguments, resolve_error);
+  const int requested_tab_id = arguments.FindInt("tab_id").value_or(0);
+  maho::MahoMcpTargetResolution target_resolution =
+      delegate->ResolveTabTarget(requested_tab_id);
+  std::optional<int> maybe_tab_id;
+  switch (target_resolution.error) {
+    case maho::MahoMcpTargetError::kNone:
+      if (target_resolution.target.valid) {
+        maybe_tab_id = target_resolution.target.tab_id;
+      } else {
+        resolve_error = "No eligible active tab";
+      }
+      break;
+    case maho::MahoMcpTargetError::kTabNotFound:
+      resolve_error = "Tab not found";
+      break;
+    case maho::MahoMcpTargetError::kNoEligibleActiveTab:
+      resolve_error = "No eligible active tab";
+      break;
+    case maho::MahoMcpTargetError::kNoEligibleActiveBrowser:
+      resolve_error = "No eligible active browser";
+      break;
+  }
   if (!maybe_tab_id.has_value()) {
     std::move(callback).Run(BuildBrowserActionErrorResult(
         std::string(contract.tool_name), kActionFailedError, resolve_error));
@@ -578,6 +695,29 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
 
   const std::string tool_name(contract.tool_name);
   const int tab_id = *maybe_tab_id;
+  if (contract.kind == maho::ai::BrowserActionKind::kAction &&
+      !delegate->RevalidateTarget(target_resolution.target)) {
+    std::move(callback).Run(BuildBrowserActionErrorResult(
+        tool_name, kActionDeniedError,
+        "Browser action target changed before dispatch."));
+    return;
+  }
+  const bool consumes_ref =
+      tool_name == "browser_click" || tool_name == "browser_type" ||
+      tool_name == "browser_select" ||
+      tool_name == "browser_screenshot_element" ||
+      tool_name == "browser_scroll" || tool_name == "browser_hover";
+  if (consumes_ref && arguments.FindInt("ref").has_value()) {
+    const std::optional<std::string> origin =
+        GetActiveTabOrigin(delegate, tab_id);
+    if (browser_action_refs_tab_id_ != tab_id || !origin.has_value() ||
+        browser_action_refs_origin_ != *origin) {
+      std::move(callback).Run(BuildBrowserActionErrorResult(
+          tool_name, kActionDeniedError,
+          "Accessibility snapshot target changed; capture a new snapshot."));
+      return;
+    }
+  }
 
   if (tool_name == "browser_navigate") {
     const std::string* url_str = arguments.FindString("url");
@@ -605,6 +745,9 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
           "Action failed: navigation could not be dispatched"));
       return;
     }
+    browser_action_refs_.clear();
+    browser_action_refs_tab_id_ = 0;
+    browser_action_refs_origin_.clear();
     base::DictValue result;
     result.Set("navigated", true);
     result.Set("url", nav_url.spec());
@@ -618,6 +761,9 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
 
   if (tool_name == "browser_accessibility_snapshot") {
     browser_action_refs_.clear();
+    browser_action_refs_tab_id_ = tab_id;
+    browser_action_refs_origin_ =
+        GetActiveTabOrigin(delegate, tab_id).value_or(std::string());
     base::Value snapshot =
         delegate->GetAccessibilitySnapshot(tab_id, &browser_action_refs_);
     auto redacted = maho::MahoMcpFirewall::Wrap(std::move(snapshot));

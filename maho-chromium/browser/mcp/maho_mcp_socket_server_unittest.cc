@@ -245,8 +245,10 @@ class FakeScreenshotDelegate : public MahoMcpBrowserDelegate {
   }
   void StartNetworkCapture(const std::string& capture_id,
                            int tab_id,
+                           const ResolvedMahoMcpTarget& target,
                            StartNetworkCaptureCallback callback) override {}
   void StopNetworkCapture(const std::string& capture_id,
+                          const ResolvedMahoMcpTarget& target,
                           StopNetworkCaptureCallback callback) override {}
   void CancelNetworkCapture(const std::string& capture_id) override {}
 

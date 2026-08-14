@@ -127,7 +127,23 @@ std::string PreserveExtension(const std::string &original_name,
   return requested.AddExtension(original.Extension()).AsUTF8Unsafe();
 }
 
-} // namespace
+}  // namespace
+
+MahoArtifact::MahoArtifact() = default;
+MahoArtifact::MahoArtifact(const MahoArtifact&) = default;
+MahoArtifact& MahoArtifact::operator=(const MahoArtifact&) = default;
+MahoArtifact::MahoArtifact(MahoArtifact&&) = default;
+MahoArtifact& MahoArtifact::operator=(MahoArtifact&&) = default;
+MahoArtifact::~MahoArtifact() = default;
+
+MahoArtifactRegistry::Capability::Capability() = default;
+MahoArtifactRegistry::Capability::Capability(const Capability&) = default;
+MahoArtifactRegistry::Capability& MahoArtifactRegistry::Capability::operator=(
+    const Capability&) = default;
+MahoArtifactRegistry::Capability::Capability(Capability&&) = default;
+MahoArtifactRegistry::Capability& MahoArtifactRegistry::Capability::operator=(
+    Capability&&) = default;
+MahoArtifactRegistry::Capability::~Capability() = default;
 
 void EnsureMahoArtifactRegistryFactoryBuilt() {
   MahoArtifactRegistryFactory::GetInstance();
@@ -219,13 +235,14 @@ base::expected<ArtifactId, std::string> MahoArtifactRegistry::RegisterArtifact(
     artifact_id = GenerateOpaqueToken(16);
   } while (artifacts_.contains(artifact_id));
 
-  MahoArtifact artifact{.artifact_id = artifact_id,
-                        .session_id = std::move(session_id),
-                        .display_name = std::move(display_name),
-                        .mime_type = std::move(mime_type),
-                        .size_bytes = size_bytes,
-                        .storage_rel_path = std::move(storage_rel_path),
-                        .created_at_ms = created_at_ms};
+  MahoArtifact artifact;
+  artifact.artifact_id = artifact_id;
+  artifact.session_id = std::move(session_id);
+  artifact.display_name = std::move(display_name);
+  artifact.mime_type = std::move(mime_type);
+  artifact.size_bytes = size_bytes;
+  artifact.storage_rel_path = std::move(storage_rel_path);
+  artifact.created_at_ms = created_at_ms;
   artifacts_.emplace(artifact_id, std::move(artifact));
   PruneToStorageLimit();
   if (!artifacts_.contains(artifact_id)) {
@@ -243,7 +260,7 @@ MahoArtifactRegistry::ListArtifacts(std::string_view session_id) {
     return result;
   }
   for (const auto &[id, artifact] : artifacts_) {
-    if (artifact.session_id == session_id) {
+    if (session_id.empty() || artifact.session_id == session_id) {
       result.push_back(artifact);
     }
   }
@@ -347,12 +364,12 @@ std::optional<std::string> MahoArtifactRegistry::IssueCapability(
   do {
     token = GenerateOpaqueToken(16);
   } while (capabilities_.contains(token));
-  capabilities_.emplace(
-      token,
-      Capability{.artifact_id = std::string(artifact_id),
-                 .purpose = std::string(purpose),
-                 .issuing_web_contents = issuing_web_contents->GetWeakPtr(),
-                 .expires_at = tick_clock_->NowTicks() + kCapabilityTtl});
+  Capability capability;
+  capability.artifact_id = artifact_id;
+  capability.purpose = purpose;
+  capability.issuing_web_contents = issuing_web_contents->GetWeakPtr();
+  capability.expires_at = tick_clock_->NowTicks() + kCapabilityTtl;
+  capabilities_.emplace(token, std::move(capability));
   return token;
 }
 

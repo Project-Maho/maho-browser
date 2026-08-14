@@ -1,0 +1,1800 @@
+{
+  "catalogDiagnostics": {
+    "catalogVersion": 1,
+    "catalogHash": "23250AC36966FCB786EA7D35DCCC51EC29A91B6F1F5AB16A3EA6DD243BF7B663",
+    "schemaVersion": 1,
+    "resultVersion": 1,
+    "canonicalCount": 75,
+    "gates": {
+      "mailBeta": true,
+      "routines": true,
+      "vault": true
+    },
+    "surfaces": {
+      "desktopAgent": {
+        "count": 27,
+        "ids": [
+          "input.click",
+          "input.hover",
+          "input.key_press",
+          "input.scroll",
+          "input.select",
+          "input.type",
+          "mail.accounts.list",
+          "mail.draft.save",
+          "mail.draft.update",
+          "mail.email.get",
+          "mail.emails.list",
+          "mail.emails.search",
+          "mail.folders.list",
+          "mail.send",
+          "mail.thread.list",
+          "navigation.navigate",
+          "navigation.wait",
+          "page.accessibility_snapshot",
+          "page.extract_structured_context",
+          "page.get_attribute",
+          "page.get_selected_text",
+          "page.get_text",
+          "page.query_selector",
+          "page.read_current",
+          "page.search",
+          "page.wait_for_selector",
+          "tab.get_active"
+        ]
+      },
+      "publicMcp": {
+        "count": 49,
+        "ids": [
+          "bookmarks.create",
+          "bookmarks.search",
+          "capture.network_get_har",
+          "capture.network_start",
+          "capture.network_stop",
+          "capture.screenshot_element",
+          "capture.screenshot_full",
+          "history.search",
+          "input.click",
+          "input.hover",
+          "input.key_press",
+          "input.scroll",
+          "input.select",
+          "input.type",
+          "mail.accounts.list",
+          "mail.draft.save",
+          "mail.draft.update",
+          "mail.email.get",
+          "mail.emails.list",
+          "mail.emails.search",
+          "mail.flag",
+          "mail.folders.list",
+          "mail.otp.extract",
+          "mail.queue",
+          "mail.send",
+          "mail.thread.list",
+          "navigation.navigate",
+          "navigation.wait",
+          "page.accessibility_snapshot",
+          "page.console_messages",
+          "page.content",
+          "page.context",
+          "page.get_attribute",
+          "page.get_text",
+          "page.query_selector",
+          "page.same_origin_fetch",
+          "page.search_mcp",
+          "page.set_viewport_size",
+          "page.text",
+          "page.wait_for_selector",
+          "policy.get_blocked_domains",
+          "policy.set_blocked_domains",
+          "routines.list",
+          "routines.run",
+          "tab.close",
+          "tab.get",
+          "tab.list",
+          "tab.new",
+          "tab.switch"
+        ]
+      },
+      "cliAgent": {
+        "count": 27,
+        "ids": [
+          "input.click",
+          "input.hover",
+          "input.key_press",
+          "input.scroll",
+          "input.select",
+          "input.type",
+          "mail.accounts.list",
+          "mail.draft.save",
+          "mail.draft.update",
+          "mail.email.get",
+          "mail.emails.list",
+          "mail.emails.search",
+          "mail.folders.list",
+          "mail.send",
+          "mail.thread.list",
+          "navigation.navigate",
+          "navigation.wait",
+          "page.accessibility_snapshot",
+          "page.extract_structured_context",
+          "page.get_attribute",
+          "page.get_selected_text",
+          "page.get_text",
+          "page.query_selector",
+          "page.read_current",
+          "page.search",
+          "page.wait_for_selector",
+          "tab.get_active"
+        ]
+      },
+      "cliGeneric": {
+        "count": 49,
+        "ids": [
+          "bookmarks.create",
+          "bookmarks.search",
+          "capture.network_get_har",
+          "capture.network_start",
+          "capture.network_stop",
+          "capture.screenshot_element",
+          "capture.screenshot_full",
+          "history.search",
+          "input.click",
+          "input.hover",
+          "input.key_press",
+          "input.scroll",
+          "input.select",
+          "input.type",
+          "mail.accounts.list",
+          "mail.draft.save",
+          "mail.draft.update",
+          "mail.email.get",
+          "mail.emails.list",
+          "mail.emails.search",
+          "mail.flag",
+          "mail.folders.list",
+          "mail.otp.extract",
+          "mail.queue",
+          "mail.send",
+          "mail.thread.list",
+          "navigation.navigate",
+          "navigation.wait",
+          "page.accessibility_snapshot",
+          "page.console_messages",
+          "page.content",
+          "page.context",
+          "page.get_attribute",
+          "page.get_text",
+          "page.query_selector",
+          "page.same_origin_fetch",
+          "page.search_mcp",
+          "page.set_viewport_size",
+          "page.text",
+          "page.wait_for_selector",
+          "policy.get_blocked_domains",
+          "policy.set_blocked_domains",
+          "routines.list",
+          "routines.run",
+          "tab.close",
+          "tab.get",
+          "tab.list",
+          "tab.new",
+          "tab.switch"
+        ]
+      },
+      "controlPlane": {
+        "count": 21,
+        "ids": [
+          "artifact.export",
+          "artifact.list",
+          "control.origin.grant",
+          "control.origin.list",
+          "control.origin.revoke",
+          "control.tab.adopt",
+          "control.tab.release",
+          "lease.acquire",
+          "lease.heartbeat",
+          "lease.release",
+          "mail.account.add",
+          "mail.account.delete",
+          "mail.account.reconnect",
+          "mail.archive.import",
+          "mail.connection.test",
+          "mail.oauth.complete",
+          "mail.oauth.start",
+          "vault.credential.fill",
+          "vault.credential.request_use",
+          "vault.credentials.list_for_page",
+          "vault.totp.fill"
+        ]
+      }
+    },
+    "intentionalExclusions": [
+      "control_plane_authority",
+      "local_agent_tools",
+      "secrets_and_raw_arguments"
+    ]
+  },
+  "tools": [
+    {
+      "name": "browser_tab_list",
+      "description": "List all open browser tabs.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "capabilityId": "tab.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "profile",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_tab_get",
+      "description": "Get details of a specific tab by ID.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id."
+          }
+        },
+        "required": [
+          "tab_id"
+        ]
+      },
+      "capabilityId": "tab.get",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_tab_close",
+      "description": "Close a browser tab by ID.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id."
+          }
+        },
+        "required": [
+          "tab_id"
+        ]
+      },
+      "capabilityId": "tab.close",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_tab_new",
+      "description": "Open a new browser tab.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL to open; defaults to about:blank."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "tab.new",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "browser",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_tab_switch",
+      "description": "Activate a specific tab by ID.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id."
+          }
+        },
+        "required": [
+          "tab_id"
+        ]
+      },
+      "capabilityId": "tab.switch",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_history_search",
+      "description": "Search browser history.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Text to search in history."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Maximum history results to return."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "history.search",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_bookmarks_search",
+      "description": "Search bookmarks.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Text to search in bookmarks."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "capabilityId": "bookmarks.search",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_bookmark_create",
+      "description": "Create a new bookmark.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Bookmark title."
+          },
+          "url": {
+            "type": "string",
+            "description": "Bookmark URL."
+          },
+          "folder": {
+            "type": "string",
+            "description": "Optional bookmark folder."
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ]
+      },
+      "capabilityId": "bookmarks.create",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_page_content",
+      "description": "Get full page content with redaction.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "page.content",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_page_text",
+      "description": "Get plain text of the page.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "page.text",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_search_in_page",
+      "description": "Search for text within the page.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "query": {
+            "type": "string",
+            "description": "Text to find in the page."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "capabilityId": "page.search_mcp",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_page_context",
+      "description": "Get structured page context.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "page.context",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_same_origin_fetch",
+      "description": "Fetch an HTTPS URL with the exact origin of the current tab.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "url": {
+            "type": "string",
+            "description": "Same-origin HTTPS URL."
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method: GET or POST."
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional request body."
+          },
+          "headers": {
+            "type": "object",
+            "description": "Optional string-valued headers.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "capabilityId": "page.same_origin_fetch",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_set_blocked_domains",
+      "description": "Set the session-scoped blocked-domain list.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "domains": {
+            "type": "array",
+            "description": "Domains or wildcard domains to block.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "domains"
+        ]
+      },
+      "capabilityId": "policy.set_blocked_domains",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "browser",
+        "requiredBoundary": "session",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_get_blocked_domains",
+      "description": "Get the session-scoped blocked-domain list.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "capabilityId": "policy.get_blocked_domains",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "session",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_routines_list",
+      "description": "List browser routines.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "capabilityId": "routines.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "routines",
+        "requiredBoundary": "profile",
+        "sensitivity": "low",
+        "featureGate": "routines",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_routines_run",
+      "description": "Run a browser routine by ID.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Routine id."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "capabilityId": "routines.run",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "routines",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "routines",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_list_accounts",
+      "description": "List mail accounts.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "capabilityId": "mail.accounts.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_list_folders",
+      "description": "List folders for a mail account.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Mail account id."
+          }
+        },
+        "required": [
+          "account_id"
+        ]
+      },
+      "capabilityId": "mail.folders.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_list_emails",
+      "description": "List emails in a folder.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Mail account id."
+          },
+          "folder_id": {
+            "type": "string",
+            "description": "Mail folder id."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum emails to return; default 50."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset; default 0."
+          }
+        },
+        "required": [
+          "account_id",
+          "folder_id"
+        ]
+      },
+      "capabilityId": "mail.emails.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_get_email",
+      "description": "Get a single email by ID.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email_id": {
+            "type": "string",
+            "description": "Email id."
+          }
+        },
+        "required": [
+          "email_id"
+        ]
+      },
+      "capabilityId": "mail.email.get",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_search_emails",
+      "description": "Search emails.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Mail search text."
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Optional mail account id."
+          },
+          "folder_id": {
+            "type": "string",
+            "description": "Optional mail folder id."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum results; default 50."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset; default 0."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "capabilityId": "mail.emails.search",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_list_thread",
+      "description": "List a mail thread.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Mail account id."
+          },
+          "message_id": {
+            "type": "string",
+            "description": "RFC message id for the thread."
+          }
+        },
+        "required": [
+          "account_id",
+          "message_id"
+        ]
+      },
+      "capabilityId": "mail.thread.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_extract_otp",
+      "description": "Request OTP extraction through the browser arbitration path.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Optional mail account id."
+          },
+          "folder_id": {
+            "type": "string",
+            "description": "Optional mail folder id."
+          },
+          "query": {
+            "type": "string",
+            "description": "Optional OTP search text."
+          },
+          "max_age_seconds": {
+            "type": "integer",
+            "description": "Maximum message age; default 300."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "mail.otp.extract",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "credential",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_send",
+      "description": "Send an email with explicit approval.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_json": {
+            "type": "string",
+            "description": "JSON request accepted by the mail broker."
+          }
+        },
+        "required": [
+          "request_json"
+        ]
+      },
+      "capabilityId": "mail.send",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_save_draft",
+      "description": "Save a mail draft with explicit approval.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_json": {
+            "type": "string",
+            "description": "JSON request accepted by the mail broker."
+          }
+        },
+        "required": [
+          "request_json"
+        ]
+      },
+      "capabilityId": "mail.draft.save",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_update_draft",
+      "description": "Update a mail draft with explicit approval.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "description": "Draft id to update."
+          },
+          "request_json": {
+            "type": "string",
+            "description": "JSON request accepted by the mail broker."
+          }
+        },
+        "required": [
+          "draft_id",
+          "request_json"
+        ]
+      },
+      "capabilityId": "mail.draft.update",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_queue_email",
+      "description": "Queue an email for later delivery.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_json": {
+            "type": "string",
+            "description": "JSON request accepted by the mail broker."
+          }
+        },
+        "required": [
+          "request_json"
+        ]
+      },
+      "capabilityId": "mail.queue",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "mail_flag",
+      "description": "Apply a Mail message flag mutation.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_json": {
+            "type": "string",
+            "description": "JSON request accepted by the mail broker."
+          }
+        },
+        "required": [
+          "request_json"
+        ]
+      },
+      "capabilityId": "mail.flag",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "mail",
+        "requiredBoundary": "profile",
+        "sensitivity": "sensitive",
+        "featureGate": "mail_beta",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_screenshot_full",
+      "description": "Capture a redacted full-page screenshot.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "capture.screenshot_full",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_screenshot_element",
+      "description": "Capture a redacted element screenshot.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Accessibility element ref."
+          }
+        },
+        "required": [
+          "ref"
+        ]
+      },
+      "capabilityId": "capture.screenshot_element",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_network_start_capture",
+      "description": "Start network capture for a tab.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "capture.network_start",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_network_stop_capture",
+      "description": "Stop network capture and return HAR data.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "capture.network_stop",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_network_get_har",
+      "description": "Get current HAR capture data.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "capture.network_get_har",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_console_messages",
+      "description": "Retrieve console messages.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum messages; default 100."
+          },
+          "since_timestamp_ms": {
+            "type": "integer",
+            "description": "Only messages after this Unix timestamp."
+          },
+          "level_filter": {
+            "type": "array",
+            "description": "Console levels to include.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "page.console_messages",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_set_viewport_size",
+      "description": "Set viewport size.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "width_px": {
+            "type": "integer",
+            "description": "Viewport width in pixels.",
+            "minimum": 100,
+            "maximum": 4096
+          },
+          "height_px": {
+            "type": "integer",
+            "description": "Viewport height in pixels.",
+            "minimum": 100,
+            "maximum": 4096
+          }
+        },
+        "required": [
+          "width_px",
+          "height_px"
+        ]
+      },
+      "capabilityId": "page.set_viewport_size",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_accessibility_snapshot",
+      "description": "Get an accessibility tree snapshot with ref labels.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "page.accessibility_snapshot",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "page_query_selector",
+      "description": "Query the page for a CSS selector.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector to query."
+          }
+        },
+        "required": [
+          "selector"
+        ]
+      },
+      "capabilityId": "page.query_selector",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "page_get_text",
+      "description": "Get text content by DOM ref.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref_id": {
+            "type": "string",
+            "description": "DOM ref id from page_query_selector."
+          }
+        },
+        "required": [
+          "ref_id"
+        ]
+      },
+      "capabilityId": "page.get_text",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "page_get_attribute",
+      "description": "Get an attribute by DOM ref.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref_id": {
+            "type": "string",
+            "description": "DOM ref id from page_query_selector."
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Attribute name to read."
+          }
+        },
+        "required": [
+          "ref_id",
+          "attribute"
+        ]
+      },
+      "capabilityId": "page.get_attribute",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "page_wait_for_selector",
+      "description": "Wait for a selector to appear.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector to wait for."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Timeout in milliseconds."
+          }
+        },
+        "required": [
+          "selector"
+        ]
+      },
+      "capabilityId": "page.wait_for_selector",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_wait_for_navigation",
+      "description": "Wait for navigation to complete or time out.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "since_timestamp_ms": {
+            "type": "integer",
+            "description": "Only navigation events after this Unix timestamp."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Timeout in milliseconds."
+          }
+        },
+        "required": []
+      },
+      "capabilityId": "navigation.wait",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "read_only",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "low",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_navigate",
+      "description": "Navigate a tab to a URL.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "url": {
+            "type": "string",
+            "description": "Destination URL."
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "capabilityId": "navigation.navigate",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_click",
+      "description": "Click an element by accessibility ref.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Accessibility ref from browser_accessibility_snapshot."
+          }
+        },
+        "required": [
+          "ref"
+        ]
+      },
+      "capabilityId": "input.click",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_type",
+      "description": "Type text into an element by accessibility ref.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Accessibility ref from browser_accessibility_snapshot."
+          },
+          "text": {
+            "type": "string",
+            "description": "Text to type. Never use for credentials."
+          },
+          "allow_credentials": {
+            "type": "boolean",
+            "description": "Allow generic typing into a credential field."
+          }
+        },
+        "required": [
+          "ref",
+          "text"
+        ]
+      },
+      "capabilityId": "input.type",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_select",
+      "description": "Select a value by accessibility ref.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Accessibility ref from browser_accessibility_snapshot."
+          },
+          "value": {
+            "type": "string",
+            "description": "Option value to select."
+          }
+        },
+        "required": [
+          "ref",
+          "value"
+        ]
+      },
+      "capabilityId": "input.select",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_scroll",
+      "description": "Scroll the viewport or an element.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "direction": {
+            "type": "string",
+            "description": "Scroll direction: up, down, left, or right."
+          },
+          "pixels": {
+            "type": "integer",
+            "description": "Pixels to scroll; default 300."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Optional accessibility ref to scroll an element."
+          }
+        },
+        "required": [
+          "direction"
+        ]
+      },
+      "capabilityId": "input.scroll",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_hover",
+      "description": "Hover over an element by accessibility ref.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Accessibility ref from browser_accessibility_snapshot."
+          }
+        },
+        "required": [
+          "ref"
+        ]
+      },
+      "capabilityId": "input.hover",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_key_press",
+      "description": "Press a keyboard key in a tab.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "type": "integer",
+            "description": "Browser tab id. Omit or pass 0 for the active tab."
+          },
+          "key": {
+            "type": "string",
+            "description": "Keyboard key, e.g. Enter or ArrowDown."
+          },
+          "modifiers": {
+            "type": "array",
+            "description": "Optional modifiers: shift, ctrl, alt, meta.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "capabilityId": "input.key_press",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": false,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    }
+  ]
+}

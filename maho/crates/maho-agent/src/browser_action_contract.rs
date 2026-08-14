@@ -40,6 +40,7 @@ pub enum EmptyAllowlistPolicy {
 pub struct BrowserActionContract<'a> {
     pub tool_name: &'a str,
     pub kind: BrowserToolKind,
+    pub changes_authority: bool,
     pub sensitivity: BrowserToolSensitivity,
     pub approval: ApprovalRequirement,
     pub lease: LeaseRequirement,
@@ -97,16 +98,17 @@ fn parse_contract_line(
         return Err(ContractParseError::InvalidLine { line: line_number });
     };
     let fields: Vec<&str> = body.split(',').map(str::trim).collect();
-    if fields.len() != 8 {
+    if fields.len() != 9 {
         return Err(ContractParseError::InvalidLine { line: line_number });
     }
     let tool_name = parse_tool_name(fields[1], line_number)?;
     let kind = parse_kind(fields[2], line_number)?;
-    let sensitivity = parse_sensitivity(fields[3], line_number)?;
-    let approval = parse_approval(fields[4], line_number)?;
-    let lease = parse_lease(fields[5], line_number)?;
-    let domain_policy = parse_domain_policy(fields[6], line_number)?;
-    let empty_allowlist_policy = parse_empty_allowlist(fields[7], line_number)?;
+    let changes_authority = parse_changes_authority(fields[3], line_number)?;
+    let sensitivity = parse_sensitivity(fields[4], line_number)?;
+    let approval = parse_approval(fields[5], line_number)?;
+    let lease = parse_lease(fields[6], line_number)?;
+    let domain_policy = parse_domain_policy(fields[7], line_number)?;
+    let empty_allowlist_policy = parse_empty_allowlist(fields[8], line_number)?;
 
     if lease == LeaseRequirement::Required && sensitivity != BrowserToolSensitivity::Sensitive {
         return Err(ContractParseError::LeaseRequiredToolMustBeSensitive {
@@ -125,12 +127,21 @@ fn parse_contract_line(
     Ok(BrowserActionContract {
         tool_name,
         kind,
+        changes_authority,
         sensitivity,
         approval,
         lease,
         domain_policy,
         empty_allowlist_policy,
     })
+}
+
+fn parse_changes_authority(token: &str, line: usize) -> Result<bool, ContractParseError> {
+    match token {
+        "Yes" => Ok(true),
+        "No" => Ok(false),
+        _ => Err(invalid_token("changes_authority", token, line)),
+    }
 }
 
 fn parse_tool_name(token: &str, line: usize) -> Result<&str, ContractParseError> {
@@ -275,7 +286,7 @@ mod tests {
     #[test]
     fn action_contract_rejects_unsafe_empty_allowlist() {
         let err = parse_contract_def(
-            r#"MAHO_BROWSER_ACTION_CONTRACT(browser_click, "browser_click", Action, Sensitive, Required, Required, ActiveTabOrigin, AllowAll)"#,
+            r#"MAHO_BROWSER_ACTION_CONTRACT(browser_click, "browser_click", Action, No, Sensitive, Required, Required, ActiveTabOrigin, AllowAll)"#,
         )
         .expect_err("AllowAll must fail closed");
         assert!(matches!(
@@ -287,7 +298,7 @@ mod tests {
     #[test]
     fn action_contract_rejects_lease_required_non_sensitive_tool() {
         let err = parse_contract_def(
-            r#"MAHO_BROWSER_ACTION_CONTRACT(browser_click, "browser_click", Action, Low, NotRequired, Required, ActiveTabOrigin, FailClosed)"#,
+            r#"MAHO_BROWSER_ACTION_CONTRACT(browser_click, "browser_click", Action, No, Low, NotRequired, Required, ActiveTabOrigin, FailClosed)"#,
         )
         .expect_err("lease-required tools must be sensitive");
         assert!(matches!(

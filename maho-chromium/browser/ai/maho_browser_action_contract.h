@@ -41,6 +41,7 @@ enum class BrowserActionEmptyAllowlistPolicy {
 struct BrowserActionContract {
   std::string_view tool_name;
   BrowserActionKind kind;
+  bool changes_authority;
   BrowserActionSensitivity sensitivity;
   BrowserActionApproval approval;
   BrowserActionLease lease;
@@ -131,9 +132,9 @@ inline constexpr std::string_view BrowserActionEmptyAllowlistPolicyName(
 }
 
 inline constexpr std::size_t kMahoBrowserActionContractCount = 0
-#define MAHO_BROWSER_ACTION_CONTRACT(id, tool_name, kind, sensitivity, approval, \
-                                     lease, domain_policy, empty_allowlist)     \
-  +1
+#define MAHO_BROWSER_ACTION_CONTRACT(id, tool_name, kind, authority_change,    \
+                                     sensitivity, approval, lease,             \
+                                     domain_policy, empty_allowlist) +1
 #include "maho/browser/ai/maho_browser_action_contract.def"
 #undef MAHO_BROWSER_ACTION_CONTRACT
     ;
@@ -141,10 +142,12 @@ inline constexpr std::size_t kMahoBrowserActionContractCount = 0
 inline constexpr std::array<BrowserActionContract,
                             kMahoBrowserActionContractCount>
     kMahoBrowserActionContracts = {{
-#define MAHO_BROWSER_ACTION_CONTRACT(id, tool_name, kind, sensitivity, approval, \
-                                     lease, domain_policy, empty_allowlist)     \
+#define MAHO_BROWSER_ACTION_CONTRACT(id, tool_name, kind, authority_change,    \
+                                     sensitivity, approval, lease,             \
+                                     domain_policy, empty_allowlist)            \
   {tool_name,                                                                 \
    BrowserActionKind::k##kind,                                                \
+   std::string_view(#authority_change) == "Yes",                              \
    BrowserActionSensitivity::k##sensitivity,                                  \
    BrowserActionApproval::k##approval,                                        \
    BrowserActionLease::k##lease,                                              \

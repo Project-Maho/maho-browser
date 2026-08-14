@@ -36,6 +36,13 @@ void EnsureMahoArtifactRegistryFactoryBuilt();
 using ArtifactId = std::string;
 
 struct MahoArtifact {
+  MahoArtifact();
+  MahoArtifact(const MahoArtifact&);
+  MahoArtifact& operator=(const MahoArtifact&);
+  MahoArtifact(MahoArtifact&&);
+  MahoArtifact& operator=(MahoArtifact&&);
+  ~MahoArtifact();
+
   ArtifactId artifact_id;
   std::string session_id;
   std::string display_name;
@@ -112,6 +119,13 @@ public:
 
 private:
   struct Capability {
+    Capability();
+    Capability(const Capability&);
+    Capability& operator=(const Capability&);
+    Capability(Capability&&);
+    Capability& operator=(Capability&&);
+    ~Capability();
+
     ArtifactId artifact_id;
     std::string purpose;
     base::WeakPtr<content::WebContents> issuing_web_contents;

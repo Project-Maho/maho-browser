@@ -10,7 +10,11 @@ enum ToolResponse {
     /// `content[0].text` field (the CLI parses it as JSON when possible).
     Ok { text: String },
     /// A JSON-RPC error response (e.g. the browser's tier-lock signal).
-    Err { code: i32, message: String },
+    Err {
+        code: i32,
+        message: String,
+        data: Option<serde_json::Value>,
+    },
 }
 /// A minimal, REACHABLE mock of the browser MCP UDS server.
 ///
@@ -78,10 +82,18 @@ impl MockBrowser {
                                         "content": [{"type": "text", "text": text}]
                                     }
                                 }),
-                                Some(ToolResponse::Err { code, message }) => serde_json::json!({
+                                Some(ToolResponse::Err {
+                                    code,
+                                    message,
+                                    data,
+                                }) => serde_json::json!({
                                     "jsonrpc": "2.0",
                                     "id": id,
-                                    "error": {"code": code, "message": message}
+                                    "error": {
+                                        "code": code,
+                                        "message": message,
+                                        "data": data
+                                    }
                                 }),
                                 None => serde_json::json!({
                                     "jsonrpc": "2.0",
@@ -194,21 +206,20 @@ fn cli_routine_list_json_from_browser() {
     assert!(stdout.contains("morning_briefing"));
 }
 
-/// Tier-lock clean error, routed through the browser: running a Max-locked
-/// routine surfaces the browser's structured tier-lock JSON-RPC error as a
-/// clean, actionable CLI error with exit code 2 — never a panic or raw failure.
+/// Tier-lock classification is carried by structured JSON-RPC data. Human
+/// wording is presentation only and may change without changing CLI behavior.
 #[test]
-fn cli_routine_run_tier_locked_clean_error() {
+fn cli_routine_run_tier_lock_ignores_message_wording() {
     let mut responses = HashMap::new();
     responses.insert(
         "browser_routines_run".to_string(),
         ToolResponse::Err {
             code: -32000,
-            message: "Routines are available on Max tier only".to_string(),
+            message: "This wording deliberately contains no subscription tier name".to_string(),
+            data: Some(serde_json::json!({"status": "routine_tier_locked"})),
         },
     );
     let mock = MockBrowser::spawn(responses);
-    std::thread::sleep(std::time::Duration::from_millis(50));
 
     let output = run_cli_with_socket(&["routine", "run", "morning_briefing"], mock.socket());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -239,6 +250,7 @@ fn cli_routine_run_not_found_clean_error() {
         ToolResponse::Err {
             code: -32001,
             message: "No routine found with id: ghost_routine_1234".to_string(),
+            data: None,
         },
     );
     let mock = MockBrowser::spawn(responses);

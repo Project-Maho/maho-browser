@@ -21,8 +21,8 @@ use tokio::task::JoinHandle;
 
 use crate::error::{McpBridgeError, Result};
 use crate::protocol::{
-    ClientInfo, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse,
+    ClientInfo, ControllerKind, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, SessionInfo,
 };
 
 #[cfg(unix)]
@@ -47,17 +47,28 @@ pub struct BrowserClient {
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
     next_id: AtomicI64,
     timeout: Duration,
+    controller_kind: ControllerKind,
+    session_info: Mutex<Option<SessionInfo>>,
 }
 
 impl BrowserClient {
     /// Connect to the browser's MCP socket, perform the `initialize` handshake,
     /// and return a ready-to-use client.
     pub async fn connect(path: &Path) -> Result<Self> {
-        Self::connect_with_timeout(path, DEFAULT_TIMEOUT).await
+        Self::connect_as(path, DEFAULT_TIMEOUT, ControllerKind::ThirdParty).await
     }
 
-    /// Connect with a custom per-request timeout.
+    /// Connect with a custom per-request timeout as an arbitrary MCP host.
     pub async fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
+        Self::connect_as(path, timeout, ControllerKind::ThirdParty).await
+    }
+
+    /// Connect with a closed controller classification hint.
+    pub async fn connect_as(
+        path: &Path,
+        timeout: Duration,
+        controller_kind: ControllerKind,
+    ) -> Result<Self> {
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
@@ -70,6 +81,8 @@ impl BrowserClient {
             pending,
             next_id: AtomicI64::new(1),
             timeout,
+            controller_kind,
+            session_info: Mutex::new(None),
         };
 
         client.perform_handshake().await?;
@@ -138,6 +151,8 @@ where
                 Err(_) => break,
             }
         }
+
+        pending.lock().await.clear();
     })
 }
 
@@ -147,9 +162,10 @@ impl BrowserClient {
         let init_params = InitializeParams {
             protocol_version: "2025-03-26".to_string(),
             client_info: ClientInfo {
-                name: "maho-browser-mcp".to_string(),
+                name: self.controller_kind.client_name().to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
+            controller_kind: self.controller_kind,
             auth_token,
         };
         let result_value = self
@@ -163,6 +179,7 @@ impl BrowserClient {
                 got: init_result.server_info.name,
             });
         }
+        *self.session_info.lock().await = Some(init_result.session_info);
         Ok(())
     }
 
@@ -170,19 +187,17 @@ impl BrowserClient {
         let (new_writer, new_read_task) =
             Self::open_stream(&self.path, Arc::clone(&self.pending)).await?;
 
-        {
-            let mut old_writer = self.writer.lock().await;
-            *old_writer = new_writer;
-        }
-        {
-            let mut old_task = self.read_task.lock().await;
-            old_task.abort();
-            *old_task = new_read_task;
-        }
+        let old_task = {
+            let mut read_task = self.read_task.lock().await;
+            std::mem::replace(&mut *read_task, new_read_task)
+        };
+        old_task.abort();
+        let _ = old_task.await;
+        self.pending.lock().await.clear();
 
         {
-            let mut pending = self.pending.lock().await;
-            pending.clear();
+            let mut writer = self.writer.lock().await;
+            *writer = new_writer;
         }
 
         self.perform_handshake().await?;
@@ -199,10 +214,14 @@ impl BrowserClient {
             map.insert(id, tx);
         }
 
-        self.write_message(&req).await?;
+        if let Err(err) = self.write_message(&req).await {
+            self.pending.lock().await.remove(&id);
+            return Err(err);
+        }
 
-        let resp = tokio::time::timeout(self.timeout, rx)
-            .await
+        let response = tokio::time::timeout(self.timeout, rx).await;
+        self.pending.lock().await.remove(&id);
+        let resp = response
             .map_err(|_| McpBridgeError::Timeout(self.timeout))?
             .map_err(|_| McpBridgeError::HandlerClosed)?;
 
@@ -215,6 +234,11 @@ impl BrowserClient {
         }
 
         Ok(resp.result.unwrap_or(Value::Null))
+    }
+
+    /// Return the browser-owned identity for the current transport session.
+    pub async fn session_info(&self) -> Option<SessionInfo> {
+        self.session_info.lock().await.clone()
     }
 
     /// Send a JSON-RPC request and await the correlated response.
@@ -244,10 +268,11 @@ impl BrowserClient {
     }
 
     /// Convenience wrapper that packages `name` and `arguments` into the
-    /// browser server's `tools/call` envelope. Prefer this over the raw
-    /// `call()` when invoking a tool by name.
+    /// browser server's `tools/call` envelope. Tool calls are never replayed:
+    /// discovery metadata may be stale or unavailable, and replaying a
+    /// mutation after an ambiguous disconnect can duplicate browser effects.
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
-        self.call(
+        self.call_without_reconnect(
             "tools/call",
             serde_json::json!({ "name": name, "arguments": arguments }),
         )
@@ -271,8 +296,10 @@ impl BrowserClient {
     /// Gracefully shut down the client connection.
     pub async fn shutdown(self) -> Result<()> {
         let mut writer = self.writer.into_inner();
-        writer.shutdown().await?;
-        Ok(())
+        let shutdown_result = writer.shutdown().await.map_err(McpBridgeError::Io);
+        self.pending.lock().await.clear();
+        self.read_task.into_inner().abort();
+        shutdown_result
     }
 
     /// Load the DPAPI session token on Windows, base64-encode it.
@@ -311,8 +338,10 @@ fn should_retry_after_reconnect(err: &McpBridgeError) -> bool {
             io_err.kind(),
             std::io::ErrorKind::BrokenPipe
                 | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
                 | std::io::ErrorKind::UnexpectedEof
                 | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::WriteZero
         ),
         McpBridgeError::HandlerClosed => true,
         _ => false,
@@ -323,9 +352,13 @@ fn should_retry_after_reconnect(err: &McpBridgeError) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
     use std::time::Duration;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, ReadBuf};
     use tokio::net::UnixListener;
+    use tokio::sync::oneshot;
 
     /// Helper: create a temp socket and UnixListener.
     async fn make_listener() -> (tempfile::TempDir, std::path::PathBuf, UnixListener) {
@@ -386,13 +419,14 @@ mod tests {
         server_handle.await.unwrap();
     }
 
-    /// SC4: client.rs timeout — 50ms timeout on non-responsive server.
+    /// SC4: client.rs timeout — timed-out requests are removed from correlation state.
     #[tokio::test]
-    async fn timeout_on_non_responsive_server() {
+    async fn timeout_on_non_responsive_server_cleans_pending_request() {
         let (_dir, sock_path, listener) = make_listener().await;
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
 
-        // Fake browser: responds to initialize but never responds to next call.
-        tokio::spawn(async move {
+        let server_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let (reader, mut writer) = stream.into_split();
             let mut reader = BufReader::new(reader);
@@ -414,20 +448,265 @@ mod tests {
             buf.push(b'\n');
             writer.write_all(&buf).await.unwrap();
 
-            // Read next request but never respond — just hold connection open.
             line.clear();
-            let _ = reader.read_line(&mut line).await;
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            reader.read_line(&mut line).await.unwrap();
+            request_seen_tx.send(()).unwrap();
+            let _ = release_rx.await;
         });
 
         let client = BrowserClient::connect_with_timeout(&sock_path, Duration::from_millis(50))
             .await
             .unwrap();
-        let err = client.call("slow_method", json!({})).await.unwrap_err();
+        let call = client.call("slow_method", json!({}));
+        let (err, ()) = tokio::join!(async { call.await.unwrap_err() }, async {
+            request_seen_rx.await.unwrap()
+        });
         assert!(
             matches!(err, McpBridgeError::Timeout(_)),
             "expected Timeout, got: {err:?}"
         );
+        assert!(client.pending.lock().await.is_empty());
+
+        release_tx.send(()).unwrap();
+        server_handle.await.unwrap();
+    }
+
+    struct FailingReader;
+
+    impl AsyncRead for FailingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "injected read failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn read_failure_drains_pending_requests() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = oneshot::channel();
+        pending.lock().await.insert(7, tx);
+
+        spawn_read_loop(FailingReader, Arc::clone(&pending))
+            .await
+            .unwrap();
+
+        assert!(pending.lock().await.is_empty());
+        assert!(rx.await.is_err(), "pending receiver must be closed");
+    }
+
+    #[tokio::test]
+    async fn eof_reconnects_and_retries_without_waiting_for_request_timeout() {
+        let (_dir, sock_path, listener) = make_listener().await;
+
+        let server_handle = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = first.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": init["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }
+            });
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            drop(reader);
+            drop(writer);
+
+            let (second, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = second.into_split();
+            let mut reader = BufReader::new(reader);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": init["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }
+            });
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let retry: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": retry["id"],
+                "result": {"reconnected": true}
+            });
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+        });
+
+        let client = BrowserClient::connect_with_timeout(&sock_path, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(
+            client.call("retry_me", json!({})).await.unwrap(),
+            json!({"reconnected": true})
+        );
+        assert!(client.pending.lock().await.is_empty());
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_call_is_not_replayed_after_disconnect() {
+        let (_dir, sock_path, listener) = make_listener().await;
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": init["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }
+            });
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            drop(reader);
+            drop(writer);
+
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err()
+            );
+        });
+
+        let client = BrowserClient::connect_with_timeout(&sock_path, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let err = client
+            .call_tool("browser_navigate", json!({"url":"https://example.com"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpBridgeError::HandlerClosed));
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_failure_cleans_pending_request() {
+        let (_dir, sock_path, listener) = make_listener().await;
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": init["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }
+            });
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+            reader.read_line(&mut line).await.unwrap();
+        });
+
+        let client = BrowserClient::connect(&sock_path).await.unwrap();
+        client.writer.lock().await.shutdown().await.unwrap();
+        let err = client
+            .call_without_reconnect("cannot_write", json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpBridgeError::Io(_)));
+        assert!(client.pending.lock().await.is_empty());
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_pending_requests() {
+        let (_dir, sock_path, listener) = make_listener().await;
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": init["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }
+            });
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+            assert_eq!(reader.read_line(&mut line).await.unwrap(), 0);
+        });
+
+        let client = BrowserClient::connect(&sock_path).await.unwrap();
+        let pending = Arc::clone(&client.pending);
+        let (tx, rx) = oneshot::channel();
+        pending.lock().await.insert(99, tx);
+
+        client.shutdown().await.unwrap();
+
+        assert!(pending.lock().await.is_empty());
+        assert!(rx.await.is_err(), "shutdown must close pending receiver");
+        server_handle.await.unwrap();
+    }
+
+    #[test]
+    fn reconnectable_transport_errors_are_classified() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::WriteZero,
+        ] {
+            let err = McpBridgeError::Io(io::Error::from(kind));
+            assert!(should_retry_after_reconnect(&err), "{kind:?}");
+        }
+        assert!(should_retry_after_reconnect(&McpBridgeError::HandlerClosed));
+        assert!(!should_retry_after_reconnect(&McpBridgeError::Io(
+            io::Error::from(io::ErrorKind::PermissionDenied)
+        )));
     }
 
     /// SC5: client.rs error response — -32601 → Rpc { code: -32601, .. }.

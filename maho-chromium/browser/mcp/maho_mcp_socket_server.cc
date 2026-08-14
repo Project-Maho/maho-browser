@@ -9,6 +9,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#if BUILDFLAG(IS_APPLE)
+#include <bsm/libbsm.h>
+#endif
+
 #include <string>
 #include <utility>
 
@@ -17,13 +21,20 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/process/process_handle.h"
+#if BUILDFLAG(IS_APPLE)
+#include "base/mac/code_signature.h"
+#endif
 #include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "net/base/io_buffer.h"
-#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/base/net_errors.h"
+#include "net/base/sockaddr_storage.h"
+#include "net/socket/socket_posix.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
+#include "net/socket/unix_domain_client_socket_posix.h"
 #include "net/socket/unix_domain_server_socket_posix.h"
 
 namespace maho {
@@ -33,6 +44,38 @@ namespace {
 constexpr char kSocketFilename[] = "maho.sock";
 constexpr int kBacklog = 5;
 constexpr int kReadBufferSize = 4096;
+
+#if BUILDFLAG(IS_APPLE)
+bool IsTrustedMahoPeer(int descriptor,
+                       const base::FilePath& peer_executable) {
+  audit_token_t audit_token = {};
+  socklen_t token_size = sizeof(audit_token);
+  if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, &audit_token,
+                 &token_size) != 0 ||
+      token_size != sizeof(audit_token)) {
+    return false;
+  }
+
+  const base::FilePath browser_executable =
+      base::GetProcessExecutablePath(base::GetCurrentProcessHandle());
+  const base::FilePath expected_helpers =
+      browser_executable.DirName().DirName().AppendASCII("Helpers");
+  if (peer_executable.DirName() != expected_helpers) {
+    return false;
+  }
+
+  const std::string name = peer_executable.BaseName().AsUTF8Unsafe();
+  if (name != "maho" && name != "maho-browser-mcp") {
+    return false;
+  }
+
+  auto requirement = base::mac::RequirementFromString(
+      R"(anchor apple generic and certificate leaf[subject.OU] = "5DUM8WPB4C" and (identifier "maho" or identifier "maho-browser-mcp"))");
+  return requirement &&
+         base::mac::ProcessIsSignedAndFulfillsRequirement(
+             audit_token, requirement.get()) == errSecSuccess;
+}
+#endif
 
 // Compute the platform-appropriate socket path.
 base::FilePath ComputeSocketPath(const base::FilePath& user_data_dir) {
@@ -148,11 +191,49 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
     return;
   }
 
-  // Create a new session for this connection.
-  // Note: peer UID was already checked by AuthenticateClient callback,
-  // but we pass it to the session for double-checking during handshake.
-  auto session = std::make_unique<MahoMcpSession>(getuid(),
-                                                  lease_registry_.get());
+  // Re-read peer credentials from the accepted descriptor. The auth callback
+  // already enforced same-UID; this second read supplies the authenticated PID
+  // for display classification without changing the authorization decision.
+  auto* unix_socket =
+      static_cast<net::UnixDomainClientSocket*>(accepted_socket_.get());
+  const net::SocketDescriptor descriptor = unix_socket->ReleaseConnectedSocket();
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  net::UnixDomainServerSocket::Credentials credentials = {};
+  const bool have_credentials =
+      net::UnixDomainServerSocket::GetPeerCredentials(descriptor, &credentials);
+#endif
+  auto adopted_socket = std::make_unique<net::SocketPosix>();
+  net::SockaddrStorage peer_address;
+  DCHECK_EQ(adopted_socket->AdoptConnectedSocket(descriptor, peer_address),
+            net::OK);
+  accepted_socket_ =
+      std::make_unique<net::UnixDomainClientSocket>(std::move(adopted_socket));
+
+  std::string peer_executable;
+  bool peer_is_trusted_maho = false;
+#if BUILDFLAG(IS_APPLE)
+  pid_t peer_pid = -1;
+  socklen_t pid_size = sizeof(peer_pid);
+  if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &peer_pid, &pid_size) ==
+      0) {
+    peer_executable =
+        base::GetProcessExecutablePath(peer_pid).AsUTF8Unsafe();
+    peer_is_trusted_maho = IsTrustedMahoPeer(
+        descriptor, base::FilePath::FromUTF8Unsafe(peer_executable));
+  }
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  if (have_credentials) {
+    peer_executable = base::GetProcessExecutablePath(credentials.process_id)
+                          .AsUTF8Unsafe();
+    peer_is_trusted_maho = true;
+  }
+#endif
+
+  // Preserve the session's same-UID defense exactly; executable identity is
+  // additional display classification only.
+  auto session = std::make_unique<MahoMcpSession>(
+      getuid(), lease_registry_.get(), std::move(peer_executable),
+      peer_is_trusted_maho);
 
   ActiveConnection conn;
   conn.socket = std::move(accepted_socket_);

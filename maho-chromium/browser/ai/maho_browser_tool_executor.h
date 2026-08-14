@@ -15,6 +15,7 @@
 #include "base/sequence_checker.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
+#include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 
 class Browser;
@@ -85,11 +86,12 @@ class MahoBrowserToolExecutor {
   static base::DictValue BuildErrorResult(const std::string& tool_name,
                                             const std::string& error);
 
-  // True for the mutating mail tools (mail_send / mail_save_draft /
-  // mail_update_draft). Shared with the agent adapter so the pre-dispatch
-  // approval prompt and the executor-side enforcement agree on which mail
-  // tools require user approval.
+  // True for every sensitive Mail write/account mutation in the canonical
+  // Mail authorization table.
   static bool IsMailWriteTool(std::string_view tool_name);
+  // True only for Mail reads whose asynchronous result must be re-authorized
+  // immediately before it is returned to the Agent.
+  static bool RequiresMailCompletionAuthorization(std::string_view tool_name);
 
  private:
   void ExecuteReadCurrentPage(ToolResultCallback callback);
@@ -111,7 +113,9 @@ class MahoBrowserToolExecutor {
   static std::optional<std::string> BuildComposeRequestJson(
       const base::DictValue& arguments,
       std::string* error);
+  maho::ai::MailAuthorizationContext GetMailAuthorizationContext() const;
   void OnMailToolResult(const std::string& tool_name,
+                        std::optional<uint64_t> helper_generation,
                         ToolResultCallback callback,
                         bool ok,
                         std::string result_json);
@@ -225,6 +229,8 @@ class MahoBrowserToolExecutor {
       browser_action_lease_registry_for_testing_;
   std::string browser_action_lease_holder_id_;
   std::unordered_map<int, ui::AXNodeID> browser_action_refs_;
+  int browser_action_refs_tab_id_ = 0;
+  std::string browser_action_refs_origin_;
   std::unordered_map<int, int> browser_action_scroll_positions_;
   std::unordered_map<std::string, BrowserActionFallbackProgress>
       browser_action_fallback_progress_;

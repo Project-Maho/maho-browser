@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use maho_browser_mcp::client::BrowserClient;
+use maho_browser_mcp::error::McpBridgeError;
 use maho_browser_mcp::paths::default_socket_path;
+use maho_browser_mcp::protocol::ControllerKind;
 use serde_json::Value;
 
 /// Default timeout for MCP tool calls from the CLI.
@@ -119,12 +121,24 @@ impl CliBrowserToolBridge {
 /// Returns a connected, initialized `BrowserClient` or an error with a
 /// user-friendly message.
 pub async fn connect(override_path: Option<&str>) -> Result<BrowserClient> {
+    connect_as(override_path, ControllerKind::MahoCli).await
+}
+
+/// Connect as the persistent interactive CLI controller.
+pub async fn connect_repl(override_path: Option<&str>) -> Result<BrowserClient> {
+    connect_as(override_path, ControllerKind::MahoCliRepl).await
+}
+
+async fn connect_as(
+    override_path: Option<&str>,
+    controller_kind: ControllerKind,
+) -> Result<BrowserClient> {
     let path = match override_path {
         Some(p) => PathBuf::from(p),
         None => default_socket_path(),
     };
 
-    BrowserClient::connect_with_timeout(&path, CLI_TIMEOUT)
+    BrowserClient::connect_as(&path, CLI_TIMEOUT, controller_kind)
         .await
         .map_err(|e| {
             // Provide a helpful message for the most common error case.
@@ -148,10 +162,7 @@ pub async fn connect(override_path: Option<&str>) -> Result<BrowserClient> {
 /// `no eligible active tab` by opening a tab, but only if it can still read
 /// that text. Wrapping the error in a generic "tools/call X failed" destroyed
 /// the signal and left the agent retrying navigation forever.
-fn describe_tool_call_failure(
-    tool: &str,
-    error: maho_browser_mcp::error::McpBridgeError,
-) -> anyhow::Error {
+fn describe_tool_call_failure(tool: &str, error: McpBridgeError) -> anyhow::Error {
     match &error {
         maho_browser_mcp::error::McpBridgeError::Io(io_err) if is_io_transport_loss(io_err) => {
             anyhow::anyhow!(
@@ -196,6 +207,42 @@ pub async fn send_tool_call(client: &BrowserClient, tool: &str, args: Value) -> 
     send_tool_call_with(client, tool, args, true).await
 }
 
+/// Stable failure classes for the Routine MCP boundary.
+#[derive(Debug, thiserror::Error)]
+pub enum RoutineCallError {
+    #[error("{message}")]
+    TierLocked { message: String },
+    #[error("{0}")]
+    Other(#[source] McpBridgeError),
+}
+
+/// Run a Routine while preserving the browser's machine-readable failure class.
+pub async fn send_routine_run(
+    client: &BrowserClient,
+    id: &str,
+) -> std::result::Result<Value, RoutineCallError> {
+    let result = client
+        .call(
+            "tools/call",
+            serde_json::json!({
+                "name": "browser_routines_run",
+                "arguments": {"id": id},
+            }),
+        )
+        .await
+        .map_err(|error| match error {
+            McpBridgeError::Rpc {
+                message,
+                data: Some(ref data),
+                ..
+            } if data.get("status").and_then(Value::as_str) == Some("routine_tier_locked") => {
+                RoutineCallError::TierLocked { message }
+            }
+            other => RoutineCallError::Other(other),
+        })?;
+    Ok(project_cli_result(result))
+}
+
 /// Send one stateful agent tool call without transparently reconnecting.
 /// A new connection loses the browser-side allowlist and lease, and replaying a
 /// mutation after an ambiguous transport failure can duplicate its effect.
@@ -225,24 +272,51 @@ async fn send_tool_call_with(
     }
     .map_err(|error| describe_tool_call_failure(tool, error))?;
 
-    // MCP tools/call returns { content: [{type: "text", text: "..."}] }
-    // We parse the text field as JSON for structured results.
-    if let Some(content) = result.get("content") {
-        if let Some(arr) = content.as_array() {
-            if let Some(first) = arr.first() {
-                if let Some(text) = first.get("text").and_then(|t| t.as_str()) {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(text) {
-                        return Ok(parsed);
-                    }
-                    // Return as raw string value if not valid JSON
-                    return Ok(Value::String(text.to_string()));
-                }
-            }
-        }
-    }
+    Ok(project_cli_result(result))
+}
 
-    // Fallback: return the raw result
-    Ok(result)
+/// Preserve the browser result while promoting optional receipt metadata into
+/// the CLI's machine JSON. Old browsers and hosts without `_meta.mahoReceipt`
+/// retain the exact pre-receipt payload shape.
+pub fn project_cli_result(result: Value) -> Value {
+    let receipt = result
+        .get("_meta")
+        .and_then(|meta| meta.get("mahoReceipt"))
+        .cloned();
+    let payload = result
+        .get("structuredContent")
+        .cloned()
+        .or_else(|| {
+            result
+                .get("content")
+                .and_then(Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|first| first.get("text"))
+                .and_then(Value::as_str)
+                .map(|text| {
+                    serde_json::from_str::<Value>(text)
+                        .unwrap_or_else(|_| Value::String(text.to_string()))
+                })
+        })
+        .unwrap_or(result);
+
+    if let Some(receipt) = receipt {
+        return serde_json::json!({
+            "result": payload,
+            "receipt": receipt,
+        });
+    }
+    if let Ok(execution) =
+        serde_json::from_value::<maho_types::tool::BrowserToolExecution>(payload.clone())
+    {
+        let output = serde_json::from_str(&execution.output_json)
+            .unwrap_or_else(|_| Value::String(execution.output_json));
+        return serde_json::json!({
+            "result": output,
+            "receipt": execution.receipt.project(),
+        });
+    }
+    payload
 }
 
 /// Parse a human duration string like "7d", "24h", "30m", "60s" into seconds.
@@ -295,6 +369,54 @@ pub fn extract_domain(url: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cli_projection_promotes_receipt_for_json_and_preserves_legacy_results() {
+        let receipt = serde_json::json!({
+            "schemaVersion": 1,
+            "resultVersion": 1,
+            "receiptId": "receipt-stable-1",
+            "capabilityId": "browser.page.read",
+            "controller": {"id": null, "name": "maho-cli", "type": "automation", "plane": "mcp"},
+            "target": {"tabId": 7, "origin": "https://example.test"},
+            "category": "observe",
+            "sensitivity": "low",
+            "approval": "not_requested",
+            "outcome": {"status": "succeeded", "code": null},
+            "timestamps": {"startedAt": 10.0, "completedAt": 11.0}
+        });
+        let projected = project_cli_result(serde_json::json!({
+            "content": [{"type": "text", "text": "{\"ok\":true}"}],
+            "structuredContent": {"ok": true},
+            "isError": false,
+            "_meta": {"mahoReceipt": receipt.clone()}
+        }));
+        assert_eq!(projected["result"], serde_json::json!({"ok": true}));
+        assert_eq!(projected["receipt"], receipt);
+
+        let direct_browser = project_cli_result(serde_json::json!({
+            "content": [{"type": "text", "text": serde_json::json!({
+                "outputJson": "{\"ok\":true}",
+                "receipt": {
+                    "capabilityId": "browser.page.read",
+                    "executionId": "receipt-stable-1",
+                    "metadata": {
+                        "controller": {"name": "maho-cli", "type": "automation", "plane": "mcp"},
+                        "state": "completed",
+                        "password": "must-not-leak"
+                    }
+                }
+            }).to_string()}]
+        }));
+        assert_eq!(direct_browser["result"], serde_json::json!({"ok": true}));
+        assert_eq!(direct_browser["receipt"]["outcome"]["status"], "succeeded");
+        assert!(!direct_browser.to_string().contains("must-not-leak"));
+
+        let legacy = project_cli_result(serde_json::json!({
+            "content": [{"type": "text", "text": "{\"tabs\":[]}"}]
+        }));
+        assert_eq!(legacy, serde_json::json!({"tabs": []}));
+    }
+
     #[test]
     fn tool_call_failure_preserves_browser_reason() {
         let error = describe_tool_call_failure(

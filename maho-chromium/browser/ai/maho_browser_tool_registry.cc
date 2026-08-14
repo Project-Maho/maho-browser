@@ -2,9 +2,15 @@
 
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 
+#include <algorithm>
+#include <initializer_list>
+#include <set>
 #include <utility>
 
+#include "base/check.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/no_destructor.h"
+#include "crypto/sha2.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 
 namespace {
@@ -87,6 +93,39 @@ base::DictValue BuildObjectSchema(base::DictValue properties,
   return schema;
 }
 
+base::DictValue
+BuildObjectSchema(base::DictValue properties,
+                  std::initializer_list<std::string_view> required_names) {
+  base::ListValue required;
+  for (std::string_view name : required_names) {
+    required.Append(name);
+  }
+  return BuildObjectSchema(std::move(properties), std::move(required));
+}
+
+base::DictValue BuildIntegerSchema(std::string description, int minimum,
+                                   int maximum) {
+  base::DictValue schema = BuildIntegerSchema(std::move(description));
+  schema.Set("minimum", minimum);
+  schema.Set("maximum", maximum);
+  return schema;
+}
+
+base::DictValue BuildStringMapSchema(std::string description) {
+  base::DictValue schema;
+  schema.Set("type", "object");
+  schema.Set("description", std::move(description));
+  base::DictValue values;
+  values.Set("type", "string");
+  schema.Set("additionalProperties", std::move(values));
+  return schema;
+}
+
+base::DictValue MissingCatalogInputSchema(std::string_view tool_name) {
+  CHECK(tool_name.empty());
+  return BuildNoArgSchema();
+}
+
 base::DictValue BuildMailAccountSchema() {
   base::DictValue properties;
   properties.Set("account_id", BuildStringSchema("Mail account id."));
@@ -99,10 +138,9 @@ base::DictValue BuildMailListEmailsSchema() {
   base::DictValue properties;
   properties.Set("account_id", BuildStringSchema("Mail account id."));
   properties.Set("folder_id", BuildStringSchema("Mail folder id."));
-  properties.Set("limit", BuildIntegerSchema(
-                              "Maximum emails to return; default 50."));
-  properties.Set("offset",
-                 BuildIntegerSchema("Pagination offset; default 0."));
+  properties.Set("limit",
+                 BuildIntegerSchema("Maximum emails to return; default 50."));
+  properties.Set("offset", BuildIntegerSchema("Pagination offset; default 0."));
   base::ListValue required;
   required.Append("account_id");
   required.Append("folder_id");
@@ -119,8 +157,9 @@ base::DictValue BuildMailIdSchema(std::string key, std::string description) {
 
 base::DictValue BuildMailSearchSchema() {
   base::DictValue properties;
-  properties.Set("query_json", BuildStringSchema(
-      "JSON search query accepted by the Mail search broker."));
+  properties.Set("query_json",
+                 BuildStringSchema(
+                     "JSON search query accepted by the Mail search broker."));
   base::ListValue required;
   required.Append("query_json");
   return BuildObjectSchema(std::move(properties), std::move(required));
@@ -148,8 +187,8 @@ base::DictValue BuildStringArraySchema(std::string description) {
 base::DictValue BuildMailAttachmentsSchema() {
   base::DictValue item_properties;
   item_properties.Set("filename", BuildStringSchema("Attachment file name."));
-  item_properties.Set("mime_type",
-                      BuildStringSchema("Attachment MIME type, e.g. image/png."));
+  item_properties.Set(
+      "mime_type", BuildStringSchema("Attachment MIME type, e.g. image/png."));
   item_properties.Set("data_base64",
                       BuildStringSchema("Attachment bytes, base64-encoded."));
   base::ListValue item_required;
@@ -167,7 +206,7 @@ base::DictValue BuildMailAttachmentsSchema() {
   return schema;
 }
 
-void AddComposeBodyProperties(base::DictValue& properties) {
+void AddComposeBodyProperties(base::DictValue &properties) {
   properties.Set("cc", BuildStringArraySchema("CC recipients."));
   properties.Set("bcc", BuildStringArraySchema("BCC recipients."));
   properties.Set("body_text", BuildStringSchema("Plain-text body."));
@@ -207,130 +246,110 @@ base::DictValue BuildMailUpdateDraftSchema() {
   return BuildObjectSchema(std::move(properties), std::move(required));
 }
 
-void AddOptionalTabId(base::DictValue& properties) {
-  properties.Set("tab_id", BuildIntegerSchema(
-                               "Browser tab id. Omit or pass 0 for the active tab."));
+void AddOptionalTabId(base::DictValue &properties) {
+  properties.Set(
+      "tab_id",
+      BuildIntegerSchema("Browser tab id. Omit or pass 0 for the active tab."));
 }
 
-base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name) {
+base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
+                                              bool catalog_surface = false) {
   base::DictValue properties;
   base::ListValue required;
   AddOptionalTabId(properties);
 
   if (tool_name == "browser_navigate") {
     properties.Set("url", BuildStringSchema("Destination URL."));
-    properties.Set("page_derived_justification",
-                   BuildBooleanSchema(
-                       "True when the destination came from page content."));
+    if (!catalog_surface) {
+      properties.Set("page_derived_justification",
+                     BuildBooleanSchema(
+                         "True when the destination came from page content."));
+    }
     required.Append("url");
   } else if (tool_name == "page_query_selector") {
     properties.Set("selector", BuildStringSchema("CSS selector to query."));
     required.Append("selector");
   } else if (tool_name == "page_get_text") {
-    properties.Set("ref_id", BuildStringSchema("DOM ref id from page_query_selector."));
+    properties.Set("ref_id",
+                   BuildStringSchema("DOM ref id from page_query_selector."));
     required.Append("ref_id");
   } else if (tool_name == "page_get_attribute") {
-    properties.Set("ref_id", BuildStringSchema("DOM ref id from page_query_selector."));
+    properties.Set("ref_id",
+                   BuildStringSchema("DOM ref id from page_query_selector."));
     properties.Set("attribute", BuildStringSchema("Attribute name to read."));
     required.Append("ref_id");
     required.Append("attribute");
   } else if (tool_name == "page_wait_for_selector") {
     properties.Set("selector", BuildStringSchema("CSS selector to wait for."));
-    properties.Set("timeout_ms", BuildIntegerSchema("Timeout in milliseconds."));
+    properties.Set("timeout_ms",
+                   BuildIntegerSchema("Timeout in milliseconds."));
     required.Append("selector");
   } else if (tool_name == "browser_wait_for_navigation") {
     properties.Set("since_timestamp_ms",
-                   BuildIntegerSchema("Only navigation events after this Unix timestamp."));
-    properties.Set("timeout_ms", BuildIntegerSchema("Timeout in milliseconds."));
+                   BuildIntegerSchema(
+                       "Only navigation events after this Unix timestamp."));
+    properties.Set("timeout_ms",
+                   BuildIntegerSchema("Timeout in milliseconds."));
   } else if (tool_name == "browser_click" || tool_name == "browser_hover") {
-    properties.Set("ref", BuildIntegerSchema(
-                              "Accessibility ref from browser_accessibility_snapshot."));
+    properties.Set(
+        "ref", BuildIntegerSchema(
+                   "Accessibility ref from browser_accessibility_snapshot."));
     required.Append("ref");
   } else if (tool_name == "browser_type") {
-    properties.Set("ref", BuildIntegerSchema(
-                              "Accessibility ref from browser_accessibility_snapshot."));
-    properties.Set("text", BuildStringSchema("Text to type. Never use for credentials."));
+    properties.Set(
+        "ref", BuildIntegerSchema(
+                   "Accessibility ref from browser_accessibility_snapshot."));
+    properties.Set(
+        "text", BuildStringSchema("Text to type. Never use for credentials."));
+    if (catalog_surface) {
+      properties.Set(
+          "allow_credentials",
+          BuildBooleanSchema("Allow generic typing into a credential field."));
+    }
     required.Append("ref");
     required.Append("text");
   } else if (tool_name == "browser_select") {
-    properties.Set("ref", BuildIntegerSchema(
-                              "Accessibility ref from browser_accessibility_snapshot."));
+    properties.Set(
+        "ref", BuildIntegerSchema(
+                   "Accessibility ref from browser_accessibility_snapshot."));
     properties.Set("value", BuildStringSchema("Option value to select."));
     required.Append("ref");
     required.Append("value");
   } else if (tool_name == "browser_scroll") {
-    properties.Set("direction",
-                   BuildStringSchema("Scroll direction: up, down, left, or right."));
-    properties.Set("pixels", BuildIntegerSchema("Pixels to scroll; default 300."));
-    properties.Set("ref", BuildIntegerSchema(
-                              "Optional accessibility ref to scroll an element."));
+    properties.Set(
+        "direction",
+        BuildStringSchema("Scroll direction: up, down, left, or right."));
+    properties.Set("pixels",
+                   BuildIntegerSchema("Pixels to scroll; default 300."));
+    properties.Set(
+        "ref",
+        BuildIntegerSchema("Optional accessibility ref to scroll an element."));
     required.Append("direction");
   } else if (tool_name == "browser_key_press") {
-    properties.Set("key", BuildStringSchema("Keyboard key, e.g. Enter or ArrowDown."));
-    properties.Set("modifiers",
-                   BuildStringListSchema("Optional modifiers: shift, ctrl, alt, meta."));
+    properties.Set("key",
+                   BuildStringSchema("Keyboard key, e.g. Enter or ArrowDown."));
+    properties.Set(
+        "modifiers",
+        BuildStringListSchema("Optional modifiers: shift, ctrl, alt, meta."));
     required.Append("key");
   }
 
   return BuildObjectSchema(std::move(properties), std::move(required));
 }
 
-std::string BrowserActionDescription(
-    const maho::ai::BrowserActionContract& contract) {
-  const std::string name(contract.tool_name);
-  if (name == "browser_navigate") {
-    return "Navigate the active tab to a URL.";
-  }
-  if (name == "browser_accessibility_snapshot") {
-    return "Return an accessibility tree snapshot with @ref labels.";
-  }
-  if (name == "page_query_selector") {
-    return "Query the active page for a CSS selector and return a DOM ref.";
-  }
-  if (name == "page_get_text") {
-    return "Return text for a DOM ref from page_query_selector.";
-  }
-  if (name == "page_get_attribute") {
-    return "Return an attribute for a DOM ref from page_query_selector.";
-  }
-  if (name == "page_wait_for_selector") {
-    return "Wait for a CSS selector to appear in the active page.";
-  }
-  if (name == "browser_wait_for_navigation") {
-    return "Wait for navigation on the active tab to complete or time out.";
-  }
-  if (name == "browser_click") {
-    return "Click an element by @ref from browser_accessibility_snapshot.";
-  }
-  if (name == "browser_type") {
-    return "Type text into an element by @ref, refusing credential fields.";
-  }
-  if (name == "browser_select") {
-    return "Select a value on an element by @ref.";
-  }
-  if (name == "browser_scroll") {
-    return "Scroll the viewport or an element by @ref.";
-  }
-  if (name == "browser_hover") {
-    return "Hover over an element by @ref.";
-  }
-  if (name == "browser_key_press") {
-    return "Press a keyboard key in the active tab.";
-  }
-  return "Run a browser action against the active tab.";
-}
-
-base::DictValue BuildApprovalMetadata(
-    const maho::ai::BrowserActionContract& contract) {
+base::DictValue
+BuildApprovalMetadata(const maho::ai::BrowserActionContract &contract) {
   base::DictValue metadata;
-  metadata.Set("kind", std::string(maho::ai::BrowserActionKindName(contract.kind)));
+  metadata.Set("kind",
+               std::string(maho::ai::BrowserActionKindName(contract.kind)));
   metadata.Set("sensitivity",
                std::string(maho::ai::BrowserActionSensitivityName(
                    contract.sensitivity)));
-  metadata.Set("approval",
-               std::string(maho::ai::BrowserActionApprovalName(contract.approval)));
+  metadata.Set("approval", std::string(maho::ai::BrowserActionApprovalName(
+                               contract.approval)));
   metadata.Set("requires_approval", maho::ai::RequiresApproval(contract));
-  metadata.Set("lease", std::string(maho::ai::BrowserActionLeaseName(contract.lease)));
+  metadata.Set("lease",
+               std::string(maho::ai::BrowserActionLeaseName(contract.lease)));
   metadata.Set("requires_lease", maho::ai::RequiresLease(contract));
   metadata.Set("domain_policy",
                std::string(maho::ai::BrowserActionDomainPolicyName(
@@ -341,11 +360,519 @@ base::DictValue BuildApprovalMetadata(
   return metadata;
 }
 
+using CapabilityDescriptor = MahoBrowserToolRegistry::CapabilityDescriptor;
+using Category = MahoBrowserToolRegistry::Category;
+using Mutability = MahoBrowserToolRegistry::Mutability;
+using Broker = MahoBrowserToolRegistry::Broker;
+using Boundary = MahoBrowserToolRegistry::Boundary;
+using Sensitivity = MahoBrowserToolRegistry::Sensitivity;
+using FeatureGate = MahoBrowserToolRegistry::FeatureGate;
+using MissingPolicy = MahoBrowserToolRegistry::MissingPolicy;
+using SurfaceMask = MahoBrowserToolRegistry::SurfaceMask;
+
+constexpr SurfaceMask kDesktopAgent = MahoBrowserToolRegistry::kDesktopAgent;
+constexpr SurfaceMask kBrowserMcp = MahoBrowserToolRegistry::kBrowserMcp;
+constexpr SurfaceMask kControlPlane = MahoBrowserToolRegistry::kControlPlane;
+constexpr SurfaceMask kDesktopAgentAndBrowserMcp = kDesktopAgent | kBrowserMcp;
+
+const char *MutabilityName(MahoBrowserToolRegistry::Mutability value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::Mutability::kReadOnly:
+    return "read_only";
+  case MahoBrowserToolRegistry::Mutability::kMutable:
+    return "mutable";
+  case MahoBrowserToolRegistry::Mutability::kUnknown:
+    return "unknown";
+  }
+}
+
+const char *MissingPolicyName(MahoBrowserToolRegistry::MissingPolicy value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::MissingPolicy::kFailClosed:
+    return "fail_closed";
+  case MahoBrowserToolRegistry::MissingPolicy::kUnknown:
+    return "unknown";
+  }
+}
+
+const char *BrokerName(MahoBrowserToolRegistry::Broker value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::Broker::kBrowser:
+    return "browser";
+  case MahoBrowserToolRegistry::Broker::kMail:
+    return "mail";
+  case MahoBrowserToolRegistry::Broker::kRoutines:
+    return "routines";
+  case MahoBrowserToolRegistry::Broker::kVault:
+    return "vault";
+  case MahoBrowserToolRegistry::Broker::kUnknown:
+    return "unknown";
+  }
+}
+
+const char *BoundaryName(MahoBrowserToolRegistry::Boundary value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::Boundary::kSession:
+    return "session";
+  case MahoBrowserToolRegistry::Boundary::kProfile:
+    return "profile";
+  case MahoBrowserToolRegistry::Boundary::kTab:
+    return "tab";
+  case MahoBrowserToolRegistry::Boundary::kUnknown:
+    return "unknown";
+  }
+}
+
+const char *SensitivityName(MahoBrowserToolRegistry::Sensitivity value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::Sensitivity::kLow:
+    return "low";
+  case MahoBrowserToolRegistry::Sensitivity::kSensitive:
+    return "sensitive";
+  case MahoBrowserToolRegistry::Sensitivity::kCredential:
+    return "credential";
+  case MahoBrowserToolRegistry::Sensitivity::kUnknown:
+    return "unknown";
+  }
+}
+
+const char *CategoryName(MahoBrowserToolRegistry::Category value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::Category::kTabs:
+    return "tabs";
+  case MahoBrowserToolRegistry::Category::kNavigation:
+    return "navigation";
+  case MahoBrowserToolRegistry::Category::kPage:
+    return "page";
+  case MahoBrowserToolRegistry::Category::kInput:
+    return "input";
+  case MahoBrowserToolRegistry::Category::kHistory:
+    return "history";
+  case MahoBrowserToolRegistry::Category::kBookmarks:
+    return "bookmarks";
+  case MahoBrowserToolRegistry::Category::kPolicy:
+    return "policy";
+  case MahoBrowserToolRegistry::Category::kRoutines:
+    return "routines";
+  case MahoBrowserToolRegistry::Category::kMail:
+    return "mail";
+  case MahoBrowserToolRegistry::Category::kLease:
+    return "lease";
+  case MahoBrowserToolRegistry::Category::kVault:
+    return "vault";
+  case MahoBrowserToolRegistry::Category::kCapture:
+    return "capture";
+  case MahoBrowserToolRegistry::Category::kUnknown:
+    return "unknown";
+  }
+}
+
+base::DictValue BuildReceiptMetadata(
+    const MahoBrowserToolRegistry::CapabilityDescriptor &descriptor,
+    const MahoBrowserToolRegistry::ExecutionReceiptContext &context) {
+  base::DictValue controller;
+  if (!context.controller_id.empty()) {
+    controller.Set("id", context.controller_id);
+  }
+  controller.Set("name", context.controller_name);
+  controller.Set("type", context.controller_type);
+  controller.Set("plane", context.control_plane);
+
+  base::DictValue target;
+  if (context.target_tab_id.has_value()) {
+    target.Set("tabId", base::Value(*context.target_tab_id));
+  }
+  if (context.target_origin.has_value()) {
+    target.Set("origin", *context.target_origin);
+  }
+
+  base::DictValue outcome;
+  outcome.Set("status", context.outcome_status);
+  if (!context.outcome_code.empty()) {
+    outcome.Set("code", context.outcome_code);
+  }
+
+  base::DictValue timestamps;
+  if (context.started_at_seconds > 0) {
+    timestamps.Set("startedAt", context.started_at_seconds);
+  }
+  if (context.completed_at_seconds > 0) {
+    timestamps.Set("completedAt", context.completed_at_seconds);
+  }
+
+  base::DictValue metadata;
+  metadata.Set("controller", std::move(controller));
+  metadata.Set("target", std::move(target));
+  metadata.Set("category", CategoryName(descriptor.category));
+  metadata.Set("sensitivity", SensitivityName(descriptor.sensitivity));
+  metadata.Set("approval", context.approval);
+  metadata.Set("outcome", std::move(outcome));
+  metadata.Set("timestamps", std::move(timestamps));
+  return metadata;
+}
+
+const char *FeatureGateName(MahoBrowserToolRegistry::FeatureGate value) {
+  switch (value) {
+  case MahoBrowserToolRegistry::FeatureGate::kAlways:
+    return "always";
+  case MahoBrowserToolRegistry::FeatureGate::kMailBeta:
+    return "mail_beta";
+  case MahoBrowserToolRegistry::FeatureGate::kRoutines:
+    return "routines";
+  case MahoBrowserToolRegistry::FeatureGate::kVault:
+    return "vault";
+  case MahoBrowserToolRegistry::FeatureGate::kUnknown:
+    return "unknown";
+  }
+}
+
+Sensitivity
+CapabilitySensitivity(const maho::ai::BrowserActionContract &contract) {
+  return contract.sensitivity == maho::ai::BrowserActionSensitivity::kLow
+             ? Sensitivity::kLow
+             : Sensitivity::kSensitive;
+}
+
+CapabilityDescriptor
+MakeBrowserActionDescriptor(std::string_view canonical_id,
+                            std::string_view tool_name, Category category,
+                            Broker broker, Boundary boundary,
+                            FeatureGate feature_gate, SurfaceMask surfaces,
+                            std::string_view description) {
+  const maho::ai::BrowserActionContract *contract =
+      maho::ai::FindBrowserActionContract(tool_name);
+  CHECK(contract);
+  CHECK(maho::ai::EmptyAllowlistFailsClosed(*contract));
+  return {canonical_id,
+          tool_name,
+          MahoBrowserToolRegistry::kSchemaVersion,
+          MahoBrowserToolRegistry::kResultVersion,
+          category,
+          contract->kind == maho::ai::BrowserActionKind::kRead
+              ? Mutability::kReadOnly
+              : Mutability::kMutable,
+          contract->changes_authority,
+          broker,
+          boundary,
+          CapabilitySensitivity(*contract),
+          feature_gate,
+          surfaces,
+          MissingPolicy::kFailClosed,
+          description,
+          contract};
+}
+
+std::vector<CapabilityDescriptor> BuildCapabilityDescriptors() {
+  std::vector<CapabilityDescriptor> descriptors;
+#define MAHO_BROWSER_CAPABILITY(id, canonical_id, tool_name, category,         \
+                                mutability, authority_change, broker,          \
+                                boundary, sensitivity, feature_gate, surfaces, \
+                                missing_policy, description)                   \
+  descriptors.push_back(                                                       \
+      {canonical_id, tool_name, MahoBrowserToolRegistry::kSchemaVersion,       \
+       MahoBrowserToolRegistry::kResultVersion, Category::k##category,         \
+       Mutability::k##mutability,                                              \
+       std::string_view(#authority_change) == "Yes", Broker::k##broker,        \
+       Boundary::k##boundary, Sensitivity::k##sensitivity,                     \
+       FeatureGate::k##feature_gate, k##surfaces,                              \
+       MissingPolicy::k##missing_policy, description, nullptr});
+#define MAHO_BROWSER_ACTION_CAPABILITY(id, canonical_id, tool_name, category,  \
+                                       broker, boundary, feature_gate,         \
+                                       surfaces, description)                  \
+  descriptors.push_back(MakeBrowserActionDescriptor(                           \
+      canonical_id, tool_name, Category::k##category, Broker::k##broker,       \
+      Boundary::k##boundary, FeatureGate::k##feature_gate, k##surfaces,        \
+      description));
+#include "maho/browser/ai/maho_browser_capability_catalog.def"
+#undef MAHO_BROWSER_ACTION_CAPABILITY
+#undef MAHO_BROWSER_CAPABILITY
+  for (CapabilityDescriptor& descriptor : descriptors) {
+    if (descriptor.surfaces & MahoBrowserToolRegistry::kDesktopAgent) {
+      descriptor.surfaces |= MahoBrowserToolRegistry::kCliAgent;
+    }
+    if (descriptor.surfaces & MahoBrowserToolRegistry::kPublicMcp) {
+      descriptor.surfaces |= MahoBrowserToolRegistry::kCliGeneric;
+    }
+  }
+  return descriptors;
+}
+
+bool FeatureEnabled(const CapabilityDescriptor &descriptor, bool mail_enabled,
+                    bool routines_enabled, bool vault_enabled) {
+  switch (descriptor.feature_gate) {
+  case FeatureGate::kUnknown:
+    return false;
+  case FeatureGate::kAlways:
+    return true;
+  case FeatureGate::kMailBeta:
+    return mail_enabled;
+  case FeatureGate::kRoutines:
+    return routines_enabled;
+  case FeatureGate::kVault:
+    return vault_enabled;
+  }
+  return false;
+}
+
+bool HasCompletePublicMetadata(const CapabilityDescriptor &descriptor) {
+  return !descriptor.canonical_id.empty() && !descriptor.tool_name.empty() &&
+         descriptor.schema_version > 0 && descriptor.result_version > 0 &&
+         descriptor.category != Category::kUnknown &&
+         descriptor.mutability != Mutability::kUnknown &&
+         descriptor.required_broker != Broker::kUnknown &&
+         descriptor.required_boundary != Boundary::kUnknown &&
+         descriptor.sensitivity != Sensitivity::kUnknown &&
+         descriptor.feature_gate != FeatureGate::kUnknown &&
+         descriptor.missing_policy == MissingPolicy::kFailClosed &&
+         !descriptor.description.empty();
+}
+
+base::DictValue
+BuildDesktopInputSchema(const CapabilityDescriptor &descriptor) {
+  if (descriptor.browser_action_contract) {
+    return BuildBrowserActionInputSchema(descriptor.tool_name);
+  }
+  if (descriptor.tool_name == "search_in_page") {
+    return BuildSearchSchema();
+  }
+  if (descriptor.tool_name == "mail_list_folders") {
+    return BuildMailAccountSchema();
+  }
+  if (descriptor.tool_name == "mail_list_emails") {
+    return BuildMailListEmailsSchema();
+  }
+  if (descriptor.tool_name == "mail_get_email") {
+    return BuildMailIdSchema("email_id", "Email id.");
+  }
+  if (descriptor.tool_name == "mail_search_emails") {
+    return BuildMailSearchSchema();
+  }
+  if (descriptor.tool_name == "mail_list_thread") {
+    return BuildMailThreadSchema();
+  }
+  if (descriptor.tool_name == "mail_send" ||
+      descriptor.tool_name == "mail_save_draft") {
+    return BuildMailComposeSchema();
+  }
+  if (descriptor.tool_name == "mail_update_draft") {
+    return BuildMailUpdateDraftSchema();
+  }
+  return BuildNoArgSchema();
+}
+
+base::DictValue
+BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
+  if (descriptor.browser_action_contract) {
+    return BuildBrowserActionInputSchema(descriptor.tool_name,
+                                         /*catalog_surface=*/true);
+  }
+
+  const std::string_view name = descriptor.tool_name;
+  base::DictValue properties;
+  if (name == "browser_tab_list" || name == "browser_get_blocked_domains" ||
+      name == "browser_routines_list" || name == "mail_list_accounts" ||
+      name == "browser_list_exact_origins") {
+    return BuildNoArgSchema();
+  }
+  if (name == "browser_tab_get" || name == "browser_tab_close" ||
+      name == "browser_tab_switch" || name == "browser_adopt_tab" ||
+      name == "browser_release_tab" || name == "browser_release_lease") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    return BuildObjectSchema(std::move(properties), {"tab_id"});
+  }
+  if (name == "browser_tab_new") {
+    properties.Set("url",
+                   BuildStringSchema("URL to open; defaults to about:blank."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "browser_history_search") {
+    properties.Set("query", BuildStringSchema("Text to search in history."));
+    properties.Set("max_results",
+                   BuildIntegerSchema("Maximum history results to return."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "browser_bookmarks_search") {
+    properties.Set("query", BuildStringSchema("Text to search in bookmarks."));
+    return BuildObjectSchema(std::move(properties), {"query"});
+  }
+  if (name == "browser_bookmark_create") {
+    properties.Set("title", BuildStringSchema("Bookmark title."));
+    properties.Set("url", BuildStringSchema("Bookmark URL."));
+    properties.Set("folder", BuildStringSchema("Optional bookmark folder."));
+    return BuildObjectSchema(std::move(properties), {"title", "url"});
+  }
+  if (name == "browser_page_content" || name == "browser_page_text" ||
+      name == "browser_page_context" || name == "browser_screenshot_full" ||
+      name == "browser_network_start_capture" ||
+      name == "browser_network_stop_capture" ||
+      name == "browser_network_get_har" ||
+      name == "vault_list_credentials_for_active_page") {
+    AddOptionalTabId(properties);
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "browser_search_in_page") {
+    AddOptionalTabId(properties);
+    properties.Set("query", BuildStringSchema("Text to find in the page."));
+    return BuildObjectSchema(std::move(properties), {"query"});
+  }
+  if (name == "browser_same_origin_fetch") {
+    AddOptionalTabId(properties);
+    properties.Set("url", BuildStringSchema("Same-origin HTTPS URL."));
+    properties.Set("method", BuildStringSchema("HTTP method: GET or POST."));
+    properties.Set("body", BuildStringSchema("Optional request body."));
+    properties.Set("headers",
+                   BuildStringMapSchema("Optional string-valued headers."));
+    return BuildObjectSchema(std::move(properties), {"url"});
+  }
+  if (name == "browser_set_blocked_domains") {
+    properties.Set("domains", BuildStringListSchema(
+                                  "Domains or wildcard domains to block."));
+    return BuildObjectSchema(std::move(properties), {"domains"});
+  }
+  if (name == "browser_routines_run") {
+    properties.Set("id", BuildStringSchema("Routine id."));
+    return BuildObjectSchema(std::move(properties), {"id"});
+  }
+  if (name == "mail_list_folders") {
+    return BuildMailAccountSchema();
+  }
+  if (name == "mail_list_emails") {
+    return BuildMailListEmailsSchema();
+  }
+  if (name == "mail_get_email") {
+    return BuildMailIdSchema("email_id", "Email id.");
+  }
+  if (name == "mail_search_emails") {
+    properties.Set("query", BuildStringSchema("Mail search text."));
+    properties.Set("account_id",
+                   BuildStringSchema("Optional mail account id."));
+    properties.Set("folder_id", BuildStringSchema("Optional mail folder id."));
+    properties.Set("limit", BuildIntegerSchema("Maximum results; default 50."));
+    properties.Set("offset",
+                   BuildIntegerSchema("Pagination offset; default 0."));
+    return BuildObjectSchema(std::move(properties), {"query"});
+  }
+  if (name == "mail_list_thread") {
+    return BuildMailThreadSchema();
+  }
+  if (name == "mail_extract_otp") {
+    properties.Set("account_id",
+                   BuildStringSchema("Optional mail account id."));
+    properties.Set("folder_id", BuildStringSchema("Optional mail folder id."));
+    properties.Set("query", BuildStringSchema("Optional OTP search text."));
+    properties.Set("max_age_seconds",
+                   BuildIntegerSchema("Maximum message age; default 300."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "mail_send" || name == "mail_save_draft" ||
+      name == "mail_queue_email" || name == "mail_flag" ||
+      name == "mail_add_account") {
+    properties.Set(
+        "request_json",
+        BuildStringSchema("JSON request accepted by the mail broker."));
+    return BuildObjectSchema(std::move(properties), {"request_json"});
+  }
+  if (name == "mail_update_draft") {
+    properties.Set("draft_id", BuildStringSchema("Draft id to update."));
+    properties.Set(
+        "request_json",
+        BuildStringSchema("JSON request accepted by the mail broker."));
+    return BuildObjectSchema(std::move(properties),
+                             {"draft_id", "request_json"});
+  }
+  if (name == "mail_test_connection") {
+    properties.Set("params_json",
+                   BuildStringSchema("JSON connection parameters."));
+    return BuildObjectSchema(std::move(properties), {"params_json"});
+  }
+  if (name == "mail_delete_account" || name == "mail_reconnect_account") {
+    return BuildMailAccountSchema();
+  }
+  if (name == "mail_start_oauth") {
+    properties.Set("provider", BuildStringSchema("OAuth provider."));
+    properties.Set("client_id", BuildStringSchema("OAuth client id."));
+    properties.Set("redirect_uri", BuildStringSchema("OAuth redirect URI."));
+    return BuildObjectSchema(std::move(properties),
+                             {"provider", "client_id", "redirect_uri"});
+  }
+  if (name == "mail_complete_oauth") {
+    properties.Set("state", BuildStringSchema("OAuth state value."));
+    properties.Set("code", BuildStringSchema("OAuth authorization code."));
+    return BuildObjectSchema(std::move(properties), {"state", "code"});
+  }
+  if (name == "mail_import_migration_archive") {
+    properties.Set("archive_json",
+                   BuildStringSchema("JSON mail migration archive."));
+    return BuildObjectSchema(std::move(properties), {"archive_json"});
+  }
+  if (name == "browser_acquire_lease" || name == "browser_heartbeat_lease") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set(
+        "ttl_seconds",
+        BuildIntegerSchema("Lease duration in seconds; default 60."));
+    return BuildObjectSchema(std::move(properties), {"tab_id"});
+  }
+  if (name == "browser_grant_exact_origin" ||
+      name == "browser_revoke_exact_origin") {
+    properties.Set("origin", BuildStringSchema("Exact HTTP or HTTPS origin."));
+    return BuildObjectSchema(std::move(properties), {"origin"});
+  }
+  if (name == "artifact.list") {
+    properties.Set("session_id",
+                   BuildStringSchema("Optional owning Agent session id."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "artifact.export") {
+    properties.Set("artifact_id", BuildStringSchema("Artifact id."));
+    properties.Set("destination",
+                   BuildStringSchema("Explicit local destination path."));
+    return BuildObjectSchema(std::move(properties),
+                             {"artifact_id", "destination"});
+  }
+  if (name == "vault_request_credential_use") {
+    AddOptionalTabId(properties);
+    properties.Set("handle", BuildStringSchema("Opaque credential handle."));
+    properties.Set("origin", BuildStringSchema("Exact credential origin."));
+    return BuildObjectSchema(std::move(properties), {"handle", "origin"});
+  }
+  if (name == "vault_fill_credential" || name == "vault_fill_totp") {
+    AddOptionalTabId(properties);
+    properties.Set("grant_handle",
+                   BuildStringSchema("Short-lived credential fill grant."));
+    properties.Set("ref", BuildIntegerSchema("Accessibility element ref."));
+    return BuildObjectSchema(std::move(properties), {"grant_handle", "ref"});
+  }
+  if (name == "browser_screenshot_element") {
+    AddOptionalTabId(properties);
+    properties.Set("ref", BuildIntegerSchema("Accessibility element ref."));
+    return BuildObjectSchema(std::move(properties), {"ref"});
+  }
+  if (name == "browser_console_messages") {
+    AddOptionalTabId(properties);
+    properties.Set("limit",
+                   BuildIntegerSchema("Maximum messages; default 100."));
+    properties.Set(
+        "since_timestamp_ms",
+        BuildIntegerSchema("Only messages after this Unix timestamp."));
+    properties.Set("level_filter",
+                   BuildStringListSchema("Console levels to include."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "browser_set_viewport_size") {
+    AddOptionalTabId(properties);
+    properties.Set("width_px",
+                   BuildIntegerSchema("Viewport width in pixels.", 100, 4096));
+    properties.Set("height_px",
+                   BuildIntegerSchema("Viewport height in pixels.", 100, 4096));
+    return BuildObjectSchema(std::move(properties), {"width_px", "height_px"});
+  }
+
+  return MissingCatalogInputSchema(name);
+}
+
 MahoBrowserToolRegistry::ToolSchema MakeToolSchema(
-    std::string name,
-    std::string description,
-    base::DictValue input_schema,
-    const maho::ai::BrowserActionContract* browser_action_contract = nullptr) {
+    std::string name, std::string description, base::DictValue input_schema,
+    const maho::ai::BrowserActionContract *browser_action_contract = nullptr) {
   MahoBrowserToolRegistry::ToolSchema schema;
   schema.name = std::move(name);
   schema.description = std::move(description);
@@ -356,87 +883,353 @@ MahoBrowserToolRegistry::ToolSchema MakeToolSchema(
 
 std::vector<MahoBrowserToolRegistry::ToolSchema> BuildPhase1ToolSchemas() {
   std::vector<MahoBrowserToolRegistry::ToolSchema> tools;
-  tools.push_back(MakeToolSchema(
-      "read_current_page",
-      "Read the currently active page and return browser-ready page context.",
-      BuildNoArgSchema()));
-  tools.push_back(MakeToolSchema(
-      "get_selected_text",
-      "Return the current text selection from the active browser tab.",
-      BuildNoArgSchema()));
-  tools.push_back(MakeToolSchema(
-      "get_active_tab",
-      "Return metadata for the active browser tab in the current window.",
-      BuildNoArgSchema()));
-  tools.push_back(MakeToolSchema(
-      "search_in_page",
-      "Search the active page content and return matching excerpts.",
-      BuildSearchSchema()));
-  tools.push_back(MakeToolSchema(
-      "extract_structured_page_context",
-      "Extract structured context from the active page for browser chat "
-      "orchestration.",
-      BuildNoArgSchema()));
-  tools.push_back(MakeToolSchema(
-      "mail_list_accounts", "List Mail accounts available to Maho Mail.",
-      BuildNoArgSchema()));
-  tools.push_back(MakeToolSchema("mail_list_folders",
-                                 "List folders for a Mail account.",
-                                 BuildMailAccountSchema()));
-  tools.push_back(MakeToolSchema("mail_list_emails",
-                                 "List emails in a Mail account folder.",
-                                 BuildMailListEmailsSchema()));
-  tools.push_back(MakeToolSchema("mail_get_email", "Read a single email by id.",
-                                 BuildMailIdSchema("email_id", "Email id.")));
-  tools.push_back(MakeToolSchema(
-      "mail_search_emails",
-      "Search emails using a Mail search query JSON object.",
-      BuildMailSearchSchema()));
-  tools.push_back(MakeToolSchema("mail_list_thread",
-                                 "List all emails in a Mail thread.",
-                                 BuildMailThreadSchema()));
-  tools.push_back(MakeToolSchema(
-      "mail_send",
-      "Send an email through Maho Mail. Requires explicit user approval; "
-      "sending honors the agent approval policy.",
-      BuildMailComposeSchema()));
-  tools.push_back(MakeToolSchema(
-      "mail_save_draft",
-      "Save a new email draft in Maho Mail. Requires explicit user approval.",
-      BuildMailComposeSchema()));
-  tools.push_back(MakeToolSchema(
-      "mail_update_draft",
-      "Update an existing Maho Mail draft by id. Requires explicit user "
-      "approval.",
-      BuildMailUpdateDraftSchema()));
-  for (const maho::ai::BrowserActionContract& contract :
-       maho::ai::kMahoBrowserActionContracts) {
-    tools.push_back(MakeToolSchema(
-        std::string(contract.tool_name), BrowserActionDescription(contract),
-        BuildBrowserActionInputSchema(contract.tool_name), &contract));
+  for (const CapabilityDescriptor *descriptor :
+       MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+           MahoBrowserToolRegistry::kDesktopAgent)) {
+    tools.push_back(MakeToolSchema(std::string(descriptor->tool_name),
+                                   std::string(descriptor->description),
+                                   BuildDesktopInputSchema(*descriptor),
+                                   descriptor->browser_action_contract));
   }
   return tools;
 }
 
 }  // namespace
 
+MahoBrowserToolRegistry::CapabilityDescriptor::CapabilityDescriptor(
+    std::string_view canonical_id,
+    std::string_view tool_name,
+    int schema_version,
+    int result_version,
+    Category category,
+    Mutability mutability,
+    bool changes_authority,
+    Broker required_broker,
+    Boundary required_boundary,
+    Sensitivity sensitivity,
+    FeatureGate feature_gate,
+    SurfaceMask surfaces,
+    MissingPolicy missing_policy,
+    std::string_view description,
+    const maho::ai::BrowserActionContract* browser_action_contract)
+    : canonical_id(canonical_id),
+      tool_name(tool_name),
+      schema_version(schema_version),
+      result_version(result_version),
+      category(category),
+      mutability(mutability),
+      changes_authority(changes_authority),
+      required_broker(required_broker),
+      required_boundary(required_boundary),
+      sensitivity(sensitivity),
+      feature_gate(feature_gate),
+      surfaces(surfaces),
+      missing_policy(missing_policy),
+      description(description),
+      browser_action_contract(browser_action_contract) {}
+
+MahoBrowserToolRegistry::CapabilityDescriptor::CapabilityDescriptor(
+    const CapabilityDescriptor&) = default;
+MahoBrowserToolRegistry::CapabilityDescriptor&
+MahoBrowserToolRegistry::CapabilityDescriptor::operator=(
+    const CapabilityDescriptor&) = default;
+MahoBrowserToolRegistry::CapabilityDescriptor::CapabilityDescriptor(
+    CapabilityDescriptor&&) = default;
+MahoBrowserToolRegistry::CapabilityDescriptor&
+MahoBrowserToolRegistry::CapabilityDescriptor::operator=(
+    CapabilityDescriptor&&) = default;
+MahoBrowserToolRegistry::CapabilityDescriptor::~CapabilityDescriptor() =
+    default;
+
+MahoBrowserToolRegistry::ExecutionReceiptContext::ExecutionReceiptContext() =
+    default;
+MahoBrowserToolRegistry::ExecutionReceiptContext::~ExecutionReceiptContext() =
+    default;
+
+// static
+const std::vector<MahoBrowserToolRegistry::CapabilityDescriptor>&
+MahoBrowserToolRegistry::GetCapabilityDescriptors() {
+  static const base::NoDestructor<std::vector<CapabilityDescriptor>>
+      kDescriptors(BuildCapabilityDescriptors());
+  CHECK(ValidateCapabilityDescriptors(*kDescriptors));
+  return *kDescriptors;
+}
+
+// static
+bool MahoBrowserToolRegistry::ValidateCapabilityDescriptors(
+    base::span<const CapabilityDescriptor> descriptors) {
+  std::set<std::string_view> canonical_ids;
+  std::set<std::string_view> tool_names;
+  const SurfaceMask kKnownSurfaces =
+      kDesktopAgent | kBrowserMcp | kControlPlane | kCliAgent | kCliGeneric;
+  for (const CapabilityDescriptor &descriptor : descriptors) {
+    if (descriptor.canonical_id.empty() || descriptor.tool_name.empty() ||
+        descriptor.schema_version <= 0 || descriptor.result_version <= 0 ||
+        descriptor.category == Category::kUnknown ||
+        descriptor.mutability == Mutability::kUnknown ||
+        descriptor.required_broker == Broker::kUnknown ||
+        descriptor.required_boundary == Boundary::kUnknown ||
+        descriptor.sensitivity == Sensitivity::kUnknown ||
+        descriptor.feature_gate == FeatureGate::kUnknown ||
+        descriptor.surfaces == 0 ||
+        (descriptor.surfaces & ~kKnownSurfaces) != 0 ||
+        descriptor.missing_policy != MissingPolicy::kFailClosed ||
+        descriptor.description.empty() ||
+        !canonical_ids.insert(descriptor.canonical_id).second ||
+        !tool_names.insert(descriptor.tool_name).second) {
+      return false;
+    }
+    const maho::ai::BrowserActionContract *contract =
+        maho::ai::FindBrowserActionContract(descriptor.tool_name);
+    if (contract != descriptor.browser_action_contract) {
+      return false;
+    }
+    if (contract &&
+        (descriptor.mutability == Mutability::kReadOnly) !=
+            (contract->kind == maho::ai::BrowserActionKind::kRead)) {
+      return false;
+    }
+    if (contract &&
+        descriptor.changes_authority != contract->changes_authority) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// static
+const MahoBrowserToolRegistry::CapabilityDescriptor *
+MahoBrowserToolRegistry::FindCapability(std::string_view tool_name) {
+  for (const CapabilityDescriptor &descriptor : GetCapabilityDescriptors()) {
+    if (descriptor.tool_name == tool_name) {
+      return &descriptor;
+    }
+  }
+  return nullptr;
+}
+
+const MahoBrowserToolRegistry::CapabilityDescriptor *
+MahoBrowserToolRegistry::FindCapabilityById(std::string_view canonical_id) {
+  for (const CapabilityDescriptor &descriptor : GetCapabilityDescriptors()) {
+    if (descriptor.canonical_id == canonical_id) {
+      return &descriptor;
+    }
+  }
+  return nullptr;
+}
+
+// static
+std::vector<const MahoBrowserToolRegistry::CapabilityDescriptor *>
+MahoBrowserToolRegistry::GetCapabilitiesForSurface(Surface surface,
+                                                   bool mail_enabled,
+                                                   bool routines_enabled,
+                                                   bool vault_enabled) {
+  std::vector<const CapabilityDescriptor *> capabilities;
+  for (const CapabilityDescriptor &descriptor : GetCapabilityDescriptors()) {
+    if (HasSurface(descriptor, surface) &&
+        FeatureEnabled(descriptor, mail_enabled, routines_enabled,
+                       vault_enabled)) {
+      capabilities.push_back(&descriptor);
+    }
+  }
+  return capabilities;
+}
+
+// static
+std::optional<base::DictValue>
+MahoBrowserToolRegistry::SerializePublicMcpCapability(
+    const CapabilityDescriptor &descriptor) {
+  if (!HasSurface(descriptor, kPublicMcp) ||
+      !HasCompletePublicMetadata(descriptor)) {
+    return std::nullopt;
+  }
+
+  base::DictValue policy;
+  policy.Set("mutability", MutabilityName(descriptor.mutability));
+  policy.Set("changesAuthority", descriptor.changes_authority);
+  policy.Set("requiredBroker", BrokerName(descriptor.required_broker));
+  policy.Set("requiredBoundary", BoundaryName(descriptor.required_boundary));
+  policy.Set("sensitivity", SensitivityName(descriptor.sensitivity));
+  policy.Set("featureGate", FeatureGateName(descriptor.feature_gate));
+  policy.Set("missingPolicy", MissingPolicyName(descriptor.missing_policy));
+
+  base::DictValue tool;
+  tool.Set("name", descriptor.tool_name);
+  tool.Set("description", descriptor.description);
+  tool.Set("inputSchema", BuildCatalogInputSchema(descriptor));
+  tool.Set("capabilityId", descriptor.canonical_id);
+  tool.Set("schemaVersion", descriptor.schema_version);
+  tool.Set("resultVersion", descriptor.result_version);
+  tool.Set("policy", std::move(policy));
+  return tool;
+}
+
+std::optional<base::DictValue>
+MahoBrowserToolRegistry::SerializeControlPlaneCapability(
+    const CapabilityDescriptor &descriptor) {
+  if (!HasSurface(descriptor, kControlPlane) ||
+      !HasCompletePublicMetadata(descriptor)) {
+    return std::nullopt;
+  }
+  base::DictValue tool;
+  tool.Set("name", descriptor.tool_name);
+  tool.Set("description", descriptor.description);
+  tool.Set("inputSchema", BuildCatalogInputSchema(descriptor));
+  tool.Set("capabilityId", descriptor.canonical_id);
+  tool.Set("schemaVersion", descriptor.schema_version);
+  tool.Set("resultVersion", descriptor.result_version);
+  return tool;
+}
+
+// static
+base::ListValue MahoBrowserToolRegistry::SerializePublicMcpCapabilities(
+    bool mail_enabled, bool routines_enabled, bool vault_enabled) {
+  base::ListValue tools;
+  for (const CapabilityDescriptor *descriptor : GetCapabilitiesForSurface(
+           kPublicMcp, mail_enabled, routines_enabled, vault_enabled)) {
+    std::optional<base::DictValue> tool =
+        SerializePublicMcpCapability(*descriptor);
+    if (tool.has_value()) {
+      tools.Append(std::move(*tool));
+    }
+  }
+  return tools;
+}
+
+base::DictValue MahoBrowserToolRegistry::SerializeDiagnostics(
+    Surface surface,
+    bool mail_enabled,
+    bool routines_enabled,
+    bool vault_enabled) {
+  const auto descriptors = GetCapabilitiesForSurface(
+      surface, mail_enabled, routines_enabled, vault_enabled);
+  std::vector<std::string_view> sorted_ids;
+  std::string canonical_bytes;
+  for (const CapabilityDescriptor* descriptor : descriptors) {
+    sorted_ids.push_back(descriptor->canonical_id);
+    canonical_bytes.append(descriptor->canonical_id)
+        .append("\t")
+        .append(descriptor->tool_name)
+        .append("\t")
+        .append(base::NumberToString(descriptor->schema_version))
+        .append("\t")
+        .append(base::NumberToString(descriptor->result_version))
+        .append("\n");
+  }
+  std::ranges::sort(sorted_ids);
+  base::ListValue ids;
+  for (std::string_view id : sorted_ids) {
+    ids.Append(id);
+  }
+
+  base::DictValue gates;
+  gates.Set("mailBeta", mail_enabled);
+  gates.Set("routines", routines_enabled);
+  gates.Set("vault", vault_enabled);
+
+  const char* surface_name = "publicMcp";
+  switch (surface) {
+    case kDesktopAgent:
+      surface_name = "desktopAgent";
+      break;
+    case kPublicMcp:
+      surface_name = "publicMcp";
+      break;
+    case kControlPlane:
+      surface_name = "controlPlane";
+      break;
+    case kCliAgent:
+      surface_name = "cliAgent";
+      break;
+    case kCliGeneric:
+      surface_name = "cliGeneric";
+      break;
+  }
+
+  base::DictValue projection;
+  projection.Set("count", static_cast<int>(descriptors.size()));
+  projection.Set("ids", std::move(ids));
+  base::DictValue surfaces;
+  surfaces.Set(surface_name, std::move(projection));
+
+  base::DictValue diagnostics;
+  diagnostics.Set("catalogVersion", kCatalogVersion);
+  diagnostics.Set("catalogHash",
+                  base::HexEncode(crypto::SHA256HashString(canonical_bytes)));
+  diagnostics.Set("schemaVersion", kSchemaVersion);
+  diagnostics.Set("resultVersion", kResultVersion);
+  diagnostics.Set("canonicalCount",
+                  static_cast<int>(GetCapabilityDescriptors().size()));
+  diagnostics.Set("gates", std::move(gates));
+  diagnostics.Set("surfaces", std::move(surfaces));
+  diagnostics.Set("intentionalExclusions",
+                  base::ListValue()
+                      .Append("other_surface_capabilities")
+                      .Append("sensitive_payloads"));
+  return diagnostics;
+}
+
+base::ListValue MahoBrowserToolRegistry::SerializeAgentCapabilities(
+    bool mail_enabled, bool routines_enabled, bool vault_enabled) {
+  base::ListValue tools;
+  for (const CapabilityDescriptor *descriptor :
+       GetCapabilitiesForSurface(kDesktopAgent, mail_enabled, routines_enabled,
+                                 vault_enabled)) {
+    if (!HasCompletePublicMetadata(*descriptor)) {
+      continue;
+    }
+    base::DictValue policy;
+    policy.Set("sensitive", descriptor->sensitivity != Sensitivity::kLow);
+    const bool can_auto_approve =
+        descriptor->mutability == Mutability::kReadOnly &&
+        !descriptor->changes_authority &&
+        descriptor->sensitivity == Sensitivity::kLow;
+    policy.Set("permission", can_auto_approve ? "auto_approve" : "always_ask");
+
+    base::DictValue tool;
+    tool.Set("capabilityId", descriptor->canonical_id);
+    tool.Set("name", descriptor->tool_name);
+    tool.Set("description", descriptor->description);
+    tool.Set("inputSchema", BuildDesktopInputSchema(*descriptor));
+    tool.Set("schemaVersion", descriptor->schema_version);
+    tool.Set("policy", std::move(policy));
+    tools.Append(std::move(tool));
+  }
+  return tools;
+}
+
+base::DictValue MahoBrowserToolRegistry::SerializeExecutionResult(
+    const CapabilityDescriptor &descriptor, std::string output_json,
+    const ExecutionReceiptContext &context) {
+  base::DictValue receipt;
+  receipt.Set("capabilityId", descriptor.canonical_id);
+  receipt.Set("executionId", context.execution_id);
+  receipt.Set("metadata", BuildReceiptMetadata(descriptor, context));
+
+  base::DictValue execution;
+  execution.Set("outputJson", std::move(output_json));
+  execution.Set("receipt", std::move(receipt));
+  return execution;
+}
+
 MahoBrowserToolRegistry::ToolSchema::ToolSchema() = default;
-MahoBrowserToolRegistry::ToolSchema::ToolSchema(ToolSchema&&) = default;
-MahoBrowserToolRegistry::ToolSchema&
-MahoBrowserToolRegistry::ToolSchema::operator=(ToolSchema&&) = default;
+MahoBrowserToolRegistry::ToolSchema::ToolSchema(ToolSchema &&) = default;
+MahoBrowserToolRegistry::ToolSchema &
+MahoBrowserToolRegistry::ToolSchema::operator=(ToolSchema &&) = default;
 MahoBrowserToolRegistry::ToolSchema::~ToolSchema() = default;
 
 // static
-const std::vector<MahoBrowserToolRegistry::ToolSchema>&
+const std::vector<MahoBrowserToolRegistry::ToolSchema> &
 MahoBrowserToolRegistry::GetPhase1ToolSchemas() {
-  static const base::NoDestructor<std::vector<ToolSchema>> kTools(BuildPhase1ToolSchemas());
+  static const base::NoDestructor<std::vector<ToolSchema>> kTools(
+      BuildPhase1ToolSchemas());
   return *kTools;
 }
 
 // static
-const MahoBrowserToolRegistry::ToolSchema* MahoBrowserToolRegistry::FindToolSchema(
-    const std::string& tool_name) {
-  for (const ToolSchema& schema : GetPhase1ToolSchemas()) {
+const MahoBrowserToolRegistry::ToolSchema *
+MahoBrowserToolRegistry::FindToolSchema(const std::string &tool_name) {
+  for (const ToolSchema &schema : GetPhase1ToolSchemas()) {
     if (schema.name == tool_name) {
       return &schema;
     }
@@ -445,14 +1238,14 @@ const MahoBrowserToolRegistry::ToolSchema* MahoBrowserToolRegistry::FindToolSche
 }
 
 // static
-base::ListValue MahoBrowserToolRegistry::SerializePhase1ToolSchemas(
-    bool enabled) {
+base::ListValue
+MahoBrowserToolRegistry::SerializePhase1ToolSchemas(bool enabled) {
   if (!enabled) {
     return base::ListValue();
   }
 
   base::ListValue tools;
-  for (const ToolSchema& schema : GetPhase1ToolSchemas()) {
+  for (const ToolSchema &schema : GetPhase1ToolSchemas()) {
     base::DictValue tool;
     tool.Set("name", schema.name);
     tool.Set("description", schema.description);
@@ -467,6 +1260,6 @@ base::ListValue MahoBrowserToolRegistry::SerializePhase1ToolSchemas(
 }
 
 bool MahoBrowserToolRegistry::IsBrowserActionTool(
-    const std::string& tool_name) {
+    const std::string &tool_name) {
   return maho::ai::FindBrowserActionContract(tool_name) != nullptr;
 }

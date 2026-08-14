@@ -60,7 +60,9 @@ pub enum McpBridgeError {
     /// Failed to read the DPAPI session token file.
     #[error("token file read failed at {path}: {source}")]
     TokenFileRead {
+        /// Session-token file path that could not be read.
         path: PathBuf,
+        /// Underlying filesystem error.
         #[source]
         source: io::Error,
     },

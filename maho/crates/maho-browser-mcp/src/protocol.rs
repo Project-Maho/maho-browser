@@ -96,8 +96,13 @@ pub struct JsonRpcError {
 pub struct InitializeParams {
     /// Protocol version string (e.g., "2025-03-26").
     pub protocol_version: String,
-    /// Information about the connecting client.
+    /// Information about the connecting client. This is descriptive only and
+    /// never grants authority or selects the browser display label.
     pub client_info: ClientInfo,
+    /// Closed classification hint selected by the local transport caller.
+    /// The browser honors known values only when the authenticated peer
+    /// executable matches the corresponding shipped Maho executable.
+    pub controller_kind: ControllerKind,
     /// DPAPI session token (base64-encoded, Windows only).
     /// When present, the server validates against its in-memory token.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,10 +112,37 @@ pub struct InitializeParams {
 /// Client identification sent during initialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientInfo {
-    /// Client name.
+    /// Client name. Descriptive only; the browser does not derive authority or
+    /// trusted display identity from this caller-controlled string.
     pub name: String,
     /// Client version.
     pub version: String,
+}
+
+/// Browser transport controller classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerKind {
+    /// One-shot and scripted `maho` CLI commands.
+    MahoCli,
+    /// The persistent interactive `maho browser repl` session.
+    MahoCliRepl,
+    /// The shipped public stdio MCP bridge executable.
+    MahoBrowserMcp,
+    /// An arbitrary local MCP host with no trusted Maho executable identity.
+    ThirdParty,
+}
+
+impl ControllerKind {
+    /// Stable descriptive client name sent alongside the classification hint.
+    pub const fn client_name(self) -> &'static str {
+        match self {
+            Self::MahoCli => "maho-cli",
+            Self::MahoCliRepl => "maho-cli-repl",
+            Self::MahoBrowserMcp => "maho-browser-mcp",
+            Self::ThirdParty => "external-mcp",
+        }
+    }
 }
 
 /// Result returned from a successful `initialize` response.
@@ -121,8 +153,33 @@ pub struct InitializeResult {
     pub protocol_version: String,
     /// Server identification.
     pub server_info: ServerInfoWire,
+    /// Browser-owned identity bound to this transport session.
+    #[serde(default)]
+    pub session_info: SessionInfo,
     /// Advertised server capabilities.
     pub capabilities: Capabilities,
+}
+
+/// Browser-owned controller identity for one transport connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    /// Opaque, browser-generated per-connection identifier.
+    pub id: String,
+    /// Safe browser-selected display label.
+    pub display_label: String,
+    /// Browser-validated controller classification.
+    pub controller_kind: ControllerKind,
+}
+
+impl Default for SessionInfo {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            display_label: "External MCP".to_string(),
+            controller_kind: ControllerKind::ThirdParty,
+        }
+    }
 }
 
 /// Server identification in the wire format.
@@ -508,16 +565,32 @@ mod tests {
                 name: "maho-browser-mcp".to_string(),
                 version: "0.1.0".to_string(),
             },
+            controller_kind: ControllerKind::MahoBrowserMcp,
             auth_token: None,
         };
         let val = serde_json::to_value(&params).unwrap();
         assert_eq!(val["protocolVersion"], "2025-03-26");
         assert_eq!(val["clientInfo"]["name"], "maho-browser-mcp");
+        assert_eq!(val["controllerKind"], "maho-browser-mcp");
         assert!(val.get("authToken").is_none());
 
         let back: InitializeParams = serde_json::from_value(val).unwrap();
         assert_eq!(back.protocol_version, "2025-03-26");
+        assert_eq!(back.controller_kind, ControllerKind::MahoBrowserMcp);
         assert!(back.auth_token.is_none());
+    }
+
+    #[test]
+    fn controller_kinds_have_stable_wire_names() {
+        let cases = [
+            (ControllerKind::MahoCli, "maho-cli"),
+            (ControllerKind::MahoCliRepl, "maho-cli-repl"),
+            (ControllerKind::MahoBrowserMcp, "maho-browser-mcp"),
+            (ControllerKind::ThirdParty, "third-party"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(serde_json::to_value(kind).unwrap(), json!(expected));
+        }
     }
 
     #[test]
@@ -528,6 +601,11 @@ mod tests {
                 name: "maho-browser".to_string(),
                 version: "0.1.0".to_string(),
             },
+            session_info: SessionInfo {
+                id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                display_label: "Maho Browser MCP".to_string(),
+                controller_kind: ControllerKind::MahoBrowserMcp,
+            },
             capabilities: Capabilities {
                 tools: Some(json!({})),
             },
@@ -535,10 +613,15 @@ mod tests {
         let val = serde_json::to_value(&result).unwrap();
         assert_eq!(val["serverInfo"]["name"], "maho-browser");
         assert_eq!(val["protocolVersion"], "2025-03-26");
+        assert_eq!(val["sessionInfo"]["displayLabel"], "Maho Browser MCP");
         assert!(val["capabilities"]["tools"].is_object());
 
         let back: InitializeResult = serde_json::from_value(val).unwrap();
         assert_eq!(back.server_info.name, "maho-browser");
+        assert_eq!(
+            back.session_info.controller_kind,
+            ControllerKind::MahoBrowserMcp
+        );
     }
 
     #[test]
