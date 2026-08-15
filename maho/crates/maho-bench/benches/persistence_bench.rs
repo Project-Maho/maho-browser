@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use maho_core::maho_core::MahoCore;
 use maho_types::common::Url;
 use maho_types::events::shell_event::ShellEvent;
@@ -25,6 +25,24 @@ fn bench_persistence(c: &mut Criterion) {
             tab_ids.push(tab.id.clone());
         }
     }
+    core.save_state().unwrap();
+
+    c.bench_function("core_startup_cold_load", |b| {
+        b.iter(|| {
+            let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
+            restored.load_state().unwrap();
+            let tabs = restored.get_tab_view_models();
+            black_box(tabs);
+        });
+    });
+
+    c.bench_function("core_startup_load_state", |b| {
+        b.iter(|| {
+            let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
+            restored.load_state().unwrap();
+            black_box(restored.get_active_space_id());
+        });
+    });
 
     c.bench_function("lmdb_save_state_100_tabs", |b| {
         b.iter(|| {

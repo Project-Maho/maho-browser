@@ -42,5 +42,5 @@ export type {
 } from './types';
 
 export { callBridge, call, isBridgeRpcError, detectPlatform } from './rpc';
-export { subscribeStream } from './streaming';
+export { subscribeStream, subscribeStreamWithCadence } from './streaming';
 export type { ImageDelta, StreamSubscriber, ToolCallDelta } from './streaming';

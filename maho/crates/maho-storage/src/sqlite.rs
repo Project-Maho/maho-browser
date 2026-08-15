@@ -19,6 +19,7 @@ pub use vault::{
 static SQLCIPHER_KEY: RwLock<Option<String>> = RwLock::new(None);
 
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+const SQLITE_SCHEMA_VERSION: i64 = 2;
 
 const REQUIRED_VAULT_TABLES: &[&str] = &[
     "vault_schema_info",
@@ -501,7 +502,6 @@ impl SqliteStorage {
             path: path.to_string(),
         };
         storage.initialize_schema()?;
-        storage.run_migrations()?;
         Ok(storage)
     }
 
@@ -521,7 +521,6 @@ impl SqliteStorage {
             path: ":memory:".to_string(),
         };
         storage.initialize_schema()?;
-        storage.run_migrations()?;
         Ok(storage)
     }
 
@@ -851,8 +850,41 @@ impl SqliteStorage {
 
         self.run_ai_extensibility_migrations()?;
 
+        self.run_memory_index_migrations()?;
+
         self.run_routines_migrations()?;
 
+        Ok(())
+    }
+
+    /// Additive change journal used by the persistent memory ANN index.
+    ///
+    /// Triggers keep the journal complete even when memory rows are changed by
+    /// pruning or future call sites that bypass the storage helper methods.
+    fn run_memory_index_migrations(&self) -> Result<(), StorageError> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory_index_changes (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact_id TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_index_changes_fact
+                ON memory_index_changes(fact_id, sequence DESC);
+            CREATE TRIGGER IF NOT EXISTS memory_index_track_insert
+                AFTER INSERT ON memory_facts
+                BEGIN
+                    INSERT INTO memory_index_changes(fact_id) VALUES (NEW.id);
+                END;
+            CREATE TRIGGER IF NOT EXISTS memory_index_track_embedding_update
+                AFTER UPDATE OF embedding ON memory_facts
+                BEGIN
+                    INSERT INTO memory_index_changes(fact_id) VALUES (NEW.id);
+                END;
+            CREATE TRIGGER IF NOT EXISTS memory_index_track_delete
+                AFTER DELETE ON memory_facts
+                BEGIN
+                    INSERT INTO memory_index_changes(fact_id) VALUES (OLD.id);
+                END;",
+        )?;
         Ok(())
     }
 
@@ -1116,6 +1148,13 @@ impl SqliteStorage {
     }
 
     fn initialize_schema(&self) -> Result<(), StorageError> {
+        let schema_version = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+        if schema_version >= SQLITE_SCHEMA_VERSION {
+            return Ok(());
+        }
+
         let has_old_schema: bool = self
             .conn
             .query_row(
@@ -1615,6 +1654,9 @@ impl SqliteStorage {
             rusqlite::params![cutoff_30d],
         );
 
+        self.run_migrations()?;
+        self.conn
+            .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION)?;
         Ok(())
     }
 
@@ -2042,13 +2084,23 @@ impl SqliteStorage {
     }
 
     pub fn load_boosts(&self) -> Result<Vec<maho_types::boost::Boost>, StorageError> {
+        self.load_boosts_with_active_state()
+            .map(|rows| rows.into_iter().map(|(boost, _)| boost).collect())
+    }
+
+    pub fn load_boosts_with_active_state(
+        &self,
+    ) -> Result<Vec<(maho_types::boost::Boost, Option<String>)>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, domain, name, enable_color_boost, dot_angle_deg, secondary_dot_angle_deg_delta,
-                    brightness, saturation, contrast, auto_theme, smart_invert,
-                    font_family, text_case_override, zap_selectors, custom_css,
-                    created_at, updated_at,
-                    dot_pos_x, dot_pos_y, dot_distance, secondary_dot_pos_x, secondary_dot_pos_y,
-                    change_was_made, size_mode FROM boosts",
+            "SELECT b.id, b.domain, b.name, b.enable_color_boost, b.dot_angle_deg,
+                    b.secondary_dot_angle_deg_delta, b.brightness, b.saturation, b.contrast,
+                    b.auto_theme, b.smart_invert, b.font_family, b.text_case_override,
+                    b.zap_selectors, b.custom_css, b.created_at, b.updated_at,
+                    b.dot_pos_x, b.dot_pos_y, b.dot_distance, b.secondary_dot_pos_x,
+                    b.secondary_dot_pos_y, b.change_was_made, b.size_mode,
+                    s.active_boost_id
+             FROM boosts b
+             LEFT JOIN domain_boost_state s ON s.domain = b.domain",
         )?;
         let rows = stmt.query_map([], |row| {
             let id = row.get::<_, String>(0)?;
@@ -2091,40 +2143,45 @@ impl SqliteStorage {
             let zap_selectors: Vec<String> =
                 serde_json::from_str(&zap_selectors_json).unwrap_or_default();
 
-            Ok(maho_types::boost::Boost {
-                id: maho_types::identifiers::BoostId::new(id),
-                domain,
-                name,
-                color: maho_types::boost::ColorBoost {
-                    dot_pos: maho_types::boost::Point {
-                        x: dot_pos_x,
-                        y: dot_pos_y,
+            let active_boost_id = row.get::<_, Option<String>>(24)?;
+
+            Ok((
+                maho_types::boost::Boost {
+                    id: maho_types::identifiers::BoostId::new(id),
+                    domain,
+                    name,
+                    color: maho_types::boost::ColorBoost {
+                        dot_pos: maho_types::boost::Point {
+                            x: dot_pos_x,
+                            y: dot_pos_y,
+                        },
+                        dot_distance,
+                        dot_angle_deg,
+                        secondary_dot_pos: maho_types::boost::Point {
+                            x: secondary_dot_pos_x,
+                            y: secondary_dot_pos_y,
+                        },
+                        secondary_dot_angle_deg_delta,
+                        magic_theme,
+                        color_boost_enabled,
+                        smart_invert,
+                        contrast,
+                        brightness,
+                        saturation,
                     },
-                    dot_distance,
-                    dot_angle_deg,
-                    secondary_dot_pos: maho_types::boost::Point {
-                        x: secondary_dot_pos_x,
-                        y: secondary_dot_pos_y,
+                    typography: maho_types::boost::TypographyBoost {
+                        font_family: font_family_opt.unwrap_or_default(),
+                        case_mode,
+                        size_mode,
                     },
-                    secondary_dot_angle_deg_delta,
-                    magic_theme,
-                    color_boost_enabled,
-                    smart_invert,
-                    contrast,
-                    brightness,
-                    saturation,
+                    zap_selectors,
+                    custom_css,
+                    change_was_made,
+                    created_at: maho_types::common::DateTime::from_iso(created_at_str),
+                    updated_at: maho_types::common::DateTime::from_iso(updated_at_str),
                 },
-                typography: maho_types::boost::TypographyBoost {
-                    font_family: font_family_opt.unwrap_or_default(),
-                    case_mode,
-                    size_mode,
-                },
-                zap_selectors,
-                custom_css,
-                change_was_made,
-                created_at: maho_types::common::DateTime::from_iso(created_at_str),
-                updated_at: maho_types::common::DateTime::from_iso(updated_at_str),
-            })
+                active_boost_id,
+            ))
         })?;
         let mut results = Vec::new();
         for row in rows {
@@ -3829,6 +3886,36 @@ mod tests {
     }
 
     #[test]
+    fn memory_embedding_change_journal_returns_latest_state() {
+        let db = test_store();
+        db.insert_memory(MemoryInsertParams {
+            id: "changed-fact",
+            fact: "journal fact",
+            source: "test",
+            session_id: None,
+            categories: "[]",
+            importance: 0.5,
+            metadata: None,
+        })
+        .unwrap();
+        let after_insert = db.memory_index_change_sequence().unwrap();
+
+        db.update_memory_embedding("changed-fact", &[1, 2, 3, 4])
+            .unwrap();
+        let (after_embedding, changes) = db.load_memory_embeddings_since(after_insert).unwrap();
+        assert!(after_embedding > after_insert);
+        assert_eq!(
+            changes,
+            vec![("changed-fact".to_string(), Some(vec![1, 2, 3, 4]))]
+        );
+
+        db.delete_memory("changed-fact").unwrap();
+        let (after_delete, changes) = db.load_memory_embeddings_since(after_embedding).unwrap();
+        assert!(after_delete > after_embedding);
+        assert_eq!(changes, vec![("changed-fact".to_string(), None)]);
+    }
+
+    #[test]
     fn test_search_memories_fts_respects_top_k() {
         // Given: more matching facts than the requested result limit.
         let db = test_store();
@@ -4203,6 +4290,55 @@ impl SqliteStorage {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Return the latest state of every memory fact changed after `sequence`,
+    /// along with the journal high-water mark. A `None` embedding means the
+    /// fact was deleted or currently has no embedding and must be removed from
+    /// the ANN index.
+    pub fn load_memory_embeddings_since(
+        &self,
+        sequence: i64,
+    ) -> Result<(i64, Vec<(String, Option<Vec<u8>>)>), StorageError> {
+        let high_water = self.conn.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM memory_index_changes",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        if high_water == 0 || high_water == sequence {
+            return Ok((high_water, Vec::new()));
+        }
+        if high_water < sequence {
+            return Ok((high_water, Vec::new()));
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT c.fact_id, f.embedding
+             FROM memory_index_changes c
+             LEFT JOIN memory_facts f ON f.id = c.fact_id
+             WHERE c.sequence > ?1 AND c.sequence <= ?2
+               AND c.sequence = (
+                   SELECT MAX(latest.sequence)
+                   FROM memory_index_changes latest
+                   WHERE latest.fact_id = c.fact_id AND latest.sequence <= ?2
+               )
+             ORDER BY c.sequence",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![sequence, high_water], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
+        })?;
+        let changes = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok((high_water, changes))
+    }
+
+    pub fn memory_index_change_sequence(&self) -> Result<i64, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) FROM memory_index_changes",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from)
     }
 
     pub fn search_memories_fts(

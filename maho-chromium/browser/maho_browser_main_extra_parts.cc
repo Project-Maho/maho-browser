@@ -29,6 +29,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/trace_event/trace_event.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -3713,6 +3714,7 @@ size_t MahoBrowserMainExtraParts::McpVaultCredentialLeaseCountForTesting()
 
 void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                 bool is_initial_profile) {
+  TRACE_EVENT0("browser", "MahoBrowserMainExtraParts::PostProfileInit");
   const bool is_regular = profile ? profile->IsRegularProfile() : false;
   const bool incognito_switch =
       base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kIncognito);
@@ -4000,13 +4002,18 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
 
   base::FilePath key_path = storage_path_.AppendASCII("maho_storage.key");
   base::FilePath database_path = storage_path_.AppendASCII("maho.db");
-  const maho::core::StorageKeySetupResult storage_key_setup =
-      maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe(),
-                                         database_path.AsUTF8Unsafe());
+  maho::core::StorageKeySetupResult storage_key_setup;
+  {
+    TRACE_EVENT0("browser", "Maho::DeriveAndSetStorageKey");
+    storage_key_setup =
+        maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe(),
+                                           database_path.AsUTF8Unsafe());
+  }
   LOG(INFO) << "Maho Vault preflight state: "
             << maho::core::VaultPreflightStateName(
                    storage_key_setup.vault_preflight_state);
   if (storage_key_setup.storage_key_ready) {
+    TRACE_EVENT0("browser", "Maho::CreateWithStorage");
     core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
   } else {
     LOG(ERROR) << "Maho storage key derivation/setting failed; password "
@@ -4016,7 +4023,12 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
   if (core_) {
     maho::SetCoreForProfile(core_, profile);
     maho::core::InstallLogCallback();
-    maho::core::LoadState(core_);
+    {
+      TRACE_EVENT0("browser", "Maho::LoadState");
+      maho::core::LoadState(core_);
+    }
+    LOG(INFO) << "Maho core readiness after LoadState: "
+              << static_cast<int>(maho_core_readiness_status(core_));
     StartObservingPowerSuspend();
     LOG(INFO) << "Maho core initialized, version: " << maho::core::Version();
     PopulateBridgeFromCore(core_);

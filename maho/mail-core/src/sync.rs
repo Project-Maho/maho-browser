@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::{FuturesUnordered, StreamExt as _};
 use futures::FutureExt as _;
 use maho_core::folder_normalize::{classify_folder, folder_type_to_string, is_visible_folder};
 use maho_core::imap_client::ImapEnvelope;
-use rusqlite::params;
+use rusqlite::{params, TransactionBehavior};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -20,13 +21,29 @@ const DEFAULT_SYNC_INTERVAL_MINUTES: u64 = 15;
 static SYNC_INTERVAL_MINUTES: AtomicU64 = AtomicU64::new(DEFAULT_SYNC_INTERVAL_MINUTES);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const SUPERVISOR_BACKOFF_MAX: Duration = Duration::from_secs(60);
+const MAX_CONCURRENT_ACCOUNT_SYNCS: usize = 2;
+const MAX_CONCURRENT_FOLDER_SYNCS: usize = 4;
+
+static ACCOUNT_SYNC_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| {
+        Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ACCOUNT_SYNCS))
+    });
+static FOLDER_SYNC_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FOLDER_SYNCS)));
 
 #[derive(Clone)]
 struct FolderSyncTarget {
     id: String,
     path: String,
+    folder_type: String,
     last_synced_uid: u32,
     uid_validity: u32,
+}
+
+struct FolderFetchResult {
+    folder: FolderSyncTarget,
+    envelopes: Vec<ImapEnvelope>,
+    server_uid_validity: u32,
 }
 
 pub fn start_sync_worker(ctx: Arc<AppCtx>, account_id: String) -> WorkerHandle {
@@ -182,29 +199,70 @@ async fn idle_loop(
 }
 
 pub async fn sync_account_once(ctx: Arc<AppCtx>, account_id: &str) -> Result<usize> {
-    let account_id = account_id.to_string();
-    tokio::task::spawn_blocking(move || sync_account_blocking(&ctx, &account_id))
+    let _account_permit = Arc::clone(&ACCOUNT_SYNC_SEMAPHORE)
+        .acquire_owned()
         .await
-        .map_err(|e| MailFfiError::Internal(format!("sync join error: {e}")))?
-}
+        .map_err(|_| MailFfiError::Internal("account sync semaphore closed".into()))?;
+    let account_id = account_id.to_string();
+    let auth_ctx = Arc::clone(&ctx);
+    let auth_account_id = account_id.clone();
+    let resolved = spawn_blocking_result("auth", move || {
+        let conn = auth_ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        resolve_account_auth(&conn, &auth_ctx.credential_key, &auth_account_id)
+    })
+    .await?;
 
-fn sync_account_blocking(ctx: &AppCtx, account_id: &str) -> Result<usize> {
-    let conn = ctx
-        .pool
-        .get()
-        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-    let resolved = resolve_account_auth(&conn, &ctx.credential_key, account_id)?;
-    sync_folders(&conn, &resolved)?;
-    let folders = sync_targets(&conn, account_id)?;
-    let mut inserted = 0usize;
+    let folder_metadata = {
+        let resolved = resolved.clone();
+        spawn_blocking_result("folder fetch", move || {
+            let mut client = connect_imap(&resolved)?;
+            let folders = client.list_folders()?;
+            safe_logout(client);
+            Ok(folders)
+        })
+        .await?
+    };
+
+    let folder_ctx = Arc::clone(&ctx);
+    let folder_account_id = account_id.clone();
+    spawn_blocking_result("folder write", move || {
+        let mut conn = folder_ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        sync_folders(&mut conn, &folder_account_id, &folder_metadata)
+    })
+    .await?;
+
+    let targets_ctx = Arc::clone(&ctx);
+    let targets_account_id = account_id.clone();
+    let folders = spawn_blocking_result("sync target read", move || {
+        let conn = targets_ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        sync_targets(&conn, &targets_account_id)
+    })
+    .await?;
+
+    let mut pending = FuturesUnordered::new();
     for folder in folders {
-        let folder_type = folder_type(&conn, &folder.id)?;
-        let (folder_inserted, arrivals) = sync_folder(&conn, &resolved, &folder)?;
+        let ctx = Arc::clone(&ctx);
+        let resolved = resolved.clone();
+        pending.push(sync_folder(ctx, resolved, folder));
+    }
+
+    let mut inserted = 0usize;
+    while let Some(result) = pending.next().await {
+        let (folder, folder_inserted, arrivals) = result?;
         inserted += folder_inserted;
-        if should_emit_new_mail(&folder_type, folder_inserted) {
+        if should_emit_new_mail(&folder.folder_type, folder_inserted) {
             for arrival in arrivals {
                 crate::ffi::emit_new_mail_event(
-                    account_id,
+                    &account_id,
                     &arrival.email_id,
                     &arrival.message_id,
                     &arrival.sender,
@@ -218,12 +276,23 @@ fn sync_account_blocking(ctx: &AppCtx, account_id: &str) -> Result<usize> {
     Ok(inserted)
 }
 
-fn sync_folders(conn: &rusqlite::Connection, resolved: &AccountAuth) -> Result<()> {
-    let mut client = connect_imap(resolved)?;
-    let folders = client.list_folders()?;
-    safe_logout(client);
+async fn spawn_blocking_result<T, F>(operation: &'static str, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| MailFfiError::Internal(format!("{operation} join error: {e}")))?
+}
 
-    let existing = existing_folders(conn, &resolved.account.id)?;
+fn sync_folders(
+    conn: &mut rusqlite::Connection,
+    account_id: &str,
+    folders: &[maho_core::folder_normalize::FolderMetadata],
+) -> Result<()> {
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = existing_folders(&transaction, account_id)?;
     let mut visible_paths = std::collections::HashSet::new();
     for metadata in folders
         .iter()
@@ -232,22 +301,17 @@ fn sync_folders(conn: &rusqlite::Connection, resolved: &AccountAuth) -> Result<(
         visible_paths.insert(metadata.raw_path.clone());
         let folder_type = folder_type_to_string(&classify_folder(metadata));
         if let Some(existing_id) = existing.get(&metadata.raw_path) {
-            conn.execute(
+            transaction.execute(
                 "UPDATE folders SET name = ?1, folder_type = ?2 WHERE id = ?3 AND account_id = ?4",
-                params![
-                    metadata.display_name,
-                    folder_type,
-                    existing_id,
-                    resolved.account.id
-                ],
+                params![metadata.display_name, folder_type, existing_id, account_id],
             )?;
         } else {
-            conn.execute(
+            transaction.execute(
                 "INSERT INTO folders (id, account_id, name, path, folder_type, unread_count, total_count)
                  VALUES (?1, ?2, ?3, ?4, ?5, 0, 0)",
                 params![
                     Uuid::new_v4().to_string(),
-                    resolved.account.id,
+                    account_id,
                     metadata.display_name,
                     metadata.raw_path,
                     folder_type
@@ -259,11 +323,12 @@ fn sync_folders(conn: &rusqlite::Connection, resolved: &AccountAuth) -> Result<(
         .keys()
         .filter(|path| !visible_paths.contains(*path))
     {
-        conn.execute(
+        transaction.execute(
             "DELETE FROM folders WHERE account_id = ?1 AND path = ?2",
-            params![resolved.account.id, stale_path],
+            params![account_id, stale_path],
         )?;
     }
+    transaction.commit()?;
     Ok(())
 }
 
@@ -280,15 +345,16 @@ fn existing_folders(
 
 fn sync_targets(conn: &rusqlite::Connection, account_id: &str) -> Result<Vec<FolderSyncTarget>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, last_synced_uid, uid_validity FROM folders
+        "SELECT id, path, folder_type, last_synced_uid, uid_validity FROM folders
          WHERE account_id = ?1 AND folder_type IN ('inbox', 'sent', 'drafts', 'archive', 'custom')",
     )?;
     let rows = stmt.query_map([account_id], |row| {
-        let last_uid: i64 = row.get(2)?;
-        let uid_validity: i64 = row.get(3)?;
+        let last_uid: i64 = row.get(3)?;
+        let uid_validity: i64 = row.get(4)?;
         Ok(FolderSyncTarget {
             id: row.get(0)?,
             path: row.get(1)?,
+            folder_type: row.get(2)?,
             last_synced_uid: u32::try_from(last_uid).unwrap_or(0),
             uid_validity: u32::try_from(uid_validity).unwrap_or(0),
         })
@@ -296,49 +362,62 @@ fn sync_targets(conn: &rusqlite::Connection, account_id: &str) -> Result<Vec<Fol
     Ok(rows.filter_map(std::result::Result::ok).collect())
 }
 
-fn folder_type(conn: &rusqlite::Connection, folder_id: &str) -> Result<String> {
-    conn.query_row(
-        "SELECT folder_type FROM folders WHERE id = ?1",
-        [folder_id],
-        |row| row.get(0),
-    )
-    .map_err(Into::into)
-}
-
 fn should_emit_new_mail(folder_type: &str, inserted: usize) -> bool {
     folder_type == "inbox" && inserted > 0
 }
 
-fn sync_folder(
-    conn: &rusqlite::Connection,
-    resolved: &AccountAuth,
-    folder: &FolderSyncTarget,
-) -> Result<(usize, Vec<NewMailArrival>)> {
-    let mut client = connect_imap(resolved)?;
-    let initial_since_uid = if folder.uid_validity == 0 {
-        0
-    } else {
-        folder.last_synced_uid
-    };
-    let (mut envelopes, server_uid_validity) =
-        client.fetch_envelopes_since_uid(&folder.path, initial_since_uid)?;
+async fn sync_folder(
+    ctx: Arc<AppCtx>,
+    resolved: AccountAuth,
+    folder: FolderSyncTarget,
+) -> Result<(FolderSyncTarget, usize, Vec<NewMailArrival>)> {
+    let _folder_permit = Arc::clone(&FOLDER_SYNC_SEMAPHORE)
+        .acquire_owned()
+        .await
+        .map_err(|_| MailFfiError::Internal("folder sync semaphore closed".into()))?;
+    let account_id = resolved.account.id.clone();
+    let fetched_folder = folder.clone();
+    let fetched = spawn_blocking_result("message fetch", move || {
+        let mut client = connect_imap(&resolved)?;
+        let initial_since_uid = if fetched_folder.uid_validity == 0 {
+            0
+        } else {
+            fetched_folder.last_synced_uid
+        };
+        let (mut envelopes, server_uid_validity) =
+            client.fetch_envelopes_since_uid(&fetched_folder.path, initial_since_uid)?;
+        let reset_required = fetched_folder.uid_validity != 0
+            && server_uid_validity != 0
+            && server_uid_validity != fetched_folder.uid_validity;
+        if reset_required {
+            let (reset_envelopes, _) = client.fetch_envelopes_since_uid(&fetched_folder.path, 0)?;
+            envelopes = reset_envelopes;
+        }
+        safe_logout(client);
+        Ok(FolderFetchResult {
+            folder: fetched_folder,
+            envelopes,
+            server_uid_validity,
+        })
+    })
+    .await?;
 
-    let reset_required = folder.uid_validity != 0
-        && server_uid_validity != 0
-        && server_uid_validity != folder.uid_validity;
-    if reset_required {
-        let (reset_envelopes, _) = client.fetch_envelopes_since_uid(&folder.path, 0)?;
-        envelopes = reset_envelopes;
-    }
-
-    safe_logout(client);
-    sync_envelopes_into_cache(
-        conn,
-        &resolved.account.id,
-        folder,
-        &envelopes,
-        server_uid_validity,
-    )
+    let result_folder = fetched.folder.clone();
+    let (inserted, arrivals) = spawn_blocking_result("message batch write", move || {
+        let conn = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        sync_envelopes_into_cache(
+            &conn,
+            &account_id,
+            &fetched.folder,
+            &fetched.envelopes,
+            fetched.server_uid_validity,
+        )
+    })
+    .await?;
+    Ok((result_folder, inserted, arrivals))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,8 +439,15 @@ fn sync_envelopes_into_cache(
 ) -> Result<(usize, Vec<NewMailArrival>)> {
     let rebuilding_baseline = folder.uid_validity == 0
         || (server_uid_validity != 0 && server_uid_validity != folder.uid_validity);
-    let (inserted, arrivals) =
-        insert_envelopes_with_arrivals(conn, account_id, folder, envelopes, server_uid_validity)?;
+    let transaction = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let (inserted, arrivals) = insert_envelopes_with_arrivals(
+        &transaction,
+        account_id,
+        folder,
+        envelopes,
+        server_uid_validity,
+    )?;
+    transaction.commit()?;
     Ok((
         inserted,
         if rebuilding_baseline {
@@ -418,6 +504,16 @@ fn insert_envelopes_with_arrivals(
             max_uid = env.uid;
         }
         if existing_uids.contains(&env.uid) {
+            conn.execute(
+                "UPDATE emails SET is_read = ?1, is_starred = ?2
+                 WHERE folder_id = ?3 AND uid = ?4",
+                params![
+                    env.flags.iter().any(|flag| flag.contains("Seen")),
+                    env.flags.iter().any(|flag| flag.contains("Flagged")),
+                    folder.id,
+                    env.uid as i64,
+                ],
+            )?;
             continue;
         }
         let email_id = Uuid::new_v4().to_string();
@@ -631,6 +727,7 @@ mod tests {
         let folder = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 10,
             uid_validity: 1234,
         };
@@ -680,6 +777,7 @@ mod tests {
         let folder = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 99,
             uid_validity: 1234,
         };
@@ -741,6 +839,7 @@ mod tests {
         let folder = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 0,
             uid_validity: 1234,
         };
@@ -831,6 +930,7 @@ mod tests {
         let folder = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 0,
             uid_validity: 1234,
         };
@@ -896,6 +996,7 @@ mod tests {
         let folder = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 0,
             uid_validity: 1234,
         };
@@ -948,6 +1049,7 @@ mod tests {
         let old_epoch = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 99,
             uid_validity: 1234,
         };
@@ -1020,6 +1122,7 @@ mod tests {
         let bootstrap = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 0,
             uid_validity: 0,
         };
@@ -1066,6 +1169,75 @@ mod tests {
     }
 
     #[test]
+    fn message_and_flag_batch_rolls_back_when_folder_cursor_update_fails() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
+             VALUES ('acc1', 'a@example.com', 'A', 'password', 'imap.example.com', 'smtp.example.com', 'a@example.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type, last_synced_uid, uid_validity)
+             VALUES ('inbox', 'acc1', 'Inbox', 'INBOX', 'inbox', 10, 1234)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, folder_id, uid, subject, date, is_read, is_starred)
+             VALUES ('existing', 'acc1', 'inbox', 10, 'Existing', '2026-08-01T00:00:00Z', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_folder_cursor_update
+             BEFORE UPDATE ON folders
+             BEGIN
+                 SELECT RAISE(ABORT, 'cursor rejected');
+             END;",
+        )
+        .unwrap();
+        let folder = FolderSyncTarget {
+            id: "inbox".to_string(),
+            path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
+            last_synced_uid: 10,
+            uid_validity: 1234,
+        };
+        let mut existing = test_envelope(10, "Existing");
+        existing.flags = vec!["\\Seen".to_string(), "\\Flagged".to_string()];
+
+        assert!(sync_envelopes_into_cache(
+            &conn,
+            "acc1",
+            &folder,
+            &[existing, test_envelope(11, "New")],
+            1234,
+        )
+        .is_err());
+
+        let rows: Vec<(i64, bool, bool)> = conn
+            .prepare(
+                "SELECT uid, is_read, is_starred FROM emails WHERE folder_id = 'inbox' ORDER BY uid",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![(10, false, false)]);
+        let cursor: i64 = conn
+            .query_row(
+                "SELECT last_synced_uid FROM folders WHERE id = 'inbox'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cursor, 10);
+    }
+
+    #[test]
     fn duplicate_uids_in_one_sync_count_once() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         maho_core::db::migrations::run_migrations(&conn).unwrap();
@@ -1084,6 +1256,7 @@ mod tests {
         let folder = FolderSyncTarget {
             id: "inbox".to_string(),
             path: "INBOX".to_string(),
+            folder_type: "inbox".to_string(),
             last_synced_uid: 0,
             uid_validity: 1234,
         };

@@ -927,6 +927,10 @@ object MahoBridge {
         return nativeSetSqlcipherKey(hex)
     }
 
+    fun provisionAssets(context: android.content.Context, force: Boolean = false): Boolean {
+        return dev.maho.browser.support.AssetProvisioner.provisionAssetsIfNeeded(context, force)
+    }
+
     // --- JVM callback bridges for JNI ---
     @JvmStatic
     fun requestAgentPermission(toolName: String, arguments: String): Int {

@@ -1,4 +1,5 @@
 import type { PinchSummaryEvent } from './types';
+import { StreamCadenceBuffer } from '../store/chatStore';
 
 export interface ToolCallDelta {
   index?: number;
@@ -62,6 +63,48 @@ export function subscribeStream(sessionId: string, sub: StreamSubscriber): () =>
       subscribers.delete(sessionId);
     }
   };
+}
+
+export function subscribeStreamWithCadence(
+  sessionId: string,
+  sub: StreamSubscriber,
+  options?: { frameWindowMs?: number },
+): () => void {
+  const cadence = new StreamCadenceBuffer({
+    frameWindowMs: options?.frameWindowMs ?? 16,
+    onTokenFlush: (token) => sub.onToken?.(token),
+    onThinkingFlush: (thinking) => sub.onThinking?.(thinking),
+  });
+
+  return subscribeStream(sessionId, {
+    ...sub,
+    onToken: (token) => {
+      cadence.pushToken(token);
+    },
+    onThinking: (thinking) => {
+      cadence.pushThinking(thinking);
+    },
+    onComplete: (finalMessage) => {
+      cadence.flush();
+      sub.onComplete?.(finalMessage);
+    },
+    onError: (error) => {
+      cadence.flush();
+      sub.onError?.(error);
+    },
+    onToolDelta: (delta) => {
+      cadence.flush();
+      sub.onToolDelta?.(delta);
+    },
+    onImageDelta: (delta) => {
+      cadence.flush();
+      sub.onImageDelta?.(delta);
+    },
+    onPinchState: (event) => {
+      cadence.flush();
+      sub.onPinchState?.(event);
+    },
+  });
 }
 
 if (typeof window !== 'undefined') {

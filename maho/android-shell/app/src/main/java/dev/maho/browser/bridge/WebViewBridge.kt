@@ -86,9 +86,7 @@ class WebViewBridge private constructor(
         scope.launch {
             val response = handleEnvelope(envelope)
             val escaped = escapeForJs(response)
-            activity.runOnUiThread {
-                webView.evaluateJavascript("window.__mahoBridgeResponse($escaped)", null)
-            }
+            scheduleJsEvaluation("window.__mahoBridgeResponse($escaped)")
         }
     }
 
@@ -118,6 +116,8 @@ class WebViewBridge private constructor(
         private val buffer = ArrayDeque<String>()
         private var droppedCount = 0
         private var flushScheduled = false
+        private val thinkingBuffer = ArrayDeque<String>()
+        private var thinkingFlushScheduled = false
         private val lock = Any()
 
         fun pushToken(token: String) {
@@ -150,6 +150,50 @@ class WebViewBridge private constructor(
             }
         }
 
+        fun pushThinking(thinking: String) {
+            val snapshot: List<String>?
+            synchronized(lock) {
+                thinkingBuffer.addLast(thinking)
+                if (thinkingBuffer.size > MAX_BUFFER_SIZE) {
+                    thinkingBuffer.removeFirst()
+                }
+                if (thinkingBuffer.size >= MAX_BATCH_SIZE) {
+                    snapshot = thinkingBuffer.toList()
+                    thinkingBuffer.clear()
+                    thinkingFlushScheduled = false
+                    streamHandler.removeCallbacksAndMessages(this)
+                } else {
+                    snapshot = null
+                    if (!thinkingFlushScheduled) {
+                        thinkingFlushScheduled = true
+                        streamHandler.postDelayed({ tryFlushThinking() }, FLUSH_INTERVAL_MS)
+                    }
+                }
+            }
+            if (snapshot != null) {
+                dispatchThinkingBatch(snapshot)
+            }
+        }
+
+        private fun tryFlushThinking() {
+            val snapshot: List<String>
+            synchronized(lock) {
+                thinkingFlushScheduled = false
+                if (thinkingBuffer.isEmpty()) return
+                snapshot = thinkingBuffer.toList()
+                thinkingBuffer.clear()
+            }
+            dispatchThinkingBatch(snapshot)
+        }
+
+        private fun dispatchThinkingBatch(chunks: List<String>) {
+            val combined = chunks.joinToString("")
+            val sidJson = JSONObject.quote(sessionId)
+            val thinkingJson = JSONObject.quote(combined)
+            val js = "window.__mahoStreamThinking($sidJson, $thinkingJson)"
+            dispatchOnUiThread { webView.evaluateJavascript(js, null) }
+        }
+
         private fun tryFlush() {
             val snapshot: List<String>
             val drops: Int
@@ -178,8 +222,10 @@ class WebViewBridge private constructor(
         fun complete(finalMessage: String) {
             val pendingSnapshot: List<String>?
             val drops: Int
+            val pendingThinking: List<String>?
             synchronized(lock) {
                 flushScheduled = false
+                thinkingFlushScheduled = false
                 streamHandler.removeCallbacksAndMessages(this)
                 if (buffer.isNotEmpty()) {
                     pendingSnapshot = buffer.toList()
@@ -190,9 +236,18 @@ class WebViewBridge private constructor(
                     pendingSnapshot = null
                     drops = 0
                 }
+                if (thinkingBuffer.isNotEmpty()) {
+                    pendingThinking = thinkingBuffer.toList()
+                    thinkingBuffer.clear()
+                } else {
+                    pendingThinking = null
+                }
             }
             if (pendingSnapshot != null) {
                 dispatchBatch(pendingSnapshot, drops)
+            }
+            if (pendingThinking != null) {
+                dispatchThinkingBatch(pendingThinking)
             }
             val sidJson = JSONObject.quote(sessionId)
             val msgJson = JSONObject.quote(finalMessage)
@@ -207,8 +262,10 @@ class WebViewBridge private constructor(
         fun error(message: String) {
             val pendingSnapshot: List<String>?
             val drops: Int
+            val pendingThinking: List<String>?
             synchronized(lock) {
                 flushScheduled = false
+                thinkingFlushScheduled = false
                 streamHandler.removeCallbacksAndMessages(this)
                 if (buffer.isNotEmpty()) {
                     pendingSnapshot = buffer.toList()
@@ -219,9 +276,18 @@ class WebViewBridge private constructor(
                     pendingSnapshot = null
                     drops = 0
                 }
+                if (thinkingBuffer.isNotEmpty()) {
+                    pendingThinking = thinkingBuffer.toList()
+                    thinkingBuffer.clear()
+                } else {
+                    pendingThinking = null
+                }
             }
             if (pendingSnapshot != null) {
                 dispatchBatch(pendingSnapshot, drops)
+            }
+            if (pendingThinking != null) {
+                dispatchThinkingBatch(pendingThinking)
             }
             val sidJson = JSONObject.quote(sessionId)
             val errJson = JSONObject.quote(message)
@@ -234,39 +300,49 @@ class WebViewBridge private constructor(
         }
     }
 
+    private val jsQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val jsFlushScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun scheduleJsEvaluation(js: String, immediate: Boolean = false) {
+        jsQueue.add(js)
+        if (immediate || jsQueue.size >= MAX_BATCH_SIZE) {
+            flushJsQueue()
+        } else {
+            if (jsFlushScheduled.compareAndSet(false, true)) {
+                dispatchOnUiThread {
+                    flushJsQueue()
+                }
+            }
+        }
+    }
+
+    private fun flushJsQueue() {
+        jsFlushScheduled.set(false)
+        if (jsQueue.isEmpty()) return
+        dispatchOnUiThread {
+            while (true) {
+                val js = jsQueue.poll() ?: break
+                webView.evaluateJavascript(js, null)
+            }
+        }
+    }
+
     fun pushToken(sessionId: String, token: String) {
         streams.getOrPut(sessionId) { StreamSession(sessionId) }.pushToken(token)
     }
 
     fun pushToolDelta(sessionId: String, deltaJson: String) {
         val sidJson = JSONObject.quote(sessionId)
-        dispatchOnUiThread {
-            webView.evaluateJavascript(
-                "window.__mahoStreamToolDelta($sidJson, $deltaJson)",
-                null,
-            )
-        }
+        scheduleJsEvaluation("window.__mahoStreamToolDelta($sidJson, $deltaJson)")
     }
 
     fun pushImageDelta(sessionId: String, deltaJson: String) {
         val sidJson = JSONObject.quote(sessionId)
-        dispatchOnUiThread {
-            webView.evaluateJavascript(
-                "window.__mahoStreamImageDelta($sidJson, $deltaJson)",
-                null,
-            )
-        }
+        scheduleJsEvaluation("window.__mahoStreamImageDelta($sidJson, $deltaJson)")
     }
 
     fun pushThinking(sessionId: String, thinking: String) {
-        val sidJson = JSONObject.quote(sessionId)
-        val thinkingJson = JSONObject.quote(thinking)
-        dispatchOnUiThread {
-            webView.evaluateJavascript(
-                "window.__mahoStreamThinking($sidJson, $thinkingJson)",
-                null,
-            )
-        }
+        streams.getOrPut(sessionId) { StreamSession(sessionId) }.pushThinking(thinking)
     }
 
     fun pushStreamComplete(sessionId: String, finalMessage: String) {
@@ -281,6 +357,7 @@ class WebViewBridge private constructor(
         streams.clear()
         streamHandler.removeCallbacksAndMessages(null)
         streamThread.quitSafely()
+        flushJsQueue()
     }
 
     private fun dispatchOnUiThread(action: () -> Unit) {

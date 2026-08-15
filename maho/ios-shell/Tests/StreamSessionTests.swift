@@ -357,6 +357,25 @@ final class StreamSessionTests: XCTestCase {
         XCTAssertTrue(toolCalls[0].contains(sessionId))
     }
 
+    // MARK: - Batched scheduleJsEvaluation combines statements with semicolon
+
+    func testBatchedScheduleJsEvaluationCombinesStatements() {
+        let (controller, mockWebView) = makeController()
+        let sessionId = "batch-js"
+        let delta1 = "{\"index\":0,\"name\":\"search\"}"
+        let delta2 = "{\"index\":1,\"name\":\"browse\"}"
+
+        controller.pushToolDelta(sessionId: sessionId, deltaJson: delta1)
+        controller.pushToolDelta(sessionId: sessionId, deltaJson: delta2)
+
+        drainMain(seconds: 0.3)
+
+        let calls = mockWebView.jsCalls
+        // The two scheduled statements should be combined into a single evaluateJavaScript call joined by ';'
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertTrue(calls[0].contains("__mahoStreamToolDelta('batch-js', {\"index\":0,\"name\":\"search\"});window.__mahoStreamToolDelta('batch-js', {\"index\":1,\"name\":\"browse\"})"))
+    }
+
     // MARK: - Image delta bypasses coalescing
 
     func testImageDeltaBypassesCoalescing() {
@@ -394,5 +413,46 @@ final class StreamSessionTests: XCTestCase {
 
         let errorCalls = calls.filter { $0.contains("__mahoStreamError") }
         XCTAssertEqual(errorCalls.count, 2, "Both sessions should get error on shutdown")
+    }
+
+    // MARK: - Thinking stream coalescing
+
+    func testThinkingStreamCoalescesAndFlushes() {
+        let (controller, mockWebView) = makeController()
+        let sessionId = "thinking-session"
+
+        for i in 0..<5 {
+            controller.pushThinking(sessionId: sessionId, thinking: "thought \(i); ")
+        }
+        controller.pushStreamComplete(sessionId: sessionId, finalMessage: "done")
+
+        drainMain(seconds: 0.5)
+
+        let thinkingCalls = mockWebView.jsCalls.filter { $0.contains("__mahoStreamThinking") && $0.contains(sessionId) }
+        XCTAssertFalse(thinkingCalls.isEmpty, "Thinking chunks should be flushed")
+        XCTAssertTrue(thinkingCalls.joined().contains("thought 0; thought 1;"))
+    }
+
+    // MARK: - Event Throttler
+
+    func testEventThrottlerThrottlesRapidEvents() {
+        let throttler = EventThrottler(interval: 0.05)
+        var executeCount = 0
+        let expectation = self.expectation(description: "throttled executions")
+
+        for _ in 0..<10 {
+            throttler.throttle {
+                executeCount += 1
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 2.0)
+        // Should have executed at most 2 times instead of 10
+        XCTAssertLessThanOrEqual(executeCount, 2)
+        XCTAssertGreaterThanOrEqual(executeCount, 1)
     }
 }

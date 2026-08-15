@@ -58,6 +58,7 @@
 		4B60E7E023C818BD4780979E /* BrowserLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C3B4A398E66153A1E1F82E /* BrowserLaunchTests.swift */; };
 		4FF775809BC1EE35D365E9FA /* MahoBridge+Downloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F4659CF74EA06C54303E51 /* MahoBridge+Downloads.swift */; };
 		5403A927A7F1A8A9E1DE9742 /* RelayAuthResponseDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */; };
+		551C3FBD417E275BA994A413 /* BridgeAssetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667E87C160D3C78DC686F518 /* BridgeAssetsTests.swift */; };
 		570DFA9BE61FE0BC8CE515D5 /* HandoffManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527B31F355C5EDFE459C310F /* HandoffManager.swift */; };
 		620729BEDF8D1984BA87B903 /* ReaderSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCD836DC0F18F95C8A80545 /* ReaderSettingsSheet.swift */; };
 		62B1753BD376BF0138169E00 /* ReadingListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B5B558DF634AA1616E1F8F /* ReadingListView.swift */; };
@@ -273,6 +274,7 @@
 		5D7E92C85D4610E690372B24 /* AiSearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AiSearchViewModel.swift; sourceTree = "<group>"; };
 		60ADFCBCE7A49F7A29243A14 /* WebViewBridgeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewBridgeController.swift; sourceTree = "<group>"; };
 		63376DBDD317ACC5749F2F2C /* DeepLinkHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkHandler.swift; sourceTree = "<group>"; };
+		667E87C160D3C78DC686F518 /* BridgeAssetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeAssetsTests.swift; sourceTree = "<group>"; };
 		6806793D9867B5B4EED7A21D /* MahoBridge+Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Chat.swift"; sourceTree = "<group>"; };
 		68C212D155CC00CF96E5EF0C /* SyncSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsView.swift; sourceTree = "<group>"; };
 		6991D853C91553504BFD80B3 /* MahoBridge+Bookmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Bookmarks.swift"; sourceTree = "<group>"; };
@@ -383,7 +385,7 @@
 		FF1AFF85313E8530CEF4B167 /* SyncTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTransport.swift; sourceTree = "<group>"; };
 		FF8FF3CC8F3101B33A809CC4 /* LanguageSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageSettingsView.swift; sourceTree = "<group>"; };
 		FFEC8CF3BAC18D361D46B8F2 /* ContentBlockerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentBlockerView.swift; sourceTree = "<group>"; };
-		"TEMP_670E855B-05A5-4550-AC61-76AC24F026EF" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_8392AC4A-A092-421A-8F30-C4740A97F25F" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -493,6 +495,7 @@
 		4673C4ED32B1C98E13F2F3DD /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				667E87C160D3C78DC686F518 /* BridgeAssetsTests.swift */,
 				3A0EC56650B338C85D86C672 /* BridgeLifecycleTests.swift */,
 				98291AB30F5FE8057ECAE731 /* BridgeSpacesTests.swift */,
 				038ED9EEA08AFAE19F7314E0 /* BridgeTabsTests.swift */,
@@ -810,10 +813,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_AD94A095-93FF-43E3-BDDA-AFEF62A56D75" /* ios-shell */ = {
+		"TEMP_CC5EE327-ACF3-4239-8571-57F54CF80EFA" /* ios-shell */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_670E855B-05A5-4550-AC61-76AC24F026EF" /* Signing.xcconfig */,
+				"TEMP_8392AC4A-A092-421A-8F30-C4740A97F25F" /* Signing.xcconfig */,
 			);
 			path = "ios-shell";
 			sourceTree = "<group>";
@@ -998,6 +1001,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				551C3FBD417E275BA994A413 /* BridgeAssetsTests.swift in Sources */,
 				23B3839770916C46B5496CF0 /* BridgeLifecycleTests.swift in Sources */,
 				E86572F15F16EC143377B9BF /* BridgeSpacesTests.swift in Sources */,
 				161EDC90361D487418E13CCC /* BridgeTabsTests.swift in Sources */,
@@ -1236,7 +1240,7 @@
 		};
 		32EAC85B0E13154E2341C404 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_670E855B-05A5-4550-AC61-76AC24F026EF" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_8392AC4A-A092-421A-8F30-C4740A97F25F" /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -1253,7 +1257,7 @@
 		};
 		609C0B55047A5B33E839A127 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_670E855B-05A5-4550-AC61-76AC24F026EF" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_8392AC4A-A092-421A-8F30-C4740A97F25F" /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";

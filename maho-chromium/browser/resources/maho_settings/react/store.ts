@@ -27,6 +27,12 @@ import type {Listener} from '../../maho_common/react/store_utils.js';
 import {bindMojoPageHandler} from '../../maho_common/react/use_mojo.js';
 import {toast} from 'sonner';
 
+export interface SettingsDelta {
+  readonly key: string;
+  readonly value: string;
+  readonly revision: number | bigint;
+}
+
 export interface SettingsState {
   readonly accountError: string;
   readonly accountLoading: boolean;
@@ -42,6 +48,7 @@ export interface SettingsState {
   readonly lastActionError: string | null;
   readonly savingKeys: ReadonlySet<string>;
   readonly settings: SettingValue[];
+  readonly settingsRevision: bigint;
   readonly browserVersion: string;
   readonly browserChannel: string;
   readonly updateState: number;
@@ -151,6 +158,7 @@ function createInitialState(): SettingsState {
     lastActionError: null,
     savingKeys: new Set<string>(),
     settings: [],
+    settingsRevision: 0n,
     browserVersion: '',
     browserChannel: '',
     updateState: BrowserUpdateState.kIdle,
@@ -188,6 +196,7 @@ export class MahoSettingsStore {
   private pendingValues = new Map<string, string>();
   private readonly selectedProfileMutationOwners = new Map<string, symbol>();
   private readonly popstateListener: () => void;
+  private refreshSettingsInFlight: Promise<void> | null = null;
 
   constructor() {
     const {router, handler} = bindMojoPageHandler(
@@ -328,8 +337,82 @@ export class MahoSettingsStore {
     void this.pageHandler.applyBrowserUpdateAndRestart();
   }
 
-  private replaceSettings(settings: SettingValue[]): void {
-    if (settingsEqual(this.state.settings, settings)) {
+  async refreshSettings(): Promise<void> {
+    if (this.refreshSettingsInFlight) {
+      return this.refreshSettingsInFlight;
+    }
+    this.refreshSettingsInFlight = (async () => {
+      try {
+        const {settings} = await this.pageHandler.getSettings();
+        this.replaceSettings(settings);
+      } catch (error) {
+        console.warn('Failed to refresh settings snapshot', error);
+      } finally {
+        this.refreshSettingsInFlight = null;
+      }
+    })();
+    return this.refreshSettingsInFlight;
+  }
+
+  /**
+   * Applies a revision-tracked settings delta ({ key, value, revision }).
+   * If bootstrap is incomplete or there is a revision mismatch/gap, falls back
+   * to requesting a full settings snapshot from the backend.
+   * Returns true if the delta was applied directly, false if ignored (stale) or if
+   * fallback snapshot was triggered.
+   */
+  applySettingsDelta(delta: SettingsDelta | { key: string; value: string; revision: number | bigint }): boolean {
+    if (!this.bootstrapComplete) {
+      void this.refreshSettings();
+      return false;
+    }
+
+    const deltaRev = typeof delta.revision === 'bigint' ? delta.revision : BigInt(delta.revision);
+    const currentRev = this.state.settingsRevision;
+
+    // Stale or already applied delta: ignore
+    if (deltaRev <= currentRev) {
+      return false;
+    }
+
+    // Expected contiguous next revision
+    if (deltaRev === currentRev + 1n) {
+      const nextSettings = cloneSettings(this.state.settings);
+      const index = nextSettings.findIndex(s => s.key === delta.key);
+      if (index >= 0) {
+        nextSettings[index] = { key: delta.key, value: delta.value };
+      } else {
+        nextSettings.push({ key: delta.key, value: delta.value });
+      }
+
+      const reachablePaneKey = resolvePaneKey(
+          this.state.currentPaneKey, isMailEnabled(nextSettings));
+
+      this.patch(state => ({
+        ...state,
+        currentPaneKey: reachablePaneKey,
+        settings: nextSettings,
+        settingsRevision: deltaRev,
+      }));
+
+      if (reachablePaneKey !== this.state.currentPaneKey) {
+        writePaneToUrl(reachablePaneKey, true);
+      }
+      return true;
+    }
+
+    // Revision mismatch (gap detected where deltaRev > currentRev + 1n):
+    // Fall back to full snapshot reload.
+    void this.refreshSettings();
+    return false;
+  }
+
+  private replaceSettings(settings: SettingValue[], revision?: number | bigint): void {
+    const nextRevision = revision !== undefined
+        ? (typeof revision === 'bigint' ? revision : BigInt(revision))
+        : this.state.settingsRevision;
+    if (settingsEqual(this.state.settings, settings) &&
+        this.state.settingsRevision === nextRevision) {
       return;
     }
     const reachablePaneKey = resolvePaneKey(
@@ -338,6 +421,7 @@ export class MahoSettingsStore {
       ...state,
       currentPaneKey: reachablePaneKey,
       settings: cloneSettings(settings),
+      settingsRevision: nextRevision,
     }));
     if (reachablePaneKey !== this.state.currentPaneKey) {
       writePaneToUrl(reachablePaneKey, true);

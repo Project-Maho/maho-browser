@@ -527,6 +527,33 @@ pub extern "C" fn maho_core_new() -> *mut MahoCore {
     )
 }
 
+/// Returns whether core initialization completed successfully.
+///
+/// # Safety
+/// `core` must be null or a valid pointer returned by `maho_core_new*`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_ready(core: *mut MahoCore) -> bool {
+    ffi_safe!({ !core.is_null() && (&*core).is_ready() }, false)
+}
+
+/// Returns the stable readiness code: 0 = uninitialized, 1 = initializing,
+/// 2 = ready, 3 = failed. Null pointers return 0.
+///
+/// # Safety
+/// `core` must be null or a valid pointer returned by `maho_core_new*`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_readiness_status(core: *mut MahoCore) -> u8 {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return 0;
+            }
+            (&*core).readiness_status().code()
+        },
+        0
+    )
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`, or null.
 #[no_mangle]
@@ -8347,9 +8374,7 @@ pub unsafe extern "C" fn maho_core_generate_sync_key(ptr: *mut MahoCore) -> *mut
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
-pub unsafe extern "C" fn maho_core_generate_sync_bootstrap(
-    ptr: *mut MahoCore,
-) -> *mut c_char {
+pub unsafe extern "C" fn maho_core_generate_sync_bootstrap(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!(
         {
             if ptr.is_null() {

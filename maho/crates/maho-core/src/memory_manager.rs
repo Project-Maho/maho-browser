@@ -1,8 +1,11 @@
 //! Memory feature backend: extracts facts from chat sessions, embeds them,
 //! retrieves them as AI context. Operates as a sub-manager owned by MahoCore.
 
+use bincode::Options;
 use instant_distance::{Builder, HnswMap, Search};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -48,8 +51,13 @@ pub enum MemoryResult {
     },
 }
 
+const MEMORY_INDEX_SNAPSHOT_FILE: &str = "memory_index_snapshot.bin";
+const MEMORY_INDEX_SNAPSHOT_VERSION: u32 = 1;
+const MEMORY_INDEX_SNAPSHOT_LIMIT: u64 = 256 * 1024 * 1024;
+const MEMORY_INDEX_MAX_SEGMENTS: usize = 32;
+
 /// Wrapper for instant-distance Point trait
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Embedding(pub Vec<f32>);
 impl instant_distance::Point for Embedding {
     fn distance(&self, other: &Self) -> f32 {
@@ -68,9 +76,29 @@ pub struct AuthSnapshot {
     pub model: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct MemoryIndexSnapshot {
+    version: u32,
+    last_change_sequence: i64,
+    segments: Vec<HnswMap<Embedding, String>>,
+    active_segments: HashMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct MemoryIndexSnapshotRef<'a> {
+    version: u32,
+    last_change_sequence: i64,
+    segments: &'a [HnswMap<Embedding, String>],
+    active_segments: &'a HashMap<String, usize>,
+}
+
 pub struct MemoryManager {
-    /// In-memory ANN index (fact_id keyed)
-    hnsw: Option<HnswMap<Embedding, String>>,
+    /// Immutable HNSW segments. Changed facts are appended to a new segment;
+    /// `active_segments` tombstones superseded vectors in older segments.
+    hnsw_segments: Vec<HnswMap<Embedding, String>>,
+    active_segments: HashMap<String, usize>,
+    last_change_sequence: i64,
+    index_initialized: bool,
     result_rx: mpsc::Receiver<MemoryResult>,
     result_tx: mpsc::Sender<MemoryResult>,
     active_tasks: Vec<JoinHandle<()>>,
@@ -88,7 +116,10 @@ impl MemoryManager {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(64);
         Self {
-            hnsw: None,
+            hnsw_segments: Vec::new(),
+            active_segments: HashMap::new(),
+            last_change_sequence: 0,
+            index_initialized: false,
             result_rx: rx,
             result_tx: tx,
             active_tasks: Vec::new(),
@@ -117,45 +148,164 @@ impl MemoryManager {
         self.last_summary_at = Some(at);
     }
 
-    /// Build HNSW from all stored embeddings. Call at MahoCore startup.
+    /// Restore the persistent HNSW snapshot and apply only facts changed since
+    /// its journal cursor. Missing or invalid snapshots fall back to a complete
+    /// build and are replaced atomically.
     pub fn rebuild_index(
         &mut self,
         storage: &SqliteStorage,
     ) -> Result<(), crate::error::CoreError> {
-        let entries = storage
-            .load_all_active_memory_embeddings()
-            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
-        if entries.is_empty() {
-            self.hnsw = None;
-            return Ok(());
-        }
-        let mut ids = Vec::new();
-        let mut vecs = Vec::new();
-        for (id, bytes) in entries {
-            if let Ok(vec) = crate::embedding::bytes_to_vec(&bytes) {
-                ids.push(id);
-                vecs.push(Embedding(vec));
+        let _span = tracing::info_span!("rebuild_index").entered();
+        let snapshot_path = memory_index_snapshot_path(storage);
+
+        if !self.index_initialized {
+            let restored = snapshot_path
+                .as_deref()
+                .and_then(|path| Self::load_snapshot(path).ok());
+            if let Some(snapshot) = restored {
+                self.hnsw_segments = snapshot.segments;
+                self.active_segments = snapshot.active_segments;
+                self.last_change_sequence = snapshot.last_change_sequence;
+                self.index_initialized = true;
+            } else {
+                return self.full_rebuild(storage, snapshot_path.as_deref());
             }
         }
-        if vecs.is_empty() {
-            self.hnsw = None;
+
+        let (high_water, changes) = storage
+            .load_memory_embeddings_since(self.last_change_sequence)
+            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        if high_water < self.last_change_sequence {
+            return self.full_rebuild(storage, snapshot_path.as_deref());
+        }
+        if changes.is_empty() {
+            self.last_change_sequence = high_water;
             return Ok(());
         }
-        let hnsw = Builder::default().build(vecs, ids);
-        self.hnsw = Some(hnsw);
+
+        let segment_id = self.hnsw_segments.len();
+        let mut ids = Vec::new();
+        let mut vecs = Vec::new();
+        for (id, bytes) in changes {
+            self.active_segments.remove(&id);
+            let Some(bytes) = bytes else {
+                continue;
+            };
+            if let Ok(vector) = crate::embedding::bytes_to_vec(&bytes) {
+                self.active_segments.insert(id.clone(), segment_id);
+                ids.push(id);
+                vecs.push(Embedding(vector));
+            }
+        }
+        if !vecs.is_empty() {
+            self.hnsw_segments.push(Builder::default().build(vecs, ids));
+        }
+        self.last_change_sequence = high_water;
+        if self.hnsw_segments.len() > MEMORY_INDEX_MAX_SEGMENTS {
+            return self.full_rebuild(storage, snapshot_path.as_deref());
+        }
+        if let Some(path) = snapshot_path.as_deref() {
+            self.save_snapshot(path)?;
+        }
         Ok(())
     }
 
-    /// Top-K semantic search.
-    pub fn search(&self, query_embedding: &[f32], top_k: usize) -> Vec<String> {
-        let Some(ref hnsw) = self.hnsw else {
-            return Vec::new();
+    fn full_rebuild(
+        &mut self,
+        storage: &SqliteStorage,
+        snapshot_path: Option<&Path>,
+    ) -> Result<(), crate::error::CoreError> {
+        let entries = storage
+            .load_all_active_memory_embeddings()
+            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        let high_water = storage
+            .memory_index_change_sequence()
+            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        let mut ids = Vec::new();
+        let mut vecs = Vec::new();
+        for (id, bytes) in entries {
+            if let Ok(vector) = crate::embedding::bytes_to_vec(&bytes) {
+                ids.push(id);
+                vecs.push(Embedding(vector));
+            }
+        }
+
+        self.hnsw_segments.clear();
+        self.active_segments.clear();
+        if !vecs.is_empty() {
+            self.active_segments
+                .extend(ids.iter().cloned().map(|id| (id, 0)));
+            self.hnsw_segments.push(Builder::default().build(vecs, ids));
+        }
+        self.last_change_sequence = high_water;
+        self.index_initialized = true;
+        if let Some(path) = snapshot_path {
+            self.save_snapshot(path)?;
+        }
+        Ok(())
+    }
+
+    fn load_snapshot(path: &Path) -> Result<MemoryIndexSnapshot, crate::error::CoreError> {
+        let bytes =
+            std::fs::read(path).map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        let snapshot: MemoryIndexSnapshot = bincode::DefaultOptions::new()
+            .with_limit(MEMORY_INDEX_SNAPSHOT_LIMIT)
+            .deserialize(&bytes)
+            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        if snapshot.version != MEMORY_INDEX_SNAPSHOT_VERSION
+            || snapshot.last_change_sequence < 0
+            || snapshot
+                .active_segments
+                .values()
+                .any(|segment| *segment >= snapshot.segments.len())
+        {
+            return Err(crate::error::CoreError::Storage(
+                "invalid memory index snapshot".into(),
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    fn save_snapshot(&self, path: &Path) -> Result<(), crate::error::CoreError> {
+        let snapshot = MemoryIndexSnapshotRef {
+            version: MEMORY_INDEX_SNAPSHOT_VERSION,
+            last_change_sequence: self.last_change_sequence,
+            segments: &self.hnsw_segments,
+            active_segments: &self.active_segments,
         };
+        let bytes = bincode::DefaultOptions::new()
+            .with_limit(MEMORY_INDEX_SNAPSHOT_LIMIT)
+            .serialize(&snapshot)
+            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        let temp_path = path.with_extension("bin.tmp");
+        std::fs::write(&temp_path, bytes)
+            .and_then(|_| std::fs::rename(&temp_path, path))
+            .map_err(|e| crate::error::CoreError::Storage(e.to_string()))
+    }
+
+    /// Top-K semantic search across the persisted base index and incremental
+    /// segments, excluding vectors superseded by later changes.
+    pub fn search(&self, query_embedding: &[f32], top_k: usize) -> Vec<String> {
+        if top_k == 0 {
+            return Vec::new();
+        }
         let q = Embedding(query_embedding.to_vec());
-        let mut search = Search::default();
-        hnsw.search(&q, &mut search)
+        let mut candidates = Vec::new();
+        for (segment_id, hnsw) in self.hnsw_segments.iter().enumerate() {
+            let mut search = Search::default();
+            candidates.extend(
+                hnsw.search(&q, &mut search)
+                    .filter(|item| {
+                        self.active_segments.get(item.value).copied() == Some(segment_id)
+                    })
+                    .map(|item| (item.distance, item.value.clone())),
+            );
+        }
+        candidates.sort_unstable_by(|left, right| left.0.total_cmp(&right.0));
+        candidates
+            .into_iter()
             .take(top_k)
-            .map(|item| item.value.clone())
+            .map(|(_, id)| id)
             .collect()
     }
 
@@ -267,6 +417,16 @@ impl MemoryManager {
     }
 }
 
+fn memory_index_snapshot_path(storage: &SqliteStorage) -> Option<PathBuf> {
+    let database_path = Path::new(storage.path());
+    if storage.path() == ":memory:" {
+        return None;
+    }
+    database_path
+        .parent()
+        .map(|directory| directory.join(MEMORY_INDEX_SNAPSHOT_FILE))
+}
+
 impl Drop for MemoryManager {
     fn drop(&mut self) {
         // Audit finding H11: abort spawned background tasks so they do not
@@ -282,6 +442,69 @@ impl Drop for MemoryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maho_storage::sqlite::MemoryInsertParams;
+
+    fn insert_embedding(storage: &SqliteStorage, id: &str, vector: &[f32]) {
+        storage
+            .insert_memory(MemoryInsertParams {
+                id,
+                fact: id,
+                source: "test",
+                session_id: None,
+                categories: "[]",
+                importance: 0.5,
+                metadata: None,
+            })
+            .unwrap();
+        storage
+            .update_memory_embedding(id, &crate::embedding::vec_to_bytes(vector))
+            .unwrap();
+    }
+
+    #[test]
+    fn memory_index_snapshot_restores_and_applies_incremental_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("memory.db");
+        let database_path = database_path.to_str().unwrap();
+        let storage = SqliteStorage::open_with_key(database_path, "snapshot-test-key").unwrap();
+        insert_embedding(&storage, "first", &[1.0, 0.0]);
+
+        let mut initial = MemoryManager::new();
+        initial.rebuild_index(&storage).unwrap();
+        assert_eq!(initial.search(&[1.0, 0.0], 1), vec!["first"]);
+        let snapshot_path = directory.path().join(MEMORY_INDEX_SNAPSHOT_FILE);
+        assert!(snapshot_path.exists());
+        drop(initial);
+
+        insert_embedding(&storage, "second", &[0.0, 1.0]);
+        let mut restored = MemoryManager::new();
+        restored.rebuild_index(&storage).unwrap();
+        assert_eq!(restored.search(&[0.0, 1.0], 1), vec!["second"]);
+        assert!(restored.hnsw_segments.len() >= 2);
+
+        storage.delete_memory("first").unwrap();
+        restored.rebuild_index(&storage).unwrap();
+        assert_eq!(restored.search(&[1.0, 0.0], 10), vec!["second"]);
+    }
+
+    #[test]
+    fn corrupted_memory_index_snapshot_falls_back_to_full_rebuild() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("memory.db");
+        let database_path = database_path.to_str().unwrap();
+        let storage = SqliteStorage::open_with_key(database_path, "corrupt-test-key").unwrap();
+        insert_embedding(&storage, "survivor", &[1.0, 0.0]);
+        std::fs::write(
+            directory.path().join(MEMORY_INDEX_SNAPSHOT_FILE),
+            b"not a snapshot",
+        )
+        .unwrap();
+
+        let mut manager = MemoryManager::new();
+        manager.rebuild_index(&storage).unwrap();
+        assert_eq!(manager.search(&[1.0, 0.0], 1), vec!["survivor"]);
+        MemoryManager::load_snapshot(&directory.path().join(MEMORY_INDEX_SNAPSHOT_FILE)).unwrap();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn memory_manager_drop_aborts_tasks() {

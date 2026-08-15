@@ -170,6 +170,23 @@ int32_t maho_core_vault_preflight_state(struct MahoCore *ptr,
 struct MahoCore *maho_core_new(void);
 
 /**
+ * Returns whether core initialization completed successfully.
+ *
+ * # Safety
+ * `core` must be null or a valid pointer returned by `maho_core_new*`.
+ */
+bool maho_core_is_ready(struct MahoCore *core);
+
+/**
+ * Returns the stable readiness code: 0 = uninitialized, 1 = initializing,
+ * 2 = ready, 3 = failed. Null pointers return 0.
+ *
+ * # Safety
+ * `core` must be null or a valid pointer returned by `maho_core_new*`.
+ */
+uint8_t maho_core_readiness_status(struct MahoCore *core);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`, or null.
  */

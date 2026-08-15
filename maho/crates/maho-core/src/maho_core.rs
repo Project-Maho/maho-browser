@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 const LMDB_DIRTY_TABS: u8 = 0b000001;
@@ -25,6 +25,25 @@ const GRANT_STATE_REVOKED: &str = "revoked";
 struct PersistThrottle {
     pending_bits: u8,
     last_flush: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CoreReadinessStatus {
+    Uninitialized,
+    Initializing,
+    Ready,
+    Failed(String),
+}
+
+impl CoreReadinessStatus {
+    pub const fn code(&self) -> u8 {
+        match self {
+            Self::Uninitialized => 0,
+            Self::Initializing => 1,
+            Self::Ready => 2,
+            Self::Failed(_) => 3,
+        }
+    }
 }
 
 impl PersistThrottle {
@@ -2178,6 +2197,7 @@ fn format_key_combo_label(key_combo: &KeyCombo) -> String {
 
 #[allow(dead_code)]
 pub struct MahoCore {
+    readiness: Arc<RwLock<CoreReadinessStatus>>,
     tab_manager: TabLifecycleManager,
     space_manager: SpaceManager,
     command_bar: CommandBarEngine,
@@ -2521,6 +2541,7 @@ impl MahoCore {
         let dispatcher = EventDispatcher::new();
 
         let core = Self {
+            readiness: Arc::new(RwLock::new(CoreReadinessStatus::Uninitialized)),
             tab_manager,
             space_manager,
             command_bar,
@@ -2633,6 +2654,24 @@ impl MahoCore {
             .set_last_active_tab(&active_space_id, Some(favorite_tab.id));
     }
 
+    pub fn readiness_status(&self) -> CoreReadinessStatus {
+        self.readiness
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn is_ready(&self) -> bool {
+        matches!(self.readiness_status(), CoreReadinessStatus::Ready)
+    }
+
+    fn set_readiness_status(&self, status: CoreReadinessStatus) {
+        *self
+            .readiness
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = status;
+    }
+
     pub fn storage_ref(&self) -> Option<&maho_storage::sqlite::SqliteStorage> {
         self.storage.as_ref()
     }
@@ -2653,6 +2692,8 @@ impl MahoCore {
     }
 
     pub fn with_storage(mut self, path: &str) -> Self {
+        let _span = tracing::info_span!("with_storage", path = %path).entered();
+        self.set_readiness_status(CoreReadinessStatus::Initializing);
         match maho_storage::sqlite::SqliteStorage::open(path) {
             Ok(storage) => {
                 eprintln!("[MahoCore::with_storage] OK: opened SQLite storage at {path}");
@@ -2779,13 +2820,16 @@ impl MahoCore {
                     #[cfg(not(target_os = "ios"))]
                     self.memory_manager.start_browsing_summary_loop();
                 }
+                self.set_readiness_status(CoreReadinessStatus::Ready);
             }
             Err(e) => {
+                let message = e.to_string();
                 eprintln!(
-                    "[MahoCore::with_storage] FAIL: SqliteStorage::open({path}) returned Err: {e}. \
+                    "[MahoCore::with_storage] FAIL: SqliteStorage::open({path}) returned Err: {message}. \
                      Storage will remain None; AI settings, agent sessions, and memory features will NOT persist."
                 );
                 self.storage = None;
+                self.set_readiness_status(CoreReadinessStatus::Failed(message));
             }
         }
         self
@@ -3002,6 +3046,19 @@ impl MahoCore {
     }
 
     pub fn load_state(&mut self) -> Result<(), PersistenceError> {
+        let _span = tracing::info_span!("load_state").entered();
+        self.set_readiness_status(CoreReadinessStatus::Initializing);
+        let result = self.load_state_inner();
+        match &result {
+            Ok(()) => self.set_readiness_status(CoreReadinessStatus::Ready),
+            Err(error) => {
+                self.set_readiness_status(CoreReadinessStatus::Failed(error.to_string()))
+            }
+        }
+        result
+    }
+
+    fn load_state_inner(&mut self) -> Result<(), PersistenceError> {
         let lmdb = self
             .lmdb_storage
             .as_ref()
@@ -3201,37 +3258,41 @@ impl MahoCore {
             >(&split_view_data)
             {
                 self.split_view_configs.clear();
+                let mut tabs_by_url_and_time: HashMap<(&str, u64), Vec<maho_types::identifiers::TabId>> =
+                    HashMap::new();
+                let all_tabs = self.tab_manager.get_all_tabs();
+                for t in &all_tabs {
+                    let t_created_micros = if let Ok(dt) =
+                        chrono::DateTime::parse_from_rfc3339(&t.created_at.0)
+                    {
+                        dt.timestamp_micros() as u64
+                    } else {
+                        0
+                    };
+                    tabs_by_url_and_time
+                        .entry((t.url.0.as_str(), t_created_micros))
+                        .or_default()
+                        .push(t.id.clone());
+                }
+
                 for (window_str, persist_config) in persist_map {
                     let window_id = WindowId::new(window_str);
                     let mut resolved_panes = Vec::new();
                     let mut skip_window = false;
                     for stable_pane in &persist_config.panes {
-                        let matching_tabs: Vec<&maho_types::tab::Tab> = self
-                            .tab_manager
-                            .get_all_tabs()
-                            .into_iter()
-                            .filter(|t| {
-                                let t_created_micros = if let Ok(dt) =
-                                    chrono::DateTime::parse_from_rfc3339(&t.created_at.0)
-                                {
-                                    dt.timestamp_micros() as u64
-                                } else {
-                                    0
-                                };
-                                t.url.0 == stable_pane.url
-                                    && t_created_micros == stable_pane.tab_creation_time_micros
-                            })
-                            .collect();
+                        let matching_tabs = tabs_by_url_and_time
+                            .get(&(stable_pane.url.as_str(), stable_pane.tab_creation_time_micros));
+                        let match_count = matching_tabs.map(|v| v.len()).unwrap_or(0);
 
-                        if matching_tabs.len() == 1 {
+                        if match_count == 1 {
                             resolved_panes.push(maho_types::split_view::SplitPane {
-                                tab_id: matching_tabs[0].id.clone(),
+                                tab_id: matching_tabs.unwrap()[0].clone(),
                             });
-                        } else if matching_tabs.len() > 1 {
+                        } else if match_count > 1 {
                             eprintln!(
                                 "[Maho] split-view restore: Ambiguity found for URL {} ({} matches). Skipping window {}",
                                 stable_pane.url,
-                                matching_tabs.len(),
+                                match_count,
                                 window_id
                             );
                             skip_window = true;

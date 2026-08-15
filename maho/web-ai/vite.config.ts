@@ -1,34 +1,39 @@
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
+import { visualizer } from 'rollup-plugin-visualizer';
 
 export default defineConfig({
   plugins: [
     preact(),
     {
-      name: 'maho-classic-file-protocol',
+      name: 'maho-file-protocol',
       transformIndexHtml(html) {
-        return html.replace(/type="module"/g, 'defer').replace(/\s+crossorigin/g, '');
+        return html.replace(/\s+crossorigin(=("[^"]*"|'[^']*'|[^\s>]+))?/g, '');
       },
     },
+    ...(process.env.ANALYZE === 'true'
+      ? [
+          visualizer({
+            filename: 'dist/stats.html',
+            open: false,
+            gzipSize: true,
+            brotliSize: true,
+          }),
+        ]
+      : []),
   ],
-  // Relative asset base + classic (non-module) IIFE output so the bundle loads under
-  // file:// (WKWebView / Android WebView). ES module scripts and crossorigin links are
-  // blocked by CORS from the null file:// origin, which leaves the app blank.
+  // Relative asset base + ES module code splitting output so the bundle loads under
+  // file:// (WKWebView / Android WebView) while dynamically loading route chunks on demand.
   base: './',
   build: {
     outDir: 'dist',
     rollupOptions: {
       input: 'index.html',
       output: {
-        format: 'iife',
-        inlineDynamicImports: true,
+        format: 'es',
         entryFileNames: 'ai-bundle.js',
-        assetFileNames: (assetInfo) => {
-          if (assetInfo.names?.some((n) => n.endsWith('.css'))) {
-            return 'ai-bundle.css';
-          }
-          return '[name]-[hash][extname]';
-        },
+        chunkFileNames: 'chunks/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
       },
     },
   },

@@ -23,7 +23,7 @@ vi.mock('../hooks/use-bridge', () => ({
   useBridge: () => mockBridge,
 }));
 
-import { App } from '../app';
+import { App, Profiler } from '../app';
 
 describe('App Router - Mobile Chat Launch Routing', () => {
   beforeEach(() => {
@@ -39,19 +39,19 @@ describe('App Router - Mobile Chat Launch Routing', () => {
     expect(screen.getByPlaceholderText('Type a message…')).not.toBeNull();
   });
 
-  it('routes #byok to AiSettingsScreen (not ComingSoonScreen)', () => {
+  it('routes #byok to AiSettingsScreen (not ComingSoonScreen)', async () => {
     window.location.hash = '#byok';
     render(<App />);
     expect(screen.queryByText('Coming Soon')).toBeNull();
-    expect(screen.getByTestId('aiScreenBYOK')).not.toBeNull();
+    expect(await screen.findByTestId('aiScreenBYOK')).not.toBeNull();
   });
 
-  it('routes #conversations to ConversationListScreen (not ComingSoonScreen)', () => {
+  it('routes #conversations to ConversationListScreen (not ComingSoonScreen)', async () => {
     window.location.hash = '#conversations';
     render(<App />);
     expect(screen.queryByText('Coming Soon')).toBeNull();
-    expect(screen.getByTestId('conversation-list-screen')).not.toBeNull();
-    expect(screen.getByText('Saved Conversations')).not.toBeNull();
+    expect(await screen.findByTestId('conversation-list-screen')).not.toBeNull();
+    expect(await screen.findByText('Saved Conversations')).not.toBeNull();
   });
 
   it('keeps out-of-scope mobile routes (#privacy) as ComingSoonScreen', () => {
@@ -67,5 +67,39 @@ describe('App Router - Mobile Chat Launch Routing', () => {
     expect(screen.queryByText(/Unknown screen/)).toBeNull();
     expect(screen.getByText('Coming Soon')).not.toBeNull();
     expect(screen.getByText('pinch-summary')).not.toBeNull();
+  });
+
+  it('traces component render durations via Profiler callback when profiling is active', () => {
+    const onRender = vi.fn();
+    window.location.hash = '#chat';
+    render(<App onRender={onRender} />);
+    expect(onRender).toHaveBeenCalledWith(
+      'ScreenRouter:chat',
+      'mount',
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
+
+  it('Profiler component invokes onRender callback with mount phase and non-negative duration', () => {
+    const onRender = vi.fn();
+    render(
+      <Profiler id="test-component" onRender={onRender}>
+        <div>Hello Profiler</div>
+      </Profiler>
+    );
+    expect(onRender).toHaveBeenCalledTimes(1);
+    expect(onRender).toHaveBeenCalledWith(
+      'test-component',
+      'mount',
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number)
+    );
+    const [, , actualDuration] = onRender.mock.calls[0];
+    expect(actualDuration).toBeGreaterThanOrEqual(0);
   });
 });

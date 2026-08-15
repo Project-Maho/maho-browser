@@ -1,4 +1,8 @@
+import os.log
+import os.signpost
 import SwiftUI
+
+private let launchLog = OSLog(subsystem: "dev.maho.browser", category: "Launch")
 
 @main
 struct MahoApp: App {
@@ -22,9 +26,19 @@ struct MahoApp: App {
             .appendingPathComponent("dev.maho.browser", isDirectory: true)
             .path
 
+        os_signpost(.begin, log: launchLog, name: "provisionSqlcipherKey")
         MahoBridge.shared.provisionSqlcipherKey(storagePath: storagePath)
+        os_signpost(.end, log: launchLog, name: "provisionSqlcipherKey")
+
+        MahoBridge.shared.provisionAssetsInBackground(storagePath: storagePath)
+
+        os_signpost(.begin, log: launchLog, name: "initialize")
         MahoBridge.shared.initialize(storagePath: storagePath)
+        os_signpost(.end, log: launchLog, name: "initialize")
+
+        os_signpost(.begin, log: launchLog, name: "loadState")
         MahoBridge.shared.loadState()
+        os_signpost(.end, log: launchLog, name: "loadState")
         E2ETestHooks.runOnBoot()
         SyncManager.registerBackgroundRefresh()
         SyncManager.shared.configureForCurrentSession()

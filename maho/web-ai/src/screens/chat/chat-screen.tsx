@@ -1,12 +1,19 @@
-import { type JSX } from 'preact';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
-import type { ChatContent, ChatMessage as BridgeChatMessage, ChatSessionOpts, ChatToolCall, ComposerDraftScope, ImageDelta, MahoBridge, ToolCallDelta, ToolDefinition, ToolResult } from '../../bridge';
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'preact/hooks';
+import type { ChatContent, ChatMessage as BridgeChatMessage, ChatSessionOpts, ComposerDraftScope, MahoBridge, ToolDefinition, ToolResult } from '../../bridge';
 import { useBridge } from '../../hooks/use-bridge';
 import { useStreaming } from '../../hooks/use-streaming';
 import { useComposerDraft } from '../../storage/use-composer-draft';
 import { Icon } from '../../ui/icon';
 import { parseCredentialErrorCode, type CredentialErrorCode } from '../credential-error';
-import { CredentialErrorCard } from '../credential-error-card';
+import { MessageList } from '../../components/Chat/MessageList';
+import type { CompleteToolBatch, MessageItem, ProviderConfig, UserMessageItem } from '../../store/chatStore';
+import {
+  chatStoreReducer,
+  formatStructuredValue,
+  initialChatStoreState,
+  parseDataUrl,
+  safeParseJson,
+} from '../../store/chatStore';
 import './chat.css';
 
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
@@ -116,340 +123,6 @@ interface ChatScreenProps {
   providerId?: string;
 }
 
-interface ProviderConfig {
-  apiKey?: string;
-  credentialProvider?: string;
-  endpoint?: string;
-  id: string;
-  label: string;
-  model?: string;
-}
-
-interface RenderedImage {
-  id: string;
-  mime: string;
-  src: string;
-  rawBase64: string;
-}
-
-interface UserMessageItem {
-  kind: 'chat';
-  id: string;
-  role: 'user';
-  content: ChatContent;
-}
-
-interface AssistantMessageItem {
-  kind: 'chat';
-  id: string;
-  role: 'assistant';
-  content: string;
-  images: RenderedImage[];
-  isStreaming: boolean;
-}
-
-interface ToolRequestMessageItem {
-  kind: 'tool-request';
-  id: string;
-  toolCallId: string;
-  toolName: string;
-  rawArguments: string;
-  argsText: string;
-  autoRun: boolean;
-  status: 'pending' | 'approved' | 'denied' | 'unsupported';
-}
-
-interface ToolResultMessageItem {
-  kind: 'tool-result';
-  id: string;
-  toolCallId: string;
-  toolName: string;
-  result: unknown;
-}
-
-interface SystemMessageItem {
-  kind: 'system';
-  id: string;
-  content: string;
-}
-
-interface ThinkingMessageItem {
-  kind: 'thinking';
-  id: string;
-  thinking: string;
-  isStreaming: boolean;
-}
-
-interface CompleteToolBatch {
-  calls: ChatToolCall[];
-  nextIndex: number;
-}
-
-type MessageItem =
-  | UserMessageItem
-  | AssistantMessageItem
-  | ToolRequestMessageItem
-  | ToolResultMessageItem
-  | ThinkingMessageItem
-  | SystemMessageItem;
-
-interface ChatScreenState {
-  booting: boolean;
-  conversationId: string | null;
-  /**
-   * True once the conversation row exists in core. A brand-new chat holds an
-   * ephemeral session handle long before any row is written, and core reaps a
-   * draft whose conversation does not exist, so drafts stay in the `new_task`
-   * scope until this flips after the first successful send.
-   */
-  conversationPersisted: boolean;
-  draft: string;
-  errorMessage: string | null;
-  credentialErrorCode: CredentialErrorCode | null;
-  isStreaming: boolean;
-  messages: MessageItem[];
-  missingApiKey: boolean;
-  pollReadyHandle: string | null;
-  provider: ProviderConfig | null;
-  sessionHandle: string | null;
-  toolActionId: string | null;
-  toolBatchPending: boolean;
-}
-
-type Action =
-  | { type: 'BOOT_START' }
-  | { type: 'BOOT_SUCCESS'; conversationId: string; conversationPersisted: boolean; messages: MessageItem[]; provider: ProviderConfig; sessionHandle: string }
-  | { type: 'CONVERSATION_PERSISTED'; conversationId: string }
-  | { type: 'BOOT_ERROR'; message: string }
-  | { type: 'BYOK_MISSING' }
-  | { type: 'POLL_READY'; handle: string }
-  | { type: 'SET_DRAFT'; value: string }
-  | { type: 'SEND_TURN_START'; message: ChatContent }
-  | { type: 'SEND_TURN_FAILURE'; message: string }
-  | { type: 'STREAM_APPEND'; text: string }
-  | { type: 'STREAM_THINKING'; text: string }
-  | { type: 'STREAM_COMPLETE'; finalMessage: string }
-  | { type: 'STREAM_ERROR'; message: string }
-  | { type: 'STREAM_IMAGE'; delta: ImageDelta }
-  | { type: 'TOOL_DELTA'; autoRun?: boolean; delta: ToolCallDelta }
-  | { type: 'TOOL_RESPONSE_START'; toolCallId: string }
-  | { type: 'TOOL_RESPONSE_DONE'; result: unknown; status: 'approved' | 'denied' | 'unsupported'; toolCallId: string; toolName: string }
-  | { type: 'TOOL_RESPONSE_ERROR'; message: string; toolCallId: string }
-  | { type: 'TOOL_BATCH_PENDING' }
-  | { type: 'TOOL_BATCH_RESOLVED' }
-  | { type: 'TURN_CANCELLED' };
-
-function initialState(): ChatScreenState {
-  return {
-    booting: true,
-    conversationId: null,
-    conversationPersisted: false,
-    draft: '',
-    errorMessage: null,
-    credentialErrorCode: null,
-    isStreaming: false,
-    messages: [],
-    missingApiKey: false,
-    pollReadyHandle: null,
-    provider: null,
-    sessionHandle: null,
-    toolActionId: null,
-    toolBatchPending: false,
-  };
-}
-
-function reducer(state: ChatScreenState, action: Action): ChatScreenState {
-  switch (action.type) {
-    case 'BOOT_START':
-      return {
-        ...state,
-        booting: true,
-        conversationId: null,
-        conversationPersisted: false,
-        errorMessage: null,
-        credentialErrorCode: null,
-        isStreaming: false,
-        messages: [],
-        missingApiKey: false,
-        pollReadyHandle: null,
-        provider: null,
-        sessionHandle: null,
-        toolActionId: null,
-        toolBatchPending: false,
-      };
-    case 'BOOT_SUCCESS':
-      return {
-        ...state,
-        booting: false,
-        conversationId: action.conversationId,
-        conversationPersisted: action.conversationPersisted,
-        errorMessage: null,
-        isStreaming: false,
-        messages: action.messages,
-        missingApiKey: false,
-        pollReadyHandle: null,
-        provider: action.provider,
-        sessionHandle: action.sessionHandle,
-        toolActionId: null,
-        toolBatchPending: false,
-        credentialErrorCode: null,
-      };
-    case 'CONVERSATION_PERSISTED':
-      if (state.conversationId !== action.conversationId || state.conversationPersisted) {
-        return state;
-      }
-      return {
-        ...state,
-        conversationPersisted: true,
-      };
-    case 'BOOT_ERROR':
-      return {
-        ...state,
-        booting: false,
-        conversationId: null,
-        conversationPersisted: false,
-        errorMessage: action.message,
-        credentialErrorCode: parseCredentialErrorCode(action.message),
-        isStreaming: false,
-        pollReadyHandle: null,
-        provider: null,
-        sessionHandle: null,
-        toolActionId: null,
-        toolBatchPending: false,
-      };
-    case 'BYOK_MISSING':
-      return {
-        ...state,
-        booting: false,
-        conversationId: null,
-        conversationPersisted: false,
-        errorMessage: null,
-        credentialErrorCode: null,
-        isStreaming: false,
-        messages: [],
-        missingApiKey: true,
-        pollReadyHandle: null,
-        provider: null,
-        sessionHandle: null,
-        toolActionId: null,
-        toolBatchPending: false,
-      };
-    case 'POLL_READY':
-      if (state.sessionHandle !== action.handle) {
-        return state;
-      }
-      return {
-        ...state,
-        pollReadyHandle: action.handle,
-      };
-    case 'SET_DRAFT':
-      return {
-        ...state,
-        draft: action.value,
-      };
-    case 'SEND_TURN_START':
-      return {
-        ...state,
-        draft: '',
-        errorMessage: null,
-        credentialErrorCode: null,
-        isStreaming: true,
-        messages: [
-          ...state.messages,
-          createUserMessage(action.message),
-          createAssistantMessage('', true),
-        ],
-      };
-    case 'SEND_TURN_FAILURE':
-      return {
-        ...state,
-        errorMessage: action.message,
-        credentialErrorCode: parseCredentialErrorCode(action.message),
-        isStreaming: false,
-        messages: removeEmptyStreamingAssistant(state.messages),
-      };
-    case 'STREAM_APPEND':
-      return {
-        ...state,
-        errorMessage: null,
-        credentialErrorCode: null,
-        isStreaming: true,
-        messages: appendAssistantTokens(closeStreamingThinking(state.messages), action.text),
-      };
-    case 'STREAM_THINKING':
-      return {
-        ...state,
-        errorMessage: null,
-        credentialErrorCode: null,
-        isStreaming: true,
-        messages: appendThinkingTokens(removeEmptyStreamingAssistant(state.messages), action.text),
-      };
-    case 'STREAM_COMPLETE':
-      return {
-        ...state,
-        isStreaming: false,
-        messages: completeAssistantMessage(state.messages, action.finalMessage),
-      };
-    case 'STREAM_ERROR':
-      return {
-        ...state,
-        errorMessage: action.message,
-        credentialErrorCode: parseCredentialErrorCode(action.message),
-        isStreaming: false,
-        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
-      };
-    case 'STREAM_IMAGE':
-      return {
-        ...state,
-        messages: appendImageDelta(state.messages, action.delta),
-      };
-    case 'TOOL_DELTA':
-      return {
-        ...state,
-        messages: upsertToolRequest(state.messages, action.delta, action.autoRun ?? false),
-      };
-    case 'TOOL_RESPONSE_START':
-      return {
-        ...state,
-        errorMessage: null,
-        credentialErrorCode: null,
-        toolActionId: action.toolCallId,
-      };
-    case 'TOOL_RESPONSE_DONE':
-      return {
-        ...state,
-        messages: appendToolResult(updateToolStatus(state.messages, action.toolCallId, action.status), action.toolCallId, action.toolName, action.result),
-        toolActionId: null,
-      };
-    case 'TOOL_RESPONSE_ERROR':
-      return {
-        ...state,
-        errorMessage: action.message,
-        credentialErrorCode: parseCredentialErrorCode(action.message),
-        toolActionId: null,
-        messages: updateToolStatus(state.messages, action.toolCallId, 'pending'),
-      };
-    case 'TOOL_BATCH_PENDING':
-      return {
-        ...state,
-        toolBatchPending: true,
-      };
-    case 'TOOL_BATCH_RESOLVED':
-      return {
-        ...state,
-        toolBatchPending: false,
-      };
-    case 'TURN_CANCELLED':
-      return {
-        ...state,
-        isStreaming: false,
-        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
-      };
-    default:
-      return state;
-  }
-}
-
 export function ChatScreen({
   onBack,
   bridge: bridgeProp,
@@ -463,7 +136,7 @@ export function ChatScreen({
 }: ChatScreenProps) {
   const bridgeFromHook = useBridge();
   const bridge = bridgeProp ?? bridgeFromHook;
-  const [state, dispatch] = useReducer(reducer, undefined, initialState);
+  const [state, dispatch] = useReducer(chatStoreReducer, undefined, initialChatStoreState);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const draftRef = useRef('');
@@ -552,9 +225,11 @@ export function ChatScreen({
           void bridge.chatSessionFree(previousHandle).catch(() => undefined);
         }
         if (generation === bootstrapGenerationRef.current) {
+          const message = toErrorMessage(error, 'Unable to open this chat right now.');
           dispatch({
             type: 'BOOT_ERROR',
-            message: toErrorMessage(error, 'Unable to open this chat right now.'),
+            message,
+            credentialErrorCode: parseCredentialErrorCode(message),
           });
         }
       }
@@ -638,9 +313,11 @@ export function ChatScreen({
         });
         return true;
       } catch (error) {
+        const message = toErrorMessage(error, 'Unable to respond to this tool call.');
         dispatch({
           type: 'TOOL_RESPONSE_ERROR',
-          message: toErrorMessage(error, 'Unable to respond to this tool call.'),
+          message,
+          credentialErrorCode: parseCredentialErrorCode(message),
           toolCallId,
         });
         return false;
@@ -721,9 +398,11 @@ export function ChatScreen({
                   await bridge.chatAppendAssistantMessage(state.sessionHandle!, event.content, toolCallsJson);
                   await executeCompletedReadTools(completeToolBatch);
                 } catch (error) {
+                  const message = toErrorMessage(error, 'Unable to record this tool call.');
                   dispatch({
                     type: 'TOOL_RESPONSE_ERROR',
-                    message: toErrorMessage(error, 'Unable to record this tool call.'),
+                    message,
+                    credentialErrorCode: parseCredentialErrorCode(message),
                     toolCallId: toolCalls[completeToolBatch.nextIndex]?.id ?? toolCalls[0].id,
                   });
                 }
@@ -734,7 +413,11 @@ export function ChatScreen({
             }
             break;
           case 'error':
-            dispatch({ type: 'STREAM_ERROR', message: event.message });
+            dispatch({
+              type: 'STREAM_ERROR',
+              message: event.message,
+              credentialErrorCode: (event.credentialErrorCode as CredentialErrorCode | undefined) ?? parseCredentialErrorCode(event.message),
+            });
             break;
           case 'tool_call':
             dispatch({
@@ -750,10 +433,13 @@ export function ChatScreen({
       }
     },
     onPollError: (message) => {
-      dispatch({ type: 'STREAM_ERROR', message });
+      dispatch({
+        type: 'STREAM_ERROR',
+        message,
+        credentialErrorCode: parseCredentialErrorCode(message),
+      });
     },
   });
-
 
   const handleScroll = useCallback(() => {
     const node = logRef.current;
@@ -788,24 +474,20 @@ export function ChatScreen({
       !text ||
       state.isStreaming ||
       state.booting ||
-      state.missingApiKey
-      || state.toolBatchPending
+      state.missingApiKey ||
+      state.toolBatchPending
     ) {
       return;
     }
 
     const content: ChatContent = { kind: 'text', text };
     const sendScope = draftScope;
-    // SEND_TURN_START only clears the in-memory composer; the persisted draft is
-    // deleted below, after the native send is accepted.
     dispatch({ type: 'SEND_TURN_START', message: content });
 
     try {
       await bridge.chatSendMessage(handle, content);
       if (state.conversationId) {
         void bridge.saveConversationMessage?.(state.conversationId, 'user', text).catch(() => undefined);
-        // The message write creates the conversation row, so the draft scope can
-        // now be promoted from new_task to this conversation.
         dispatch({ type: 'CONVERSATION_PERSISTED', conversationId: state.conversationId });
       }
       if (sendScope !== null) {
@@ -813,9 +495,11 @@ export function ChatScreen({
       }
     } catch (error) {
       restoreUnsentDraft(text);
+      const message = toErrorMessage(error, 'Unable to send this message.');
       dispatch({
         type: 'SEND_TURN_FAILURE',
-        message: toErrorMessage(error, 'Unable to send this message.'),
+        message,
+        credentialErrorCode: parseCredentialErrorCode(message),
       });
     }
   }, [bridge, draftScope, drafts, restoreUnsentDraft, state.booting, state.conversationId, state.draft, state.isStreaming, state.missingApiKey, state.pollReadyHandle, state.sessionHandle, state.toolBatchPending]);
@@ -878,9 +562,11 @@ export function ChatScreen({
           await executeCompletedReadTools(batch);
         }
       } catch (error) {
+        const message = toErrorMessage(error, 'Unable to respond to this tool call.');
         dispatch({
           type: 'TOOL_RESPONSE_ERROR',
-          message: toErrorMessage(error, 'Unable to respond to this tool call.'),
+          message,
+          credentialErrorCode: parseCredentialErrorCode(message),
           toolCallId,
         });
       }
@@ -945,9 +631,11 @@ export function ChatScreen({
         }
       } catch (error) {
         restoreUnsentDraft(state.draft.trim());
+        const message = toErrorMessage(error, 'Unable to attach this image.');
         dispatch({
           type: 'SEND_TURN_FAILURE',
-          message: toErrorMessage(error, 'Unable to attach this image.'),
+          message,
+          credentialErrorCode: parseCredentialErrorCode(message),
         });
       }
     },
@@ -1033,50 +721,16 @@ export function ChatScreen({
             <p class="chat-empty-copy">AI responses use your BYOK key.</p>
           </section>
         ) : (
-          <div
-            ref={logRef}
-            class="chat-log"
-            role="log"
-            aria-live="polite"
-            aria-relevant="additions text"
+          <MessageList
+            logRef={logRef}
+            messages={state.messages}
+            toolActionId={state.toolActionId}
+            credentialErrorCode={state.credentialErrorCode}
             onScroll={handleScroll}
-          >
-            {state.messages.map((message) => {
-              if (message.kind === 'tool-request') {
-                return (
-                  <ToolRequestCard
-                    key={message.id}
-                    activeToolCallId={state.toolActionId}
-                    message={message}
-                    onApprove={(approved) =>
-                      void handleApproveTool(message.toolCallId, message.toolName, message.rawArguments, approved)
-                    }
-                  />
-                );
-              }
-
-              if (message.kind === 'tool-result') {
-                return <ToolResultCard key={message.id} message={message} />;
-              }
-
-              if (message.kind === 'system') {
-                return (
-                  <div key={message.id} class="chat-system-row">
-                    <div class="chat-system-card">{message.content}</div>
-                  </div>
-                );
-              }
-
-              if (message.kind === 'thinking') {
-                return <ThinkingBubble key={message.id} message={message} />;
-              }
-
-              return <ChatBubble key={message.id} message={message} />;
-            })}
-            {state.credentialErrorCode && (
-              <CredentialErrorCard code={state.credentialErrorCode} />
-            )}
-          </div>
+            onApproveTool={(toolCallId, toolName, rawArguments, approved) =>
+              void handleApproveTool(toolCallId, toolName, rawArguments, approved)
+            }
+          />
         )}
       </main>
 
@@ -1093,6 +747,9 @@ export function ChatScreen({
           accept="image/*"
           class="chat-file-input"
           onChange={(event) => {
+            void handleImageUpload(event);
+          }}
+          onInput={(event) => {
             void handleImageUpload(event);
           }}
         />
@@ -1167,498 +824,6 @@ export function ChatScreen({
       </form>
     </div>
   );
-}
-
-function ChatBubble({ message }: { message: UserMessageItem | AssistantMessageItem }) {
-  const isUser = message.role === 'user';
-
-  return (
-    <article class={`chat-row chat-row--${message.role}`}>
-      <div
-        class={[
-          'chat-bubble',
-          isUser ? 'chat-bubble-user' : 'chat-bubble-assistant',
-          !isUser && message.isStreaming ? 'chat-bubble-streaming' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-      >
-        <div class="chat-bubble-label">{isUser ? 'You' : 'Maho'}</div>
-        {isUser ? <UserMessageContent message={message.content} /> : <AssistantMessageContent message={message} />}
-      </div>
-    </article>
-  );
-}
-
-function UserMessageContent({ message }: { message: ChatContent }) {
-  if (message.kind === 'image') {
-    const src = `data:${message.mime};base64,${message.base64}`;
-    return (
-      <div class="chat-message-stack">
-        {message.text ? <p class="chat-message-copy">{message.text}</p> : null}
-        <img class="chat-message-image" src={src} alt="Uploaded attachment" />
-      </div>
-    );
-  }
-
-  return <p class="chat-message-copy">{message.text}</p>;
-}
-
-function AssistantMessageContent({ message }: { message: AssistantMessageItem }) {
-  return (
-    <div class="chat-message-stack">
-      {message.content ? (
-        message.isStreaming ? (
-          <p class="chat-message-copy">{message.content}</p>
-        ) : (
-          <MarkdownRenderer text={message.content} />
-        )
-      ) : message.isStreaming ? (
-        <p class="chat-message-copy chat-message-copy--placeholder">Streaming…</p>
-      ) : null}
-      {message.images.map((image) => (
-        <img key={image.id} class="chat-message-image" src={image.src} alt="Assistant generated" />
-      ))}
-    </div>
-  );
-}
-
-function ToolRequestCard(
-  {
-    activeToolCallId,
-    message,
-    onApprove,
-  }: {
-    activeToolCallId: string | null;
-    message: ToolRequestMessageItem;
-    onApprove: (approved: boolean) => void;
-  },
-) {
-  const pending = message.status === 'pending';
-  const busy = activeToolCallId === message.toolCallId;
-  const autoRunState = message.autoRun && (busy ? 'Running…' : message.status === 'approved' ? 'Ran automatically' : null);
-
-  return (
-    <article class="chat-tool-row">
-      <div class="chat-tool-card">
-        <div class="chat-tool-header">
-          <span class="chat-tool-label">Calling</span>
-          <strong class="chat-tool-name">{message.toolName}</strong>
-        </div>
-        <pre class="chat-tool-code">{message.argsText}</pre>
-        <div class="chat-tool-actions">
-          {autoRunState ? (
-            <span class="chat-tool-state chat-tool-state--approved">{autoRunState}</span>
-          ) : pending ? (
-            <>
-              <button
-                type="button"
-                class="chat-tool-button chat-tool-button--approve"
-                aria-label={`Approve ${message.toolName}`}
-                disabled={busy}
-                onClick={() => onApprove(true)}
-              >
-                {busy ? 'Working…' : 'Approve'}
-              </button>
-              <button
-                type="button"
-                class="chat-tool-button chat-tool-button--deny"
-                aria-label={`Deny ${message.toolName}`}
-                disabled={busy}
-                onClick={() => onApprove(false)}
-              >
-                Deny
-              </button>
-            </>
-          ) : (
-            <span class={`chat-tool-state chat-tool-state--${message.status}`}>
-              {message.status === 'approved'
-                ? 'Approved'
-                : message.status === 'unsupported'
-                  ? 'Tool execution unsupported'
-                  : 'Denied'}
-            </span>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function ToolResultCard({ message }: { message: ToolResultMessageItem }) {
-  return (
-    <article class="chat-tool-row">
-      <div class="chat-tool-card chat-tool-card--result">
-        <div class="chat-tool-header">
-          <span class="chat-tool-label">Result</span>
-          <strong class="chat-tool-name">{message.toolName}</strong>
-        </div>
-        <pre class="chat-tool-code">{formatStructuredValue(toolResultDisplayValue(message.result))}</pre>
-      </div>
-    </article>
-  );
-}
-
-function ThinkingBubble({ message }: { message: ThinkingMessageItem }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <article class="chat-thinking" data-testid="chat-thinking-bubble">
-      <button
-        type="button"
-        class="chat-thinking-header-btn"
-        onClick={() => setExpanded((prev) => !prev)}
-        aria-expanded={expanded}
-      >
-        <Icon
-          name="chevron-down"
-          size={14}
-          class={expanded ? 'chat-thinking-chevron chat-thinking-chevron-expanded' : 'chat-thinking-chevron'}
-          aria-hidden
-        />
-        <span class="chat-thinking-header-title">
-          {message.isStreaming ? 'Thinking…' : 'Thought'}
-        </span>
-      </button>
-      {expanded && (
-        <div class="chat-thinking-content">
-          <div class="chat-thinking-text">{message.thinking}</div>
-        </div>
-      )}
-    </article>
-  );
-}
-
-function MarkdownRenderer({ text }: { text: string }) {
-  return <div class="chat-markdown">{parseMarkdown(text)}</div>;
-}
-
-function parseMarkdown(text: string): JSX.Element[] {
-  const normalized = text.replace(/\r\n/g, '\n');
-  const lines = normalized.split('\n');
-  const blocks: JSX.Element[] = [];
-
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index] ?? '';
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-
-    if (line.startsWith('```')) {
-      const codeLines: string[] = [];
-      index += 1;
-      while (index < lines.length && !lines[index]?.startsWith('```')) {
-        codeLines.push(lines[index] ?? '');
-        index += 1;
-      }
-      index += index < lines.length ? 1 : 0;
-      blocks.push(
-        <pre key={`code-${blocks.length}`} class="chat-markdown-pre">
-          <code>{codeLines.join('\n')}</code>
-        </pre>,
-      );
-      continue;
-    }
-
-    if (line.startsWith('- ')) {
-      const items: string[] = [];
-      while (index < lines.length && (lines[index] ?? '').startsWith('- ')) {
-        items.push((lines[index] ?? '').slice(2));
-        index += 1;
-      }
-      blocks.push(
-        <ul key={`list-${blocks.length}`} class="chat-markdown-list">
-          {items.map((item, itemIndex) => (
-            <li key={`item-${itemIndex}`}>{parseInlineMarkdown(item, `list-${blocks.length}-${itemIndex}`)}</li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    const paragraphLines: string[] = [];
-    while (index < lines.length) {
-      const currentLine = lines[index] ?? '';
-      if (!currentLine.trim() || currentLine.startsWith('```') || currentLine.startsWith('- ')) {
-        break;
-      }
-      paragraphLines.push(currentLine);
-      index += 1;
-    }
-
-    blocks.push(
-      <p key={`p-${blocks.length}`} class="chat-markdown-paragraph">
-        {parseInlineMarkdown(paragraphLines.join(' '), `p-${blocks.length}`)}
-      </p>,
-    );
-  }
-
-  return blocks;
-}
-
-function parseInlineMarkdown(text: string, keyPrefix: string): Array<string | JSX.Element> {
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g;
-  const nodes: Array<string | JSX.Element> = [];
-  let cursor = 0;
-  let matchIndex = 0;
-
-  for (;;) {
-    const match = pattern.exec(text);
-    if (!match) {
-      break;
-    }
-
-    if (match.index > cursor) {
-      nodes.push(text.slice(cursor, match.index));
-    }
-
-    const token = match[0];
-    if (token.startsWith('**')) {
-      const inner = token.slice(2, -2);
-      nodes.push(
-        <strong key={`${keyPrefix}-strong-${matchIndex}`}>
-          {parseInlineMarkdown(inner, `${keyPrefix}-strong-${matchIndex}`)}
-        </strong>,
-      );
-    } else if (token.startsWith('*')) {
-      const inner = token.slice(1, -1);
-      nodes.push(
-        <em key={`${keyPrefix}-em-${matchIndex}`}>
-          {parseInlineMarkdown(inner, `${keyPrefix}-em-${matchIndex}`)}
-        </em>,
-      );
-    } else if (token.startsWith('`')) {
-      nodes.push(
-        <code key={`${keyPrefix}-code-${matchIndex}`} class="chat-markdown-inline-code">
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else {
-      const linkMatch = /^\[([^\]]+)\]\(([^\)]+)\)$/.exec(token);
-      if (linkMatch) {
-        nodes.push(
-          <a
-            key={`${keyPrefix}-link-${matchIndex}`}
-            href={linkMatch[2]}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {linkMatch[1]}
-          </a>,
-        );
-      } else {
-        nodes.push(token);
-      }
-    }
-
-    cursor = match.index + token.length;
-    matchIndex += 1;
-  }
-
-  if (cursor < text.length) {
-    nodes.push(text.slice(cursor));
-  }
-
-  return nodes;
-}
-
-function appendAssistantTokens(messages: MessageItem[], text: string): MessageItem[] {
-  const streamingIndex = findLastStreamingAssistantIndex(messages);
-  if (streamingIndex === -1) {
-    return [...messages, createAssistantMessage(text, true)];
-  }
-
-  return messages.map((message, index) => {
-    if (index !== streamingIndex || message.kind !== 'chat' || message.role !== 'assistant') {
-      return message;
-    }
-
-    return {
-      ...message,
-      content: `${message.content}${text}`,
-      isStreaming: true,
-    };
-  });
-}
-
-function completeAssistantMessage(messages: MessageItem[], finalMessage: string): MessageItem[] {
-  const streamingIndex = findLastStreamingAssistantIndex(messages);
-  if (streamingIndex === -1) {
-    return finalMessage
-      ? [...messages, createAssistantMessage(finalMessage, false)]
-      : messages;
-  }
-
-  return messages.map((message, index) => {
-    if (index !== streamingIndex || message.kind !== 'chat' || message.role !== 'assistant') {
-      return message;
-    }
-
-    return {
-      ...message,
-      content: finalMessage || message.content,
-      isStreaming: false,
-    };
-  });
-}
-
-function removeEmptyStreamingAssistant(messages: MessageItem[]): MessageItem[] {
-  const streamingIndex = findLastStreamingAssistantIndex(messages);
-  if (streamingIndex === -1) {
-    return messages;
-  }
-
-  const candidate = messages[streamingIndex];
-  if (
-    candidate &&
-    candidate.kind === 'chat' &&
-    candidate.role === 'assistant' &&
-    candidate.content.trim().length === 0 &&
-    candidate.images.length === 0
-  ) {
-    return messages.filter((_, index) => index !== streamingIndex);
-  }
-
-  return messages;
-}
-
-function markAssistantStreamClosed(messages: MessageItem[]): MessageItem[] {
-  return messages.map((message) => {
-    if (message.kind !== 'chat' || message.role !== 'assistant') {
-      return message;
-    }
-
-    return {
-      ...message,
-      isStreaming: false,
-    };
-  });
-}
-
-function appendImageDelta(messages: MessageItem[], delta: ImageDelta): MessageItem[] {
-  const assistantIndex = findLastAssistantIndex(messages);
-  if (assistantIndex === -1) {
-    return [
-      ...messages,
-      createAssistantMessage('', true, [createImageFromDelta(delta)]),
-    ];
-  }
-
-  return messages.map((message, index) => {
-    if (index !== assistantIndex || message.kind !== 'chat' || message.role !== 'assistant') {
-      return message;
-    }
-
-    const nextImages = upsertAssistantImage(message.images, delta);
-    return {
-      ...message,
-      images: nextImages,
-    };
-  });
-}
-
-function upsertAssistantImage(images: RenderedImage[], delta: ImageDelta): RenderedImage[] {
-  const imageId = `image-${delta.index ?? images.length}`;
-  const existingIndex = images.findIndex((image) => image.id === imageId);
-  const existing = existingIndex === -1 ? null : images[existingIndex];
-
-  const mime = delta.mime ?? existing?.mime ?? 'image/png';
-  const nextBase64 = delta.url
-    ? parseDataUrl(delta.url)?.base64 ?? existing?.rawBase64 ?? ''
-    : `${existing?.rawBase64 ?? ''}${delta.b64Chunk ?? ''}`;
-  const src = delta.url ?? `data:${mime};base64,${nextBase64}`;
-  const nextImage: RenderedImage = {
-    id: imageId,
-    mime,
-    rawBase64: nextBase64,
-    src,
-  };
-
-  if (existingIndex === -1) {
-    return [...images, nextImage];
-  }
-
-  return images.map((image, index) => (index === existingIndex ? nextImage : image));
-}
-
-function upsertToolRequest(messages: MessageItem[], delta: ToolCallDelta, autoRun: boolean): MessageItem[] {
-  const toolCallId = getToolCallId(delta);
-  const toolName = delta.name?.trim() || delta.tool?.trim() || 'Unknown tool';
-  const existingIndex = messages.findIndex(
-    (message) => message.kind === 'tool-request' && message.toolCallId === toolCallId,
-  );
-  const existing = existingIndex === -1 ? null : (messages[existingIndex] as ToolRequestMessageItem);
-  const rawArguments = buildRawArguments(existing?.rawArguments ?? '', delta);
-  const argsText = formatToolArguments(rawArguments, delta.args ?? delta.arguments);
-  const nextMessage: ToolRequestMessageItem = {
-    argsText,
-    autoRun: existing?.autoRun ?? autoRun,
-    id: existing?.id ?? createLocalId('tool-request'),
-    kind: 'tool-request',
-    rawArguments,
-    status: existing?.status ?? 'pending',
-    toolCallId,
-    toolName: toolName || existing?.toolName || 'Unknown tool',
-  };
-
-  if (existingIndex === -1) {
-    return [...messages, nextMessage];
-  }
-
-  return messages.map((message, index) => (index === existingIndex ? nextMessage : message));
-}
-
-function updateToolStatus(
-  messages: MessageItem[],
-  toolCallId: string,
-  status: ToolRequestMessageItem['status'],
-): MessageItem[] {
-  return messages.map((message) => {
-    if (message.kind !== 'tool-request' || message.toolCallId !== toolCallId) {
-      return message;
-    }
-
-    return {
-      ...message,
-      status,
-    };
-  });
-}
-
-function appendToolResult(
-  messages: MessageItem[],
-  toolCallId: string,
-  toolName: string,
-  result: unknown,
-): MessageItem[] {
-  const exists = messages.some(
-    (message) => message.kind === 'tool-result' && message.toolCallId === toolCallId,
-  );
-  if (exists) {
-    return messages.map((message) => {
-      if (message.kind !== 'tool-result' || message.toolCallId !== toolCallId) {
-        return message;
-      }
-
-      return {
-        ...message,
-        result,
-        toolName,
-      };
-    });
-  }
-
-  return [
-    ...messages,
-    {
-      id: createLocalId('tool-result'),
-      kind: 'tool-result',
-      result,
-      toolCallId,
-      toolName,
-    },
-  ];
 }
 
 function historyToMessages(history: BridgeChatMessage[]): MessageItem[] {
@@ -1750,94 +915,11 @@ function deriveConversationTitle(messages: MessageItem[], resumed: boolean): str
   return trimmed.length > 42 ? `${trimmed.slice(0, 42).trimEnd()}…` : trimmed;
 }
 
-function createUserMessage(content: ChatContent): UserMessageItem {
-  return {
-    content,
-    id: createLocalId('user'),
-    kind: 'chat',
-    role: 'user',
-  };
-}
-
-function createAssistantMessage(
-  content: string,
-  isStreaming: boolean,
-  images: RenderedImage[] = [],
-): AssistantMessageItem {
-  return {
-    content,
-    id: createLocalId('assistant'),
-    images,
-    isStreaming,
-    kind: 'chat',
-    role: 'assistant',
-  };
-}
-
-function appendThinkingTokens(messages: MessageItem[], text: string): MessageItem[] {
-  const last = messages[messages.length - 1];
-  if (last && last.kind === 'thinking' && last.isStreaming) {
-    return messages.map((message, index) =>
-      index === messages.length - 1 && message.kind === 'thinking'
-        ? { ...message, thinking: `${message.thinking}${text}` }
-        : message,
-    );
-  }
-
-  return [
-    ...messages,
-    { id: createLocalId('thinking'), isStreaming: true, kind: 'thinking', thinking: text },
-  ];
-}
-
-function closeStreamingThinking(messages: MessageItem[]): MessageItem[] {
-  return messages.map((message) =>
-    message.kind === 'thinking' && message.isStreaming
-      ? { ...message, isStreaming: false }
-      : message,
-  );
-}
-
-function findLastStreamingAssistantIndex(messages: MessageItem[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.kind === 'chat' && message.role === 'assistant' && message.isStreaming) {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function findLastAssistantIndex(messages: MessageItem[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.kind === 'chat' && message.role === 'assistant') {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function getToolCallId(delta: ToolCallDelta): string {
-  return delta.id?.trim() || delta.toolCallId?.trim() || `tool-${delta.index ?? 0}`;
-}
-
-function buildRawArguments(existing: string, delta: ToolCallDelta): string {
-  if (typeof delta.argumentsDelta === 'string') {
-    return `${existing}${delta.argumentsDelta}`;
-  }
-
-  if (delta.args !== undefined) {
-    return formatStructuredValue(delta.args);
-  }
-
-  if (delta.arguments !== undefined) {
-    return formatStructuredValue(delta.arguments);
-  }
-
-  return existing;
+function parseToolArgumentsForExecution(rawArguments: string): Record<string, unknown> | null {
+  const parsed = safeParseJson(rawArguments);
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
 }
 
 function formatToolArguments(rawArguments: string, argsValue?: unknown): string {
@@ -1852,82 +934,26 @@ function formatToolArguments(rawArguments: string, argsValue?: unknown): string 
   return formatStructuredValue(safeParseJson(rawArguments));
 }
 
-function parseToolArgumentsForExecution(rawArguments: string): Record<string, unknown> | null {
-  const parsed = safeParseJson(rawArguments);
-  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-    ? parsed as Record<string, unknown>
-    : null;
-}
-
 function isReadTool(toolName: string): boolean {
-  return toolName === 'search_bookmarks' ||
+  return (
+    toolName === 'search_bookmarks' ||
     toolName === 'list_tabs' ||
     toolName === 'get_page_info' ||
-    toolName === 'search_history';
+    toolName === 'search_history'
+  );
 }
 
-function createImageFromDelta(delta: ImageDelta): RenderedImage {
-  const parsed = delta.url ? parseDataUrl(delta.url) : null;
-  const mime = delta.mime ?? parsed?.mime ?? 'image/png';
-  const rawBase64 = parsed?.base64 ?? delta.b64Chunk ?? '';
-  return {
-    id: `image-${delta.index ?? 0}`,
-    mime,
-    rawBase64,
-    src: delta.url ?? `data:${mime};base64,${rawBase64}`,
-  };
-}
-
-function formatStructuredValue(value: unknown): string {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return '{}';
-    }
-
-    const parsed = safeParseJson(trimmed);
-    if (typeof parsed === 'string') {
-      return parsed;
-    }
-    return JSON.stringify(parsed, null, 2);
-  }
-
-  return JSON.stringify(value, null, 2) ?? String(value);
-}
-
-function toolResultDisplayValue(result: unknown): unknown {
-  if (
-    typeof result === 'object' &&
-    result !== null &&
-    !Array.isArray(result) &&
-    typeof (result as Record<string, unknown>).output === 'string'
-  ) {
-    return safeParseJson((result as Record<string, string>).output);
-  }
-  return result;
-}
-
-function safeParseJson(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
-function buildSystemInstruction(
-  {
-    pageText,
-    pageTitle,
-    pageUrl,
-    systemInstruction,
-  }: {
-    pageText?: string;
-    pageTitle?: string;
-    pageUrl?: string;
-    systemInstruction?: string;
-  },
-): string {
+function buildSystemInstruction({
+  pageText,
+  pageTitle,
+  pageUrl,
+  systemInstruction,
+}: {
+  pageText?: string;
+  pageTitle?: string;
+  pageUrl?: string;
+  systemInstruction?: string;
+}): string {
   const trimmedText = pageText?.trim().slice(0, MAX_PAGE_CONTEXT_CHARS) ?? '';
   const trimmedTitle = pageTitle?.trim() ?? '';
   const trimmedUrl = pageUrl?.trim() ?? '';
@@ -2016,18 +1042,6 @@ function normalizeChatCompletionsEndpoint(baseUrl: string): string {
     : `${trimmed}/chat/completions`;
 }
 
-function parseDataUrl(value: string): { base64: string; mime: string } | null {
-  const match = /^data:(.+?);base64,(.+)$/u.exec(value);
-  if (!match) {
-    return null;
-  }
-
-  return {
-    base64: match[2] ?? '',
-    mime: match[1] ?? 'application/octet-stream',
-  };
-}
-
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2051,12 +1065,4 @@ function toErrorMessage(error: unknown, fallback: string): string {
     return error;
   }
   return fallback;
-}
-
-function createLocalId(prefix: string): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-
-  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }

@@ -225,4 +225,36 @@ class SessionStreamingTest {
             lastJs != null && lastJs.contains("__mahoStreamComplete"),
         )
     }
+
+    @Test
+    fun `pushThinking coalesces and flushes on complete`() {
+        val sid = "thinking-test"
+        repeat(5) { i ->
+            bridge.pushThinking(sid, "thought-$i; ")
+        }
+        bridge.pushStreamComplete(sid, "thinking-done")
+        drainAll()
+
+        val lastJs = shadowOf(webView).lastEvaluatedJavascript
+        assertTrue(
+            "Should have completed stream",
+            lastJs != null && lastJs.contains("__mahoStreamComplete"),
+        )
+    }
+
+    @Test
+    fun `EventThrottler throttles rapid events`() {
+        val throttler = dev.maho.browser.bridge.EventThrottler(intervalMs = 50L)
+        var count = 0
+        repeat(10) {
+            throttler.throttle {
+                count++
+            }
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(100)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue("Execution count should be throttled (got $count)", count in 1..2)
+    }
 }

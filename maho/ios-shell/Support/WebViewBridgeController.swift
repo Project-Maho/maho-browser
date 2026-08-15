@@ -104,20 +104,22 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         session.pushToken(token)
     }
 
+    func pushThinking(sessionId: String, thinking: String) {
+        streamsLock.lock()
+        let session = streams[sessionId] ?? StreamSession(sessionId: sessionId, webView: webView)
+        streams[sessionId] = session
+        streamsLock.unlock()
+        session.pushThinking(thinking)
+    }
+
     func pushToolDelta(sessionId: String, deltaJson: String) {
-        guard let webView = webView else { return }
         let js = "window.__mahoStreamToolDelta('\(sessionId)', \(deltaJson))"
-        DispatchQueue.main.async {
-            webView.evaluateJavaScript(js, completionHandler: nil)
-        }
+        scheduleJsEvaluation(js)
     }
 
     func pushImageDelta(sessionId: String, deltaJson: String) {
-        guard let webView = webView else { return }
         let js = "window.__mahoStreamImageDelta('\(sessionId)', \(deltaJson))"
-        DispatchQueue.main.async {
-            webView.evaluateJavaScript(js, completionHandler: nil)
-        }
+        scheduleJsEvaluation(js)
     }
 
     func pushStreamComplete(sessionId: String, finalMessage: String) {
@@ -143,6 +145,56 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         for session in activeSessions {
             session.error(message: "Shutdown")
         }
+        flushPendingJsEvaluations()
+    }
+
+    // MARK: - JS Batching & Throttling
+
+    private let jsEvaluationLock = NSLock()
+    private var pendingJsEvaluations: [String] = []
+    private var jsEvaluationScheduled = false
+
+    private func scheduleJsEvaluation(_ js: String, immediate: Bool = false) {
+        guard let webView = webView else { return }
+        jsEvaluationLock.lock()
+        pendingJsEvaluations.append(js)
+        if immediate || pendingJsEvaluations.count >= 32 {
+            let batch = pendingJsEvaluations
+            pendingJsEvaluations.removeAll()
+            jsEvaluationScheduled = false
+            jsEvaluationLock.unlock()
+            DispatchQueue.main.async {
+                guard !batch.isEmpty else { return }
+                let combined = batch.joined(separator: ";")
+                webView.evaluateJavaScript(combined, completionHandler: nil)
+            }
+        } else {
+            if !jsEvaluationScheduled {
+                jsEvaluationScheduled = true
+                jsEvaluationLock.unlock()
+                DispatchQueue.main.async { [weak self] in
+                    self?.flushPendingJsEvaluations()
+                }
+            } else {
+                jsEvaluationLock.unlock()
+            }
+        }
+    }
+
+    private func flushPendingJsEvaluations() {
+        jsEvaluationLock.lock()
+        jsEvaluationScheduled = false
+        if pendingJsEvaluations.isEmpty {
+            jsEvaluationLock.unlock()
+            return
+        }
+        let batch = pendingJsEvaluations
+        pendingJsEvaluations.removeAll()
+        jsEvaluationLock.unlock()
+
+        guard let webView = webView else { return }
+        let combined = batch.joined(separator: ";")
+        webView.evaluateJavaScript(combined, completionHandler: nil)
     }
 
 
@@ -744,14 +796,11 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     // MARK: - JS response delivery
 
     private func resolveOnJS(_ responseJson: String) {
-        guard let webView else { return }
         let escaped = responseJson
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
         let js = "window.__mahoBridgeResponse('\(escaped)')"
-        DispatchQueue.main.async {
-            webView.evaluateJavaScript(js, completionHandler: nil)
-        }
+        scheduleJsEvaluation(js)
     }
 
     private func triggerHaptic(style: String) {
@@ -1478,12 +1527,24 @@ extension WebViewBridgeController {
             return
         }
 
-        guard let bundleURL = Bundle.main.url(
-            forResource: "index",
-            withExtension: "html",
-            subdirectory: "web-ai"
-        ) else {
-            assertionFailure("[WebViewBridgeController] web-ai/index.html not found in bundle")
+        let storagePath = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("dev.maho.browser", isDirectory: true)
+            .path
+        let assetURL: URL? = {
+            if let storagePath, let provisioned = MahoBridge.shared.getProvisionedAssetURL(storagePath: storagePath, relativePath: "web-ai/index.html") {
+                return provisioned
+            }
+            return Bundle.main.url(
+                forResource: "index",
+                withExtension: "html",
+                subdirectory: "web-ai"
+            )
+        }()
+
+        guard let bundleURL = assetURL else {
+            assertionFailure("[WebViewBridgeController] web-ai/index.html not found in bundle or provisioned storage")
             return
         }
 
@@ -1517,6 +1578,9 @@ private final class StreamSession {
     private var buffer: [String] = []
     private var droppedCount = 0
     private var flushScheduled = false
+    private var thinkingBuffer: [String] = []
+    private var thinkingFlushScheduled = false
+    private var thinkingWorkItem: DispatchWorkItem?
     private let lock = NSLock()
     private var flushWorkItem: DispatchWorkItem?
 
@@ -1575,6 +1639,63 @@ private final class StreamSession {
         dispatchBatch(tokens: snapshot, drops: drops)
     }
 
+    func pushThinking(_ thinking: String) {
+        lock.lock()
+        thinkingBuffer.append(thinking)
+        if thinkingBuffer.count > 256 {
+            thinkingBuffer.removeFirst()
+        }
+
+        if thinkingBuffer.count >= 32 {
+            let snapshot = thinkingBuffer
+            thinkingBuffer.removeAll()
+            thinkingFlushScheduled = false
+            thinkingWorkItem?.cancel()
+            thinkingWorkItem = nil
+            lock.unlock()
+            dispatchThinkingBatch(chunks: snapshot)
+        } else {
+            if !thinkingFlushScheduled {
+                thinkingFlushScheduled = true
+                let workItem = DispatchWorkItem { [weak self] in
+                    self?.tryFlushThinking()
+                }
+                thinkingWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60), execute: workItem)
+            }
+            lock.unlock()
+        }
+    }
+
+    private func tryFlushThinking() {
+        lock.lock()
+        guard thinkingFlushScheduled else {
+            lock.unlock()
+            return
+        }
+        thinkingFlushScheduled = false
+        if thinkingBuffer.isEmpty {
+            lock.unlock()
+            return
+        }
+        let snapshot = thinkingBuffer
+        thinkingBuffer.removeAll()
+        lock.unlock()
+        dispatchThinkingBatch(chunks: snapshot)
+    }
+
+    private func dispatchThinkingBatch(chunks: [String]) {
+        guard let webView = webView else { return }
+        let combined = chunks.joined()
+        let escaped = combined
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        let js = "window.__mahoStreamThinking('\(sessionId)', '\(escaped)')"
+        DispatchQueue.main.async {
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
     private func dispatchBatch(tokens: [String], drops: Int) {
         guard let webView = webView else { return }
         guard let tokensData = try? JSONSerialization.data(withJSONObject: tokens),
@@ -1599,14 +1720,22 @@ private final class StreamSession {
         flushScheduled = false
         flushWorkItem?.cancel()
         flushWorkItem = nil
+        thinkingFlushScheduled = false
+        thinkingWorkItem?.cancel()
+        thinkingWorkItem = nil
         let pendingSnapshot = buffer.isEmpty ? nil : buffer
         let drops = droppedCount
         buffer.removeAll()
         droppedCount = 0
+        let pendingThinking = thinkingBuffer.isEmpty ? nil : thinkingBuffer
+        thinkingBuffer.removeAll()
         lock.unlock()
 
         if let pending = pendingSnapshot {
             dispatchBatch(tokens: pending, drops: drops)
+        }
+        if let pendingT = pendingThinking {
+            dispatchThinkingBatch(chunks: pendingT)
         }
 
         guard let webView = webView else { return }
@@ -1624,14 +1753,22 @@ private final class StreamSession {
         flushScheduled = false
         flushWorkItem?.cancel()
         flushWorkItem = nil
+        thinkingFlushScheduled = false
+        thinkingWorkItem?.cancel()
+        thinkingWorkItem = nil
         let pendingSnapshot = buffer.isEmpty ? nil : buffer
         let drops = droppedCount
         buffer.removeAll()
         droppedCount = 0
+        let pendingThinking = thinkingBuffer.isEmpty ? nil : thinkingBuffer
+        thinkingBuffer.removeAll()
         lock.unlock()
 
         if let pending = pendingSnapshot {
             dispatchBatch(tokens: pending, drops: drops)
+        }
+        if let pendingT = pendingThinking {
+            dispatchThinkingBatch(chunks: pendingT)
         }
 
         guard let webView = webView else { return }

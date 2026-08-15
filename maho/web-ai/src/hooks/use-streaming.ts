@@ -7,6 +7,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { ChatEvent, MahoBridge, SessionHandle } from '../bridge/types';
 import { parseCredentialErrorCode } from '../screens/credential-error';
+import { coalesceChatEventBatch } from '../store/chatStore';
 
 const POLL_INTERVAL_MS = 50;
 
@@ -133,8 +134,9 @@ export function useStreaming({
         const events = (Array.isArray(rawEvents) ? rawEvents : [])
           .map(normalizeChatEvent)
           .filter((event): event is ChatEvent => event !== null);
-        if (events.length > 0) {
-          onEventsRef.current(events);
+        const coalesced = coalesceChatEventBatch(events);
+        if (coalesced.length > 0) {
+          onEventsRef.current(coalesced);
         }
       } catch (error) {
         if (active) {

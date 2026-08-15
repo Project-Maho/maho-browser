@@ -26,9 +26,14 @@ Benchmark crate boundary for workspace performance and comparison harnesses.
 cargo test -p maho-bench
 
 # Rust micro-benchmarks (criterion): crdt_bench, tab_switch, command_search,
-# tab_snapshot_lookup, persistence_bench
+# tab_snapshot_lookup, persistence_bench, memory_hnsw_bench, sqlite_concurrency_bench
 cargo bench -p maho-bench            # run all
 cargo bench -p maho-bench --no-run   # compile-only check
+
+# CI Performance Regression Gate
+python3 maho/crates/maho-bench/run_perf_regression_gate.py --dry-run
+python3 maho/crates/maho-bench/run_perf_regression_gate.py --parse-only
+python3 maho/crates/maho-bench/run_perf_regression_gate.py
 ```
 
 ## AGENT TASK BENCHMARK (web/run_bench.py)

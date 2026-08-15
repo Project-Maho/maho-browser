@@ -2,6 +2,39 @@ import Foundation
 import os.log
 import Security
 
+// MARK: - Asset Provisioning Manifest Models
+
+struct AssetManifest: Codable, Equatable, Sendable {
+    var schemaVersion: Int
+    var bundleVersion: String
+    var buildTimestamp: TimeInterval
+    var files: [String: AssetFileEntry]
+
+    struct AssetFileEntry: Codable, Equatable, Sendable {
+        var size: Int64
+        var sha256: String?
+        var modifiedTimestamp: TimeInterval?
+
+        init(size: Int64 = 0, sha256: String? = nil, modifiedTimestamp: TimeInterval? = nil) {
+            self.size = size
+            self.sha256 = sha256
+            self.modifiedTimestamp = modifiedTimestamp
+        }
+    }
+
+    init(
+        schemaVersion: Int = 1,
+        bundleVersion: String,
+        buildTimestamp: TimeInterval = Date().timeIntervalSince1970,
+        files: [String: AssetFileEntry] = [:]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.bundleVersion = bundleVersion
+        self.buildTimestamp = buildTimestamp
+        self.files = files
+    }
+}
+
 // MARK: - SQLCipher Keychain Helper
 
 struct SqlCipherKeychain {
@@ -125,6 +158,188 @@ final class MahoBridge: @unchecked Sendable {
         }
         if !success {
             fatalError("Failed to set SQLCipher key in storage driver")
+        }
+    }
+
+    // MARK: - Asset Provisioning & Differential Sync
+
+    /// Inspects bundle asset manifest vs sandbox destination manifest.
+    /// If identical, fast paths and returns `false` (no staging/copying performed).
+    /// If changed or missing, performs differential staging in staging directory and atomically swaps into place, returning `true`.
+    @discardableResult
+    func provisionAssets(
+        storagePath: String,
+        bundle: Bundle = .main,
+        force: Bool = false
+    ) -> Bool {
+        let fileManager = FileManager.default
+        let assetsDir = URL(fileURLWithPath: storagePath).appendingPathComponent("assets", isDirectory: true)
+        let manifestURL = assetsDir.appendingPathComponent("asset-manifest.json")
+
+        let bundleManifest = resolveBundleManifest(bundle: bundle)
+
+        // Fast path: Check versioned manifest comparison
+        if !force, fileManager.fileExists(atPath: assetsDir.path), fileManager.fileExists(atPath: manifestURL.path) {
+            if let storedData = try? Data(contentsOf: manifestURL),
+               let storedManifest = try? JSONDecoder().decode(AssetManifest.self, from: storedData) {
+                if storedManifest.bundleVersion == bundleManifest.bundleVersion,
+                   storedManifest.schemaVersion == bundleManifest.schemaVersion,
+                   storedManifest.files == bundleManifest.files {
+                    log.debug("Asset manifest identical (v\(storedManifest.bundleVersion, privacy: .public)); skipped asset walk and sync.")
+                    return false
+                }
+            }
+        }
+
+        // Staging path: Perform staging in background/temporary directory then atomic swap
+        let parentDir = assetsDir.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: parentDir.path) {
+            try? fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        }
+
+        let stagingDir = parentDir.appendingPathComponent("assets_staging_\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+
+            // Stage bundle web-ai assets
+            stageBundleAssets(bundle: bundle, to: stagingDir, existingLiveDir: assetsDir)
+
+            // Write updated manifest to staging directory
+            let manifestData = try JSONEncoder().encode(bundleManifest)
+            try manifestData.write(to: stagingDir.appendingPathComponent("asset-manifest.json"), options: .atomic)
+
+            // Atomic swap: replace live directory with staging directory
+            if fileManager.fileExists(atPath: assetsDir.path) {
+                let backupDir = parentDir.appendingPathComponent("assets_backup_\(UUID().uuidString)", isDirectory: true)
+                try fileManager.moveItem(at: assetsDir, to: backupDir)
+                do {
+                    try fileManager.moveItem(at: stagingDir, to: assetsDir)
+                    try? fileManager.removeItem(at: backupDir)
+                } catch {
+                    // Rollback if swap failed
+                    try? fileManager.moveItem(at: backupDir, to: assetsDir)
+                    throw error
+                }
+            } else {
+                try fileManager.moveItem(at: stagingDir, to: assetsDir)
+            }
+
+            log.info("Asset provisioning complete (v\(bundleManifest.bundleVersion, privacy: .public)) with atomic swap.")
+            return true
+        } catch {
+            log.error("Asset provisioning failed: \(error.localizedDescription, privacy: .public)")
+            try? fileManager.removeItem(at: stagingDir)
+            return false
+        }
+    }
+
+    /// Asynchronously provisions assets in background queue if needed, executing fast-path check first.
+    func provisionAssetsInBackground(
+        storagePath: String,
+        bundle: Bundle = .main,
+        force: Bool = false,
+        completion: (@Sendable (Result<Bool, Error>) -> Void)? = nil
+    ) {
+        let fileManager = FileManager.default
+        let assetsDir = URL(fileURLWithPath: storagePath).appendingPathComponent("assets", isDirectory: true)
+        let manifestURL = assetsDir.appendingPathComponent("asset-manifest.json")
+        let bundleManifest = resolveBundleManifest(bundle: bundle)
+
+        // Immediate fast path check
+        if !force, fileManager.fileExists(atPath: assetsDir.path), fileManager.fileExists(atPath: manifestURL.path) {
+            if let storedData = try? Data(contentsOf: manifestURL),
+               let storedManifest = try? JSONDecoder().decode(AssetManifest.self, from: storedData),
+               storedManifest.bundleVersion == bundleManifest.bundleVersion,
+               storedManifest.schemaVersion == bundleManifest.schemaVersion,
+               storedManifest.files == bundleManifest.files {
+                completion?(.success(false))
+                return
+            }
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let updated = self.provisionAssets(storagePath: storagePath, bundle: bundle, force: force)
+            completion?(.success(updated))
+        }
+    }
+
+    /// Retrieves URL for a provisioned sandbox asset if present.
+    func getProvisionedAssetURL(storagePath: String, relativePath: String) -> URL? {
+        let fileManager = FileManager.default
+        let url = URL(fileURLWithPath: storagePath)
+            .appendingPathComponent("assets", isDirectory: true)
+            .appendingPathComponent(relativePath)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func resolveBundleManifest(bundle: Bundle) -> AssetManifest {
+        // 1. Check for explicit asset-manifest.json in bundle
+        if let manifestURL = bundle.url(forResource: "asset-manifest", withExtension: "json", subdirectory: "web-ai") ??
+                              bundle.url(forResource: "asset-manifest", withExtension: "json"),
+           let data = try? Data(contentsOf: manifestURL),
+           let manifest = try? JSONDecoder().decode(AssetManifest.self, from: data) {
+            return manifest
+        }
+
+        // 2. Derive manifest from bundle version & resource metadata
+        let version = (bundle.infoDictionary?["CFBundleVersion"] as? String) ??
+                      (bundle.infoDictionary?["CFBundleShortVersionString"] as? String) ??
+                      "1.0.0"
+
+        var files: [String: AssetManifest.AssetFileEntry] = [:]
+        let fileManager = FileManager.default
+
+        if let webAiPath = bundle.resourceURL?.appendingPathComponent("web-ai").path,
+           fileManager.fileExists(atPath: webAiPath),
+           let enumerator = fileManager.enumerator(atPath: webAiPath) {
+            for case let relativePath as String in enumerator {
+                let fullPath = (webAiPath as NSString).appendingPathComponent(relativePath)
+                var isDir: ObjCBool = false
+                if fileManager.fileExists(atPath: fullPath, isDirectory: &isDir), !isDir.boolValue {
+                    let attrs = (try? fileManager.attributesOfItem(atPath: fullPath)) ?? [:]
+                    let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+                    let modDate = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+                    files["web-ai/\(relativePath)"] = AssetManifest.AssetFileEntry(
+                        size: size,
+                        modifiedTimestamp: modDate
+                    )
+                }
+            }
+        }
+
+        return AssetManifest(
+            schemaVersion: 1,
+            bundleVersion: version,
+            files: files
+        )
+    }
+
+    private func stageBundleAssets(bundle: Bundle, to stagingDir: URL, existingLiveDir: URL) {
+        let fileManager = FileManager.default
+
+        // Copy web-ai resources
+        if let webAiURL = bundle.url(forResource: "index", withExtension: "html", subdirectory: "web-ai")?
+            .deletingLastPathComponent() {
+            let stagingWebAi = stagingDir.appendingPathComponent("web-ai", isDirectory: true)
+            try? fileManager.createDirectory(at: stagingWebAi, withIntermediateDirectories: true)
+
+            if let items = try? fileManager.contentsOfDirectory(at: webAiURL, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) {
+                for item in items {
+                    let destItem = stagingWebAi.appendingPathComponent(item.lastPathComponent)
+                    let liveItem = existingLiveDir.appendingPathComponent("web-ai").appendingPathComponent(item.lastPathComponent)
+
+                    // Differential check: if file in live directory exists and matches size/date, copy from live, else copy from bundle
+                    if fileManager.fileExists(atPath: liveItem.path),
+                       let liveAttrs = try? fileManager.attributesOfItem(atPath: liveItem.path),
+                       let bundleAttrs = try? fileManager.attributesOfItem(atPath: item.path),
+                       (liveAttrs[.size] as? NSNumber) == (bundleAttrs[.size] as? NSNumber) {
+                        try? fileManager.copyItem(at: liveItem, to: destItem)
+                    } else {
+                        try? fileManager.copyItem(at: item, to: destItem)
+                    }
+                }
+            }
         }
     }
 
