@@ -37,9 +37,6 @@ void AddChromeSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorContentBackground] = {dark_mode
       ? kContentBackgroundDark
       : kContentBackgroundLight};
-  // Fill the empty content area (blank / new-tab) with the themed content color
-  // so it matches the sidebar, instead of Chromium's default opaque gray.
-  mixer[kColorWebContentsBackground] = {kMahoColorContentBackground};
   mixer[kMahoColorContentGradientTop] = {dark_mode
       ? kContentGradientTopDark
       : kContentGradientTopLight};

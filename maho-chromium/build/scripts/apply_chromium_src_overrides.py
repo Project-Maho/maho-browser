@@ -101,6 +101,32 @@ _BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/ui/views/passwords/password_bubble_view_base.cc": [
+        Replacement(
+            old=(
+                '  if (browser_) {\n'
+                '    auto* passwords_action_item = actions::ActionManager::Get().FindAction(\n'
+                '        kActionShowPasswordsBubbleOrPage,\n'
+                '        browser_->browser_actions()->root_action_item());\n'
+                '    CHECK(passwords_action_item);\n'
+                '    passwords_action_item->SetIsShowingBubble(false);\n'
+                '  }\n'
+            ),
+            new=(
+                '  if (browser_ && browser_->browser_actions() &&\n'
+                '      browser_->browser_actions()->root_action_item()) {\n'
+                '    auto* passwords_action_item = actions::ActionManager::Get().FindAction(\n'
+                '        kActionShowPasswordsBubbleOrPage,\n'
+                '        browser_->browser_actions()->root_action_item());\n'
+                '    if (passwords_action_item) {\n'
+                '      passwords_action_item->SetIsShowingBubble(false);\n'
+                '    }\n'
+                '  }\n'
+            ),
+            description="Maho: safely null-check passwords_action_item in destructor",
+            guard="if (passwords_action_item) {\n      passwords_action_item->SetIsShowingBubble(false);",
+        ),
+    ],
     "chrome/browser/notifications/notification_handler.h": [
         Replacement(
             old=(
@@ -4647,11 +4673,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  if (maho_content_gradient_view_) {\n"
                 "    maho_content_gradient_view_->SetPalette(palette);\n"
                 "  }\n"
-                "  if (!GetColorProvider()) {\n"
-                "    return;\n"
-                "  }\n"
-                "  const SkColor maho_web_content_base =\n"
-                "      GetColorProvider()->GetColor(kColorWebContentsBackground);\n"
                 "  bool has_native_ntp_surface = false;\n"
                 "  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
                 "    if (!view) {\n"
@@ -4670,7 +4691,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  TabStripModel* maho_tsm = browser_->tab_strip_model();\n"
                 "  for (int i = 0; i < maho_tsm->count(); ++i) {\n"
                 "    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {\n"
-                "      wc->SetPageBaseBackgroundColor(maho_web_content_base);\n"
+                "      wc->SetPageBaseBackgroundColor(std::nullopt);\n"
                 "    }\n"
                 "  }\n"
                 "}\n"
@@ -4758,6 +4779,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Maho: isolate loaded WebContents from the active Space palette"
             ),
             guard="maho_web_content_base",
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -4852,6 +4874,36 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }\n"
             ),
             new=(
+                "  bool has_native_ntp_surface = false;\n"
+                "  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
+                "    if (!view) {\n"
+                "      continue;\n"
+                "    }\n"
+                "    const bool view_shows_native_ntp =\n"
+                "        MahoShouldRevealSharedGlass(view->web_contents());\n"
+                "    has_native_ntp_surface |= view_shows_native_ntp;\n"
+                "    view->SetVisible(!view_shows_native_ntp);\n"
+                "    view->SetMahoBackgroundOverride(std::nullopt);\n"
+                "    view->SetBackgroundVisible(true);\n"
+                "  }\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(has_native_ntp_surface);\n"
+                "  }\n"
+                "  TabStripModel* maho_tsm = browser_->tab_strip_model();\n"
+                "  for (int i = 0; i < maho_tsm->count(); ++i) {\n"
+                "    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {\n"
+                "      wc->SetPageBaseBackgroundColor(std::nullopt);\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: render New Tab as a native opaque surface"
+            ),
+            guard="view->SetVisible(!view_shows_native_ntp);",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
                 "  if (!GetColorProvider()) {\n"
                 "    return;\n"
                 "  }\n"
@@ -4879,10 +4931,33 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    }\n"
                 "  }\n"
             ),
-            description=(
-                "Maho: render New Tab as a native opaque surface"
+            new=(
+                "  bool has_native_ntp_surface = false;\n"
+                "  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {\n"
+                "    if (!view) {\n"
+                "      continue;\n"
+                "    }\n"
+                "    const bool view_shows_native_ntp =\n"
+                "        MahoShouldRevealSharedGlass(view->web_contents());\n"
+                "    has_native_ntp_surface |= view_shows_native_ntp;\n"
+                "    view->SetVisible(!view_shows_native_ntp);\n"
+                "    view->SetMahoBackgroundOverride(std::nullopt);\n"
+                "    view->SetBackgroundVisible(true);\n"
+                "  }\n"
+                "  if (maho_content_gradient_view_) {\n"
+                "    maho_content_gradient_view_->SetVisible(has_native_ntp_surface);\n"
+                "  }\n"
+                "  TabStripModel* maho_tsm = browser_->tab_strip_model();\n"
+                "  for (int i = 0; i < maho_tsm->count(); ++i) {\n"
+                "    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {\n"
+                "      wc->SetPageBaseBackgroundColor(std::nullopt);\n"
+                "    }\n"
+                "  }\n"
             ),
-            guard="view->SetVisible(!view_shows_native_ntp);",
+            description=(
+                "Maho: reset Blink page base background to std::nullopt for loaded WebContents"
+            ),
+            guard="wc->SetPageBaseBackgroundColor(std::nullopt);",
             idempotent=True,
         ),
         Replacement(

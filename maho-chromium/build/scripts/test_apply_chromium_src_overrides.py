@@ -632,12 +632,10 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 "Maho: define BrowserView content-surface palette projection")
         )
 
-        self.assertIn("GetColorProvider()->GetColor(kColorWebContentsBackground)",
-                      replacement.new)
         self.assertIn("view->SetMahoBackgroundOverride(std::nullopt);",
                       replacement.new)
         self.assertIn(
-            "wc->SetPageBaseBackgroundColor(maho_web_content_base);",
+            "wc->SetPageBaseBackgroundColor(std::nullopt);",
             replacement.new,
         )
         self.assertNotIn("view->SetMahoBackgroundOverride(solid);",
@@ -676,12 +674,6 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         )
         self.assertIn("view->SetBackgroundVisible(true);", replacement.new)
         self.assertNotIn("SK_ColorTRANSPARENT", replacement.new)
-        self.assertIn(
-            "if (!GetColorProvider()) {\n"
-            "    return;\n"
-            "  }",
-            replacement.new,
-        )
 
     def test_existing_space_tinted_web_contents_patch_migrates_to_neutral_base(self):
         replacement = next(
